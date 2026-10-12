@@ -5,16 +5,15 @@ import type { OfficialAppId } from '../types/OfficialApp.js'
  * Shell rebuilds and generated file hashes do not change these revisions.
  */
 export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
-  chatReader: 4,
+  chatReader: 5,
   draw: 1,
-  stitch: 12,
-  frontendWorkshop: 5,
-  imageGeneration: 3,
-  imageAlbum: 1,
-  userPersona: 5,
-  resourceBundle: 1,
-  tavernBridge: 6,
-  assistant: 1,
+  stitch: 13,
+  frontendWorkshop: 6,
+  imageGeneration: 4,
+  imageAlbum: 2,
+  userPersona: 6,
+  tavernBridge: 9,
+  assistant: 28,
 }
 
 /** Existing installed records predate explicit revisions and start at the migration baseline. */

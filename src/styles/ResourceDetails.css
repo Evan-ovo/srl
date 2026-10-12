@@ -18,7 +18,7 @@
   padding: 0;
   border: 1px solid var(--color-line-strong);
   color: inherit;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), transparent 48%), #111713;
+  background: var(--viewer-background);
   overflow: hidden;
   cursor: zoom-in;
 }
@@ -44,9 +44,9 @@
   right: 0.75rem;
   bottom: 0.75rem;
   padding: 0.375rem 0.5rem;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.82);
-  background: rgba(8, 12, 10, 0.7);
+  border: 1px solid var(--viewer-control-border);
+  color: var(--viewer-color);
+  background: var(--viewer-control-background);
   font-family: var(--font-label);
   font-size: 8px;
   letter-spacing: 0.12em;
@@ -249,9 +249,10 @@
   min-height: 2.125rem;
   padding: 0.25rem 0.75rem;
   font-size: 0.875rem;
-  background: var(--color-accent);
-  color: var(--color-on-accent, #fff);
-  box-shadow: none;
+  background: var(--button-primary-background, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
+  box-shadow: var(--button-shadow, none);
+  border-color: var(--button-primary-border, var(--color-accent));
 }
 .resource-detail-sheet--content-editor .resource-detail__layout {
   grid-template-columns: minmax(0, 1fr);
@@ -313,10 +314,10 @@
   min-height: var(--size-touch);
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: 999px;
-  color: var(--color-ink-soft);
-  background: var(--color-surface);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, 999px);
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--glass-panel-strong));
   font-size: 11px;
   cursor: pointer;
 }
@@ -335,9 +336,9 @@
 }
 
 .resource-detail__folder-option--selected {
-  border-color: var(--color-accent);
-  color: var(--color-ink);
-  background: var(--color-accent-soft);
+  border-color: var(--selection-border, var(--color-accent));
+  color: var(--selection-color, var(--color-ink));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .resource-detail__folder-empty {
@@ -416,11 +417,7 @@
   min-width: 0;
   min-height: var(--size-touch);
   padding: 0 0.7rem;
-  border: 1px solid var(--color-line);
-  border-radius: 3px;
   outline: 0;
-  color: var(--color-ink);
-  background: var(--color-surface);
   font: inherit;
   font-size: 1rem;
 }
@@ -434,8 +431,8 @@
 .resource-link-card input:focus,
 .resource-link-card select:focus,
 .resource-link-card textarea:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  border-color: var(--control-border, var(--color-accent));
+  box-shadow: var(--control-shadow, 0 0 0 3px var(--color-accent-soft));
 }
 
 .resource-link-card__url,
@@ -483,8 +480,8 @@
   justify-content: center;
   padding: 0 0.8rem;
   border: 1px solid var(--color-line-strong);
-  color: var(--color-accent);
-  background: var(--color-surface);
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-surface));
   font: inherit;
   font-size: 0.6875rem;
   font-weight: 700;
@@ -593,17 +590,13 @@
   min-width: 0;
   min-height: 2.25rem;
   padding: 0 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: 3px;
   outline: 0;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
   font-size: 12px;
 }
 
 .resource-relations__search input:focus {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  border-color: var(--control-border, var(--color-accent));
+  box-shadow: var(--control-shadow, 0 0 0 3px var(--color-accent-soft));
 }
 
 .resource-relations__list {
@@ -625,7 +618,7 @@
 }
 
 .resource-relation--selected {
-  background: var(--color-accent-soft);
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .resource-relation__select {
@@ -673,8 +666,8 @@
   gap: 0.375rem;
   padding: 0 0.625rem;
   border: 1px solid var(--color-line);
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-surface-raised));
   font-size: 10px;
   cursor: pointer;
 }
@@ -719,10 +712,6 @@
 .character-record__edit-button {
   min-height: 44px;
   padding: 0.35rem 0.7rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.55rem;
-  color: var(--color-accent);
-  background: var(--color-surface);
   font: inherit;
   font-size: 0.875rem;
   white-space: nowrap;
@@ -806,9 +795,9 @@
   width: 100%;
   min-height: var(--size-touch);
   padding: 0 0.65rem;
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-ink);
-  background: var(--color-surface);
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-ink));
+  background: var(--control-background, var(--color-surface));
   font: inherit;
   font-size: 0.75rem;
 }
@@ -824,7 +813,7 @@
 .character-record__section summary {
   min-height: var(--size-touch);
   padding: 0.875rem 0.25rem;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
@@ -1029,9 +1018,9 @@
 }
 
 .character-greetings-page__regex-status.is-error {
-  border-color: color-mix(in srgb, #a14a3f 48%, var(--color-line));
-  color: #a14a3f;
-  background: color-mix(in srgb, #a14a3f 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 48%, var(--color-line));
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
 }
 
 .character-greetings__controls button:disabled {
@@ -1194,9 +1183,9 @@
   gap: 0.4rem;
   min-height: var(--size-touch);
   padding: 0 0.9rem;
-  border: 1px solid var(--color-accent);
-  color: var(--color-surface-raised);
-  background: var(--color-accent);
+  border: 1px solid var(--button-border, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
+  background: var(--button-primary-background, var(--color-accent));
   font: inherit;
   font-size: 0.6875rem;
   font-weight: 700;
@@ -1206,8 +1195,8 @@
 
 .character-greeting-card__footer > button:hover,
 .character-greeting-card__footer > button:focus-visible {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-accent-soft));
   outline: 0;
 }
 
@@ -1237,8 +1226,8 @@
   height: var(--size-touch);
   padding: 0;
   border: 0;
-  border-radius: 999px;
-  background: transparent;
+  border-radius: var(--button-radius, 999px);
+  background: var(--button-background, transparent);
   cursor: pointer;
 }
 
@@ -1259,7 +1248,7 @@
 
 .character-greetings-page__dots button.is-active::before {
   width: 1.75rem;
-  background: var(--color-accent);
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .character-greetings-page__dots button:focus-visible {
@@ -1279,8 +1268,7 @@ body.greeting-preview-open {
   overflow: hidden;
 }
 
-body.greeting-preview-open .mobile-bottom-nav,
-body.greeting-preview-open .notice {
+body.greeting-preview-open :is(.mobile-bottom-nav, .notice) {
   display: none;
 }
 
@@ -1363,9 +1351,9 @@ body.greeting-preview-open .notice {
 .greeting-preview-overlay__footer button {
   min-height: var(--size-touch);
   padding: 0 1rem;
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-accent);
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, transparent);
   font: inherit;
   font-size: 0.75rem;
   font-weight: 700;
@@ -1379,8 +1367,8 @@ body.greeting-preview-open .notice {
   gap: 0.35rem;
   min-width: var(--size-touch);
   padding-inline: 0.75rem;
-  color: var(--color-accent);
-  background: transparent;
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, transparent);
 }
 
 .greeting-preview-overlay__header-actions > button {
@@ -1409,11 +1397,11 @@ body.greeting-preview-open .notice {
   align-items: center;
   gap: 0.35rem;
   padding: 0 0.75rem;
-  border: 1px solid color-mix(in srgb, white 35%, transparent);
+  border: 1px solid var(--viewer-control-border);
   border-radius: 999px;
-  color: white;
-  background: color-mix(in srgb, #111 82%, transparent);
-  box-shadow: 0 0.35rem 1.25rem rgb(0 0 0 / 28%);
+  color: var(--viewer-color);
+  background: var(--viewer-control-background);
+  box-shadow: var(--viewer-control-shadow);
   font: inherit;
   font-size: 0.72rem;
   font-weight: 700;
@@ -1537,7 +1525,7 @@ body.greeting-preview-open .notice {
   gap: 0.75rem;
   min-height: var(--size-touch);
   padding: 0.5rem 0.75rem;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   list-style: none;
   cursor: pointer;
 }
@@ -1580,9 +1568,9 @@ body.greeting-preview-open .notice {
 
 .rich-content-preview--immersive .rich-content-preview__settings button {
   min-height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-ink-soft);
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-ink-soft));
+  background: var(--button-background, transparent);
   font: inherit;
   font-size: 0.75rem;
   font-weight: 700;
@@ -1594,8 +1582,8 @@ body.greeting-preview-open .notice {
 }
 
 .rich-content-preview--immersive .rich-content-preview__settings button.is-active {
-  color: var(--color-surface-raised);
-  background: var(--color-accent);
+  color: var(--selection-color, var(--color-ink));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .rich-content-preview--immersive .rich-content-preview__settings > p {
@@ -1627,11 +1615,11 @@ body.greeting-preview-open .notice {
   --rich-preview-min-height: var(--visual-viewport-height);
   display: block;
   padding: 0;
-  background: #111;
+  background: var(--viewer-background);
 }
 
-.greeting-preview-overlay.is-content-fullscreen > .greeting-preview-overlay__header,
-.greeting-preview-overlay.is-content-fullscreen > .greeting-preview-overlay__footer {
+.greeting-preview-overlay.is-content-fullscreen
+  > :is(.greeting-preview-overlay__header, .greeting-preview-overlay__footer) {
   display: none;
 }
 
@@ -1644,8 +1632,8 @@ body.greeting-preview-open .notice {
 }
 
 .greeting-preview-overlay.is-content-fullscreen .greeting-preview-overlay__stage > article,
-.greeting-preview-overlay.is-content-fullscreen .greeting-preview-overlay__reader,
-.greeting-preview-overlay.is-content-fullscreen .rich-content-preview {
+.greeting-preview-overlay.is-content-fullscreen
+  :is(.greeting-preview-overlay__reader, .rich-content-preview) {
   min-height: var(--visual-viewport-height);
   border: 0;
   box-shadow: none;
@@ -1656,9 +1644,12 @@ body.greeting-preview-open .notice {
 }
 
 .greeting-preview-overlay.is-content-fullscreen .greeting-preview-overlay__reader > header,
-.greeting-preview-overlay.is-content-fullscreen .greeting-preview-overlay__description,
-.greeting-preview-overlay.is-content-fullscreen .rich-content-preview__toolbar,
-.greeting-preview-overlay.is-content-fullscreen .rich-content-preview__settings {
+.greeting-preview-overlay.is-content-fullscreen
+  :is(
+    .greeting-preview-overlay__description,
+    .rich-content-preview__toolbar,
+    .rich-content-preview__settings
+  ) {
   display: none;
 }
 
@@ -1677,8 +1668,8 @@ body.greeting-preview-open .notice {
   transition: opacity 180ms ease;
 }
 
-.greeting-preview-enter-active .greeting-preview-overlay__stage,
-.greeting-preview-leave-active .greeting-preview-overlay__stage {
+:is(.greeting-preview-enter-active, .greeting-preview-leave-active)
+  .greeting-preview-overlay__stage {
   transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1687,8 +1678,7 @@ body.greeting-preview-open .notice {
   opacity: 0;
 }
 
-.greeting-preview-enter-from .greeting-preview-overlay__stage,
-.greeting-preview-leave-to .greeting-preview-overlay__stage {
+:is(.greeting-preview-enter-from, .greeting-preview-leave-to) .greeting-preview-overlay__stage {
   transform: translateY(1rem);
 }
 
@@ -1727,8 +1717,8 @@ body.greeting-preview-open .notice {
   padding: 0 0.75rem;
   border: 0;
   border-left: 1px solid var(--color-line);
-  color: var(--color-ink);
-  background: transparent;
+  color: var(--button-color, var(--color-ink));
+  background: var(--control-background, transparent);
   font: inherit;
   font-size: 1rem;
   outline: 0;
@@ -1753,15 +1743,18 @@ body.greeting-preview-open .notice {
   min-height: 4.25rem;
   padding: 0.625rem 0.25rem;
   border: 0;
-  color: var(--color-ink);
-  background: transparent;
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, transparent);
   text-align: left;
   cursor: pointer;
 }
 
 .character-asset-directory li > button:hover,
 .character-asset-directory li > button:focus-visible {
-  background: color-mix(in srgb, var(--color-accent-soft) 52%, transparent);
+  background: var(
+    --button-background,
+    color-mix(in srgb, var(--color-accent-soft) 52%, transparent)
+  );
   outline: 0;
 }
 
@@ -1824,8 +1817,8 @@ body.greeting-preview-open .notice {
   min-height: 4.25rem;
   padding: 0.625rem 0.25rem;
   border: 0;
-  color: var(--color-ink);
-  background: transparent;
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, transparent);
   text-align: left;
   cursor: pointer;
 }
@@ -1877,9 +1870,9 @@ body.greeting-preview-open .notice {
 .character-asset-page__pagination button {
   min-width: 4.75rem;
   min-height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-surface-raised));
   font: inherit;
   font-size: 0.75rem;
 }

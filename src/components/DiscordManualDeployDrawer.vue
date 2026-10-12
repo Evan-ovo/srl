@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useAssistantHelpContext } from '../composables/UseAssistantHelpContext'
 import ResourceImageViewer from './ResourceImageViewer.vue'
 
 import manualWorkerSource from 'virtual:srl-discord-manual-worker-source'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   applicationId: string
   publicKey: string
@@ -17,6 +18,7 @@ defineProps<{
 const emit = defineEmits<{ close: [] }>()
 
 const copyStatus = ref('')
+useAssistantHelpContext('discord-bridge', () => props.open)
 const previewImage = ref<{ source: string; alt: string }>()
 
 function openScreenshot(event: MouseEvent | KeyboardEvent): void {
@@ -66,6 +68,7 @@ async function copyText(value: string, message: string): Promise<void> {
       <aside
         v-if="open"
         class="discord-manual-drawer"
+        data-assistant-help-context="discord-bridge"
         aria-label="Cloudflare 浏览器手动部署教程"
         data-assistant-focus="discord-manual-deploy-tutorial-content"
         data-assistant-focus-text="已为你展开浏览器手动部署教程，可以按顺序查看步骤。"

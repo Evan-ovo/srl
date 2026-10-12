@@ -86,6 +86,12 @@ const sourceRegexPicked = toRef(input.model, 'sourceRegexPicked')
 const toggleRegexGroup = toRef(input.model, 'toggleRegexGroup')
 const sourcePageCount = toRef(input.model, 'sourcePageCount')
 const sourcePage = toRef(input.model, 'sourcePage')
+function jumpToSourcePage(event: Event): void {
+  const pageInput = event.currentTarget as HTMLInputElement
+  const requestedPage = Number.parseInt(pageInput.value, 10)
+  if (Number.isFinite(requestedPage)) setPage.value('source', requestedPage)
+  pageInput.value = String(sourcePage.value)
+}
 </script>
 <template>
   <section
@@ -376,7 +382,16 @@ const sourcePage = toRef(input.model, 'sourcePage')
           @click="setPage('source', sourcePage - 1)"
         >
           ←</button
-        ><span>{{ sourcePage }} / {{ sourcePageCount }}</span
+        ><label class="stitch-pagination__jump"
+          ><input
+            :value="sourcePage"
+            type="text"
+            inputmode="numeric"
+            :maxlength="String(sourcePageCount).length"
+            aria-label="跳转到填充预设条目页"
+            @change="jumpToSourcePage"
+            @keydown.enter.prevent="jumpToSourcePage"
+          /><span>/ {{ sourcePageCount }} 页</span></label
         ><button
           class="button button--quiet"
           type="button"

@@ -16,11 +16,19 @@ async function reader(
   scriptRules: Array<{ key: string; sourceId: string; name: string; enabled: boolean }> = [],
   unrelatedCharacters = 0,
   builtinReader = false,
+  paragraphCount = 1,
 ) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true })
   windows.push(dom)
   const { window } = dom
   const document = window.document
+  let maskPatternBuilds = 0
+  window.RegExp = new Proxy(window.RegExp, {
+    construct(target, args) {
+      if (String(args[0]).includes('测试用户')) maskPatternBuilds++
+      return Reflect.construct(target, args)
+    },
+  })
   window.scrollTo = () => {}
   window.HTMLElement.prototype.scrollIntoView = () => {}
   window.HTMLDialogElement.prototype.showModal = function () {
@@ -79,7 +87,13 @@ async function reader(
   const setLoading = vi.fn(async () => {})
   const thumbnail = vi.fn(async () => null)
   const readChat = vi.fn(
-    async (options: { offset: number; interactive: boolean; limit?: number }) => {
+    async (options: {
+      offset: number
+      interactive: boolean
+      limit?: number
+      scriptListOnly?: boolean
+      scriptSources?: string[]
+    }) => {
       if (readCalls++ === 0) {
         startFirstRead()
         if (pauseFirstRead) await firstReadGate
@@ -90,21 +104,24 @@ async function reader(
         total: 12,
         userNames: ['测试用户'],
         regexRules: [],
-        scriptRules,
+        scriptRules: scriptRules.filter(
+          (rule) => rule.sourceId === 'character' || options.scriptSources?.includes(rule.sourceId),
+        ),
         nextOffset:
           options.offset + (options.limit || 1) < 12 ? options.offset + (options.limit || 1) : null,
         previewDocumentUrl: 'data:text/html,fixture',
-        messages: Array.from(
-          { length: Math.min(options.limit || 1, 12 - options.offset) },
-          (_, i) => ({
-            index: options.offset + i,
-            depth: 0,
-            message: { name: '角色', mes: '测试用户的正文', is_user: false },
-            html: '<p>测试用户的正文</p><div data-chat-frontend="0"></div>',
-            frontends: ['<p>测试用户的静态状态</p>'],
-            interactiveFrontends: ['<p>测试用户的交互状态</p>'],
-          }),
-        ),
+        messages: options.scriptListOnly
+          ? []
+          : Array.from({ length: Math.min(options.limit || 1, 12 - options.offset) }, (_, i) => ({
+              index: options.offset + i,
+              depth: 0,
+              message: { name: '角色', mes: '测试用户的正文', is_user: false },
+              html:
+                '<p>测试用户的正文</p>'.repeat(paragraphCount) +
+                '<div data-chat-frontend="0"></div>',
+              frontends: ['<p>测试用户的静态状态</p>'],
+              interactiveFrontends: ['<p>测试用户的交互状态</p>'],
+            })),
       }
     },
   )
@@ -169,6 +186,9 @@ async function reader(
     readChat,
     listResources,
     saved,
+    get maskPatternBuilds() {
+      return maskPatternBuilds
+    },
     releaseFirstRead,
     waitUntilReady,
     close: () => dom.window.close(),
@@ -213,6 +233,9 @@ describe('reader controls and identity display boundaries', () => {
     await app.click('[data-panel="display"]')
     await app.click('#manageScripts')
     await vi.waitFor(() => expect(app.document.querySelector('#applyScripts')).not.toBeNull())
+    expect(app.readChat).toHaveBeenCalledWith(
+      expect.objectContaining({ scriptList: true, scriptListOnly: true }),
+    )
     expect(app.document.querySelector('#applyScripts')?.textContent).toBe('保存选择（不运行）')
     ;(app.document.querySelector('[data-script]') as HTMLInputElement).checked = true
     const beforeSave = app.readChat.mock.calls.length
@@ -249,6 +272,86 @@ describe('reader controls and identity display boundaries', () => {
     expect(app.readChat).toHaveBeenLastCalledWith(expect.objectContaining({ scripts: false }))
   })
 
+  it('reuses the validated script catalog after removing a source instead of immediately fetching it again', async () => {
+    const saved = new Map<string, unknown>([
+      ['preferences-v1', { renderMode: 'full', progressMode: 'chapters' }],
+      ['chat:chat', { scriptSources: ['manual'] }],
+    ])
+    const app = await reader({}, saved, false, false, [
+      { key: 'manual-rule', sourceId: 'manual', name: '手动脚本', enabled: false },
+    ])
+    await app.click('[data-panel="display"]')
+    await app.click('#manageScripts')
+    const proseReads = app.readChat.mock.calls.filter(([options]) => !options.scriptListOnly).length
+    await app.click('[data-script-remove="manual"]')
+    await vi.waitFor(() => expect(app.saved.get('chat:chat')).toMatchObject({ scriptSources: [] }))
+    await vi.waitFor(() => expect(app.document.querySelector('#applyScripts')).not.toBeNull())
+    const catalogs = app.readChat.mock.calls.filter(([options]) => options.scriptListOnly)
+    expect(catalogs).toHaveLength(2)
+    expect(app.readChat.mock.calls.filter(([options]) => !options.scriptListOnly)).toHaveLength(
+      proseReads,
+    )
+  })
+  it('uses the validated page to display a regex-source change without reading that page twice', async () => {
+    const saved = new Map<string, unknown>([
+      ['preferences-v1', { progressMode: 'chapters', renderMode: 'simple' }],
+      ['chat:chat', { regexSources: { character: 'manual-regex' } }],
+    ])
+    const app = await reader({}, saved)
+    await app.click('[data-panel="display"]')
+    await app.click('#regexRules')
+    const before = app.readChat.mock.calls.length
+    await app.click('[data-regex-restore="character"]')
+    await vi.waitFor(() => expect(app.saved.get('chat:chat')).toMatchObject({ regexSources: {} }))
+    await vi.waitFor(() =>
+      expect(app.document.querySelector('#sheetFeedback')?.textContent).toContain(
+        '已恢复聊天随附正则',
+      ),
+    )
+    expect(app.readChat.mock.calls).toHaveLength(before + 1)
+    expect(app.shadow.querySelector('[data-floor="0"]')?.textContent).toContain('测试用户的正文')
+  })
+  it('compiles masking once per DOM pass while masking every text node completely', async () => {
+    const small = await reader(
+      { mask: true, renderMode: 'simple' },
+      undefined,
+      false,
+      false,
+      [],
+      0,
+      false,
+      1,
+    )
+    const large = await reader(
+      { mask: true, renderMode: 'simple' },
+      undefined,
+      false,
+      false,
+      [],
+      0,
+      false,
+      60,
+    )
+    expect(large.maskPatternBuilds).toBe(small.maskPatternBuilds)
+    expect(large.maskPatternBuilds).toBeGreaterThan(0)
+    expect(large.shadow.querySelector('.mes_text')?.textContent).not.toContain('测试用户')
+    expect(large.shadow.querySelector('.mes_text')?.querySelectorAll('p')).toHaveLength(60)
+  })
+  it('clears dormant script selections without reading the prose or fetching the catalog again', async () => {
+    const app = await reader({ renderMode: 'full' }, undefined, false, false, [
+      { key: 'phone', sourceId: 'character', name: '手机', enabled: true },
+    ])
+    await app.click('[data-panel="display"]')
+    await app.click('#manageScripts')
+    await vi.waitFor(() => expect(app.document.querySelector('#applyScripts')).not.toBeNull())
+    const before = app.readChat.mock.calls.length
+    await app.click('#disableScripts')
+    await vi.waitFor(() =>
+      expect(app.saved.get('chat:chat')).toMatchObject({ scripts: false, scriptOverrides: {} }),
+    )
+    expect(app.readChat.mock.calls).toHaveLength(before)
+    expect((app.document.querySelector('[data-script]') as HTMLInputElement).checked).toBe(false)
+  })
   it('keeps interrupted reading resumable after a failed restore read', async () => {
     const saved = new Map<string, unknown>([
       ['reader-index-v1', { lastChat: 'chat', resumeReading: true }],

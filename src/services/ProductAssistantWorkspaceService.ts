@@ -16,6 +16,22 @@ import {
   normalizeAssistantToolCallLimit,
   MAX_ASSISTANT_TOOL_CALL_LIMIT,
 } from './ProductAssistantTools'
+import { taskCenter } from '../core/TaskCenter'
+
+export interface AssistantHistoryRecoveryResult {
+  scanned: number
+  total: number
+  recovered: number
+  repaired: number
+  conflicts: number
+  invalid: number
+  missingProjects: number
+  cancelled: boolean
+}
+export interface AssistantHistoryRecoveryOptions {
+  signal?: AbortSignal
+  onProgress?: (result: AssistantHistoryRecoveryResult) => void
+}
 
 export const DEFAULT_ASSISTANT_AVATAR = '/icons/assistant-avatar.png'
 export interface AssistantMemory {
@@ -100,6 +116,7 @@ export type AssistantConversationSummary = Pick<
   'id' | 'title' | 'customTitle' | 'updatedAt'
 >
 export interface ProductAssistantStorage {
+  recoverHistory(options: AssistantHistoryRecoveryOptions): Promise<AssistantHistoryRecoveryResult>
   preferences(): Promise<AssistantPreferences | undefined>
   savePreferences(value: AssistantPreferences): Promise<void>
   active(): Promise<string | undefined>
@@ -168,6 +185,7 @@ export class ProductAssistantWorkspaceService {
   }
   private githubSessionToken = ''
   private writes: Promise<void> = Promise.resolve()
+  private historyRecovery?: Promise<AssistantHistoryRecoveryResult>
   private initialized = false
   private initializing?: Promise<void>
   private readonly preferenceListeners = new Set<(value: AssistantPreferences) => void>()
@@ -339,7 +357,10 @@ export class ProductAssistantWorkspaceService {
       networkEnabled: value.networkEnabled === true,
       toolCallingEnabled: value.toolCallingEnabled !== false,
       allowPageScripts: value.allowPageScripts === true,
-      toolCallLimit: value.toolCallLimit ?? normalizeAssistantToolCallLimit(),
+      toolCallLimit:
+        (value.toolCallLimit as unknown) === '' || value.toolCallLimit == null
+          ? undefined
+          : value.toolCallLimit,
       providerSearch: value.providerSearch === true,
       githubReadWithoutConfirmation: value.githubReadWithoutConfirmation === true,
       githubReadPersistence:
@@ -471,8 +492,66 @@ export class ProductAssistantWorkspaceService {
     const reference = await this.save(value, true)
     return { ...value, ...reference }
   }
+  async continueDiscordSetupConversation(id: string): Promise<AssistantConversation> {
+    if (!/^[\w-]{1,100}$/u.test(id)) throw new Error('网页协助对话标识无效')
+    await this.flush()
+    const value = (await this.storage.read(id)) ?? {
+      ...newAssistantConversation(),
+      id,
+      customTitle: 'Discord Bridge 网页协助',
+    }
+    const reference = await this.save(value, true)
+    return { ...value, ...reference }
+  }
   list(offset = 0) {
     return this.storage.list(Math.max(0, offset), 20)
+  }
+  recoverHistory(
+    options: AssistantHistoryRecoveryOptions = {},
+  ): Promise<AssistantHistoryRecoveryResult> {
+    if (this.historyRecovery) return this.historyRecovery
+    const controller = new AbortController()
+    const stop = () => controller.abort()
+    options.signal?.addEventListener('abort', stop, { once: true })
+    if (options.signal?.aborted) stop()
+    const operationId = taskCenter.start({
+      name: '找回蒜惹菈历史',
+      cancelable: true,
+      cancel: async () => {
+        stop()
+        await this.historyRecovery?.catch(() => {})
+      },
+    })
+    const run = this.writes.then(async () => {
+      try {
+        const result = await this.storage.recoverHistory({
+          signal: controller.signal,
+          onProgress: (progress) => {
+            taskCenter.update(operationId, {
+              phase: `已找回 ${progress.recovered} 条，修复列表 ${progress.repaired} 条`,
+              itemProgress: { completed: progress.scanned, total: progress.total },
+            })
+            options.onProgress?.(progress)
+          },
+        })
+        if (result.cancelled) taskCenter.cancelled(operationId)
+        else taskCenter.complete(operationId)
+        return result
+      } catch (cause) {
+        taskCenter.fail(operationId, cause)
+        throw cause
+      } finally {
+        options.signal?.removeEventListener('abort', stop)
+        this.historyRecovery = undefined
+      }
+    })
+    this.historyRecovery = run
+    // Recovery and autosaves use the same writer queue; each record still commits atomically.
+    this.writes = run.then(
+      () => {},
+      () => {},
+    )
+    return run
   }
   async projects(offset = 0) {
     await this.flush()

@@ -25,11 +25,9 @@ describe('Feature App visual contract', () => {
   it('keeps nonessential counters out of the shared Header', () => {
     const cloud = readComponent('CloudBackupCenter.vue')
     const album = readComponent('GeneratedImageAlbumApp.vue')
-    const bundle = readComponent('ResourceBundleApp.vue')
 
     expect(cloud).not.toContain('{{ resourceCount }} 项资源')
     expect(album).not.toContain('{{ page.total }} 张本地原图')
-    expect(bundle).not.toContain('{{ templates.length }} 个已存套装')
   })
 
   it('lays out settings as a full-viewport page instead of a centered sheet', () => {

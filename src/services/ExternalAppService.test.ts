@@ -11,6 +11,31 @@ import { ExternalAppService } from './ExternalAppService'
 
 const databases: AppDatabase[] = []
 
+it('checks a reading permission group from one live summary and rejects revoked, disabled or missing grants', async () => {
+  const permissions = ['resources.library.read', 'resources.content.read'] as const
+  const storage = {
+    getSummary: vi.fn(
+      async () => ({ enabled: true, manifest: { permissions: [...permissions] } }) as unknown,
+    ),
+  }
+  const service = new ExternalAppService(storage as never)
+  expect(await service.hasPermission('app', [...permissions])).toBe(true)
+  expect(storage.getSummary).toHaveBeenCalledTimes(1)
+  storage.getSummary.mockResolvedValue({
+    enabled: true,
+    manifest: { permissions: [permissions[0]] },
+  })
+  expect(await service.hasPermission('app', [...permissions])).toBe(false)
+  expect(await service.hasPermission('app', permissions[0])).toBe(true)
+  storage.getSummary.mockResolvedValue({
+    enabled: false,
+    manifest: { permissions: [...permissions] },
+  })
+  expect(await service.hasPermission('app', [...permissions])).toBe(false)
+  storage.getSummary.mockResolvedValue(undefined)
+  expect(await service.hasPermission('app', [...permissions])).toBe(false)
+})
+
 it('trusts only inspected build-shipped reader bytes, never an ID or restored fingerprint alone', async () => {
   const service = createService('builtin-reader-identity')
   const preview = await service.inspect(createPackage({ ...manifest, id: 'com.srl.duleme' }))

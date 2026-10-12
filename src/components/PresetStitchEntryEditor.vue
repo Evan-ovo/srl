@@ -118,10 +118,6 @@ const editor = toRef(props.model, 'editor')
   min-width: 0;
   min-height: 44px;
   padding: 0.55rem 0.65rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
-  background: var(--color-canvas);
-  color: inherit;
   font: inherit;
   font-size: 16px;
 }
@@ -150,19 +146,13 @@ const editor = toRef(props.model, 'editor')
   min-height: 36px;
   min-width: 0;
   padding: 4px 8px;
-  border-radius: var(--radius-control);
   font-size: var(--text-caption);
   line-height: 1.3;
-  box-shadow: none;
-}
-.stitch-editor .button--quiet {
-  border-color: var(--color-line-strong);
-  background: var(--color-canvas);
 }
 .stitch-editor .button.button--primary {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-on-accent);
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
 }
 .stitch-editor__actions {
   flex-wrap: wrap;
@@ -192,10 +182,10 @@ const editor = toRef(props.model, 'editor')
     overflow: auto;
     overscroll-behavior: contain;
     padding: 0.65rem;
-    border: 1px solid var(--color-line-strong);
-    border-radius: var(--radius-card);
-    background: var(--color-canvas);
-    box-shadow: 0 8px 24px var(--color-shadow);
+    border: 1px solid var(--dialog-border, var(--color-line-strong));
+    border-radius: var(--dialog-radius, var(--radius-card));
+    background: var(--dialog-background, var(--color-canvas));
+    box-shadow: var(--dialog-shadow, 0 8px 24px var(--color-shadow));
   }
   .stitch-editor textarea {
     min-height: min(11rem, 38svh);
@@ -216,7 +206,7 @@ const editor = toRef(props.model, 'editor')
     bottom: -0.65rem;
     margin: 0 -0.65rem -0.65rem;
     padding: 0.5rem 0.65rem;
-    background: var(--color-canvas);
+    background: var(--dialog-background, var(--color-canvas));
   }
 }
 </style>

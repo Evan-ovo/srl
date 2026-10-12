@@ -8,6 +8,8 @@ import {
   type NativeSecretRecoveryState,
 } from '../core/NativeSecurity'
 const native = isNativeSecurityAvailable()
+const props = defineProps<{ unlockOnly?: boolean }>()
+const emit = defineEmits<{ ready: [] }>()
 const configured = ref(false)
 const unlocked = ref(false)
 const editing = ref(false)
@@ -30,6 +32,7 @@ async function run(action: () => Promise<void>) {
   try {
     await action()
     await refresh()
+    if (unlocked.value) emit('ready')
   } catch (error) {
     message.value = error instanceof Error ? error.message : '操作未完成'
   } finally {
@@ -39,6 +42,8 @@ async function run(action: () => Promise<void>) {
 onMounted(async () => {
   try {
     await refresh()
+    if (props.unlockOnly) editing.value = !unlocked.value
+    if (unlocked.value) emit('ready')
   } catch {
     message.value = '读取密码设置失败'
   } finally {
@@ -90,7 +95,7 @@ async function recover() {
       <span>{{ configured ? '已设置' : '未设置' }}</span>
     </header>
     <p>所有密钥资料共用一个密码。私密字段加密保存，导出和云备份的加密原件也使用它。</p>
-    <div class="secret-protection-settings__actions">
+    <div v-if="!unlockOnly" class="secret-protection-settings__actions">
       <button
         class="button button--quiet"
         type="button"
@@ -139,7 +144,7 @@ async function recover() {
         {{ configured ? '解锁' : '保存统一密码' }}
       </button>
     </form>
-    <template v-if="native && configured">
+    <template v-if="native && configured && !unlockOnly">
       <p>
         指纹找回仅限此
         APK、此设备。需提前开启；卸载应用或更改系统指纹后可能失效。恢复材料不进入云备份。
@@ -214,6 +219,17 @@ async function recover() {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+.secret-protection-settings .field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.secret-protection-settings .field__control {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 .secret-protection-settings p {
   margin: 0;

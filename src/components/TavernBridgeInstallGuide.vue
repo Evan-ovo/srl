@@ -61,7 +61,10 @@ onUnmounted(() => {
     <header>
       <small>INSTALL · {{ BRIDGE_DOWNLOAD_VERSION }}</small>
       <strong>还没有安装互传扩展？</strong>
-      <p>新版 HTTPS 设备码只需页面扩展；服务端插件仅用于旧版或本机离线中继兼容。</p>
+      <p>
+        HTTPS 中继码需自部署 Worker，在设置 → 自部署 Worker 保存地址并检测通过；酒馆端填写相同地址。
+        此方式只需页面扩展；服务端插件用于旧版或本机离线中继兼容。
+      </p>
     </header>
 
     <section class="tavern-bridge-install__git" aria-label="页面扩展安装（推荐）">

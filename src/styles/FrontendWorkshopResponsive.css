@@ -46,9 +46,9 @@
   min-height: var(--size-touch);
   flex: 0 0 auto;
   padding: 0 0.8rem;
-  border: 1px solid var(--color-line-strong);
-  color: white;
-  background: var(--color-accent);
+  border: 1px solid var(--button-primary-border, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
+  background: var(--button-primary-background, var(--color-accent));
 }
 .frontend-workshop__fullscreen > main {
   width: 100%;
@@ -154,7 +154,7 @@
     padding: 0.4rem 0.25rem;
     overflow: hidden;
     border: 0;
-    background: var(--color-surface-raised);
+    background: var(--button-background, var(--color-surface-raised));
     text-align: center;
   }
   .frontend-workshop__design-tabs button small {
@@ -171,8 +171,8 @@
     -webkit-line-clamp: 2;
   }
   .frontend-workshop__design-tabs button.is-active {
-    color: var(--color-accent);
-    background: var(--color-accent-soft);
+    color: var(--selection-color, var(--color-accent));
+    background: var(--selection-background, var(--color-accent-soft));
     box-shadow: inset 0 -2px 0 var(--color-accent);
   }
   .frontend-workshop__design-tabs button.is-active small {
@@ -189,9 +189,9 @@
     display: block;
     width: 100%;
     margin-top: 0.8rem;
-    color: white;
-    border-color: var(--color-accent);
-    background: var(--color-accent);
+    color: var(--button-primary-color, var(--color-on-accent));
+    border-color: var(--button-primary-border, var(--color-accent));
+    background: var(--button-primary-background, var(--color-accent));
     font-weight: var(--weight-title);
   }
   .frontend-workshop__drafts > div {
@@ -245,10 +245,13 @@
   .frontend-workshop__condition-form > button {
     grid-column: 1 / -1;
   }
-  .frontend-workshop__module-prompt pre,
-  .frontend-workshop__full-prompt pre,
-  .frontend-workshop__prompt-history pre,
-  .frontend-workshop__review-prompt pre {
+  :is(
+      .frontend-workshop__module-prompt,
+      .frontend-workshop__full-prompt,
+      .frontend-workshop__prompt-history,
+      .frontend-workshop__review-prompt
+    )
+    pre {
     max-height: 13rem;
   }
   .frontend-workshop__review > header,
@@ -270,8 +273,8 @@
   .frontend-workshop__delivery-actions {
     min-width: 0;
   }
-  .frontend-workshop__conversation-toolbar :where(button, select),
-  .frontend-workshop__version-controls :where(button, select) {
+  :is(.frontend-workshop__conversation-toolbar, .frontend-workshop__version-controls)
+    :where(button, select) {
     max-width: 100%;
   }
   .frontend-workshop__field-editor > header {
@@ -416,6 +419,9 @@
     padding-inline: 0.6rem;
     white-space: normal;
     overflow-wrap: anywhere;
+    color: var(--button-primary-color, var(--color-on-accent));
+    background: var(--button-primary-background, var(--color-accent));
+    border: 1px solid var(--button-primary-border, var(--color-accent));
   }
 
   .frontend-workshop__design-tabs {

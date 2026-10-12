@@ -119,10 +119,6 @@ input {
 button,
 input {
   padding: 8px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
-  color: var(--color-ink);
 }
 small {
   display: block;

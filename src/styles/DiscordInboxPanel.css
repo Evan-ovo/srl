@@ -54,8 +54,7 @@
   margin: 8px 0 0;
 }
 
-:is(.discord-inbox, .discord-inbox-pairing) .discord-inbox__target,
-:is(.discord-inbox, .discord-inbox-pairing) .discord-inbox__intro {
+:is(.discord-inbox, .discord-inbox-pairing) :is(.discord-inbox__target, .discord-inbox__intro) {
   margin-top: 4px;
 }
 
@@ -90,10 +89,6 @@
   min-width: 44px;
   min-height: 44px;
   padding: 8px 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
-  color: var(--color-ink);
   font: inherit;
   font-size: 13px;
   font-weight: 550;
@@ -117,12 +112,6 @@
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.discord-inbox .discord-inbox__receive {
-  border-color: transparent;
-  background: var(--color-accent-soft);
-  color: var(--color-ink);
 }
 
 :is(.discord-inbox, .discord-inbox-pairing) .discord-inbox__progress {
@@ -154,10 +143,6 @@
   min-height: 44px;
   margin-top: 6px;
   padding: 8px 10px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
-  color: var(--color-ink);
   font: inherit;
   font-size: 16px;
 }
@@ -292,7 +277,7 @@
 
 .discord-inbox__auto-binding-review mark {
   border-radius: 3px;
-  background: color-mix(in srgb, var(--color-warning, #f4c95d) 55%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 55%, transparent);
   color: inherit;
   font-weight: 750;
 }
@@ -330,7 +315,7 @@
   display: grid;
   place-items: center;
   padding: 16px;
-  background: rgb(12 28 32 / 48%);
+  background: var(--overlay-background);
 }
 
 .discord-inbox-dialog {
@@ -339,11 +324,6 @@
   max-height: min(80dvh, 42rem);
   overflow: auto;
   padding: 16px;
-  border: 1px solid var(--color-line);
-  border-radius: 16px;
-  background: var(--color-surface-raised);
-  color: var(--color-ink);
-  box-shadow: 0 18px 54px rgb(0 0 0 / 22%);
 }
 
 .discord-inbox-dialog > header,
@@ -366,10 +346,6 @@
   align-items: center;
   justify-content: center;
   padding: 8px 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 10px;
-  background: var(--color-surface);
-  color: var(--color-ink);
   font: inherit;
   cursor: pointer;
 }
@@ -417,15 +393,21 @@
   align-items: center;
   gap: 10px;
   padding: 0 10px;
-  border: 1px solid var(--color-line);
-  border-radius: 10px;
-  background: var(--color-surface);
+  border: 1px solid var(--control-border, var(--color-line));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  background: var(--control-background);
 }
 
 .discord-inbox-cleanup-options input {
   width: 18px;
   height: 18px;
   accent-color: var(--color-accent);
+}
+
+.discord-inbox-cleanup-options label:has(input:checked) {
+  border-color: var(--selection-border, var(--color-accent));
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .discord-inbox-dialog > p {
@@ -444,11 +426,6 @@
   margin-top: 16px;
 }
 
-.discord-inbox-dialog > footer .discord-inbox-dialog__primary {
-  border-color: transparent;
-  background: var(--color-accent-soft);
-}
-
 .discord-inbox-dialog > footer button:disabled {
   opacity: 0.55;
   cursor: default;
@@ -459,6 +436,7 @@
     align-items: center;
     justify-items: center;
     padding: 16px;
+    background: var(--overlay-background);
   }
 
   .discord-inbox-dialog {
@@ -503,7 +481,7 @@
   display: flex;
   align-items: center;
   min-height: 44px;
-  color: var(--color-ink-soft);
+  color: var(--button-color, var(--color-ink-soft));
   font-size: 12px;
   cursor: pointer;
 }
@@ -530,7 +508,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--color-ink-soft);
+  color: var(--button-color, var(--color-ink-soft));
   cursor: pointer;
 }
 .discord-inbox__history summary::after {

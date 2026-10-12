@@ -20,7 +20,7 @@
   background: transparent;
 }
 .confirm-dialog__overlay::backdrop {
-  background: rgba(18, 24, 21, 0.45);
+  background: var(--overlay-background);
   backdrop-filter: blur(2px);
 }
 
@@ -30,7 +30,7 @@
 
 /* Keep confirmations usable when an embedded WebView cannot enter the top layer. */
 .confirm-dialog__overlay--fallback {
-  background: rgba(18, 24, 21, 0.45);
+  background: var(--overlay-background);
   backdrop-filter: blur(2px);
 }
 
@@ -47,10 +47,6 @@
   );
   overflow: auto;
   padding: 1.25rem 1.4rem;
-  border: 1px solid var(--color-line, rgba(31, 106, 84, 0.3));
-  border-radius: 0.9rem;
-  background: var(--color-surface, var(--surface, #fffdf7));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 
 .confirm-dialog > h3 {
@@ -75,16 +71,9 @@
   gap: 0.6rem;
 }
 
-.confirm-dialog > footer button {
-  min-height: 44px;
+.confirm-dialog :where(footer button) {
   min-width: 5.5rem;
   padding: 0 1.1rem;
-  border: 1px solid rgba(32, 42, 38, 0.3);
-  border-radius: 0.55rem;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
 }
 
 .confirm-dialog > footer.confirm-dialog__choices {
@@ -98,21 +87,10 @@
   overflow-wrap: anywhere;
 }
 
-.confirm-dialog__confirm {
-  border-color: var(--color-accent, #1f6a54) !important;
-  background: var(--color-accent, #1f6a54) !important;
-  color: var(--color-on-accent, #fff) !important;
-}
-
-.confirm-dialog__confirm--danger {
-  border-color: #b3261e !important;
-  background: #b3261e !important;
-  color: #fff !important;
-}
-
-:root[data-theme='dark'] .confirm-dialog {
-  background: var(--color-surface, #1c2420);
-  border-color: rgba(143, 183, 168, 0.35);
+button.confirm-dialog__confirm--danger {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+  color: var(--button-color, var(--color-on-danger));
 }
 
 @media (max-width: 480px) {

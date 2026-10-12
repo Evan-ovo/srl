@@ -11,8 +11,10 @@ import { hashBlob } from '../services/HashService'
 import { PngResourceParser } from '../parser/PngResourceParser'
 import type { TavernResourceItem } from '../services/TavernBridgeProtocol'
 import { RESOURCE_TYPE, type ResourceSummary } from '../types/Resource'
+import { checkRelayWorker, saveRelayWorkerBaseUrl } from '../services/RelayWorkerSettingsService'
 
 beforeEach(() => {
+  localStorage.clear()
   HTMLDialogElement.prototype.showModal = function () {
     this.setAttribute('open', '')
   }
@@ -34,6 +36,7 @@ const bridgeMocks = vi.hoisted(() => ({
   hasInvitation: vi.fn(() => false),
   canBindDirectory: vi.fn(() => false),
   bindDirectory: vi.fn(async () => undefined),
+  joinSecureRelay: vi.fn(async () => undefined),
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),
   listResources: vi.fn(
@@ -106,6 +109,54 @@ afterEach(() => {
   for (const wrapper of mountedWrappers.splice(0)) wrapper.unmount()
   bridgeMocks.sendFiles.mockReset()
   bridgeMocks.sendFiles.mockImplementation(async () => [{ status: 'created', name: '已接收' }])
+  bridgeMocks.joinSecureRelay.mockClear()
+  vi.unstubAllGlobals()
+  localStorage.clear()
+})
+
+it('shows the exact centered prompt instead of joining without a self-hosted Worker', async () => {
+  const wrapper = render()
+  const button = wrapper.get('.tavern-device-join button')
+  expect(button.attributes('data-relay-enabled')).toBe('false')
+  expect(wrapper.get('.tavern-device-join input').attributes('disabled')).toBeDefined()
+  await wrapper.get('.tavern-device-join').trigger('submit')
+  expect(confirmAction).toHaveBeenCalledWith({
+    title: '中继码',
+    message: '中继码功能已停用，请自部署worker',
+    confirmLabel: '知道了',
+    centered: true,
+  })
+  expect(bridgeMocks.joinSecureRelay).not.toHaveBeenCalled()
+})
+
+it('enables the button only after checking the saved Worker and disables it on target change', async () => {
+  saveRelayWorkerBaseUrl('https://worker.example')
+  const wrapper = render()
+  expect(wrapper.get('.tavern-device-join button').attributes('data-relay-enabled')).toBe('false')
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async (url) =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            service: String(url).endsWith('/api/bridge/health')
+              ? 'srl-bridge-cloudflare'
+              : 'srl-koofr-worker',
+          }),
+        ),
+    ),
+  )
+  await checkRelayWorker('https://worker.example')
+  await flushPromises()
+  expect(wrapper.get('.tavern-device-join button').attributes('data-relay-enabled')).toBe('true')
+  await wrapper.get('.tavern-device-join input').setValue('AB23CD45')
+  await wrapper.get('.tavern-device-join').trigger('submit')
+  await flushPromises()
+  expect(bridgeMocks.joinSecureRelay).toHaveBeenCalledWith('AB23CD45')
+  saveRelayWorkerBaseUrl('https://other.example')
+  await flushPromises()
+  expect(wrapper.get('.tavern-device-join button').attributes('data-relay-enabled')).toBe('false')
 })
 
 function resource(overrides: Partial<ResourceSummary>): ResourceSummary {
@@ -1337,7 +1388,7 @@ describe('用户人设共用互传通道', () => {
 })
 
 describe('bridge send content preference', () => {
-  it('opens two settings rows before connection and persists choices without loading scripts', async () => {
+  it('keeps version settings without automatic script-source selection', async () => {
     bridgeMocks.getState.mockReturnValue({
       status: 'idle',
       detail: '未连接',
@@ -1352,10 +1403,10 @@ describe('bridge send content preference', () => {
     await button.trigger('click')
     const dialog = transferSettings()
     expect((dialog.element as HTMLDialogElement).open).toBe(true)
-    const toggle = dialog.get('input[role="switch"]')
-    expect((toggle.element as HTMLInputElement).checked).toBe(true)
-    await toggle.setValue(false)
+    expect(dialog.find('input[role="switch"]').exists()).toBe(true)
+    await dialog.get('input[role="switch"]').setValue(false)
     expect(browserStorageService.setTavernChatCarryScripts).toHaveBeenLastCalledWith(false)
+    expect(dialog.text()).toContain('仅携带角色脚本')
     expect(bridgeMocks.listResources).not.toHaveBeenCalled()
     await dialog
       .findAll('button')
@@ -1371,7 +1422,7 @@ describe('bridge send content preference', () => {
     await dialog.get('[aria-label="关闭互传设置"]').trigger('click')
     expect((dialog.element as HTMLDialogElement).open).toBe(false)
     await button.trigger('click')
-    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    expect(dialog.find('.tavern-bridge-chat-scripts').exists()).toBe(false)
   })
   it.each([
     ['modified', 'relay'],
@@ -1537,77 +1588,64 @@ it('keeps an original legacy draft operation identity when retrying original con
   await flushPromises()
 })
 
-it('keeps chat script selection folded/lazy, searchable after no matches, and snapshots it for transfer', async () => {
-  vi.clearAllMocks()
-  tavernConnectionStore.clearInventory()
-  bridgeMocks.getState.mockReturnValue({
-    status: 'connected',
-    detail: '已连接',
-    pairCode: '',
-    tavernOrigin: 'https://chat-scripts.test',
-    bridgeVersion: '0.3.57',
-    capabilities: [
-      'chat-archive-v1',
-      'chat-reading-scripts-v1',
-      'pull-cancel-v1',
-      'pull-progress-v1',
-    ],
-  } as ReturnType<typeof bridgeMocks.getState>)
-  const chat: TavernResourceItem = {
-    id: 'chat:one',
-    kind: 'chat',
-    name: '雨夜',
-    fileName: '雨夜.srlchat',
-    detail: '',
-  }
-  bridgeMocks.listResources.mockImplementation(async (kind) => (kind === 'chat' ? [chat] : []))
-  bridgeMocks.pullResources.mockResolvedValue([new File(['chat'], '雨夜.srlchat')])
-  const wrapper = render()
-  await flushPromises()
-  await wrapper
-    .findAll('.tavern-bridge-type-filter button')
-    .find((b) => b.text().includes('聊天记录'))!
-    .trigger('click')
-  await flushPromises()
-  await wrapper.get('[aria-label="酒馆互传设置"]').trigger('click')
-  const group = transferSettings().get('.tavern-bridge-chat-scripts')
-  expect((group.element as HTMLDetailsElement).open).toBe(false)
-  const calls = bridgeMocks.listResources.mock.calls.length
-  await group.get('summary').trigger('click')
-  expect(bridgeMocks.listResources).toHaveBeenCalledTimes(calls)
-  bridgeMocks.listResources.mockResolvedValue(
-    Array.from({ length: 9 }, (_, i) => ({
-      id: `scriptGlobal:${i}`,
-      kind: 'scriptGlobal',
-      name: `手机${i}`,
-      fileName: `${i}.json`,
-      detail: '全局',
-    })),
-  )
-  await group
-    .findAll('button')
-    .find((b) => b.attributes('aria-label') === '读取可附带脚本')!
-    .trigger('click')
-  await flushPromises()
-  await group.get('input[type="search"]').setValue('无匹配')
-  expect(group.find('input[type="search"]').exists()).toBe(true)
-  await group.get('input[type="search"]').setValue('')
-  for (const box of group.findAll('input[type="checkbox"]').slice(0, 8)) await box.setValue(true)
-  expect(group.findAll('input[type="checkbox"]')[8]!.attributes('disabled')).toBeDefined()
-  await wrapper.get('.tavern-bridge-resource-card').trigger('click')
-  await wrapper
-    .findAll('.tavern-bridge__sticky-action')
-    .find((b) => b.text().includes('取回'))!
-    .trigger('click')
-  await flushPromises()
-  expect(bridgeMocks.pullResources).toHaveBeenCalledWith(
-    [
-      expect.objectContaining({
-        id: chat.id,
-        carryReadingScripts: true,
-        readingScriptIds: Array.from({ length: 8 }, (_, i) => `scriptGlobal:${i}`),
-      }),
-    ],
-    { signal: expect.any(AbortSignal) },
-  )
-})
+it.each([true, false])(
+  'restores the carry setting %s and requests only role scripts without extra selections',
+  async (carryReadingScripts) => {
+    vi.clearAllMocks()
+    vi.mocked(browserStorageService.getTavernChatCarryScripts).mockReturnValueOnce(
+      carryReadingScripts,
+    )
+    tavernConnectionStore.clearInventory()
+    bridgeMocks.getState.mockReturnValue({
+      status: 'connected',
+      detail: '已连接',
+      pairCode: '',
+      tavernOrigin: 'https://chat-scripts.test',
+      bridgeVersion: '0.3.57',
+      capabilities: [
+        'chat-archive-v1',
+        'chat-reading-scripts-v1',
+        'pull-cancel-v1',
+        'pull-progress-v1',
+      ],
+    } as ReturnType<typeof bridgeMocks.getState>)
+    const chat: TavernResourceItem = {
+      id: 'chat:one',
+      kind: 'chat',
+      name: '雨夜',
+      fileName: '雨夜.srlchat',
+      detail: '',
+    }
+    bridgeMocks.listResources.mockImplementation(async (kind) => (kind === 'chat' ? [chat] : []))
+    bridgeMocks.pullResources.mockResolvedValue([new File(['chat'], '雨夜.srlchat')])
+    const wrapper = render()
+    await flushPromises()
+    await wrapper
+      .findAll('.tavern-bridge-type-filter button')
+      .find((b) => b.text().includes('聊天记录'))!
+      .trigger('click')
+    await flushPromises()
+    await wrapper.get('[aria-label="酒馆互传设置"]').trigger('click')
+    expect(transferSettings().find('.tavern-bridge-chat-scripts').exists()).toBe(false)
+    expect(
+      (transferSettings().get('[aria-label="聊天记录互传携带脚本"]').element as HTMLInputElement)
+        .checked,
+    ).toBe(carryReadingScripts)
+    await wrapper.get('.tavern-bridge-resource-card').trigger('click')
+    await wrapper
+      .findAll('.tavern-bridge__sticky-action')
+      .find((b) => b.text().includes('取回'))!
+      .trigger('click')
+    await flushPromises()
+    expect(bridgeMocks.pullResources).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          id: chat.id,
+          carryReadingScripts,
+          readingScriptIds: [],
+        }),
+      ],
+      { signal: expect.any(AbortSignal) },
+    )
+  },
+)

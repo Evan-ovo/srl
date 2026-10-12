@@ -66,8 +66,8 @@
   right: 0.2rem;
   width: var(--size-touch);
   height: var(--size-touch);
-  color: white;
-  background: rgb(20 20 20 / 75%);
+  color: var(--button-color, var(--color-on-brand));
+  background: var(--button-background, var(--viewer-control-background));
 }
 .frontend-workshop__blocks,
 .frontend-workshop__design-tokens,
@@ -76,9 +76,8 @@
   border: 1px solid var(--color-line);
   background: var(--color-surface-raised);
 }
-.frontend-workshop__blocks > summary,
-.frontend-workshop__design-tokens > summary,
-.frontend-workshop__conditions > summary {
+:is(.frontend-workshop__blocks, .frontend-workshop__design-tokens, .frontend-workshop__conditions)
+  > summary {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -88,23 +87,23 @@
   padding: 0.6rem 0.7rem;
   cursor: pointer;
 }
-.frontend-workshop__blocks > summary span,
-.frontend-workshop__design-tokens > summary span,
-.frontend-workshop__conditions > summary span {
+:is(.frontend-workshop__blocks, .frontend-workshop__design-tokens, .frontend-workshop__conditions)
+  > summary
+  span {
   display: grid;
   min-width: 0;
 }
-.frontend-workshop__blocks > summary strong,
-.frontend-workshop__design-tokens > summary strong,
-.frontend-workshop__conditions > summary strong {
+:is(.frontend-workshop__blocks, .frontend-workshop__design-tokens, .frontend-workshop__conditions)
+  > summary
+  strong {
   min-width: 0;
   margin: 0;
   font: var(--weight-title) var(--text-body)/1.35 var(--font-ui);
   overflow-wrap: anywhere;
 }
-.frontend-workshop__blocks > summary em,
-.frontend-workshop__design-tokens > summary em,
-.frontend-workshop__conditions > summary em {
+:is(.frontend-workshop__blocks, .frontend-workshop__design-tokens, .frontend-workshop__conditions)
+  > summary
+  em {
   flex: 0 0 auto;
   color: var(--color-ink-soft);
   font: var(--weight-body) var(--text-caption)/1.4 var(--font-ui);
@@ -148,15 +147,15 @@
   padding: 0.5rem;
   cursor: pointer;
   overflow: hidden;
-  border: 1px solid var(--color-line);
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
   text-align: left;
 }
 .frontend-workshop__design-tokens fieldset > button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
   box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 .frontend-workshop__design-tokens fieldset > button strong {
@@ -278,7 +277,7 @@
 .frontend-workshop__module-prompt > summary {
   min-height: var(--size-touch);
   padding: 0.55rem 0;
-  color: var(--color-accent);
+  color: var(--button-color, var(--color-accent));
   cursor: pointer;
   font-size: var(--text-caption);
   font-weight: var(--weight-ui);
@@ -310,7 +309,7 @@
   max-height: 1.1rem;
   margin: 0;
   padding: 0;
-  border-radius: 0.15rem;
+  border-radius: var(--control-radius, 0.15rem);
   accent-color: var(--color-accent);
 }
 
@@ -374,9 +373,9 @@
   min-height: var(--control-visual-secondary);
   margin-top: 0.45rem;
   padding-inline: 0.75rem;
-  border: 1px solid var(--color-line);
-  color: var(--color-ink-soft);
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line));
+  color: var(--button-color, var(--color-ink-soft));
+  background: var(--button-background, transparent);
   cursor: pointer;
 }
 
@@ -406,9 +405,8 @@
     grid-column: 1;
   }
 
-  .frontend-workshop__blocks > summary,
-  .frontend-workshop__design-tokens > summary,
-  .frontend-workshop__conditions > summary {
+  :is(.frontend-workshop__blocks, .frontend-workshop__design-tokens, .frontend-workshop__conditions)
+    > summary {
     align-items: stretch;
     flex-direction: column;
   }

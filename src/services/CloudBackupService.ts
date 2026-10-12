@@ -305,46 +305,51 @@ export class CloudBackupService extends CloudBackupTransport {
   }
 
   async testConnection(config: CloudBackupConfig, secret?: string): Promise<string> {
-    await this.initializeCredentials()
-    const credential = secret || this.requireSecret(config.provider)
-    try {
-      if (config.provider === 'github') {
-        const repository = await this.inspectGitHubRepository(config, credential)
-        return `已连接 ${repository.fullName}${repository.isPrivate ? '（私有仓库）' : '（公开仓库，建议改为私有）'}`
-      }
-      await this.ensureWebDavFolder(config, credential)
-      const probeUrl = joinUrl(
-        config.baseUrl,
-        normalizeFolder(config.folder),
-        '.srl-connection-test',
-      )
-      const response = await this.cloudFetch(
-        probeUrl,
-        {
-          method: 'PUT',
-          headers: {
-            Authorization: basicAuthorization(config.username, credential),
-            'Content-Type': 'text/plain',
-          },
-          body: 'SRL connection test',
-        },
-        'webdav',
-      )
-      if (!response.ok)
-        throw cloudHttpError(`WebDAV 写入测试返回 ${response.status}`, response.status)
-      await this.cloudFetch(
-        probeUrl,
-        {
-          method: 'DELETE',
-          headers: { Authorization: basicAuthorization(config.username, credential) },
-        },
-        'webdav',
-      )
-      return 'Koofr 连接成功'
-    } catch (error) {
-      if (!secret) await this.invalidateCredentialOnConfirmed401(config.provider, error)
-      throw friendlyNetworkError(error, config.provider)
-    }
+    return this.withRelayWorkerTarget(
+      config?.provider ?? this.getActiveConfig().provider,
+      async () => {
+        await this.initializeCredentials()
+        const credential = secret || this.requireSecret(config.provider)
+        try {
+          if (config.provider === 'github') {
+            const repository = await this.inspectGitHubRepository(config, credential)
+            return `已连接 ${repository.fullName}${repository.isPrivate ? '（私有仓库）' : '（公开仓库，建议改为私有）'}`
+          }
+          await this.ensureWebDavFolder(config, credential)
+          const probeUrl = joinUrl(
+            config.baseUrl,
+            normalizeFolder(config.folder),
+            '.srl-connection-test',
+          )
+          const response = await this.cloudFetch(
+            probeUrl,
+            {
+              method: 'PUT',
+              headers: {
+                Authorization: basicAuthorization(config.username, credential),
+                'Content-Type': 'text/plain',
+              },
+              body: 'SRL connection test',
+            },
+            'webdav',
+          )
+          if (!response.ok)
+            throw cloudHttpError(`WebDAV 写入测试返回 ${response.status}`, response.status)
+          await this.cloudFetch(
+            probeUrl,
+            {
+              method: 'DELETE',
+              headers: { Authorization: basicAuthorization(config.username, credential) },
+            },
+            'webdav',
+          )
+          return 'Koofr 连接成功'
+        } catch (error) {
+          if (!secret) await this.invalidateCredentialOnConfirmed401(config.provider, error)
+          throw friendlyNetworkError(error, config.provider)
+        }
+      },
+    )
   }
 
   async createBackup(
@@ -353,213 +358,219 @@ export class CloudBackupService extends CloudBackupTransport {
     onProgress?: CloudBackupProgressCallback,
     respectAutomaticConstraints = false,
   ): Promise<CloudBackupItem> {
-    await this.initializeCredentials()
-    const resolved = config ?? this.getActiveConfig()
-    const credential = secret || this.requireSecret(resolved.provider)
-    if (isNativeCloudTransferAvailable()) {
-      const latest = await getLatestNativeCloudJob(resolved.provider).catch(() => null)
-      if (latest && ['staging', 'queued', 'running', 'committing'].includes(latest.status)) {
-        throw new Error('已有 Android 原生云备份正在继续；不会重新开始整个备份')
-      }
-    }
-    if (this.transportState.activeMetrics)
-      throw new Error('已有云备份正在执行，请等待它结束或先取消')
-    const metrics = new CloudBackupMetricsTracker()
-    this.transportState.activeMetrics = metrics
-    this.writeStatus({
-      provider: resolved.provider,
-      lastAttemptAt: Date.now(),
-      lastError: undefined,
-      lastWarning: undefined,
-    })
-    try {
-      if (isNativeCloudTransferAvailable() && this.prepareNativeBackup) {
-        onProgress?.('正在核对 Android 本机原件镜像…')
-        await metrics.measure('prepareMs', this.prepareNativeBackup)
-      }
-      onProgress?.('正在读取资源与历史版本…')
-      const contentSelection = normalizeContentSelection(resolved.contentSelection)
-      if (contentSelection.communitySources && resolved.provider === 'github') {
-        const target = this.githubTargetKey(resolved)
-        if (!this.verifiedPrivateGitHubTargets.has(target)) {
-          const repository = await this.inspectGitHubRepository(resolved, credential)
-          if (!repository.isPrivate)
-            throw new Error(
-              `GitHub 仓库 ${repository.fullName} 是公开仓库，已阻止上传 Discord 社区内容。请先把仓库改为 Private，再重新测试连接。`,
+    return this.withRelayWorkerTarget(
+      config?.provider ?? this.getActiveConfig().provider,
+      async () => {
+        await this.initializeCredentials()
+        const resolved = config ?? this.getActiveConfig()
+        const credential = secret || this.requireSecret(resolved.provider)
+        if (isNativeCloudTransferAvailable()) {
+          const latest = await getLatestNativeCloudJob(resolved.provider).catch(() => null)
+          if (latest && ['staging', 'queued', 'running', 'committing'].includes(latest.status)) {
+            throw new Error('已有 Android 原生云备份正在继续；不会重新开始整个备份')
+          }
+        }
+        if (this.transportState.activeMetrics)
+          throw new Error('已有云备份正在执行，请等待它结束或先取消')
+        const metrics = new CloudBackupMetricsTracker()
+        this.transportState.activeMetrics = metrics
+        this.writeStatus({
+          provider: resolved.provider,
+          lastAttemptAt: Date.now(),
+          lastError: undefined,
+          lastWarning: undefined,
+        })
+        try {
+          if (isNativeCloudTransferAvailable() && this.prepareNativeBackup) {
+            onProgress?.('正在核对 Android 本机原件镜像…')
+            await metrics.measure('prepareMs', this.prepareNativeBackup)
+          }
+          onProgress?.('正在读取资源与历史版本…')
+          const contentSelection = normalizeContentSelection(resolved.contentSelection)
+          if (contentSelection.communitySources && resolved.provider === 'github') {
+            const target = this.githubTargetKey(resolved)
+            if (!this.verifiedPrivateGitHubTargets.has(target)) {
+              const repository = await this.inspectGitHubRepository(resolved, credential)
+              if (!repository.isPrivate)
+                throw new Error(
+                  `GitHub 仓库 ${repository.fullName} 是公开仓库，已阻止上传 Discord 社区内容。请先把仓库改为 Private，再重新测试连接。`,
+                )
+            }
+          }
+          const portableData: ArchivePortableData = await metrics.measure('prepareMs', async () =>
+            Promise.resolve(this.portableDataFactory?.(contentSelection)).then(
+              (value) => value ?? { version: 1 },
+            ),
+          )
+          if (contentSelection.cloudBackup) portableData.cloudBackup = this.exportPortableSettings()
+          if (contentSelection.personalResources?.secret && contentSelection.plaintextSecretCopy) {
+            portableData.plaintextSecretCopies = await cloudPlainSecretCopies(
+              resolved,
+              this.resourceService,
             )
-        }
-      }
-      const portableData: ArchivePortableData = await metrics.measure('prepareMs', async () =>
-        Promise.resolve(this.portableDataFactory?.(contentSelection)).then(
-          (value) => value ?? { version: 1 },
-        ),
-      )
-      if (contentSelection.cloudBackup) portableData.cloudBackup = this.exportPortableSettings()
-      if (contentSelection.personalResources?.secret && contentSelection.plaintextSecretCopy) {
-        portableData.plaintextSecretCopies = await cloudPlainSecretCopies(
-          resolved,
-          this.resourceService,
-        )
-      }
-      if (
-        typeof this.resourceService.listSummaries === 'function' &&
-        typeof this.resourceService.listVersions === 'function'
-      ) {
-        onProgress?.('正在读取轻量索引，检查本机内容是否变化…')
-        const index = await metrics.measure('prepareMs', () =>
-          readStructuredBackupIndex(this.snapshotContext(), contentSelection.personalResources),
-        )
-        const currentResourceCount = index.resourceCount
-        const previousHealth = this.getSnapshot().status
-        const suspiciousDrop =
-          previousHealth.lastHealthyResourceCount !== undefined &&
-          previousHealth.lastHealthyResourceCount > 0 &&
-          currentResourceCount <
-            Math.max(1, Math.floor(previousHealth.lastHealthyResourceCount * 0.5))
-        if (suspiciousDrop && respectAutomaticConstraints) {
-          throw new Error(
-            `本机资源从上次健康备份的 ${previousHealth.lastHealthyResourceCount} 项骤降到 ${currentResourceCount} 项，已暂停自动备份与旧备份清理，请先检查资源库。`,
-          )
-        }
-        const contentFingerprint = await metrics.measure('hashMs', () =>
-          this.createStructuredFingerprint(resolved, portableData, index),
-        )
-        const previousStatus = this.getSnapshot().status
-        if (
-          previousStatus.provider === resolved.provider &&
-          previousStatus.lastContentFingerprint === contentFingerprint &&
-          previousStatus.lastObjectKey
-        ) {
-          onProgress?.('本机内容与上次成功备份一致，正在核对远端清单…')
-          const reused = await this.reuseUnchangedStructuredBackup(
-            resolved,
-            credential,
-            previousStatus.lastObjectKey,
-          )
-          if (reused) {
+          }
+          if (
+            typeof this.resourceService.listSummaries === 'function' &&
+            typeof this.resourceService.listVersions === 'function'
+          ) {
+            onProgress?.('正在读取轻量索引，检查本机内容是否变化…')
+            const index = await metrics.measure('prepareMs', () =>
+              readStructuredBackupIndex(this.snapshotContext(), contentSelection.personalResources),
+            )
+            const currentResourceCount = index.resourceCount
+            const previousHealth = this.getSnapshot().status
+            const suspiciousDrop =
+              previousHealth.lastHealthyResourceCount !== undefined &&
+              previousHealth.lastHealthyResourceCount > 0 &&
+              currentResourceCount <
+                Math.max(1, Math.floor(previousHealth.lastHealthyResourceCount * 0.5))
+            if (suspiciousDrop && respectAutomaticConstraints) {
+              throw new Error(
+                `本机资源从上次健康备份的 ${previousHealth.lastHealthyResourceCount} 项骤降到 ${currentResourceCount} 项，已暂停自动备份与旧备份清理，请先检查资源库。`,
+              )
+            }
+            const contentFingerprint = await metrics.measure('hashMs', () =>
+              this.createStructuredFingerprint(resolved, portableData, index),
+            )
+            const previousStatus = this.getSnapshot().status
+            if (
+              previousStatus.provider === resolved.provider &&
+              previousStatus.lastContentFingerprint === contentFingerprint &&
+              previousStatus.lastObjectKey
+            ) {
+              onProgress?.('本机内容与上次成功备份一致，正在核对远端清单…')
+              const reused = await this.reuseUnchangedStructuredBackup(
+                resolved,
+                credential,
+                previousStatus.lastObjectKey,
+              )
+              if (reused) {
+                const lastMetrics = metrics.snapshot(true)
+                this.writeStatus({
+                  provider: resolved.provider,
+                  lastAttemptAt: Date.now(),
+                  lastSuccessAt: Date.now(),
+                  lastObjectKey: reused.objectKey,
+                  lastSize: reused.size,
+                  lastContentFingerprint: contentFingerprint,
+                  lastResourceCount: currentResourceCount,
+                  lastHealthyObjectKey: suspiciousDrop
+                    ? previousHealth.lastHealthyObjectKey
+                    : reused.objectKey,
+                  lastHealthyResourceCount: suspiciousDrop
+                    ? previousHealth.lastHealthyResourceCount
+                    : currentResourceCount,
+                  lastMetrics,
+                  lastError: undefined,
+                  lastWarning: undefined,
+                })
+                return { ...reused, unchanged: true, metrics: lastMetrics }
+              }
+              onProgress?.('远端上次清单缺失或不完整，正在重新构建对象快照…')
+            }
+            const structured = await metrics.measure('objectBuildMs', () =>
+              this.buildStructuredBackup(
+                portableData,
+                onProgress,
+                contentSelection.personalResources,
+                index,
+              ),
+            )
+            if (structured.descriptorUpdates?.length) {
+              onProgress?.('正在保存可复用的分块描述，下次差量备份将跳过未变大文件扫描…')
+              for (const update of structured.descriptorUpdates) {
+                await this.resourceService.updateBackupDescriptor(
+                  update.id,
+                  update.descriptor,
+                  update.historical,
+                )
+              }
+            }
+            metrics.add('localReadBytes', structured.localReadBytes ?? structured.totalSize)
+            const item =
+              resolved.provider === 'github'
+                ? await this.uploadGitHubStructuredBackup(
+                    resolved,
+                    credential,
+                    structured,
+                    onProgress,
+                    respectAutomaticConstraints,
+                  )
+                : await this.uploadWebDavStructuredBackup(
+                    resolved,
+                    credential,
+                    structured,
+                    onProgress,
+                    respectAutomaticConstraints,
+                  )
+            let maintenanceWarning: string | undefined
+            try {
+              if (suspiciousDrop) {
+                maintenanceWarning =
+                  '检测到资源数量异常下降：新快照已作为事故现场保留，未执行任何云端清理。'
+              } else {
+                onProgress?.('备份已提交成功，正在按保留份数检查旧快照…')
+                const removed = await metrics.measure('maintenanceMs', () =>
+                  this.prune(
+                    resolved,
+                    credential,
+                    item.objectKey,
+                    false,
+                    structured.snapshot,
+                    onProgress,
+                  ),
+                )
+                if (removed > 0)
+                  maintenanceWarning = `已按保留份数自动清理 ${removed} 份旧云端快照。`
+              }
+            } catch (error) {
+              maintenanceWarning = `新对象快照已上传成功，但旧备份清理失败：${friendlyNetworkError(error, resolved.provider).message}`
+            }
             const lastMetrics = metrics.snapshot(true)
             this.writeStatus({
               provider: resolved.provider,
               lastAttemptAt: Date.now(),
               lastSuccessAt: Date.now(),
-              lastObjectKey: reused.objectKey,
-              lastSize: reused.size,
+              lastObjectKey: item.objectKey,
+              lastSize: item.size,
               lastContentFingerprint: contentFingerprint,
               lastResourceCount: currentResourceCount,
               lastHealthyObjectKey: suspiciousDrop
                 ? previousHealth.lastHealthyObjectKey
-                : reused.objectKey,
+                : item.objectKey,
               lastHealthyResourceCount: suspiciousDrop
                 ? previousHealth.lastHealthyResourceCount
                 : currentResourceCount,
               lastMetrics,
               lastError: undefined,
-              lastWarning: undefined,
+              lastWarning: maintenanceWarning,
             })
-            return { ...reused, unchanged: true, metrics: lastMetrics }
+            return maintenanceWarning
+              ? { ...item, maintenanceWarning, metrics: lastMetrics }
+              : { ...item, metrics: lastMetrics }
           }
-          onProgress?.('远端上次清单缺失或不完整，正在重新构建对象快照…')
-        }
-        const structured = await metrics.measure('objectBuildMs', () =>
-          this.buildStructuredBackup(
-            portableData,
-            onProgress,
-            contentSelection.personalResources,
-            index,
-          ),
-        )
-        if (structured.descriptorUpdates?.length) {
-          onProgress?.('正在保存可复用的分块描述，下次差量备份将跳过未变大文件扫描…')
-          for (const update of structured.descriptorUpdates) {
-            await this.resourceService.updateBackupDescriptor(
-              update.id,
-              update.descriptor,
-              update.historical,
-            )
-          }
-        }
-        metrics.add('localReadBytes', structured.localReadBytes ?? structured.totalSize)
-        const item =
-          resolved.provider === 'github'
-            ? await this.uploadGitHubStructuredBackup(
-                resolved,
-                credential,
-                structured,
-                onProgress,
-                respectAutomaticConstraints,
-              )
-            : await this.uploadWebDavStructuredBackup(
-                resolved,
-                credential,
-                structured,
-                onProgress,
-                respectAutomaticConstraints,
-              )
-        let maintenanceWarning: string | undefined
-        try {
-          if (suspiciousDrop) {
-            maintenanceWarning =
-              '检测到资源数量异常下降：新快照已作为事故现场保留，未执行任何云端清理。'
-          } else {
-            onProgress?.('备份已提交成功，正在按保留份数检查旧快照…')
-            const removed = await metrics.measure('maintenanceMs', () =>
-              this.prune(
-                resolved,
-                credential,
-                item.objectKey,
-                false,
-                structured.snapshot,
-                onProgress,
-              ),
-            )
-            if (removed > 0) maintenanceWarning = `已按保留份数自动清理 ${removed} 份旧云端快照。`
-          }
+          throw new Error('当前资源存储不支持 Cloud Backup V3 所需的摘要与版本读取接口')
         } catch (error) {
-          maintenanceWarning = `新对象快照已上传成功，但旧备份清理失败：${friendlyNetworkError(error, resolved.provider).message}`
+          await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
+          const friendly = friendlyNetworkError(error, resolved.provider)
+          const lastMetrics = metrics.snapshot(true)
+          this.writeStatus({
+            provider: resolved.provider,
+            lastAttemptAt: Date.now(),
+            lastMetrics,
+            lastError: friendly.message,
+            lastWarning: undefined,
+          })
+          throw friendly
+        } finally {
+          if (this.transportState.activeMetrics === metrics) {
+            this.transportState.activeMetrics = undefined
+            this.transportState.activeGitHubInventory = undefined
+            this.transportState.activeWebDavInventory = undefined
+          }
         }
-        const lastMetrics = metrics.snapshot(true)
-        this.writeStatus({
-          provider: resolved.provider,
-          lastAttemptAt: Date.now(),
-          lastSuccessAt: Date.now(),
-          lastObjectKey: item.objectKey,
-          lastSize: item.size,
-          lastContentFingerprint: contentFingerprint,
-          lastResourceCount: currentResourceCount,
-          lastHealthyObjectKey: suspiciousDrop
-            ? previousHealth.lastHealthyObjectKey
-            : item.objectKey,
-          lastHealthyResourceCount: suspiciousDrop
-            ? previousHealth.lastHealthyResourceCount
-            : currentResourceCount,
-          lastMetrics,
-          lastError: undefined,
-          lastWarning: maintenanceWarning,
-        })
-        return maintenanceWarning
-          ? { ...item, maintenanceWarning, metrics: lastMetrics }
-          : { ...item, metrics: lastMetrics }
-      }
-      throw new Error('当前资源存储不支持 Cloud Backup V3 所需的摘要与版本读取接口')
-    } catch (error) {
-      await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
-      const friendly = friendlyNetworkError(error, resolved.provider)
-      const lastMetrics = metrics.snapshot(true)
-      this.writeStatus({
-        provider: resolved.provider,
-        lastAttemptAt: Date.now(),
-        lastMetrics,
-        lastError: friendly.message,
-        lastWarning: undefined,
-      })
-      throw friendly
-    } finally {
-      if (this.transportState.activeMetrics === metrics) {
-        this.transportState.activeMetrics = undefined
-        this.transportState.activeGitHubInventory = undefined
-        this.transportState.activeWebDavInventory = undefined
-      }
-    }
+      },
+    )
   }
 
   async listBackups(
@@ -568,33 +579,43 @@ export class CloudBackupService extends CloudBackupTransport {
     onProgress?: CloudBackupProgressCallback,
     onWarning?: CloudBackupProgressCallback,
   ): Promise<CloudBackupItem[]> {
-    await this.initializeCredentials()
-    const resolved = config ?? this.getActiveConfig()
-    const credential = secret || this.requireSecret(resolved.provider)
-    try {
-      return resolved.provider === 'github'
-        ? await this.listGitHub(resolved, credential, onProgress)
-        : await this.listWebDav(resolved, credential, onProgress, onWarning)
-    } catch (error) {
-      await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
-      throw friendlyNetworkError(error, resolved.provider)
-    }
+    return this.withRelayWorkerTarget(
+      config?.provider ?? this.getActiveConfig().provider,
+      async () => {
+        await this.initializeCredentials()
+        const resolved = config ?? this.getActiveConfig()
+        const credential = secret || this.requireSecret(resolved.provider)
+        try {
+          return resolved.provider === 'github'
+            ? await this.listGitHub(resolved, credential, onProgress)
+            : await this.listWebDav(resolved, credential, onProgress, onWarning)
+        } catch (error) {
+          await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
+          throw friendlyNetworkError(error, resolved.provider)
+        }
+      },
+    )
   }
 
   async enforceRetention(
     config?: CloudBackupConfig,
     secret?: string,
   ): Promise<{ removed: number; remaining: number }> {
-    await this.initializeCredentials()
-    const resolved = config ?? this.getActiveConfig()
-    const credential = secret || this.requireSecret(resolved.provider)
-    try {
-      const removed = await this.prune(resolved, credential, undefined, true)
-      return { removed, remaining: normalizeRetention(resolved.retention) }
-    } catch (error) {
-      await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
-      throw friendlyNetworkError(error, resolved.provider)
-    }
+    return this.withRelayWorkerTarget(
+      config?.provider ?? this.getActiveConfig().provider,
+      async () => {
+        await this.initializeCredentials()
+        const resolved = config ?? this.getActiveConfig()
+        const credential = secret || this.requireSecret(resolved.provider)
+        try {
+          const removed = await this.prune(resolved, credential, undefined, true)
+          return { removed, remaining: normalizeRetention(resolved.retention) }
+        } catch (error) {
+          await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
+          throw friendlyNetworkError(error, resolved.provider)
+        }
+      },
+    )
   }
 
   async downloadBackup(
@@ -602,44 +623,49 @@ export class CloudBackupService extends CloudBackupTransport {
     config?: CloudBackupConfig,
     secret?: string,
   ): Promise<Blob> {
-    await this.initializeCredentials()
-    const resolved = config ?? this.getActiveConfig()
-    const credential = secret || this.requireSecret(resolved.provider)
-    try {
-      if (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot') {
-        return (await this.materializeStructuredArchive(item, resolved, credential)).blob
-      }
-      if (resolved.provider === 'github') {
-        if (item.kind === 'githubBundle' || item.objectKey.endsWith('.srlbundle.json')) {
-          return this.downloadGitHubBundle(resolved, credential, item)
+    return this.withRelayWorkerTarget(
+      config?.provider ?? this.getActiveConfig().provider,
+      async () => {
+        await this.initializeCredentials()
+        const resolved = config ?? this.getActiveConfig()
+        const credential = secret || this.requireSecret(resolved.provider)
+        try {
+          if (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot') {
+            return (await this.materializeStructuredArchive(item, resolved, credential)).blob
+          }
+          if (resolved.provider === 'github') {
+            if (item.kind === 'githubBundle' || item.objectKey.endsWith('.srlbundle.json')) {
+              return this.downloadGitHubBundle(resolved, credential, item)
+            }
+            const response = await this.githubFetch(
+              resolved,
+              credential,
+              `/releases/assets/${item.id}`,
+              {
+                headers: { Accept: 'application/octet-stream' },
+              },
+            )
+            return this.verifyDownloadedBlob(item, await response.blob())
+          }
+          if (item.kind === 'webdavBundle' || item.objectKey.endsWith('.srlbundle.json')) {
+            return this.downloadWebDavBundle(resolved, credential, item)
+          }
+          const response = await this.cloudFetch(
+            joinUrl(resolved.baseUrl, normalizeFolder(resolved.folder), item.objectKey),
+            {
+              headers: { Authorization: basicAuthorization(resolved.username, credential) },
+            },
+            'webdav',
+          )
+          if (!response.ok)
+            throw cloudHttpError(`WebDAV 下载失败（${response.status}）`, response.status)
+          return this.verifyDownloadedBlob(item, await response.blob())
+        } catch (error) {
+          await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
+          throw friendlyNetworkError(error, resolved.provider)
         }
-        const response = await this.githubFetch(
-          resolved,
-          credential,
-          `/releases/assets/${item.id}`,
-          {
-            headers: { Accept: 'application/octet-stream' },
-          },
-        )
-        return this.verifyDownloadedBlob(item, await response.blob())
-      }
-      if (item.kind === 'webdavBundle' || item.objectKey.endsWith('.srlbundle.json')) {
-        return this.downloadWebDavBundle(resolved, credential, item)
-      }
-      const response = await this.cloudFetch(
-        joinUrl(resolved.baseUrl, normalizeFolder(resolved.folder), item.objectKey),
-        {
-          headers: { Authorization: basicAuthorization(resolved.username, credential) },
-        },
-        'webdav',
-      )
-      if (!response.ok)
-        throw cloudHttpError(`WebDAV 下载失败（${response.status}）`, response.status)
-      return this.verifyDownloadedBlob(item, await response.blob())
-    } catch (error) {
-      await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
-      throw friendlyNetworkError(error, resolved.provider)
-    }
+      },
+    )
   }
 
   async listBackupResources(item: CloudBackupItem): Promise<ResourceSummary[]> {
@@ -649,29 +675,31 @@ export class CloudBackupService extends CloudBackupTransport {
   async listBackupRestoreContents(
     item: CloudBackupItem,
   ): Promise<{ resources: ResourceSummary[]; portableScopeIds: BackupScopeId[] }> {
-    await this.initializeCredentials()
-    const resolved = this.getActiveConfig()
-    const credential = this.requireSecret(resolved.provider)
-    try {
-      const contents = await readBackupRestoreContents(
-        item,
-        async () =>
-          resolved.provider === 'github'
-            ? await this.readGitHubStructuredSnapshot(resolved, credential, item)
-            : await this.readWebDavStructuredSnapshot(resolved, credential, item.objectKey),
-        () => this.downloadBackup(item),
-        this.resourceService,
-        this.categoryService,
-        this.restoreService,
-      )
-      return {
-        resources: contents.resources,
-        portableScopeIds: portableRestoreScopeIds(contents.portableData),
+    return this.withRelayWorkerTarget(this.getActiveConfig().provider, async () => {
+      await this.initializeCredentials()
+      const resolved = this.getActiveConfig()
+      const credential = this.requireSecret(resolved.provider)
+      try {
+        const contents = await readBackupRestoreContents(
+          item,
+          async () =>
+            resolved.provider === 'github'
+              ? await this.readGitHubStructuredSnapshot(resolved, credential, item)
+              : await this.readWebDavStructuredSnapshot(resolved, credential, item.objectKey),
+          () => this.downloadBackup(item),
+          this.resourceService,
+          this.categoryService,
+          this.restoreService,
+        )
+        return {
+          resources: contents.resources,
+          portableScopeIds: portableRestoreScopeIds(contents.portableData),
+        }
+      } catch (error) {
+        await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
+        throw friendlyNetworkError(error, resolved.provider)
       }
-    } catch (error) {
-      await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
-      throw friendlyNetworkError(error, resolved.provider)
-    }
+    })
   }
 
   async restoreBackup(
@@ -681,49 +709,52 @@ export class CloudBackupService extends CloudBackupTransport {
     includeGallery = true,
     portableScopeIds?: readonly BackupScopeId[],
   ): Promise<number> {
-    if (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot') {
-      const resolved = this.getActiveConfig()
-      const credential = this.requireSecret(resolved.provider)
-      try {
-        return await this.restoreStructuredBackup(
-          item,
-          resolved,
-          credential,
-          filterPortableData,
-          resourceKeys,
-          includeGallery,
-          portableScopeIds,
-        )
-      } catch (error) {
-        await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
-        throw friendlyNetworkError(error, resolved.provider)
+    return this.withRelayWorkerTarget(this.getSnapshot().activeProvider, async () => {
+      if (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot') {
+        const resolved = this.getActiveConfig()
+        const credential = this.requireSecret(resolved.provider)
+        try {
+          return await this.restoreStructuredBackup(
+            item,
+            resolved,
+            credential,
+            filterPortableData,
+            resourceKeys,
+            includeGallery,
+            portableScopeIds,
+          )
+        } catch (error) {
+          await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
+          throw friendlyNetworkError(error, resolved.provider)
+        }
       }
-    }
-    const blob = await this.downloadBackup(item)
-    const fileName = item.archiveName ?? item.objectKey.replace(/\.srlbundle\.json$/i, '')
-    const [resources, categories] = await Promise.all([
-      this.resourceService.listResourceListSummaries(),
-      this.categoryService.list(),
-    ])
-    const prepared = await this.restoreService.prepare(
-      new File([blob], fileName, { type: 'application/zip' }),
-      resources,
-      categories,
-      true,
-    )
-    const selected = selectPreparedRestore(
-      prepared,
-      new Set(
-        resourceKeys ?? [...prepared.resources, ...(prepared.galleryOwners ?? [])].map((r) => r.id),
-      ),
-      includeGallery,
-    )
-    const report = await this.restoreService.restore(selected)
-    await this.importPreparedPortableData(
-      selectRestorePortableData(selected.portableData, portableScopeIds),
-      filterPortableData,
-    )
-    return report.restoredResources
+      const blob = await this.downloadBackup(item)
+      const fileName = item.archiveName ?? item.objectKey.replace(/\.srlbundle\.json$/i, '')
+      const [resources, categories] = await Promise.all([
+        this.resourceService.listResourceListSummaries(),
+        this.categoryService.list(),
+      ])
+      const prepared = await this.restoreService.prepare(
+        new File([blob], fileName, { type: 'application/zip' }),
+        resources,
+        categories,
+        true,
+      )
+      const selected = selectPreparedRestore(
+        prepared,
+        new Set(
+          resourceKeys ??
+            [...prepared.resources, ...(prepared.galleryOwners ?? [])].map((r) => r.id),
+        ),
+        includeGallery,
+      )
+      const report = await this.restoreService.restore(selected)
+      await this.importPreparedPortableData(
+        selectRestorePortableData(selected.portableData, portableScopeIds),
+        filterPortableData,
+      )
+      return report.restoredResources
+    })
   }
 
   private async restoreStructuredBackup(

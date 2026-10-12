@@ -161,10 +161,6 @@ function commitOpacity(event: Event) {
   min-width: 0;
   width: 100%;
   min-height: 40px;
-  border: 1px solid var(--color-line);
-  border-radius: 6px;
-  background: var(--color-surface);
-  color: var(--color-ink);
   padding: 8px;
   font: inherit;
 }

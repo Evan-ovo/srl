@@ -5,6 +5,7 @@ import {
   estimateMainApiTokens,
   estimateTextTokens,
   openAiMessages,
+  normalizeDsmlToolReply,
   readNativeSearchResult,
   responseFinishReason,
   responseReasoningFromJson,
@@ -532,13 +533,18 @@ export class MainApiService {
             return response.json().then((rawBody) => {
               const body = rawBody as Record<string, unknown>
               if (options?.webSearch) return readNativeSearchResult(body, config.protocol)
+              const text = responseTextFromJson(body, config.protocol)
+              const toolCalls = responseToolCalls(body, config.protocol)
+              const completion =
+                config.protocol === 'openai-compatible'
+                  ? normalizeDsmlToolReply(text, toolCalls, options?.tools ?? [])
+                  : { text, toolCalls }
               return {
                 sources: undefined,
-                text: responseTextFromJson(body, config.protocol),
+                ...completion,
                 usage: tokenUsageFromJson(body, config.protocol),
                 reasoning: responseReasoningFromJson(body, config.protocol),
                 finishReason: responseFinishReason(body, config.protocol),
-                toolCalls: responseToolCalls(body, config.protocol),
                 providerContent:
                   config.protocol === 'anthropic-compatible' && Array.isArray(body.content)
                     ? (body.content as Array<Record<string, unknown>>)

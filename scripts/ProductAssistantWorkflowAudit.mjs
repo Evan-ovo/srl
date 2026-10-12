@@ -1,4 +1,4 @@
-/* global document, innerWidth, indexedDB, getComputedStyle */
+/* global document, window, innerWidth, indexedDB, getComputedStyle */
 import assert from 'node:assert/strict'
 import console from 'node:console'
 import process from 'node:process'
@@ -13,6 +13,7 @@ import {
   saveAuditFailure,
 } from './AuditEnvironment.mjs'
 const environment = auditEnvironment(undefined, 'assistant-workflows')
+const historyRecoveryOnly = process.env.SRL_ASSISTANT_AUDIT_SCOPE === 'history-recovery'
 const githubPublicLive = process.env.SRL_ASSISTANT_AUDIT_SCOPE === 'github-public-live'
 const githubReadOnly = process.env.SRL_ASSISTANT_AUDIT_SCOPE === 'github-read'
 const currentViewOnly = process.env.SRL_ASSISTANT_AUDIT_SCOPE === 'current-view'
@@ -40,7 +41,7 @@ try {
         isMobile: true,
         hasTouch: true,
         colorScheme: theme,
-        serviceWorkers: 'block',
+        serviceWorkers: historyRecoveryOnly ? 'allow' : 'block',
       })
       await prepareAuditContext(context, environment, { trace: false })
       const page = await context.newPage()
@@ -164,7 +165,145 @@ try {
         (value) => document.documentElement.setAttribute('data-theme', value),
         theme,
       )
+      if (historyRecoveryOnly) {
+        await tap(page.getByRole('button', { name: 'APP 管理', exact: true }))
+        const manager = page.locator('.official-app-manager')
+        await manager.waitFor()
+        await tap(
+          manager.locator('li').filter({ hasText: '蒜惹菈' }).getByRole('button', {
+            name: '下载',
+            exact: true,
+          }),
+        )
+        await page.getByRole('status').filter({ hasText: '安装成功' }).waitFor()
+        await tap(page.locator('.feature-app-header__back').first())
+      }
       await openAuditFeature(page, '蒜惹菈')
+      if (historyRecoveryOnly) {
+        await chat.getByLabel('发送消息', { exact: true }).fill('当前对话保留')
+        await page.waitForFunction(async () => {
+          const opening = indexedDB.open('SillyTavernResourceLibrary')
+          const db = await new Promise((accept, reject) => {
+            opening.onsuccess = () => accept(opening.result)
+            opening.onerror = () => reject(opening.error)
+          })
+          try {
+            const transaction = db.transaction('settings', 'readonly')
+            const request = transaction.objectStore('settings').get('assistant.active')
+            return await new Promise((accept, reject) => {
+              request.onsuccess = () => accept(Boolean(request.result?.value))
+              request.onerror = () => reject(request.error)
+            })
+          } finally {
+            db.close()
+          }
+        })
+        await page.evaluate(async () => {
+          const opening = indexedDB.open('SillyTavernResourceLibrary')
+          const db = await new Promise((accept, reject) => {
+            opening.onsuccess = () => accept(opening.result)
+            opening.onerror = () => reject(opening.error)
+          })
+          try {
+            const transaction = db.transaction('settings', 'readwrite')
+            transaction.objectStore('settings').put({
+              id: 'assistant.chat:lost-history-fixture',
+              updatedAt: 1,
+              value: {
+                id: 'lost-history-fixture',
+                title: '更新前的历史夹具',
+                updatedAt: 1,
+                history: [{ id: 'old-message', role: 'user', text: '保留的历史正文' }],
+                input: '未发送的旧输入',
+                images: [],
+              },
+            })
+            await new Promise((accept, reject) => {
+              transaction.oncomplete = accept
+              transaction.onerror = () => reject(transaction.error)
+              transaction.onabort = () => reject(transaction.error)
+            })
+          } finally {
+            db.close()
+          }
+        })
+        const activeBefore = (await records()).find((row) => row.id === 'assistant.active')?.value
+        await settings()
+        await tap(chat.getByRole('button', { name: '历史对话', exact: false }))
+        const gear = chat.getByRole('button', { name: '历史设置', exact: true })
+        assert.equal(await chat.getByRole('button', { name: '找回历史', exact: true }).count(), 0)
+        assert.ok(await gear.evaluate((node) => node.getBoundingClientRect().height >= 44))
+        await screenshot('history-list')
+        await tap(gear)
+        const dialog = page.getByRole('dialog', { name: '历史设置', exact: true })
+        const panel = dialog.locator('.chat-history-recovery')
+        const geometry = await panel.evaluate((node) => {
+          const rect = node.getBoundingClientRect()
+          return {
+            x: rect.x + rect.width / 2,
+            y: rect.y + rect.height / 2,
+            width: innerWidth,
+            height: window.innerHeight,
+          }
+        })
+        assert.ok(Math.abs(geometry.x - geometry.width / 2) <= 2)
+        assert.ok(Math.abs(geometry.y - geometry.height / 2) <= 2, 'dialog centered vertically')
+        await screenshot('history-options')
+        await tap(dialog.getByRole('button', { name: '关闭', exact: true }))
+        assert.equal(
+          (await records()).some((row) => row.id === 'assistant.summary:lost-history-fixture'),
+          false,
+        )
+        await tap(gear)
+        const recovery = dialog.getByRole('button', { name: '找回历史', exact: true })
+        await tap(recovery)
+        await dialog.getByText('检查完成：找回 0 条，修复列表 1 条', { exact: true }).waitFor()
+        const recoveredChat = chat
+          .locator('.chat-history-open')
+          .filter({ hasText: '更新前的历史夹具' })
+        await recoveredChat.waitFor()
+        assert.equal(
+          (await records()).find((row) => row.id === 'assistant.active')?.value,
+          activeBefore,
+        )
+        assert.equal(requests, 0, 'recovery must not call the model')
+        assert.ok(await recovery.evaluate((node) => node.getBoundingClientRect().height >= 44))
+        await screenshot('history-recovered')
+        await tap(recovery)
+        await dialog.getByText(/检查完成：找回 0 条，修复列表 0 条/).waitFor()
+        assert.equal(
+          (await records()).filter((row) => row.id === 'assistant.summary:lost-history-fixture')
+            .length,
+          1,
+        )
+        const focus = await dialog.evaluate((node) => ({
+          inside: node.contains(document.activeElement),
+          tag: document.activeElement?.tagName,
+          label: document.activeElement?.textContent?.slice(0, 80),
+        }))
+        assert.ok(focus.inside, `recovery must retain dialog focus: ${JSON.stringify(focus)}`)
+        await page.keyboard.press('Escape')
+        await dialog.waitFor({ state: 'hidden' })
+        await gear.waitFor()
+        await page.reload({ waitUntil: 'domcontentloaded' })
+        await tap(page.getByRole('button', { name: '功能', exact: true }))
+        await openAuditFeature(page, '蒜惹菈')
+        await settings()
+        await tap(chat.getByRole('button', { name: '历史对话', exact: false }))
+        await tap(recoveredChat)
+        await chat.getByText('保留的历史正文', { exact: true }).waitFor()
+        assert.equal(
+          await chat.getByLabel('发送消息', { exact: true }).inputValue(),
+          '未发送的旧输入',
+        )
+        assert.equal(requests, 0)
+        console.log(
+          `PASS ${environment.engine} ${width} ${theme}: header SVG, centered dialog/close/results/Escape, real stored list repair, no model request, repeat idempotency and reload/open original body`,
+        )
+        await context.close()
+        context = undefined
+        continue
+      }
       await settings()
       await chat.getByLabel('助手工作模式').selectOption('creation')
       const compressionThreshold = chat.getByLabel('自动压缩 token 阈值', { exact: true })

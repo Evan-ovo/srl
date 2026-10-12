@@ -18,20 +18,15 @@
 }
 .frontend-image-picker__tabs button,
 .frontend-image-picker__hosting-mode button {
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
   padding: 4px 8px;
   min-height: 30px;
   font-size: 12px;
-  color: var(--color-ink-soft);
   font-weight: 700;
 }
-.frontend-image-picker__tabs button.is-active,
-.frontend-image-picker__hosting-mode button.is-active {
-  background: var(--color-surface-raised);
-  color: var(--color-accent);
-  box-shadow: 0 1px 5px var(--color-shadow);
+:is(.frontend-image-picker__tabs, .frontend-image-picker__hosting-mode) button.is-active {
+  background: var(--selection-background, var(--color-accent-soft));
+  color: var(--selection-color, var(--color-accent));
+  box-shadow: var(--selection-shadow, var(--control-shadow));
 }
 .frontend-image-picker__body,
 .frontend-image-picker__manual {
@@ -50,10 +45,6 @@
 .frontend-image-picker input,
 .frontend-image-picker select {
   width: 100%;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 10px;
-  background: var(--color-surface-raised);
-  color: var(--color-ink);
   min-height: 30px;
   min-width: 0;
   padding: 4px 6px;
@@ -132,10 +123,6 @@
   color: var(--color-ink-soft);
 }
 .frontend-image-picker__primary {
-  border: 0;
-  border-radius: 10px;
-  background: var(--color-accent);
-  color: var(--color-on-accent);
   padding: 4px 8px;
   min-height: 30px;
   font-size: 12px;
@@ -152,9 +139,6 @@
   margin: 16px;
 }
 .frontend-image-picker__pagination button {
-  border: 1px solid var(--color-line-strong);
-  border-radius: 9px;
-  background: var(--color-surface-raised);
   padding: 4px 8px;
   min-height: 30px;
   font-size: 12px;

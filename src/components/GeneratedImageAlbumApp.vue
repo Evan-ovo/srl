@@ -760,7 +760,7 @@ onUnmounted(() => {
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) max(1rem, var(--safe-bottom))
     max(1rem, var(--safe-left));
   place-items: center;
-  background: rgb(15 27 34 / 42%);
+  background: var(--overlay-background);
 }
 
 .generated-album__settings {
@@ -769,11 +769,8 @@ onUnmounted(() => {
   max-height: 100%;
   overflow: auto;
   padding: 0.75rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-panel);
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
   color: var(--color-ink);
-  background: var(--color-surface-raised);
-  box-shadow: 0 1rem 3rem var(--color-shadow);
 }
 
 .generated-album__settings header,
@@ -797,10 +794,6 @@ onUnmounted(() => {
 .generated-album__settings button {
   min-height: var(--size-touch);
   padding: 0 0.75rem;
-  border: 0;
-  border-radius: var(--radius-control);
-  color: inherit;
-  background: transparent;
   font: inherit;
   cursor: pointer;
 }
@@ -827,7 +820,7 @@ onUnmounted(() => {
 
 .generated-album__settings button:hover,
 .generated-album__settings button[aria-pressed='true'] {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 </style>

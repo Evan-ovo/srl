@@ -14,11 +14,13 @@
 .duplicate-cleaner__header > button:not(.feature-back-button) {
   min-width: 44px;
   min-height: 44px;
-  border: 1px solid rgba(32, 42, 38, 0.25);
-  border-radius: 0.5rem;
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  background: var(--button-background, var(--glass-panel-strong));
   font-size: 1.1rem;
   cursor: pointer;
+  color: var(--button-color, var(--color-ink));
+  box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 
 .duplicate-cleaner__header small {
@@ -41,10 +43,12 @@
 .duplicate-cleaner__message {
   margin: 0;
   padding: 0.6rem 0.9rem;
-  border: 1px solid rgba(31, 106, 84, 0.35);
-  border-radius: 0.6rem;
-  background: rgba(31, 106, 84, 0.08);
+  border: 1px solid var(--notice-border, var(--color-line));
+  border-radius: var(--notice-radius, 0.6rem);
+  background: var(--notice-background, var(--color-accent-soft));
   font-size: 0.875rem;
+  color: var(--notice-color, var(--color-ink));
+  box-shadow: var(--notice-shadow, none);
 }
 
 .duplicate-cleaner__empty,
@@ -55,7 +59,7 @@
 }
 
 .duplicate-cleaner__group {
-  border: 1px solid rgba(32, 42, 38, 0.18);
+  border: 1px solid var(--color-line);
   border-radius: 0.75rem;
   overflow: hidden;
 }
@@ -66,7 +70,7 @@
   justify-content: space-between;
   gap: 0.35rem 1rem;
   padding: 0.7rem 1rem;
-  background: rgba(32, 42, 38, 0.05);
+  background: var(--glass-panel-muted);
 }
 
 .duplicate-cleaner__group > header small {
@@ -84,7 +88,7 @@
   align-items: center;
   gap: 0.75rem;
   padding: 0.55rem 1rem;
-  border-top: 1px solid rgba(32, 42, 38, 0.1);
+  border-top: 1px solid var(--color-line);
 }
 
 .duplicate-cleaner__group > ul > li > label {
@@ -100,7 +104,7 @@
   margin-top: 0.3rem;
   width: 1.1rem;
   height: 1.1rem;
-  accent-color: #1f6a54;
+  accent-color: var(--color-accent);
 }
 
 .duplicate-cleaner__name {
@@ -120,11 +124,13 @@
 .duplicate-cleaner__group > ul button {
   min-height: 44px;
   padding: 0 0.9rem;
-  border: 1px solid rgba(32, 42, 38, 0.25);
-  border-radius: 0.5rem;
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  background: var(--button-background, var(--glass-panel-strong));
   font: inherit;
   cursor: pointer;
+  color: var(--button-color, var(--color-ink));
+  box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 
 .duplicate-cleaner__group > footer {
@@ -134,19 +140,21 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.7rem 1rem;
-  border-top: 1px solid rgba(32, 42, 38, 0.1);
+  border-top: 1px solid var(--color-line);
   font-size: 0.8125rem;
 }
 
 .duplicate-cleaner__clean {
   min-height: 44px;
   padding: 0 1.25rem;
-  border: 1px solid #1f6a54;
-  border-radius: 0.5rem;
-  background: #1f6a54;
-  color: #fff;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  background: var(--button-primary-background, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
   font: inherit;
   cursor: pointer;
+  box-shadow: var(--button-primary-shadow, var(--button-shadow, var(--glass-shadow)));
+  border-color: var(--button-primary-border, var(--color-accent));
 }
 
 .duplicate-cleaner__clean:disabled {
@@ -154,34 +162,21 @@
   cursor: default;
 }
 
-:root[data-theme='dark'] .duplicate-cleaner__group,
-:root[data-theme='dark'] .duplicate-cleaner__group > ul > li,
-:root[data-theme='dark'] .duplicate-cleaner__group > footer {
-  border-color: rgba(236, 232, 220, 0.16);
-}
-
-:root[data-theme='dark'] .duplicate-cleaner__group > header {
-  background: rgba(255, 255, 255, 0.05);
-}
-
 .duplicate-cleaner-sheet {
   width: min(860px, calc(100vw - 2rem));
   max-height: min(88svh, 64rem);
   overflow: auto;
   padding: 1.25rem 1.4rem calc(1.25rem + var(--safe-bottom));
-  border: 1px solid rgba(31, 106, 84, 0.3);
-  border-radius: 0.9rem;
-  background: var(--surface, #fffdf7);
-}
-
-:root[data-theme='dark'] .duplicate-cleaner-sheet {
-  background: #1c2420;
-  border-color: rgba(143, 183, 168, 0.35);
+  border: 1px solid var(--dialog-border, var(--color-line-strong));
+  border-radius: var(--dialog-radius, 0.9rem);
+  background: var(--dialog-background, var(--color-surface));
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 @media (max-width: 640px) {
   .duplicate-cleaner-sheet {
     width: calc(100vw - 1rem);
     max-height: calc(var(--app-viewport-height) - 1rem);
+    border-radius: var(--dialog-radius, var(--glass-radius-panel));
   }
 }

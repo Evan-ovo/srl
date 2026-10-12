@@ -152,8 +152,8 @@ defineExpose({ closeDetail })
   min-height: 44px;
   padding: 0.25rem 0;
   border: 0;
-  background: none;
-  color: inherit;
+  background: var(--button-background, none);
+  color: var(--button-color, inherit);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -214,10 +214,10 @@ defineExpose({ closeDetail })
   flex: 0 0 44px;
   height: 44px;
   padding: 0;
-  border: 1px solid var(--color-line);
-  border-radius: 12px;
-  color: inherit;
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line));
+  border-radius: var(--button-radius, 12px);
+  color: var(--button-color, inherit);
+  background: var(--button-background, transparent);
   cursor: pointer;
 }
 .assistant-token-review__detail-header svg {
@@ -245,7 +245,7 @@ defineExpose({ closeDetail })
   overflow-wrap: anywhere;
   border: 1px solid var(--color-line);
   border-radius: 12px;
-  background: var(--color-bg);
+  background: var(--color-surface-raised);
   font:
     0.75rem/1.65 ui-monospace,
     monospace;

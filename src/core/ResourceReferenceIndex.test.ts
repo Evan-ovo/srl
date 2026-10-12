@@ -27,19 +27,9 @@ function resource(id: string, relatedResourceIds: string[] = []): ResourceSummar
 }
 
 describe('ResourceReferenceIndex', () => {
-  it('indexes strong relation, weak loadout and UI-only cabinet impacts', () => {
+  it('indexes strong relation and UI-only cabinet impacts', () => {
     const missing = rebuildResourceReferenceIndex(
       [resource('a', ['b', 'missing']), resource('b')],
-      [
-        {
-          id: 'loadout-1',
-          name: '测试装配',
-          primaryResourceId: 'b',
-          resourceIds: ['b'],
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      ],
       ['b'],
     )
     expect(
@@ -47,7 +37,7 @@ describe('ResourceReferenceIndex', () => {
         .impacts('resource', 'b')
         .map((item) => item.strength)
         .sort(),
-    ).toEqual(['strong', 'ui', 'weak'])
+    ).toEqual(['strong', 'ui'])
     expect(missing).toMatchObject([{ ownerId: 'a', missingResourceId: 'missing' }])
   })
 })

@@ -99,7 +99,7 @@ textarea {
   min-width: 0;
   margin-block: 6px;
   color: inherit;
-  background: var(--color-surface, transparent);
+  background: var(--control-background, var(--color-surface, transparent));
 }
 summary,
 button {

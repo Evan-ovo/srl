@@ -115,6 +115,28 @@ function toScript(
     data: isRecord(scriptValue.data) ? scriptValue.data : {},
     enabled: inheritedEnabled && scriptValue.enabled === true,
     buttons: buttonNames(scriptValue),
+    buttonDefinitions: (() => {
+      const button = isRecord(scriptValue.button) ? scriptValue.button : undefined
+      const entries = Array.isArray(button?.buttons)
+        ? button.buttons
+        : Array.isArray(scriptValue.buttonDefinitions)
+          ? scriptValue.buttonDefinitions
+          : Array.isArray(scriptValue.buttons)
+            ? scriptValue.buttons
+            : []
+      return entries.flatMap((entry) =>
+        isRecord(entry) && readString(entry.name)
+          ? [
+              {
+                name: readString(entry.name),
+                visible: button?.enabled !== false && entry.visible === true,
+              },
+            ]
+          : typeof entry === 'string' && entry.trim()
+            ? [{ name: entry, visible: true }]
+            : [],
+      )
+    })(),
   }
 }
 

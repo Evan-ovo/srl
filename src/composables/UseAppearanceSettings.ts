@@ -18,12 +18,14 @@ import type {
   UiFontScale,
 } from '../services/BrowserStorageService'
 import { sanitizeCssForPreview } from '../utils/PreviewSafety'
+import { normalizeUiViews, resolveUiCssAssets } from '../core/UiCustomization'
+import { CUSTOM_UI_VIEWS_CHANGED } from '../types/UiCustomization'
+import type { UiApplyOptions } from '../types/UiCustomization'
 import { confirmAction } from './UseConfirmDialog'
 import { configureNativePreviewDownloadConcurrency } from '../services/NativePreviewAsset'
 import { readStoredTheme, writeStoredTheme, type ThemeValue } from '../utils/LibraryFormatting'
 
 const CUSTOM_UI_STYLE_ID = 'srl-custom-ui-style'
-const CUSTOM_UI_CSS_LIMIT = 200_000
 const SCRIPT_PREVIEW_CONFIRM =
   '开启后，导入资源中的完整 JavaScript（包括内联、远程脚本和动态代码）会在隔离 iframe 中运行，并可加载远程图片、音频、字体及发起联网请求。\n\n脚本仍不能读取资源库、IndexedDB、登录信息或主页面，但可能暴露 IP、诱导跳转、持续占用 CPU 或导致当前页面卡顿。只应预览你信任来源的文件。'
 
@@ -156,47 +158,84 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
       style.id = CUSTOM_UI_STYLE_ID
       document.head.append(style)
     }
-    style.textContent = sanitizeCssForPreview(
+    const source = sanitizeCssForPreview(
       isSafeModeActive()
         ? ''
         : upgradeLegacyAppearanceCss(customUiCss.value, browserStorageService.getCustomUiPresets()),
       {
         allowExternalResources: previewPolicy.value.allowRemoteResources,
+        allowLocalResources: true,
+        preserveLength: true,
       },
     )
+    style.textContent = resolveUiCssAssets(source, browserStorageService.getCustomUiViews?.() ?? {})
     window.dispatchEvent(new Event(APPLIED_CSS_CHANGED_EVENT))
   }
+  onMounted(() => window.addEventListener(CUSTOM_UI_VIEWS_CHANGED, syncCustomUiCss))
+  onUnmounted(() => window.removeEventListener(CUSTOM_UI_VIEWS_CHANGED, syncCustomUiCss))
 
-  function saveCustomUiCss(value: string, options?: { assistant?: boolean }): void {
-    const nextCss = value.slice(0, CUSTOM_UI_CSS_LIMIT)
-    if (isSafeModeActive() && nextCss) {
+  function saveCustomUiCss(value: string, options?: UiApplyOptions): void {
+    const nextCss = value
+    if (
+      isSafeModeActive() &&
+      (nextCss || Object.values(options?.views ?? {}).some((view) => view?.enabled))
+    ) {
       showNotice('当前处于安全模式；恢复正常启动后才能应用自定义 CSS')
       return
     }
     if (options?.assistant) appearanceTransaction.keep()
+    if (options?.views !== undefined) appearanceTransaction.rollback()
     const previousCss = browserStorageService.getCustomUiCss()
+    const previousViews =
+      options?.views === undefined ? {} : browserStorageService.getCustomUiViews()
+    const nextViews = options?.views === undefined ? undefined : normalizeUiViews(options.views)
+    const viewsChanged =
+      nextViews !== undefined && JSON.stringify(nextViews) !== JSON.stringify(previousViews)
     const apply = (css: string) => {
       customUiCss.value = css
       syncCustomUiCss()
     }
     const persist = (css: string) => browserStorageService.setCustomUiCss(css)
-    if (!nextCss || nextCss === previousCss) {
+    if ((!nextCss || nextCss === previousCss) && !viewsChanged) {
       appearanceTransaction.clear(nextCss, apply, persist)
       showNotice(nextCss ? '自定义 CSS 未发生变化' : '自定义 CSS 已清除')
       return
     }
-    appearanceTransaction.begin({
-      previousCss,
-      nextCss,
-      apply,
-      persist,
-      autoKeep: options?.assistant,
-      onKeep: () => showNotice(options?.assistant ? 'AI 美化已保留' : '自定义 CSS 已确认保留'),
-      onRollback: () =>
-        showNotice(
-          options?.assistant ? '已恢复 AI 修改前的 CSS' : '未确认更改，已自动恢复上一版 CSS',
-        ),
-    })
+    try {
+      appearanceTransaction.begin({
+        previousCss,
+        nextCss,
+        apply,
+        persist,
+        autoKeep: options?.assistant,
+        ...(viewsChanged
+          ? { previousViews: JSON.stringify(previousViews), title: '自定义界面与样式已临时应用' }
+          : {}),
+        onKeep: () => showNotice(options?.assistant ? 'AI 美化已保留' : '自定义 CSS 已确认保留'),
+        onRollback: () => {
+          if (viewsChanged) browserStorageService.setCustomUiViews(previousViews)
+          showNotice(
+            options?.assistant ? '已恢复 AI 修改前的 CSS' : '未确认更改，已自动恢复上一版 CSS',
+          )
+        },
+      })
+    } catch (error) {
+      showNotice(
+        error instanceof Error
+          ? `外观试用未开始：${error.message}`
+          : '外观试用未开始，请检查本机空间',
+      )
+      return
+    }
+    if (viewsChanged) {
+      try {
+        browserStorageService.setCustomUiViews(nextViews!)
+      } catch (error) {
+        appearanceTransaction.rollback()
+        showNotice(error instanceof Error ? error.message : '界面源码保存失败，已恢复原界面')
+        return
+      }
+    }
     showNotice(
       options?.assistant
         ? 'AI 美化已应用，可通过对话撤销'

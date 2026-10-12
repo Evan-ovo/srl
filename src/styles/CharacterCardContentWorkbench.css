@@ -24,15 +24,15 @@
 .card-content-workbench input,
 .card-content-workbench textarea {
   font: inherit;
-  color: inherit;
+  color: var(--button-color, inherit);
 }
 .card-content-workbench button {
   min-height: 34px;
   padding: 0.3rem 0.65rem;
-  border: 1px solid var(--workbench-line);
-  border-radius: 0.4rem;
-  color: var(--workbench-ink);
-  background: var(--workbench-surface);
+  border: 1px solid var(--button-border, var(--workbench-line));
+  border-radius: var(--button-radius, 0.4rem);
+  color: var(--button-color, var(--workbench-ink));
+  background: var(--button-background, var(--workbench-surface));
   font-size: 0.8125rem;
   font-weight: 650;
   cursor: pointer;
@@ -53,19 +53,22 @@
   outline-offset: 2px;
 }
 .card-content-workbench button.is-primary {
-  border-color: var(--workbench-accent);
-  color: var(--color-on-accent, #fff);
-  background: var(--workbench-accent);
+  border-color: var(--button-primary-border, var(--workbench-accent));
+  color: var(--button-primary-color, var(--color-on-accent, #fff));
+  background: var(--button-primary-background, var(--workbench-accent));
 }
 .card-content-workbench button.is-secondary {
-  background: color-mix(in srgb, var(--workbench-raised) 72%, var(--workbench-surface));
+  background: var(
+    --button-background,
+    color-mix(in srgb, var(--workbench-raised) 72%, var(--workbench-surface))
+  );
 }
 .card-content-workbench button.is-text {
   min-height: 32px;
   padding: 0.25rem 0.4rem;
-  border-color: transparent;
-  color: var(--workbench-accent);
-  background: transparent;
+  border-color: var(--button-border, transparent);
+  color: var(--button-color, var(--workbench-accent));
+  background: var(--button-background, transparent);
 }
 .card-content-workbench__header,
 .card-content-workbench__actions,
@@ -135,15 +138,15 @@
   min-width: 0;
   min-height: 34px;
   padding: 0.4rem 0;
-  border-radius: 0;
-  border-color: transparent;
-  background: transparent;
+  border-radius: var(--button-radius, 0);
+  border-color: var(--button-border, transparent);
+  background: var(--button-background, transparent);
   font-size: 0.74rem;
   white-space: nowrap;
 }
 .card-content-workbench__tabs button.is-active {
-  color: var(--workbench-accent);
-  background: transparent;
+  color: var(--selection-color, var(--workbench-accent));
+  background: var(--selection-background, transparent);
 }
 .card-content-workbench__tabs button.is-active::after {
   content: '';
@@ -176,10 +179,10 @@
   min-width: 0;
   min-height: 32px;
   padding: 0.25rem 0.5rem;
-  border: 1px solid var(--workbench-line);
-  border-radius: 0.4rem;
+  border: 1px solid var(--control-border, var(--workbench-line));
+  border-radius: var(--control-radius, 0.4rem);
   color: var(--workbench-ink);
-  background: var(--workbench-surface);
+  background: var(--control-background, var(--workbench-surface));
   font-size: 16px;
   font-weight: 450;
   line-height: 1.25;
@@ -194,7 +197,7 @@
   line-height: 1.35;
 }
 .card-content-workbench__editor .is-code {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-code, monospace);
   tab-size: 2;
 }
 .card-content-workbench__editor textarea::placeholder,
@@ -246,8 +249,8 @@
   min-height: 34px;
   padding: 0.35rem 0.55rem;
   font-size: 0.8125rem;
-  border-color: transparent;
-  background: transparent;
+  border-color: var(--button-border, transparent);
+  background: var(--button-background, transparent);
 }
 .card-content-workbench__list .is-danger,
 .card-content-workbench__error {
@@ -339,7 +342,7 @@
   -webkit-line-clamp: 2;
 }
 .card-content-workbench__candidate em {
-  color: #99671f;
+  color: var(--color-warning-ink);
   font-size: 0.7rem;
   font-style: normal;
   line-height: 1.45;
@@ -401,7 +404,7 @@
 .card-content-workbench__advanced summary {
   min-height: 32px;
   align-content: center;
-  color: var(--workbench-accent);
+  color: var(--button-color, var(--workbench-accent));
   font-size: 0.8125rem;
   font-weight: 700;
   cursor: pointer;
@@ -476,9 +479,9 @@
   width: 100%;
   min-height: 34px;
   padding: 0.35rem 0.5rem;
-  border: 1px solid var(--workbench-line);
-  border-radius: 0.6rem;
-  background: var(--workbench-surface);
+  border: 1px solid var(--control-border, var(--workbench-line));
+  border-radius: var(--control-radius, 0.6rem);
+  background: var(--control-background, var(--workbench-surface));
   font-size: 16px;
 }
 .card-content-workbench input[type='checkbox'] {

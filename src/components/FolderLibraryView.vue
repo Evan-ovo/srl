@@ -414,7 +414,7 @@ const {
     <section
       v-else-if="activeFolderEntry"
       class="folder-detail"
-      :style="{ '--folder-accent': activeFolderEntry.category?.color ?? '#817767' }"
+      :style="{ '--folder-accent': activeFolderEntry.category?.color ?? 'var(--color-ink-soft)' }"
     >
       <label class="folder-detail__search">
         <span aria-hidden="true">⌕</span>

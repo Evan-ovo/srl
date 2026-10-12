@@ -16,6 +16,7 @@ import { hashBlob } from './HashService'
 import { RESOURCE_TYPE, includeChatCompanionIds, toResourceListSummary } from '../types/Resource'
 import * as nativeFiles from '../core/NativeFileSource'
 import * as thumbnails from '../utils/createImageThumbnail'
+import { chatReaderScripts } from './ChatReaderRendering'
 
 vi.mock('../utils/createImageThumbnail', () => ({
   createImageThumbnail: async () => new Blob(['thumbnail'], { type: 'image/webp' }),
@@ -40,21 +41,18 @@ function setup() {
   return { resources, storage, database: db }
 }
 function png(marker: string, scripts: unknown[] = []) {
-  const data = new TextEncoder().encode(
-    'chara\0' +
-      btoa(
-        String.fromCharCode(
-          ...new TextEncoder().encode(
-            JSON.stringify({
-              name: 'Same name',
-              description: marker,
-              first_mes: 'Hello',
-              ...(scripts.length ? { extensions: { tavern_helper: { scripts } } } : {}),
-            }),
-          ),
-        ),
-      ),
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({
+      name: 'Same name',
+      description: marker,
+      first_mes: 'Hello',
+      ...(scripts.length ? { extensions: { tavern_helper: { scripts } } } : {}),
+    }),
   )
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 32768)
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768))
+  const data = new TextEncoder().encode('chara\0' + btoa(binary))
   const chunk = new Uint8Array(data.length + 12)
   new DataView(chunk.buffer).setUint32(0, data.length)
   chunk.set(new TextEncoder().encode('tEXt'), 4)
@@ -387,7 +385,7 @@ describe('chat transfer to the canonical resource library', () => {
   })
 })
 
-describe('chat reading script carriage', () => {
+describe('character reading scripts travel inside chat companions', () => {
   const phone = {
     type: 'script',
     id: 'phone',
@@ -395,103 +393,170 @@ describe('chat reading script carriage', () => {
     enabled: true,
     content: 'initializeGlobal("Phone", getVariables({type:"message"}));',
     data: { label: '保存配置' },
+    folder: '手机分组',
+    info: '角色手机',
+    button: { enabled: true, buttons: [{ name: '手机显隐切换', visible: true }] },
   }
-  it('extracts legacy card scripts without saving the full card and deduplicates redelivery', async () => {
-    const { resources } = setup()
-    const file = createChatArchive(png('script', [phone]), new File([raw], '雨夜.jsonl'), 'a.png')
-    expect((await readChatArchive(file)).hasReadingScriptSnapshot).toBe(false)
+  it('persists role scripts without standalone card/script resources and reads them after reopening storage', async () => {
+    const { resources, database } = setup()
+    const card = png('script', [phone])
+    const file = createChatArchive(card, new File([raw], '雨夜.jsonl'), 'a.png')
     await resources.importFiles([file, file])
     const rows = await resources.list()
-    expect(rows).toHaveLength(2)
-    expect(rows.some((r) => r.type === RESOURCE_TYPE.CHARACTER_CARD)).toBe(false)
-    const chat = rows.find((r) => r.type === RESOURCE_TYPE.CHAT)!
-    const source = rows.find((r) => r.id === chat.metadata.chatReadingScriptId)!
-    expect(source.type).toBe(RESOURCE_TYPE.SCRIPT)
-    expect(JSON.parse(await source.originalBlob.text()).scripts[0]).toMatchObject({
-      ...phone,
-      enabled: false,
-    })
-    expect(JSON.stringify(chat.metadata)).not.toContain(phone.content)
+    expect(rows).toHaveLength(1)
+    const chat = rows[0]!
+    expect(chat.type).toBe(RESOURCE_TYPE.CHAT)
+    expect(chat.metadata.chatReadingScriptId).toBeNull()
+    expect(JSON.stringify(toResourceListSummary(chat))).not.toContain('initializeGlobal')
     expect(new Uint8Array(await chat.originalBlob.arrayBuffer())).toEqual(
       new TextEncoder().encode(raw),
     )
     const selected = new Set([chat.id])
     includeChatCompanionIds(rows, selected)
-    expect([...selected]).toEqual([chat.id, source.id])
-  })
-  it('an explicit off snapshot skips all companion scripts, clears previous references and retains PNG/JSONL bytes', async () => {
-    const { resources } = setup()
-    const card = png('off', [phone]),
-      chatFile = new File([raw], '雨夜.jsonl')
-    await resources.importFiles([createChatArchive(card, chatFile, 'a.png')])
-    const chat = (await resources.list()).find((r) => r.type === RESOURCE_TYPE.CHAT)!
-    const oldScript = chat.metadata.chatReadingScriptId as string
-    const archive = createChatArchive(card, chatFile, 'a.png', [], {
-      carryReadingScripts: false,
-      readingScripts: [{ sourceName: 'ignored', scripts: phone }],
-    })
-    const decoded = await readChatArchive(archive)
-    expect(decoded.carryReadingScripts).toBe(false)
-    expect(decoded.readingScripts).toEqual([])
-    expect(await decoded.card.arrayBuffer()).toEqual(await card.arrayBuffer())
-    await resources.importFiles([archive])
-    expect((await resources.get(chat.id))?.metadata.chatReadingScriptId).toBeNull()
-    expect(await resources.get(oldScript)).toBeDefined()
-    expect(
-      new Uint8Array(await (await resources.get(chat.id))!.originalBlob.arrayBuffer()),
-    ).toEqual(new TextEncoder().encode(raw))
-  })
-  it('stores selected global/preset code separately and preserves old-package reimports', async () => {
-    const { resources } = setup()
-    const file = createChatArchive(png('a'), new File([raw], '雨夜.jsonl'), 'a.png', [], {
-      readingScripts: [{ sourceName: '全局手机', scripts: phone }],
-    })
-    expect((await readChatArchive(file)).hasReadingScriptSnapshot).toBe(true)
-    await resources.importFiles([file, file])
-    const chat = (await resources.list()).find((r) => r.type === RESOURCE_TYPE.CHAT)!
-    const sourceId = chat.metadata.chatReadingScriptId
-    await resources.importFiles([archive()])
-    expect((await resources.get(chat.id))?.metadata.chatReadingScriptId).toBe(sourceId)
-    await resources.importFiles([
-      createChatArchive(png('a'), new File([raw], '雨夜.jsonl'), 'a.png', [], {
-        readingScripts: [],
+    expect([...selected]).toEqual([chat.id])
+    database.close()
+    await database.open()
+    const saved = (await resources.get(chat.id))!
+    const role = await resolveChatCharacter(saved, resources)
+    expect(role.card).not.toHaveProperty('description')
+    const catalog = await chatReaderScripts(role.card, [], {})
+    expect(catalog.rules).toEqual([
+      expect.objectContaining({
+        name: phone.name,
+        folder: phone.folder,
+        sourceId: 'character',
+        enabled: false,
       }),
     ])
-    expect((await resources.get(chat.id))?.metadata.chatReadingScriptId).toBeNull()
-    // Existing sources may be used by another chat; clearing a reference never deletes them.
-    expect(await resources.get(sourceId as string)).toBeDefined()
-  })
-  it('rejects unrecognizable and excessive sources before storing chat/card resources', async () => {
-    const { resources } = setup()
-    const files = [
-      createChatArchive(png('a'), new File([raw], '雨夜.jsonl'), 'a.png', [], {
-        readingScripts: [{ sourceName: '坏来源', scripts: { other: true } }],
+    expect(catalog.active).toEqual([])
+    const enabled = await chatReaderScripts(role.card, [], { [catalog.rules[0]!.key]: true })
+    expect(enabled.active).toEqual([
+      expect.objectContaining({
+        content: phone.content,
+        data: phone.data,
+        info: phone.info,
+        buttonDefinitions: [{ name: '手机显隐切换', visible: true }],
       }),
+    ])
+    expect(await hashBlob(card)).toBe((saved.metadata.chatCharacter as { hash: string }).hash)
+  })
+  it('does not save role scripts when the carry switch is off, preserving both originals', async () => {
+    const { resources } = setup()
+    const card = png('off', [phone])
+    const file = createChatArchive(card, new File([raw], '雨夜.jsonl'), 'a.png', [], {
+      carryReadingScripts: false,
+    })
+    const decoded = await readChatArchive(file)
+    expect(await decoded.card.arrayBuffer()).toEqual(await card.arrayBuffer())
+    await resources.importFiles([file])
+    const chat = (await resources.list())[0]!
+    expect(
+      (await chatReaderScripts((await resolveChatCharacter(chat, resources)).card, [], {})).rules,
+    ).toHaveLength(0)
+    expect(JSON.stringify(chat.metadata)).not.toContain('initializeGlobal')
+    expect(new Uint8Array(await chat.originalBlob.arrayBuffer())).toEqual(
+      new TextEncoder().encode(raw),
+    )
+    expect(await resources.list()).toHaveLength(1)
+  })
+  it('honors mixed carry settings and reimports without leaking the batch script cache', async () => {
+    const { resources } = setup()
+    const card = png('mixed', [phone])
+    const make = (carryReadingScripts: boolean, name = '雨夜') =>
       createChatArchive(
-        png(
-          'a',
-          Array.from({ length: 65 }, (_, i) => ({ ...phone, id: String(i) })),
+        card,
+        new File(
+          [raw + JSON.stringify({ name: '角色', mes: name, is_user: false }) + '\n'],
+          name + '.jsonl',
         ),
-        new File([raw], '雨夜.jsonl'),
         'a.png',
-      ),
-    ]
-    for (const file of files)
-      expect((await resources.importFiles([file], { saveChatCharacter: true }))[0]?.status).toBe(
+        [],
+        { carryReadingScripts },
+      )
+    await resources.importFiles([make(true, '开启'), make(false, '关闭')])
+    const rows = await resources.list()
+    const withCode = rows.find((r) => JSON.stringify(r.metadata).includes('initializeGlobal'))!
+    const withoutCode = rows.find((r) => r.id !== withCode.id)!
+    expect(rows).toHaveLength(2)
+    expect(
+      (await chatReaderScripts((await resolveChatCharacter(withoutCode, resources)).card, [], {}))
+        .rules,
+    ).toHaveLength(0)
+    await resources.importFiles([make(false, '开启')])
+    expect(JSON.stringify((await resources.get(withCode.id))!.metadata)).not.toContain(
+      'initializeGlobal',
+    )
+    await resources.importFiles([make(true, '关闭')])
+    expect(JSON.stringify((await resources.get(withoutCode.id))!.metadata)).toContain(
+      'initializeGlobal',
+    )
+    expect(await resources.list()).toHaveLength(2)
+  })
+  it('stores the carry exclusion with a full bound card without editing its original', async () => {
+    const { resources } = setup()
+    const card = png('full-off', [phone])
+    const file = createChatArchive(card, new File([raw], '雨夜.jsonl'), 'a.png', [], {
+      carryReadingScripts: false,
+    })
+    await resources.importFiles([file], { saveChatCharacter: true })
+    const rows = await resources.list()
+    const savedCard = rows.find((r) => r.type === RESOURCE_TYPE.CHARACTER_CARD)!
+    const chat = rows.find((r) => r.type === RESOURCE_TYPE.CHAT)!
+    expect(await savedCard.originalBlob.arrayBuffer()).toEqual(await card.arrayBuffer())
+    expect(chat.metadata.chatCharacter).toMatchObject({ carryReadingScripts: false })
+    expect(JSON.stringify(chat.metadata)).not.toContain('initializeGlobal')
+    expect(chat.relatedResourceIds).toEqual([savedCard.id])
+  })
+  it('ignores legacy global/preset snapshots and preserves manually imported scripts', async () => {
+    const { resources } = setup()
+    await resources.importFiles([new File([JSON.stringify(phone)], 'manual-phone.json')])
+    const manual = (await resources.list())[0]!
+    const file = createChatArchive(png('a', [phone]), new File([raw], '雨夜.jsonl'), 'a.png', [], {
+      readingScripts: [
+        { sourceName: '全局手机', scripts: { ...phone, id: 'global', content: 'globalOnly()' } },
+        { sourceName: '预设', scripts: { other: true } },
+      ],
+    })
+    await resources.importFiles([file])
+    const chat = (await resources.list()).find((r) => r.type === RESOURCE_TYPE.CHAT)!
+    expect(JSON.stringify(chat.metadata)).not.toContain('globalOnly()')
+    expect(await resources.list()).toHaveLength(2)
+    await resources.updateMetadata(chat.id, { chatReadingScriptId: manual.id })
+    await resources.importFiles([file])
+    expect((await resources.get(chat.id))!.metadata.chatReadingScriptId).toBeNull()
+    expect((await resources.get(manual.id))!.contentHash).toBe(manual.contentHash)
+    const role = await resolveChatCharacter((await resources.get(chat.id))!, resources)
+    const catalog = await chatReaderScripts(role.card, [manual], {})
+    expect(catalog.rules).toHaveLength(1)
+  })
+  it('still supports saving and binding the full original card without extracting scripts', async () => {
+    const { resources } = setup()
+    const file = createChatArchive(png('full', [phone]), new File([raw], '雨夜.jsonl'), 'a.png')
+    await resources.importFiles([file, file], { saveChatCharacter: true })
+    const rows = await resources.list()
+    expect(rows).toHaveLength(2)
+    const card = rows.find((r) => r.type === RESOURCE_TYPE.CHARACTER_CARD)!
+    const chat = rows.find((r) => r.type === RESOURCE_TYPE.CHAT)!
+    expect(chat.relatedResourceIds).toEqual([card.id])
+    const role = await resolveChatCharacter(chat, resources)
+    expect((await chatReaderScripts(role.card, [], {})).rules).toHaveLength(1)
+  })
+  it('rejects excessive role code before any write, keeping the bounded legacy wire checks', async () => {
+    const { resources } = setup()
+    for (const scripts of [
+      Array.from({ length: 65 }, (_, i) => ({ ...phone, id: String(i) })),
+      [{ ...phone, content: 'x'.repeat(2 * 1024 * 1024) }],
+    ]) {
+      const file = createChatArchive(png('large', scripts), new File([raw], '雨夜.jsonl'), 'a.png')
+      expect((await resources.importFiles([file], { saveChatCharacter: true }))[0]!.status).toBe(
         'failed',
       )
+    }
     expect(await resources.list()).toHaveLength(0)
     expect(() =>
       createChatArchive(png('a'), new File([raw], '雨夜.jsonl'), 'a.png', [], {
         readingScripts: Array.from({ length: 9 }, () => ({ sourceName: '手机', scripts: phone })),
       }),
     ).toThrow('来源')
-    expect(() =>
-      createChatArchive(png('a'), new File([raw], '雨夜.jsonl'), 'a.png', [], {
-        readingScripts: [
-          { sourceName: '手机', scripts: { ...phone, content: 'x'.repeat(2 * 1024 * 1024) } },
-        ],
-      }),
-    ).toThrow('大小限制')
   })
 })

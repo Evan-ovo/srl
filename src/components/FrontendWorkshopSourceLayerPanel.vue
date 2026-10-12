@@ -343,7 +343,7 @@ function organize() {
   background: var(--color-surface-raised);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-card);
-  box-shadow: var(--shadow-panel, 0 8px 24px #0002);
+  box-shadow: var(--glass-shadow);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -381,11 +381,7 @@ details {
 button,
 input {
   min-height: 36px;
-  border: 1px solid var(--color-line);
-  border-radius: 7px;
   padding: 6px;
-  background: var(--color-surface);
-  color: inherit;
 }
 input {
   min-width: 0;
@@ -395,8 +391,8 @@ input {
   flex: 1;
 }
 button[aria-pressed='true'] {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .fw-layer-panel__element {
   display: flex;

@@ -1,15 +1,11 @@
 /** @vitest-environment jsdom */
-// SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=parcel-test-worker-settings
-vi.mock('../services/PublicWorkerSettingsService', () => ({
-  publicWorkerEndpoint: () => new URL('https://worker.example/'),
-}))
-// SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=parcel-test-worker-settings
 import { mount, flushPromises } from '@vue/test-utils'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import TavernParcelExchange from './TavernParcelExchange.vue'
 import { resourceService } from '../core/AppContainer'
 import { createChatArchive, readChatArchive } from '../services/TavernChatArchiveCodec.mjs'
-import { createParcel, readParcel } from '../services/BridgeParcelCodec.mjs'
+import { createParcel, readParcel, removeParcel } from '../services/BridgeParcelCodec.mjs'
+import { saveRelayWorkerBaseUrl } from '../services/RelayWorkerSettingsService'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import { PngResourceParser } from '../parser/PngResourceParser'
 vi.mock('../core/AppContainer', async () => ({
@@ -23,9 +19,14 @@ vi.mock('../services/BridgeParcelCodec.mjs', () => ({
   removeParcel: vi.fn(),
 }))
 const wrappers: Array<{ unmount(): void }> = []
+beforeEach(() => {
+  localStorage.removeItem('srl.publicWorker.baseUrl.v1')
+  saveRelayWorkerBaseUrl('https://worker.example')
+})
 afterEach(() => {
   wrappers.splice(0).forEach((w) => w.unmount())
   vi.clearAllMocks()
+  localStorage.removeItem('srl.publicWorker.baseUrl.v1')
 })
 it.each(['original', 'modified'] as const)(
   'packages %s according to the shared setting',
@@ -83,6 +84,39 @@ it.each(['original', 'modified'] as const)(
     expect(w.text()).toContain('暂存就绪')
   },
 )
+
+it('deletes a saved parcel from its original Worker after changing the local setting', async () => {
+  saveRelayWorkerBaseUrl('https://worker.example')
+  const resource = {
+    id: 'card',
+    name: '角色',
+    fileName: 'card.json',
+    type: RESOURCE_TYPE.CHARACTER_CARD,
+    tags: [],
+    mimeType: 'application/json',
+    originalBlob: new Blob(['{}']),
+    metadata: {},
+  } as unknown as Resource
+  vi.mocked(resourceService.get).mockResolvedValue(resource)
+  const w = mount(TavernParcelExchange, {
+    props: { resources: [resource], initialIds: ['card'], sendContent: 'original' },
+  })
+  wrappers.push(w)
+  await w
+    .findAll('button')
+    .find((b) => b.text() === '发给酒馆')!
+    .trigger('click')
+  await w.find('.tavern-parcel__primary').trigger('click')
+  await vi.waitFor(() => expect(createParcel).toHaveBeenCalledOnce())
+  expect(vi.mocked(createParcel).mock.calls[0]![0]).toBe('https://worker.example')
+  saveRelayWorkerBaseUrl('https://other.example')
+  await w
+    .findAll('button')
+    .find((b) => b.text().includes('删除暂存'))!
+    .trigger('click')
+  await vi.waitFor(() => expect(removeParcel).toHaveBeenCalledOnce())
+  expect(vi.mocked(removeParcel).mock.calls[0]![0]).toBe('https://worker.example')
+})
 it('checks the prepared parcel size instead of the source size and never falls back to original', async () => {
   const resource = {
     id: 'large',
@@ -125,37 +159,42 @@ it('checks the prepared parcel size instead of the source size and never falls b
   }
 })
 
-it('applies the shared off setting to parcel chat imports while preserving PNG/JSONL and regex', async () => {
-  const card = new File(['png-original'], 'card.png'),
-    chat = new File(['jsonl-original'], 'chat.jsonl')
-  const rule = { findRegex: 'status', replaceString: 'panel', markdownOnly: true }
-  vi.mocked(readParcel).mockResolvedValue([
-    {
-      kind: 'chat',
-      displayName: 'chat',
-      file: createChatArchive(card, chat, 'card.png', [rule], {
-        readingScripts: [{ sourceName: 'phone', scripts: { content: 'code' } }],
-      }),
-    },
-  ])
-  const w = mount(TavernParcelExchange, { props: { resources: [], includeChatScripts: false } })
-  wrappers.push(w)
-  await w.get('textarea').setValue('SRL1-fixture')
-  await w
-    .findAll('button')
-    .find((b) => b.text().includes('领取并校验'))!
-    .trigger('click')
-  await flushPromises()
-  await w
-    .findAll('button')
-    .find((b) => b.text() === '导入资源库')!
-    .trigger('click')
-  await flushPromises()
-  const imported = (w.emitted('import-files')![0]![0] as File[])[0]!
-  const archive = await readChatArchive(imported)
-  expect(archive.carryReadingScripts).toBe(false)
-  expect(archive.readingScripts).toEqual([])
-  expect(await archive.card.text()).toBe('png-original')
-  expect(await archive.chat.text()).toBe('jsonl-original')
-  expect(archive.displayRules).toEqual([rule])
-})
+it.each([true, false])(
+  'honors the carry setting %s on parcel receipt, preserving card, chat and display rules',
+  async (includeChatScripts) => {
+    const card = new File(['png-original'], 'card.png'),
+      chat = new File(['jsonl-original'], 'chat.jsonl')
+    const rule = { findRegex: 'status', replaceString: 'panel', markdownOnly: true }
+    vi.mocked(readParcel).mockResolvedValue([
+      {
+        kind: 'chat',
+        displayName: 'chat',
+        file: createChatArchive(card, chat, 'card.png', [rule], {
+          readingScripts: [{ sourceName: 'phone', scripts: { content: 'code' } }],
+        }),
+      },
+    ])
+    const w = mount(TavernParcelExchange, { props: { resources: [], includeChatScripts } })
+    wrappers.push(w)
+    await w.get('textarea').setValue('SRL1-fixture')
+    await w
+      .findAll('button')
+      .find((b) => b.text().includes('领取并校验'))!
+      .trigger('click')
+    await flushPromises()
+    await w
+      .findAll('button')
+      .find((b) => b.text() === '导入资源库')!
+      .trigger('click')
+    await flushPromises()
+    const imported = (w.emitted('import-files')![0]![0] as File[])[0]!
+    const archive = await readChatArchive(imported)
+    expect(archive.carryReadingScripts).toBe(includeChatScripts)
+    expect(archive.readingScripts).toEqual(
+      includeChatScripts ? [{ sourceName: 'phone', scripts: { content: 'code' } }] : [],
+    )
+    expect(await archive.card.text()).toBe('png-original')
+    expect(await archive.chat.text()).toBe('jsonl-original')
+    expect(archive.displayRules).toEqual([rule])
+  },
+)

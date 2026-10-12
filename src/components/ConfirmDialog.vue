@@ -12,6 +12,10 @@ const modal = ref<HTMLDialogElement>()
 const confirmButton = ref<HTMLButtonElement>()
 const cancelButton = ref<HTMLButtonElement>()
 const dialogPanel = ref<HTMLElement>()
+const SecretProtectionSettings = defineAsyncComponent(
+  () => import('./SecretProtectionSettings.vue'),
+)
+const secretReady = ref(false)
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-token-review-dialog-state
 const TokenReview = defineAsyncComponent(() => import('./ProductAssistantTokenReview.vue'))
 const tokenReview = ref<{ closeDetail: () => void }>()
@@ -41,6 +45,7 @@ watch(
   activeDialog,
   async (dialog, previous) => {
     detailsOpen.value = false
+    secretReady.value = false
     if (!dialog) {
       await nextTick()
       if (!activeDialog.value && returnFocus?.isConnected)
@@ -63,7 +68,7 @@ function handleKeydown(event: KeyboardEvent): void {
   if (event.key === 'Tab') {
     const buttons = Array.from(
       dialogPanel.value?.querySelectorAll<HTMLElement | SVGElement>(
-        'button:not(:disabled), [tabindex="0"], summary',
+        'button:not(:disabled), input:not(:disabled), [tabindex="0"], summary',
       ) ?? [],
     )
     const first = buttons[0]
@@ -95,6 +100,7 @@ function cancelOrReturn(): void {
 }
 
 function respondWithHaptic(response: ConfirmDialogResponse): void {
+  if (response === 'confirm' && activeDialog.value?.secretUnlock && !secretReady.value) return
   if (response === 'confirm')
     triggerNativeHaptic(activeDialog.value?.danger ? 'warning' : 'confirm')
   respond(response)
@@ -144,6 +150,12 @@ onUnmounted(() => {
           @details="detailsOpen = $event"
         />
         <p v-else>{{ activeDialog.message }}</p>
+        <SecretProtectionSettings
+          v-if="activeDialog.secretUnlock"
+          :key="activeDialog.id"
+          unlock-only
+          @ready="secretReady = true"
+        />
         <!-- SRL-PUBLIC-SYNC: END REPLACE id=assistant-token-review-dialog-content -->
         <footer
           v-if="!detailsOpen"
@@ -170,6 +182,7 @@ onUnmounted(() => {
             ref="confirmButton"
             type="button"
             class="confirm-dialog__confirm"
+            :disabled="activeDialog.secretUnlock && !secretReady"
             :class="{ 'confirm-dialog__confirm--danger': activeDialog.danger }"
             @click="respondWithHaptic('confirm')"
           >

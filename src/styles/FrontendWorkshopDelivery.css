@@ -16,9 +16,10 @@
   font-size: var(--text-caption);
 }
 .frontend-workshop__delivery-actions button:last-child {
-  color: var(--color-surface);
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
+  box-shadow: var(--button-shadow, none);
 }
 .frontend-workshop__delivery-hint,
 .frontend-workshop__library-status {
@@ -69,8 +70,8 @@
   max-height: 22rem;
   overflow: auto;
   padding: 0.75rem;
-  color: #dbece5;
-  background: #16231e;
+  color: var(--color-ink);
+  background: var(--control-background, var(--color-surface-raised));
   font: var(--weight-body) var(--text-caption)/1.55 var(--font-code);
   white-space: pre-wrap;
   overflow-wrap: anywhere;

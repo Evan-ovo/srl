@@ -49,10 +49,10 @@
   width: var(--size-touch);
   min-height: var(--size-touch);
   padding: 0;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
-  color: var(--color-ink-soft);
-  background: var(--color-surface);
+  border: 1px solid var(--button-border, var(--color-line));
+  border-radius: var(--button-radius, var(--radius-control));
+  color: var(--button-color, var(--color-ink-soft));
+  background: var(--button-background, var(--color-surface));
   font-size: 1.5rem;
   cursor: pointer;
 }
@@ -216,10 +216,10 @@
   min-width: 0;
   min-height: var(--size-touch);
   padding: 0.5rem 0.625rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--radius-control));
   color: var(--color-ink);
-  background: var(--color-surface);
+  background: var(--control-background, var(--color-surface));
   font: inherit;
   font-size: 1rem;
 }
@@ -238,10 +238,10 @@
 .ai-tagging button:not(.ai-tagging__close) {
   min-height: var(--size-touch);
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--radius-control));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
   font: 600 var(--text-body)/1.4 var(--font-body);
   cursor: pointer;
 }
@@ -256,7 +256,7 @@
 .ai-tagging summary {
   min-height: var(--size-touch);
   padding: 0.625rem 0;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   cursor: pointer;
   font-weight: 600;
   overflow-wrap: anywhere;
@@ -440,8 +440,9 @@
   cursor: pointer;
 }
 .ai-tagging__candidate.is-selected {
-  border-left-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  border-left-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
+  color: var(--selection-color, var(--color-ink));
 }
 .ai-tagging__candidate-index {
   display: grid;
@@ -664,7 +665,8 @@
   gap: 0.375rem;
   padding: 0.75rem 1rem 0;
 }
-.ai-tagging__existing-tags > small {
+.ai-tagging__existing-tags > small,
+.ai-tagging__existing-tags > span {
   color: var(--color-ink-soft);
   font-size: var(--text-caption);
 }
@@ -672,8 +674,6 @@
   padding: 0.125rem 0.5rem;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-control);
-  color: var(--color-ink-soft);
-  font-size: var(--text-caption);
   overflow-wrap: anywhere;
 }
 .ai-tagging__suggested-tags {
@@ -714,8 +714,8 @@
   width: var(--size-touch);
   padding: 0;
   border: 0;
-  color: var(--color-ink-soft);
-  background: transparent;
+  color: var(--button-color, var(--color-ink-soft));
+  background: var(--button-background, transparent);
   font-size: 1.25rem;
 }
 .ai-tagging__tag-evidence p {
@@ -814,9 +814,9 @@
   gap: 0.5rem;
 }
 .ai-tagging .ai-tagging__footer button.is-primary {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-on-accent);
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
 }
 @media (hover: hover) {
   .ai-tagging button:not(:disabled):hover {

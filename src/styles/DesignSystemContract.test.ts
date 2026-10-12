@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { parse } from '@vue/compiler-sfc'
 
 const foundation = readFileSync(new URL('./Foundation.css', import.meta.url), 'utf8')
 const glass = readFileSync(new URL('./GlassRefinement.css', import.meta.url), 'utf8')
@@ -35,6 +36,21 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe('mobile design system contract', () => {
+  it('does not discard UI declarations through retired undefined theme aliases', () => {
+    const obsolete =
+      /var\((?:--color-paper|--color-bg|--text-secondary|--color-muted|--color-border|--color-text-secondary|--color-grid|--shadow-soft|--color-surface-soft|--color-accent-contrast|--surface-muted|--text-muted|--line-soft|--accent-strong)\b/
+    const failures: string[] = []
+    for (const path of sourceFiles(fileURLToPath(new URL('../', import.meta.url)))) {
+      if (/ChatReader|ResourcePlaza|AppearanceUiEditor/.test(path)) continue
+      const source = readFileSync(path, 'utf8')
+      const styles = path.endsWith('.vue')
+        ? parse(source).descriptor.styles.map((style) => style.content)
+        : [source]
+      if (styles.some((style) => obsolete.test(style))) failures.push(path)
+    }
+    expect(failures).toEqual([])
+  })
+
   it('defines semantic type, density, radius and icon tokens', () => {
     for (const token of [
       '--text-caption',
@@ -75,9 +91,9 @@ describe('mobile design system contract', () => {
       '--text-caption: 0.75rem',
       '--text-body: 0.875rem',
       '--text-body-strong: 1rem',
-      '--radius-control: 0.5rem',
+      '--radius-control: 0.82rem',
       '--radius-card: 0.75rem',
-      '--radius-panel: 1rem',
+      '--radius-panel: 1.35rem',
     ]) {
       expect(foundation).toContain(declaration)
     }
@@ -153,8 +169,8 @@ describe('mobile design system contract', () => {
   it('keeps the compact tool exception and retired legacy migration explicit', () => {
     expect(refinement).toContain('FrontendWorkshop 的 10/11/12/14px 层级由各正式 Owner')
     expect(refinement).not.toMatch(/\.frontend-workshop[^{}]*:where\([^)]*button/)
-    expect(layout).toContain(
-      "input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], :where(.main-api-settings input))",
+    expect(layout.replace(/\s+/g, '')).toContain(
+      "input:not([type='checkbox'],[type='radio'],[type='range'],[type='color'],[type='file'],:where(.main-api-settingsinput))",
     )
     expect(layout).toMatch(
       /:is\(#app, \[role='dialog'\]\)\s*:where\([^{}]+\)\s*\{\s*font-size: 16px;/,

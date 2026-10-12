@@ -17,8 +17,7 @@ import {
   withAbortSignal,
 } from './TavernBridgeTransferOperations'
 import { tavernHttpFetch } from './TavernHttpTransport'
-// SRL-PUBLIC-SYNC: PUBLIC-ONLY id=tavern-public-endpoint-import
-import { publicWorkerEndpoint } from './PublicWorkerSettingsService'
+import { acquireDeviceRelayTarget, relayWorkerEndpoint } from './RelayWorkerSettingsService'
 import { supportsBridgeGzip } from '../utils/BridgeCompression'
 import { isCapacitorApp } from '../utils/CapacitorDetection'
 import {
@@ -71,6 +70,8 @@ export class TavernBridgeService extends EventTarget {
   private helloTimer?: number
   private relayWindow?: Window
   private relayOrigin = ''
+  private secureJoinAbort?: AbortController
+  private relayWorkerRelease?: () => unknown
   private messageChain = Promise.resolve()
   private readonly pendingLists = new Map<string, PendingList>()
   private readonly pendingPulls = new Map<string, PendingPull>()
@@ -185,57 +186,81 @@ export class TavernBridgeService extends EventTarget {
   async joinSecureRelay(codeValue: string): Promise<void> {
     const code = codeValue.trim().toUpperCase()
     if (!/^[2-9A-HJ-NP-Z]{8}$/u.test(code)) throw new Error('设备码格式无效')
+    const worker = acquireDeviceRelayTarget()
     this.disconnect('正在连接 HTTPS 安全中继')
-    // SRL-PUBLIC-SYNC: BEGIN WORKER-URL id=tavern-device-relay
-    const endpoint = publicWorkerEndpoint('/api/bridge/join')
-    // SRL-PUBLIC-SYNC: END WORKER-URL id=tavern-device-relay
-    let response: Response
+    const joinAbort = new AbortController()
+    this.secureJoinAbort = joinAbort
+    let connected = false
     try {
-      response = await tavernHttpFetch(endpoint.href, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-        cache: 'no-store',
-      })
-    } catch {
-      throw new Error('无法连接资源库的 HTTPS 中继，请检查网络或服务器是否已更新')
-    }
-    const result = (await response.json().catch(() => ({}))) as {
-      error?: string
-      pairCode?: string
-      participantToken?: string
-      relayBase?: string
-      reliableDelivery?: boolean
-      message?: string
-    }
-    if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error(result.error || result.message || '设备码不存在或已过期，请在酒馆重新生成')
+      // SRL-PUBLIC-SYNC: BEGIN WORKER-URL id=tavern-device-relay
+      const endpoint = relayWorkerEndpoint('/api/bridge/join', worker.target)
+      // SRL-PUBLIC-SYNC: END WORKER-URL id=tavern-device-relay
+      let response: Response
+      try {
+        response = await tavernHttpFetch(endpoint.href, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+          signal: joinAbort.signal,
+          redirect: 'error',
+          cache: 'no-store',
+        })
+      } catch {
+        throw new Error('无法连接资源库的 HTTPS 中继，请检查网络或服务器是否已更新')
       }
-      throw new Error(
-        result.error || result.message || `HTTPS 中继连接失败（HTTP ${response.status}）`,
+      joinAbort.signal.throwIfAborted()
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: string
+        pairCode?: string
+        participantToken?: string
+        relayBase?: string
+        reliableDelivery?: boolean
+        message?: string
+      }
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error(
+            result.error || result.message || '设备码不存在或已过期，请在酒馆重新生成',
+          )
+        }
+        throw new Error(
+          result.error || result.message || `HTTPS 中继连接失败（HTTP ${response.status}）`,
+        )
+      }
+      if (
+        typeof result.pairCode !== 'string' ||
+        typeof result.participantToken !== 'string' ||
+        typeof result.relayBase !== 'string'
+      ) {
+        throw new Error('HTTPS 中继返回的数据不完整，请更新云服务器')
+      }
+      // SRL-PUBLIC-SYNC: BEGIN WORKER-URL id=tavern-relay-origin
+      joinAbort.signal.throwIfAborted()
+      const relayBase = new URL(result.relayBase, worker.target.origin)
+      if (
+        relayBase.origin !== worker.target.origin ||
+        !relayBase.pathname.startsWith('/api/bridge/') ||
+        relayBase.username ||
+        relayBase.password ||
+        relayBase.search ||
+        relayBase.hash
       )
+        throw new Error('中继响应地址与所选 Worker 不一致')
+      // SRL-PUBLIC-SYNC: END WORKER-URL id=tavern-relay-origin
+      this.connectHttpRelay(
+        relayBase.href,
+        code,
+        result.participantToken,
+        result.pairCode,
+        relayBase.origin,
+        result.reliableDelivery === true,
+      )
+      this.relayWorkerRelease = worker.release
+      connected = true
+    } finally {
+      if (this.secureJoinAbort === joinAbort) this.secureJoinAbort = undefined
+      if (!connected) worker.release()
     }
-    if (
-      typeof result.pairCode !== 'string' ||
-      typeof result.participantToken !== 'string' ||
-      typeof result.relayBase !== 'string'
-    ) {
-      throw new Error('HTTPS 中继返回的数据不完整，请更新云服务器')
-    }
-    // SRL-PUBLIC-SYNC: BEGIN WORKER-URL id=tavern-relay-origin
-    const workerOrigin = publicWorkerEndpoint('/').origin
-    const relayBase = new URL(result.relayBase, workerOrigin)
-    if (relayBase.origin !== workerOrigin) throw new Error('中继地址必须与设置的 Worker 来源一致')
-    // SRL-PUBLIC-SYNC: END WORKER-URL id=tavern-relay-origin
-    this.connectHttpRelay(
-      relayBase.href,
-      code,
-      result.participantToken,
-      result.pairCode,
-      relayBase.origin,
-      result.reliableDelivery === true,
-    )
   }
 
   async connectLocalTavern(): Promise<void> {
@@ -781,6 +806,10 @@ export class TavernBridgeService extends EventTarget {
   }
 
   disconnect(detail = '连接已断开'): void {
+    this.secureJoinAbort?.abort()
+    this.secureJoinAbort = undefined
+    this.relayWorkerRelease?.()
+    this.relayWorkerRelease = undefined
     this.directory = undefined
     if (this.helloTimer) window.clearInterval(this.helloTimer)
     this.port?.close()
@@ -810,6 +839,8 @@ export class TavernBridgeService extends EventTarget {
     this.port?.close()
     this.port = undefined
     this.rejectPending(error)
+    this.relayWorkerRelease?.()
+    this.relayWorkerRelease = undefined
     this.setState('error', error.message)
   }
 

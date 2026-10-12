@@ -3,7 +3,7 @@
   inset: 0;
   z-index: 1190;
   border: 0;
-  background: rgb(18 34 40 / 18%);
+  background: var(--overlay-background);
 }
 
 .discord-guide-drawer {
@@ -13,9 +13,9 @@
   width: min(410px, 91vw);
   display: flex;
   flex-direction: column;
-  background: var(--surface-strong, #f8fbfb);
-  border-left: 1px solid var(--line-soft, #d4e0e2);
-  box-shadow: -18px 0 40px rgb(20 43 51 / 8%);
+  background: var(--dialog-background);
+  border-left: 1px solid var(--color-line);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 .discord-guide-drawer__header {
@@ -24,11 +24,11 @@
   justify-content: space-between;
   gap: 16px;
   padding: 22px 22px 17px;
-  border-bottom: 1px solid var(--line-soft, #dce6e8);
+  border-bottom: 1px solid var(--color-line);
 }
 
 .discord-guide-drawer__header small {
-  color: var(--text-muted, #789099);
+  color: var(--color-ink-soft);
   font-size: 0.66rem;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -42,9 +42,9 @@
 .discord-guide-drawer__header button {
   width: 38px;
   height: 38px;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted, #70868e);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  background: var(--button-background, var(--glass-panel-strong));
+  color: var(--button-color, var(--color-ink));
   font-size: 1.5rem;
   cursor: pointer;
 }
@@ -60,12 +60,12 @@
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 12px;
   padding: 20px 0 22px;
-  border-bottom: 1px solid var(--line-soft, #e2eaec);
+  border-bottom: 1px solid var(--color-line);
 }
 
 .discord-guide-step > span {
   padding-top: 2px;
-  color: var(--text-muted, #83969d);
+  color: var(--color-ink-soft);
   font-size: 0.68rem;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -78,27 +78,20 @@
 
 .discord-guide-intro {
   margin: 16px 0 0;
-  color: var(--text-secondary, #62777f);
-  font-size: 0.82rem;
-  line-height: 1.7;
-}
-
-.discord-guide-intro {
-  margin: 16px 0 0;
-  color: var(--text-secondary, #62777f);
+  color: var(--color-ink-soft);
   font-size: 0.82rem;
   line-height: 1.7;
 }
 
 .discord-guide-step p {
   margin: 0;
-  color: var(--text-secondary, #62777f);
+  color: var(--color-ink-soft);
   font-size: 0.82rem;
   line-height: 1.72;
 }
 
 .discord-guide-step strong {
-  color: var(--text-primary, #173641);
+  color: var(--color-ink);
   font-weight: 800;
 }
 
@@ -109,10 +102,10 @@
   margin-top: 9px;
   padding: 5px 8px;
   overflow-wrap: anywhere;
-  border: 1px solid var(--line-soft, #dce7e9);
+  border: 1px solid var(--color-line);
   border-radius: 6px;
-  background: var(--surface-soft, #edf4f5);
-  color: var(--text-secondary, #456571);
+  background: var(--color-accent-soft);
+  color: var(--color-ink-soft);
   font-family: inherit;
   font-size: 0.72rem;
   font-weight: 750;
@@ -158,7 +151,7 @@
 .discord-guide-step a {
   display: inline-block;
   margin-top: 11px;
-  color: var(--accent-strong, #426b79);
+  color: var(--color-accent);
   font-size: 0.78rem;
   font-weight: 800;
   text-decoration: none;
@@ -174,8 +167,8 @@
   align-items: center;
   padding: 0 12px;
   border-radius: 7px;
-  background: var(--accent-strong, #426b79);
-  color: white;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
   text-decoration: none;
 }
 
@@ -189,10 +182,6 @@
 .discord-guide-copy-list button {
   min-height: 34px;
   padding: 0 9px;
-  border: 1px solid var(--line-soft, #cbd8da);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--accent-strong, #496d79);
   font-size: 0.68rem;
   font-weight: 850;
   cursor: pointer;
@@ -209,59 +198,10 @@
   width: fit-content;
   margin: 14px auto 0;
   padding: 7px 10px;
-  border: 1px solid var(--line-soft, #cbd8db);
+  border: 1px solid var(--color-line);
   border-radius: 7px;
-  background: var(--surface-strong, #f8fbfb);
-  color: var(--text-secondary, #55727c);
-  font-size: 0.7rem;
-  font-weight: 800;
-}
-
-.discord-guide-step .discord-guide-action {
-  min-height: 38px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 12px;
-  border-radius: 7px;
-  background: var(--accent-strong, #426b79);
-  color: white;
-  text-decoration: none;
-}
-
-.discord-guide-copy-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin-top: 11px;
-}
-
-.discord-guide-copy-list button {
-  min-height: 34px;
-  padding: 0 9px;
-  border: 1px solid var(--line-soft, #cbd8da);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--accent-strong, #496d79);
-  font-size: 0.68rem;
-  font-weight: 850;
-  cursor: pointer;
-}
-
-.discord-guide-copy-list button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.discord-guide-status {
-  position: sticky;
-  bottom: 8px;
-  width: fit-content;
-  margin: 14px auto 0;
-  padding: 7px 10px;
-  border: 1px solid var(--line-soft, #cbd8db);
-  border-radius: 7px;
-  background: var(--surface-strong, #f8fbfb);
-  color: var(--text-secondary, #55727c);
+  background: var(--color-surface-raised);
+  color: var(--color-ink-soft);
   font-size: 0.7rem;
   font-weight: 800;
 }
@@ -269,14 +209,14 @@
 .discord-guide-step .discord-guide-note {
   margin-top: 11px;
   padding: 6px 0 6px 10px;
-  border-left: 2px solid #a98b70;
-  color: #755f50;
+  border-left: 2px solid var(--color-warning-line);
+  color: var(--color-ink-soft);
   font-size: 0.75rem;
 }
 
 .discord-guide-step .discord-guide-note--soft {
-  border-left-color: var(--accent-soft, #9ab2bb);
-  color: var(--text-secondary, #607780);
+  border-left-color: var(--color-line);
+  color: var(--color-ink-soft);
 }
 
 .discord-guide-fade-enter-active,
@@ -333,13 +273,13 @@
   display: block;
   width: 100%;
   height: auto;
-  border: 1px solid var(--line-soft, #dce7e9);
+  border: 1px solid var(--color-line);
   border-radius: 7px;
 }
 
 .discord-guide-screenshot figcaption {
   margin-top: 4px;
-  color: var(--text-muted, #789099);
+  color: var(--color-ink-soft);
   font-size: 0.68rem;
   line-height: 1.5;
 }

@@ -39,7 +39,7 @@
   min-width: 0;
   min-height: 44px;
   padding: 0.45rem 0.6rem;
-  border-radius: 999px;
+  border-radius: var(--button-radius, 999px);
   font-size: 0.8rem;
   font-weight: 500;
   box-shadow: none;
@@ -136,9 +136,9 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-md, 12px);
-  background: var(--color-surface);
+  border: 1px solid var(--dialog-border, var(--glass-border));
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
+  background: var(--dialog-background);
 }
 .resource-gallery__quality {
   display: flex;
@@ -192,8 +192,8 @@
   inset: var(--visual-viewport-offset-top, 0px) 0 auto;
   height: var(--visual-viewport-height, 100dvh);
   z-index: 32;
-  background: #07100d;
-  color: #fff;
+  background: var(--viewer-background);
+  color: var(--viewer-color);
   overscroll-behavior: none;
 }
 .resource-image-viewer__sheet {
@@ -241,10 +241,10 @@
   flex-shrink: 0;
   min-height: var(--size-touch);
   padding: 0 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.38);
+  border: 1px solid var(--viewer-control-border);
   border-radius: var(--radius-control);
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(8, 12, 10, 0.7);
+  color: var(--viewer-color);
+  background: var(--viewer-control-background);
   font-family: var(--font-label);
   font-size: 0.75rem;
   backdrop-filter: blur(8px);
@@ -254,7 +254,7 @@
 }
 .resource-image-viewer--minimal {
   z-index: 1300;
-  background: #07100d;
+  background: var(--viewer-background);
 }
 .resource-image-viewer--minimal .resource-image-viewer__sheet {
   padding: 0;
@@ -280,7 +280,7 @@
   white-space: nowrap;
   font-size: 0.8rem;
   font-weight: 400;
-  text-shadow: 0 1px 4px #000;
+  text-shadow: var(--viewer-control-shadow);
 }
 .resource-cover {
   width: 100%;
@@ -384,9 +384,9 @@
   white-space: normal;
 }
 .resource-gallery__category-options [aria-pressed='true'] {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft, var(--color-surface-raised));
+  color: var(--selection-color, var(--color-ink));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .resource-gallery__new-category {
   display: grid;

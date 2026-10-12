@@ -73,10 +73,10 @@
   max-width: 100%;
   resize: vertical;
   padding: 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
+  border: 1px solid var(--control-border, var(--color-line));
+  border-radius: var(--control-radius, var(--radius-control));
   color: var(--color-ink);
-  background: var(--color-surface-raised);
+  background: var(--control-background, var(--color-surface-raised));
   font: var(--weight-body) var(--text-body)/1.6 var(--font-ui);
 }
 .frontend-workshop select,
@@ -103,9 +103,9 @@
 }
 .frontend-workshop button {
   min-height: var(--control-visual-secondary);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-ink);
-  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, color-mix(in srgb, var(--color-surface) 72%, transparent));
   cursor: pointer;
 }
 .frontend-workshop button:disabled {
@@ -128,8 +128,8 @@
   position: relative;
   min-height: var(--control-visual);
   padding: 0 0.55rem;
-  border-color: var(--color-line);
-  color: var(--color-accent);
+  border-color: var(--button-border, var(--color-line));
+  color: var(--button-color, var(--color-accent));
   font-size: var(--text-caption);
 }
 .frontend-workshop__presets button::before {
@@ -246,9 +246,9 @@
   scroll-snap-align: start;
 }
 .frontend-workshop__size-presets button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
   box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 .frontend-workshop__size-presets button small {
@@ -323,9 +323,9 @@
   min-width: 0;
   min-height: var(--control-visual-secondary);
   padding-inline: 0.7rem;
-  color: var(--color-accent);
-  border-color: var(--color-line-strong);
-  background: var(--color-accent-soft);
+  color: var(--button-color, var(--color-accent));
+  border-color: var(--button-border, var(--color-line-strong));
+  background: var(--button-background, var(--color-accent-soft));
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -341,31 +341,30 @@
   font-style: normal;
   overflow-wrap: anywhere;
 }
-.frontend-workshop__palettes > header,
-.frontend-workshop__typography > header,
-.frontend-workshop__locks > header {
+:is(.frontend-workshop__palettes, .frontend-workshop__typography, .frontend-workshop__locks)
+  > header {
   display: flex;
   min-width: 0;
   align-items: end;
   justify-content: space-between;
   gap: 0.75rem;
 }
-.frontend-workshop__palettes > header span,
-.frontend-workshop__typography > header span,
-.frontend-workshop__locks > header span {
+:is(.frontend-workshop__palettes, .frontend-workshop__typography, .frontend-workshop__locks)
+  > header
+  span {
   min-width: 0;
 }
-.frontend-workshop__palettes > header small,
-.frontend-workshop__palettes > header strong,
-.frontend-workshop__typography > header small,
-.frontend-workshop__typography > header strong,
-.frontend-workshop__locks > header small,
-.frontend-workshop__locks > header strong {
+:is(.frontend-workshop__palettes, .frontend-workshop__typography, .frontend-workshop__locks)
+  > header
+  small,
+:is(.frontend-workshop__palettes, .frontend-workshop__typography, .frontend-workshop__locks)
+  > header
+  strong {
   display: block;
 }
-.frontend-workshop__palettes > header strong,
-.frontend-workshop__typography > header strong,
-.frontend-workshop__locks > header strong {
+:is(.frontend-workshop__palettes, .frontend-workshop__typography, .frontend-workshop__locks)
+  > header
+  strong {
   margin-top: 0.05rem;
   font: var(--weight-title) var(--text-body)/1.35 var(--font-ui);
 }
@@ -573,14 +572,14 @@
 .frontend-workshop__locks > div button {
   min-height: var(--control-visual);
   padding: 0 0.6rem;
-  border-color: var(--color-line);
+  border-color: var(--button-border, var(--color-line));
   font-size: var(--text-caption);
 }
 .frontend-workshop__scope-chips button.is-active,
 .frontend-workshop__locks > div button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .frontend-workshop__locks > div {
   margin-top: 0.6rem;
@@ -612,7 +611,7 @@
   content: '';
 }
 .frontend-workshop__mode-grid > button.is-active {
-  border-color: var(--color-accent);
+  border-color: var(--selection-border, var(--color-accent));
   box-shadow: inset 0 -0.2rem 0 var(--color-accent);
 }
 .frontend-workshop__mode-grid > button.is-active::after {
@@ -670,11 +669,14 @@
     grid-column: 1;
   }
 
-  .frontend-workshop__axis > header,
-  .frontend-workshop__target-size > header,
-  .frontend-workshop__palettes > header,
-  .frontend-workshop__typography > header,
-  .frontend-workshop__locks > header {
+  :is(
+      .frontend-workshop__axis,
+      .frontend-workshop__target-size,
+      .frontend-workshop__palettes,
+      .frontend-workshop__typography,
+      .frontend-workshop__locks
+    )
+    > header {
     align-items: stretch;
     flex-direction: column;
   }

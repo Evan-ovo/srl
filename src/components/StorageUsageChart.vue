@@ -114,15 +114,15 @@ button {
   padding: 0.5rem 0.2rem;
   border: 0;
   border-bottom: 1px solid var(--color-line);
-  background: transparent;
-  color: var(--color-ink);
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-ink));
   text-align: left;
   font: inherit;
   font-size: 0.78rem;
   cursor: pointer;
 }
 button:hover {
-  background: var(--color-surface);
+  background: var(--button-background, var(--color-surface));
 }
 button i {
   width: 0.65rem;

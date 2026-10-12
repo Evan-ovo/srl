@@ -14,7 +14,7 @@
 .resource-sources__header p {
   max-width: 620px;
   margin: 7px 0 0;
-  color: var(--text-muted, #748990);
+  color: var(--color-ink-soft);
   font-size: 0.76rem;
   line-height: 1.6;
 }
@@ -26,26 +26,26 @@
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: var(--text-muted, #6d838b);
+  color: var(--color-ink-soft);
   font-size: 0.72rem;
   font-weight: 800;
   cursor: pointer;
 }
 
 .resource-sources__advanced:hover {
-  border-color: var(--line-soft, #dbe5e7);
-  background: var(--surface-soft, #eef4f5);
-  color: var(--accent-strong, #416b79);
+  border-color: var(--color-line);
+  background: var(--color-surface);
+  color: var(--color-accent);
 }
 
 .resource-sources__add {
   width: 100%;
   min-height: 44px;
   margin-top: 18px;
-  border: 1px solid var(--line-soft, #c7d6d9);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-primary, #24434e);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--glass-radius-control));
+  background: var(--button-background, var(--glass-panel-strong));
+  color: var(--button-color, var(--color-ink));
   font-size: 0.78rem;
   font-weight: 850;
   cursor: pointer;
@@ -53,18 +53,18 @@
 
 .resource-sources__status {
   margin: 8px 4px 0;
-  color: var(--text-muted, #80939a);
+  color: var(--color-ink-soft);
   font-size: 0.7rem;
   line-height: 1.55;
 }
 
 .resource-sources__directory {
   margin-top: 18px;
-  border-top: 1px solid var(--line-soft, #d8e3e5);
+  border-top: 1px solid var(--color-line);
 }
 
 .resource-source-platform {
-  border-bottom: 1px solid var(--line-soft, #d8e3e5);
+  border-bottom: 1px solid var(--color-line);
 }
 
 .resource-source-platform__row {
@@ -83,22 +83,22 @@
 }
 
 .resource-source-platform__row:hover {
-  background: color-mix(in srgb, var(--surface-strong, #f8fbfb) 38%, transparent);
+  background: color-mix(in srgb, var(--color-surface-raised) 38%, transparent);
 }
 
 .resource-source-platform__row > i {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background: #879aa1;
+  background: var(--color-ink-soft);
 }
 
 .resource-source-platform__row > .resource-source-platform__mark--discord {
-  background: #5865f2;
+  background: var(--color-brand-discord);
 }
 
 .resource-source-platform__row > .resource-source-platform__mark--github {
-  background: #2b3a40;
+  background: var(--color-brand-github);
 }
 
 .resource-source-platform__copy {
@@ -107,7 +107,7 @@
 
 .resource-source-platform__copy strong {
   display: block;
-  color: var(--text-primary, #24434e);
+  color: var(--color-ink);
   font-size: 0.86rem;
   font-weight: 850;
 }
@@ -115,7 +115,7 @@
 .resource-source-platform__copy small {
   display: block;
   margin-top: 3px;
-  color: var(--text-muted, #86969c);
+  color: var(--color-ink-soft);
   font-size: 0.68rem;
 }
 
@@ -126,16 +126,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--line-soft, #dde7e9);
+  border: 1px solid var(--color-line);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface-strong, #f8fbfb) 52%, transparent);
-  color: var(--text-muted, #73878f);
+  background: color-mix(in srgb, var(--color-surface-raised) 52%, transparent);
+  color: var(--color-ink-soft);
   font-size: 0.66rem;
   font-weight: 850;
 }
 
 .resource-source-platform__chevron {
-  color: var(--text-muted, #91a1a7);
+  color: var(--color-ink-soft);
   font-size: 1.25rem;
   transition: transform 160ms ease;
 }
@@ -157,7 +157,7 @@
   gap: 10px;
   padding: 0 4px;
   border: 0;
-  border-top: 1px solid var(--line-soft, #e1e9eb);
+  border-top: 1px solid var(--color-line);
   background: transparent;
   color: inherit;
   text-align: left;
@@ -170,14 +170,14 @@
 }
 
 .resource-source-subgroup span strong {
-  color: var(--text-primary, #294750);
+  color: var(--color-ink);
   font-size: 0.79rem;
   font-weight: 850;
 }
 
 .resource-source-subgroup span small {
   margin-top: 3px;
-  color: var(--text-muted, #88999f);
+  color: var(--color-ink-soft);
   font-size: 0.66rem;
 }
 
@@ -188,15 +188,15 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: var(--surface-soft, #edf3f4);
-  color: var(--text-muted, #72878f);
+  background: var(--color-surface);
+  color: var(--color-ink-soft);
   font-size: 0.63rem;
   font-style: normal;
   font-weight: 850;
 }
 
 .resource-source-subgroup b {
-  color: var(--text-muted, #94a4aa);
+  color: var(--color-ink-soft);
   font-size: 1.12rem;
   font-weight: 500;
   transition: transform 160ms ease;
@@ -209,7 +209,7 @@
 .resource-source-link-list {
   margin-left: 2px;
   padding-left: 14px;
-  border-left: 2px solid color-mix(in srgb, var(--accent-soft, #9db4bc) 72%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--color-accent-soft) 72%, transparent);
 }
 
 .resource-sources__discord-probe {
@@ -218,7 +218,7 @@
 
 .resource-sources__empty,
 .resource-sources__hint {
-  color: var(--text-muted, #83969d);
+  color: var(--color-ink-soft);
   font-size: 0.72rem;
   line-height: 1.6;
 }
@@ -238,7 +238,7 @@
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  background: rgb(18 30 34 / 30%);
+  background: var(--overlay-background);
 }
 
 .resource-source-add-sheet {
@@ -246,11 +246,12 @@
   max-height: 100%;
   overflow-y: auto;
   padding: 18px 18px calc(18px + var(--safe-bottom));
-  border: 1px solid var(--line-soft, #c8d7da);
+  border: 1px solid var(--dialog-border, var(--glass-border));
   border-bottom: 0;
-  border-radius: 14px 14px 0 0;
-  background: var(--surface-strong, #f8fbfb);
-  box-shadow: 0 18px 60px rgb(25 51 60 / 15%);
+  border-radius: var(--dialog-radius, var(--glass-radius-panel))
+    var(--dialog-radius, var(--glass-radius-panel)) 0 0;
+  background: var(--dialog-background);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 .resource-source-add-sheet h3 {
@@ -260,7 +261,7 @@
 
 .resource-source-add-sheet > p {
   margin: 6px 0 14px;
-  color: var(--text-muted, #82959c);
+  color: var(--color-ink-soft);
   font-size: 0.64rem;
   line-height: 1.55;
 }
@@ -273,7 +274,7 @@
 .resource-source-add-field span {
   display: block;
   margin-bottom: 5px;
-  color: var(--text-secondary, #5f767f);
+  color: var(--color-ink-soft);
   font-size: 0.61rem;
   font-weight: 850;
 }
@@ -282,16 +283,12 @@
   width: 100%;
   min-height: 42px;
   padding: 9px 10px;
-  border: 1px solid var(--line-soft, #c8d7da);
-  border-radius: 7px;
-  background: var(--surface-strong, #f8fbfb);
-  color: var(--text-primary, #294650);
   font-size: 0.71rem;
   outline: none;
 }
 
 .resource-source-add-field input:focus {
-  border-color: var(--accent-soft, #7898a4);
+  border-color: var(--control-border, var(--color-accent-soft));
 }
 
 .resource-source-add-choice {
@@ -299,7 +296,7 @@
   align-items: flex-start;
   gap: 8px;
   padding: 10px 2px;
-  border-top: 1px solid var(--line-soft, #d7e3e5);
+  border-top: 1px solid var(--color-line);
 }
 
 .resource-source-add-choice:first-of-type {
@@ -317,14 +314,14 @@
 
 .resource-source-add-choice small {
   margin-top: 3px;
-  color: var(--text-muted, #82959c);
+  color: var(--color-ink-soft);
   font-size: 0.57rem;
   line-height: 1.45;
 }
 
 .resource-source-add-error {
   margin: 10px 0 0 !important;
-  color: var(--danger, #a65858) !important;
+  color: var(--color-danger) !important;
 }
 
 .resource-source-add-actions {
@@ -337,18 +334,14 @@
 .resource-source-add-actions button {
   min-height: 35px;
   padding: 0 10px;
-  border: 1px solid var(--line-soft, #c8d7da);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-primary, #294650);
   font-size: 0.66rem;
   font-weight: 850;
 }
 
-.resource-source-add-actions__primary {
-  border-color: var(--accent-strong, #4d7582) !important;
-  background: var(--accent-strong, #4d7582) !important;
-  color: #fff !important;
+.resource-source-add-actions__primary:is(a, button) {
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
 }
 
 .resource-source-add-actions button:disabled,
@@ -386,8 +379,9 @@
   }
 
   .resource-source-add-sheet {
-    border-bottom: 1px solid var(--line-soft, #c8d7da);
-    border-radius: 12px;
+    border-bottom: 1px solid var(--color-line);
+    border-radius: var(--dialog-radius, var(--glass-radius-panel))
+      var(--dialog-radius, var(--glass-radius-panel)) 0 0;
   }
 }
 

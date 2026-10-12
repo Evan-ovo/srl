@@ -9,7 +9,7 @@
   overflow: hidden;
   padding: var(--safe-top) max(8px, var(--safe-right)) max(4px, var(--safe-bottom))
     max(8px, var(--safe-left));
-  background: var(--color-surface);
+  background: var(--dialog-background, var(--color-surface));
   color: var(--color-ink);
   box-sizing: border-box;
 }
@@ -38,8 +38,7 @@
   cursor: pointer;
 }
 .frontend-workshop-source-editor__tools summary {
-  color: var(--color-ink);
-  border-radius: var(--radius-control);
+  list-style-position: inside;
 }
 .frontend-workshop-source-editor__tool-menu {
   position: absolute;
@@ -52,10 +51,6 @@
   max-height: calc(var(--app-viewport-height) - var(--safe-top) - var(--safe-bottom) - 64px);
   overflow: auto;
   padding: 8px;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-panel);
-  background: var(--color-surface-raised);
-  box-shadow: var(--glass-shadow);
 }
 .frontend-workshop-source-editor__tool-menu small {
   font-size: 12px;
@@ -79,11 +74,7 @@
   flex: 1 1 0;
   min-height: 64px;
   resize: none;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
   padding: 8px;
-  background: var(--color-surface);
-  color: inherit;
   font:
     16px/1.5 ui-monospace,
     SFMono-Regular,

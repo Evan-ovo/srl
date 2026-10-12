@@ -1,5 +1,5 @@
 export type ReferenceEntityType =
-  'resource' | 'asset' | 'version' | 'relation' | 'loadout' | 'workshop-project' | 'generated-image'
+  'resource' | 'asset' | 'version' | 'relation' | 'workshop-project' | 'generated-image'
 
 export interface EntityReference {
   ownerType: ReferenceEntityType

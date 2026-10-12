@@ -9,10 +9,18 @@ import { startAuditPreview } from './AuditPreviewServer.mjs'
 import { createAuditApiFixture } from './AuditEnvironment.mjs'
 
 export const AUDIT_SUITES = {
+  'installable-appearance': 'scripts/InstallableAppearanceAudit.mjs',
+  'discord-markdown': 'scripts/DiscordMarkdownLayoutAudit.mjs',
   'discord-handoff': 'scripts/DiscordHandoffPageAudit.mjs',
   'discord-inbox': 'scripts/DiscordInboxUiAudit.mjs',
+  'discord-setup': 'scripts/DiscordSetupUiAudit.mjs',
   'official-apps': 'scripts/OfficialAppLifecycleAudit.mjs',
   appearance: 'scripts/AppearanceScopeAudit.mjs',
+  'outer-appearance': 'scripts/OuterAppearanceAudit.mjs',
+  'resident-appearance': 'scripts/ResidentAppearanceAudit.mjs',
+  'ui-customization': 'scripts/UiCustomizationAudit.mjs',
+  'appearance-reference': 'scripts/AppearanceReferenceAudit.mjs',
+  'home-expansion': 'scripts/HomeExpansionWidthAudit.mjs',
   'detail-layout': 'scripts/ResourceDetailLayoutAudit.mjs',
   'world-book': 'scripts/WorldBookBrowserAudit.mjs',
   'storage-settings': 'scripts/ResourceRecoveryAudit.mjs',
@@ -20,6 +28,7 @@ export const AUDIT_SUITES = {
   stress: 'scripts/BrowserStressAudit.mjs',
   assistant: 'scripts/ProductAssistantPetAudit.mjs',
   'api-config': 'scripts/ApiConfigurationAudit.mjs',
+  'relay-settings': 'scripts/RelayWorkerSettingsAudit.mjs',
   'tag-version': 'scripts/TagVersionPerformanceAudit.mjs',
   'reader-scripts': 'scripts/ChatReaderScriptsAudit.mjs',
   'reader-startup': 'scripts/ChatReaderStartupAudit.mjs',
@@ -156,13 +165,25 @@ export async function runIsolatedAudit(options, validation) {
   let preview
   let phase = '产物完整性预检'
   try {
-    if (['discord-handoff', 'discord-inbox', 'preview-loading'].includes(options.suite)) {
+    if (
+      [
+        'discord-markdown',
+        'discord-handoff',
+        'discord-inbox',
+        'discord-setup',
+        'preview-loading',
+      ].includes(options.suite)
+    ) {
       phase =
-        options.suite === 'preview-loading'
-          ? '开场白渐进加载组件隔离浏览器审计'
-          : options.suite === 'discord-inbox'
-            ? '收件箱组件隔离浏览器审计'
-            : 'Worker 接收页隔离浏览器审计'
+        options.suite === 'discord-markdown'
+          ? 'Discord 帖子 Markdown 排版隔离浏览器审计'
+          : options.suite === 'discord-setup'
+            ? 'Discord 网页协助组件隔离浏览器审计'
+            : options.suite === 'preview-loading'
+              ? '开场白渐进加载组件隔离浏览器审计'
+              : options.suite === 'discord-inbox'
+                ? '收件箱组件隔离浏览器审计'
+                : 'Worker 接收页隔离浏览器审计'
       await runAuditCommand(AUDIT_SUITES[options.suite], [], {
         ...process.env,
         SRL_AUDIT_MODE: 'fixture',

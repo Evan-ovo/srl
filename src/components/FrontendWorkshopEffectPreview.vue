@@ -168,10 +168,10 @@ onBeforeUnmount(() => {
   min-height: 44px;
 }
 .fw-effect-preview__controls button {
-  border: 1px solid var(--color-line);
-  background: var(--color-surface-raised);
-  color: var(--color-ink);
-  border-radius: var(--radius-control);
+  border: 1px solid var(--button-border, var(--color-line));
+  background: var(--button-background, var(--color-surface-raised));
+  color: var(--button-color, var(--color-ink));
+  border-radius: var(--button-radius, var(--radius-control));
   padding: 6px 10px;
   min-height: 36px;
 }

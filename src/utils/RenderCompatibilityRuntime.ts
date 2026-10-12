@@ -1,4 +1,8 @@
 import type { PreviewRuntimeScript } from './RichContentPreview'
+import {
+  buildRenderCompatibilityScriptHost,
+  type PreviewScriptHostContext,
+} from './RenderCompatibilityScriptHost'
 
 export const RENDER_COMPATIBILITY_PROTOCOL = 'srl-render-compat-v1' as const
 
@@ -43,6 +47,7 @@ export interface RenderCompatibilityDiagnostic {
 }
 
 export interface PreviewSessionContext {
+  scriptHost?: PreviewScriptHostContext
   character?: {
     name?: string
     data?: Record<string, unknown>
@@ -86,6 +91,7 @@ export interface ArchivedMessageSnapshot {
 }
 
 export interface RenderCompatibilityContextInput {
+  scriptHost?: PreviewScriptHostContext
   greetings: string[]
   formattedGreetings: string[]
   renderedGreetings?: string[]
@@ -106,6 +112,7 @@ export interface RenderCompatibilityContextInput {
 }
 
 export interface RenderCompatibilityContext {
+  scriptHost?: PreviewScriptHostContext
   greetings: string[]
   formattedGreetings: string[]
   renderedGreetings: string[]
@@ -442,6 +449,7 @@ export function createRenderCompatibilityContext(
     swipesData,
     swipesInfo,
     charName: input.charName?.trim() || '角色',
+    scriptHost: input.scriptHost ? clonePreviewValue(input.scriptHost) : undefined,
     userName: input.userName?.trim() || '用户',
     characterData,
     globalVariables,
@@ -475,6 +483,7 @@ export function createRenderCompatibilityContextFromPreviewSession(
   const resolvedMessageVariables = resolvePreviewMessageVariables(session)
   const messageVariables = messageContextAvailable ? resolvedMessageVariables : undefined
   return createRenderCompatibilityContext({
+    scriptHost: session.scriptHost,
     greetings: messages ? [...messages.greetings] : [],
     formattedGreetings: messages?.formattedGreetings
       ? [...messages.formattedGreetings]
@@ -618,6 +627,7 @@ const settleSwipeTransition=(target,changed)=>{const key=String(target);const wa
   retrieveDisplayedMessage(meta,messageId){touch('message.displayed-dom',{implementationStatus:'IMPLEMENTED',parityStatus:'UNVERIFIED',source:'isolated-preview-dom',failureReason:'only the current opening preview DOM exists',impact:'message ids absent from the preview return an empty JQuery collection'});return Number(messageId)},
   };
   const mvuEvents={VARIABLE_INITIALIZED:'mag_variable_initialized',VARIABLE_UPDATE_STARTED:'mag_variable_update_started',VARIABLE_UPDATE_ENDED:'mag_variable_update_ended',BEFORE_MESSAGE_UPDATE:'mag_before_message_update',SINGLE_VARIABLE_UPDATED:'mag_variable_updated'};
+${buildRenderCompatibilityScriptHost()}
   const requireMvu=options=>{const target=options||{type:'message',message_id:'latest'};const data=archived?api.getVariables({},target):variableTarget(target,{});if(!data||typeof data!=='object'||!data.stat_data||!data.schema)throw new Error('MVU Opening Preview State is unavailable');return data};
   const archivedMvu=archived?.data&&typeof archived.data.stat_data==='object'&&archived.data.stat_data!==null&&!Array.isArray(archived.data.stat_data)&&typeof archived.data.schema==='object'&&archived.data.schema!==null&&!Array.isArray(archived.data.schema);
   const mvu=(archived?archivedMvu:context.mvuRecognized)?Object.freeze({events:Object.freeze(mvuEvents),getMvuData:(options={type:'message',message_id:'latest'})=>clone(requireMvu(options)),replaceMvuData:async(data,options={type:'message',message_id:'latest'})=>{if(archived)throw new Error('Archived chat snapshots are read-only');if(!data||typeof data!=='object'||!data.stat_data||!data.schema)throw new TypeError('Invalid MvuData');await emit(mvuEvents.VARIABLE_UPDATE_STARTED,clone(data));api.replaceVariables({},data,options);await emit(mvuEvents.VARIABLE_UPDATE_ENDED,clone(data));return clone(data)},getCurrentMvuData:()=>clone(requireMvu({type:'message',message_id:'latest'})),replaceCurrentMvuData:async data=>mvu.replaceMvuData(data,{type:'message',message_id:'latest'}),getMvuVariable:(data,path,options={})=>clone(mvuPath(mvuRecord(data,options?.category||'stat'),path,options?.default_value)),getRecordFromMvuData:(data,category)=>clone(mvuRecord(data,category))}):undefined;
@@ -649,21 +659,31 @@ const settleSwipeTransition=(target,changed)=>{const key=String(target);const wa
     api.getAllVariables=()=>clone(archived.data);
     for(const name of ['setChatMessages','setChatMessage','replaceVariables','updateVariablesWith','insertVariables','insertOrAssignVariables','deleteVariable'])api[name]=()=>{throw new Error('Archived chat snapshots are read-only')};
   }
-  const host={protocol,events:tavernEvents,diagnostics:()=>clone([...diagnostics.values()]),getInitializedGlobal(name){return globals.get(String(name))},invoke(name,args=[],meta={}){if(disposed)throw new Error('Preview host has been disposed');const fn=api[name];if(typeof fn!=='function'){touch(String(name),{implementationStatus:'UNSUPPORTED',parityStatus:'UNSUPPORTED_HOST_BOUND',source:'capability-boundary',failureReason:'API is not available in the SRL preview host',impact:'the calling script may be partial'});throw new Error('Unsupported host capability: '+String(name))}return fn(meta,...args)},subscribe(type,listener,owner,once=false){if(disposed)return{stop(){}};return on(type,listener,owner,once)},emit(type,args=[]){return disposed?Promise.resolve():emit(type,...args)},transitionSwipe,detach(owner){const owned=subscriptions.get(owner);if(!owned)return;for(const [type,list] of listeners)listeners.set(type,list.filter(item=>!owned.has(item)));subscriptions.delete(owner)},teardown(){if(disposed)return;disposed=true;window.removeEventListener('message',handleHostMessage);window.removeEventListener('pagehide',handlePagehide);document.removeEventListener('DOMContentLoaded',boot);for(const waiters of swipeTransitionWaiters.values())for(const resolve of waiters)resolve(false);swipeTransitionWaiters.clear();for(const waiters of globalWaiters.values())for(const resolve of waiters)resolve(undefined);globalWaiters.clear();globals.clear();listeners.clear();subscriptions.clear();if(window.__SRL_RENDER_COMPAT_HOST__===host)delete window.__SRL_RENDER_COMPAT_HOST__;if(window.tavern_events===tavernEvents)delete window.tavern_events},context(){return{chat:context.messageContextAvailable?[clone(message())]:[],characters:context.characterContextAvailable?[clone(context.characterData)]:[],characterId:context.characterContextAvailable?0:-1,eventSource:{emit:(type,...args)=>emit(type,...args)}}}};
+  const host={registerScript,protocol,events:tavernEvents,diagnostics:()=>clone([...diagnostics.values()]),getInitializedGlobal(name){return globals.get(String(name))},invoke(name,args=[],meta={}){if(disposed)throw new Error('Preview host has been disposed');const fn=api[name];if(typeof fn!=='function'){touch(String(name),{implementationStatus:'UNSUPPORTED',parityStatus:'UNSUPPORTED_HOST_BOUND',source:'capability-boundary',failureReason:'API is not available in the SRL preview host',impact:'the calling script may be partial'});throw new Error('Unsupported host capability: '+String(name))}return fn(meta,...args)},subscribe(type,listener,owner,once=false){if(disposed)return{stop(){}};return on(type,listener,owner,once)},emit(type,args=[]){return disposed?Promise.resolve():emit(type,...args)},transitionSwipe,detach(owner){const owned=subscriptions.get(owner);if(!owned)return;for(const [type,list] of listeners)listeners.set(type,list.filter(item=>!owned.has(item)));subscriptions.delete(owner)},teardown(){if(disposed)return;disposed=true;window.removeEventListener('message',handleHostMessage);window.removeEventListener('pagehide',handlePagehide);document.removeEventListener('DOMContentLoaded',boot);for(const waiters of swipeTransitionWaiters.values())for(const resolve of waiters)resolve(false);swipeTransitionWaiters.clear();for(const waiters of globalWaiters.values())for(const resolve of waiters)resolve(undefined);globalWaiters.clear();globals.clear();listeners.clear();subscriptions.clear();scriptRegistry.clear();books.clear();if(window.__SRL_RENDER_COMPAT_HOST__===host)delete window.__SRL_RENDER_COMPAT_HOST__;if(window.tavern_events===tavernEvents)delete window.tavern_events},context(){return{chat:context.messageContextAvailable?[clone(message())]:[],characters:context.characterContextAvailable?[clone(context.characterData)]:[],characterId:context.characterContextAvailable?0:-1,eventSource:{emit:(type,...args)=>emit(type,...args)}}}};
 Object.defineProperty(window,'__SRL_RENDER_COMPAT_HOST__',{configurable:true,value:host});window.tavern_events=tavernEvents;
   const expected=${Math.max(0, Math.trunc(expectedFrameCount))};const ready=new Set();let booted=false;
- handleHostMessage=event=>{if(disposed)return;const data=event.data;if(!data||data.protocol!==protocol)return;if(data.type===control.swipeTransition&&event.source===window.parent){void(async()=>{if(await transitionSwipe(data.target,false,data.rendered))await emit(tavernEvents.CHARACTER_MESSAGE_RENDERED,0)})();return}if(data.type!==control.frameReady)return;ready.add(String(data.frameId||ready.size));if(!booted&&ready.size>=expected){booted=true;void(async()=>{await selectInitialFirstMessage();await emit(tavernEvents.CHARACTER_MESSAGE_RENDERED,archived?.message_id??0)})()}};
+ handleHostMessage=event=>{if(disposed)return;const data=event.data;if(!data||data.protocol!==protocol)return;if(data.type===control.swipeTransition&&event.source===window.parent){void(async()=>{if(await transitionSwipe(data.target,false,data.rendered))await emit(tavernEvents.CHARACTER_MESSAGE_RENDERED,0)})();return}if(data.type==='SRL_SCRIPT_BUTTON_CLICK'&&event.source===window.parent){const item=scriptRegistry.get(String(data.scriptId));if(item?.buttons.some(button=>button.visible&&button.name===data.name))void emit(buttonEvent(item.id,data.name));return}if(data.type!==control.frameReady)return;ready.add(String(data.frameId||ready.size));if(!booted&&ready.size>=expected){booted=true;void(async()=>{await selectInitialFirstMessage();await emit(tavernEvents.CHARACTER_MESSAGE_RENDERED,archived?.message_id??0)})()}};
   boot=()=>{if(disposed)return;void emit(tavernEvents.APP_READY);if(expected===0)booted=true};handlePagehide=()=>host.teardown();window.addEventListener('message',handleHostMessage);window.addEventListener('pagehide',handlePagehide,{once:true});if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();</script>`
 }
 
 export function buildRenderCompatibilityChildAdapter(
-  script?: Pick<PreviewRuntimeScript, 'id' | 'name' | 'source' | 'data'>,
+  script?: Pick<
+    PreviewRuntimeScript,
+    'id' | 'name' | 'source' | 'data' | 'buttons' | 'buttonDefinitions' | 'info'
+  >,
   options: { hostScope?: 'parent' | 'self' } = {},
 ): string {
   const metadata = scriptJson(
     script
-      ? { id: script.id, name: script.name, source: script.source, data: script.data ?? {} }
+      ? {
+          id: script.id,
+          name: script.name,
+          source: script.source,
+          data: script.data ?? {},
+          buttons: script.buttonDefinitions ?? script.buttons ?? [],
+          info: script.info ?? '',
+        }
       : {},
   )
   const hostOwner = options.hostScope === 'self' ? 'window' : 'window.parent'
@@ -671,14 +691,23 @@ export function buildRenderCompatibilityChildAdapter(
   const readyTarget = options.hostScope === 'self' ? 'window' : 'parent'
   return `<script>(()=>{'use strict';
 const host=${hostOwner}.__SRL_RENDER_COMPAT_HOST__;if(!host)throw new Error('SRL Render Compatibility Host is unavailable');
-  const meta=${metadata};const invoke=(name,...args)=>host.invoke(name,args,{scriptId:meta.id,scriptName:meta.name,scriptData:meta.data,frameName:window.name});
+  const meta=${metadata};host.registerScript({scriptId:meta.id,scriptName:meta.name,scriptButtons:meta.buttons,scriptInfo:meta.info});const invoke=(name,...args)=>host.invoke(name,args,{scriptId:meta.id,scriptName:meta.name,scriptData:meta.data,frameName:window.name});
+  // Hidden companion iframes do not receive animation frames; their UI lives in the visible isolated parent.
+  const animationFrames=new Set();const originalAnimationFrame=window.requestAnimationFrame;const originalCancelAnimationFrame=window.cancelAnimationFrame;
+  const animationOwner=meta.id&&${hostOwner}!==window?${hostOwner}:null;
+  if(animationOwner&&typeof animationOwner.requestAnimationFrame==='function'&&typeof animationOwner.cancelAnimationFrame==='function'){
+    window.requestAnimationFrame=callback=>{if(typeof callback!=='function')throw new TypeError('Animation callback must be a function');let id;id=animationOwner.requestAnimationFrame(time=>{animationFrames.delete(id);callback.call(window,time)});animationFrames.add(id);return id};
+    window.cancelAnimationFrame=id=>{animationFrames.delete(id);animationOwner.cancelAnimationFrame(id)};
+  }
   const exposedGlobals=new Set();const exposeGlobal=(name,value)=>{const key=String(name);exposedGlobals.add(key);Object.defineProperty(window,key,{configurable:true,get:()=>value});return value};
   const retrieveDisplayedMessage=messageId=>{const normalized=invoke('retrieveDisplayedMessage',messageId);return window.$('#chat > .mes[mesid = "'+normalized+'"]',${displayedDocument}).find('div.mes_text')};
   const errorCatched=fn=>{const onError=error=>{const value=error instanceof Error?error:new Error(String(error));try{window.toastr?.error('<pre style="white-space: pre-wrap">'+String(value.stack||value.message)+'</pre>',value.name,{escapeHtml:false,toastClass:'toastr w-fit! min-w-[300px]'})}catch{}throw error};return(...args)=>{try{const result=fn(...args);return result&&typeof result.then==='function'?result.then(undefined,onError):result}catch(error){return onError(error)}}};
-  const api={getChatMessages:(...args)=>invoke('getChatMessages',...args),setChatMessages:(...args)=>invoke('setChatMessages',...args),setChatMessage:(...args)=>invoke('setChatMessage',...args),getLastMessageId:(...args)=>invoke('getLastMessageId',...args),getIframeName:(...args)=>invoke('getIframeName',...args),getScriptId:(...args)=>invoke('getScriptId',...args),getCurrentMessageId:(...args)=>invoke('getCurrentMessageId',...args),getMessageId:(...args)=>invoke('getMessageId',...args),getVariables:(...args)=>invoke('getVariables',...args),getAllVariables:(...args)=>invoke('getAllVariables',...args),replaceVariables:(...args)=>invoke('replaceVariables',...args),setVariables:(...args)=>invoke('replaceVariables',...args),updateVariablesWith:(...args)=>invoke('updateVariablesWith',...args),insertOrAssignVariables:(...args)=>invoke('insertOrAssignVariables',...args),insertVariables:(...args)=>invoke('insertVariables',...args),deleteVariable:(...args)=>invoke('deleteVariable',...args),initializeGlobal:(name,value)=>{invoke('initializeGlobal',name,value);exposeGlobal(name,value)},waitGlobalInitialized:async name=>{await invoke('waitGlobalInitialized',name);exposeGlobal(name,host.getInitializedGlobal(name))},getCurrentCharacterName:(...args)=>invoke('getCurrentCharacterName',...args),getCurrentCharacterId:(...args)=>invoke('getCurrentCharacterId',...args),getCharacter:(...args)=>invoke('getCharacter',...args),getCharData:(...args)=>invoke('getCharData',...args),formatAsDisplayedMessage:(...args)=>invoke('formatAsDisplayedMessage',...args),retrieveDisplayedMessage,errorCatched,eventOn:(type,listener)=>host.subscribe(type,listener,window,false),eventOnce:(type,listener)=>host.subscribe(type,listener,window,true),eventOff:(type,listener)=>host.invoke('eventOff',[type,listener]),eventEmit:(type,...args)=>host.emit(type,args)};
+  const scriptApiNames=['getScriptName','getScriptInfo','getButtonEvent','getScriptButtons','replaceScriptButtons','updateScriptButtonsWith','appendInexistentScriptButtons','getWorldbookNames','getCharWorldbookNames','getWorldbook','createWorldbook','createOrReplaceWorldbook','replaceWorldbook','updateWorldbookWith','createWorldbookEntries','deleteWorldbookEntries','getLorebookEntries','setLorebookEntries','deleteLorebookEntries','getTavernRegexes','replaceTavernRegexes','triggerSlash'];
+const scriptApis=Object.fromEntries(scriptApiNames.map(name=>[name,(...args)=>invoke(name,...args)]));
+const api={...scriptApis,getChatMessages:(...args)=>invoke('getChatMessages',...args),setChatMessages:(...args)=>invoke('setChatMessages',...args),setChatMessage:(...args)=>invoke('setChatMessage',...args),getLastMessageId:(...args)=>invoke('getLastMessageId',...args),getIframeName:(...args)=>invoke('getIframeName',...args),getScriptId:(...args)=>invoke('getScriptId',...args),getCurrentMessageId:(...args)=>invoke('getCurrentMessageId',...args),getMessageId:(...args)=>invoke('getMessageId',...args),getVariables:(...args)=>invoke('getVariables',...args),getAllVariables:(...args)=>invoke('getAllVariables',...args),replaceVariables:(...args)=>invoke('replaceVariables',...args),setVariables:(...args)=>invoke('replaceVariables',...args),updateVariablesWith:(...args)=>invoke('updateVariablesWith',...args),insertOrAssignVariables:(...args)=>invoke('insertOrAssignVariables',...args),insertVariables:(...args)=>invoke('insertVariables',...args),deleteVariable:(...args)=>invoke('deleteVariable',...args),initializeGlobal:(name,value)=>{invoke('initializeGlobal',name,value);exposeGlobal(name,value)},waitGlobalInitialized:async name=>{await invoke('waitGlobalInitialized',name);exposeGlobal(name,host.getInitializedGlobal(name))},getCurrentCharacterName:(...args)=>invoke('getCurrentCharacterName',...args),getCurrentCharacterId:(...args)=>invoke('getCurrentCharacterId',...args),getCharacter:(...args)=>invoke('getCharacter',...args),getCharData:(...args)=>invoke('getCharData',...args),formatAsDisplayedMessage:(...args)=>invoke('formatAsDisplayedMessage',...args),retrieveDisplayedMessage,errorCatched,eventOn:(type,listener)=>host.subscribe(type,listener,window,false),eventOnce:(type,listener)=>host.subscribe(type,listener,window,true),eventOff:(type,listener)=>host.invoke('eventOff',[type,listener]),eventEmit:(type,...args)=>host.emit(type,args)};
 Object.assign(window,api);window.tavern_events=host.events;window.TavernHelper=Object.freeze({...api,tavern_events:host.events,eventEmitAndWait:api.eventEmit,eventRemoveListener:api.eventOff});window.tavern_helper=window.TavernHelper;
 const inheritedMvu=host.getInitializedGlobal('Mvu');if(inheritedMvu!==undefined)exposeGlobal('Mvu',inheritedMvu);
-const getContext=()=>({...host.context(),...api,eventSource:{on:api.eventOn,once:api.eventOnce,off:api.eventOff,emit:api.eventEmit}});Object.defineProperty(window,'SillyTavern',{configurable:true,value:Object.freeze({getContext})});
- window.__SRL_SCRIPT_META__=meta;const injectedGlobals=[...Object.keys(api),'tavern_events','TavernHelper','tavern_helper','SillyTavern','__SRL_SCRIPT_META__'];const cleanup=()=>{host.detach(window);for(const name of [...injectedGlobals,...exposedGlobals]){try{delete window[name]}catch{}};exposedGlobals.clear()};window.addEventListener('pagehide',cleanup,{once:true});window.addEventListener('load',()=>${readyTarget}.postMessage({protocol:host.protocol,type:'${RENDER_COMPATIBILITY_EVENTS.frameReady}',frameId:window.frameElement?.id||window.name},'*'),{once:true});
+const getContext=()=>({...host.context(),...api,eventSource:{on:api.eventOn,once:api.eventOnce,off:api.eventOff,emit:api.eventEmit}});Object.defineProperty(window,'SillyTavern',{configurable:true,value:Object.freeze({getContext,isMobile:()=>matchMedia('(pointer: coarse)').matches||/Android|iPhone|iPad/i.test(navigator.userAgent)})});
+ window.__SRL_SCRIPT_META__=meta;const injectedGlobals=[...Object.keys(api),'tavern_events','TavernHelper','tavern_helper','SillyTavern','__SRL_SCRIPT_META__'];const cleanup=()=>{for(const id of animationFrames)animationOwner?.cancelAnimationFrame(id);animationFrames.clear();window.requestAnimationFrame=originalAnimationFrame;window.cancelAnimationFrame=originalCancelAnimationFrame;host.detach(window);for(const name of [...injectedGlobals,...exposedGlobals]){try{delete window[name]}catch{}};exposedGlobals.clear()};window.addEventListener('pagehide',cleanup,{once:true});window.addEventListener('load',()=>${readyTarget}.postMessage({protocol:host.protocol,type:'${RENDER_COMPATIBILITY_EVENTS.frameReady}',frameId:window.frameElement?.id||window.name},'*'),{once:true});
 })();</script>`
 }

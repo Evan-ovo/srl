@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, useTemplateRef } from 'vue'
+import '../styles/ConfirmDialog.css'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch, useTemplateRef } from 'vue'
 import { mainApiService } from '../core/AppContainer'
 import MainApiSettings from './MainApiSettings.vue'
 import ProductAssistantMemory from './ProductAssistantMemory.vue'
@@ -126,6 +127,72 @@ const busy = ref(false)
 const leaving = ref(false)
 const error = ref('')
 const status = ref('')
+const recoveringHistory = ref(false)
+const recoveryStatus = ref('')
+const recoveryError = ref('')
+const historyRecoveryOpen = ref(false)
+const recoveryDialog = useTemplateRef<HTMLDialogElement>('recoveryDialog')
+let recoveryController: AbortController | undefined
+let disposed = false
+async function openHistoryRecovery() {
+  if (!props.historyPage || disposed || historyRecoveryOpen.value) return
+  historyRecoveryOpen.value = true
+  await nextTick()
+  recoveryDialog.value?.showModal()
+}
+function closeHistoryRecovery() {
+  if (recoveringHistory.value) stopHistoryRecovery()
+  recoveryDialog.value?.close()
+  historyRecoveryOpen.value = false
+}
+onBeforeUnmount(() => {
+  disposed = true
+  recoveryController?.abort()
+})
+async function recoverHistory() {
+  if (busy.value || disposed || !historyRecoveryOpen.value) return
+  const controller = new AbortController()
+  recoveryController = controller
+  busy.value = true
+  recoveringHistory.value = true
+  recoveryError.value = ''
+  recoveryStatus.value = '正在检查历史…'
+  try {
+    const result = await props.workspace.recoverHistory({
+      signal: controller.signal,
+      onProgress: (value) => {
+        recoveryStatus.value = `已检查 ${value.scanned}/${value.total} 条，找回 ${value.recovered} 条`
+      },
+    })
+    recoveryStatus.value =
+      `${result.cancelled ? '已停止' : '检查完成'}：找回 ${result.recovered} 条，修复列表 ${result.repaired} 条` +
+      (result.invalid ? `；${result.invalid} 条格式异常，原件保留` : '') +
+      (result.missingProjects
+        ? `；${result.missingProjects} 条对话的旧 APP 项目缺失，仅找回聊天`
+        : '') +
+      (!result.recovered && !result.repaired && !result.cancelled
+        ? '；未发现可补回记录，可再检查旧副本恢复档或备份'
+        : '')
+    if (!disposed) {
+      page.value = 0
+      searchedQuery.value = ''
+      query.value = ''
+      await load()
+    }
+  } catch (cause) {
+    recoveryError.value =
+      '找回未完成，已补回的记录和旧库均保留：' +
+      (cause instanceof Error ? cause.message : '读取或保存失败')
+  } finally {
+    recoveryController = undefined
+    recoveringHistory.value = false
+    busy.value = false
+  }
+}
+function stopHistoryRecovery() {
+  recoveryController?.abort()
+  recoveryStatus.value = '正在停止，已完成的记录会保留…'
+}
 const petAssetsBusy = ref(false)
 const petAssetsAvailable = ref(props.preferences.petAssetMode === 'images')
 const petAssetsLabel = computed(() =>
@@ -276,10 +343,15 @@ async function save(apiProfileId?: string): Promise<boolean> {
   busy.value = true
   error.value = ''
   status.value = ''
-  const snapshot = {
+  const draftSnapshot = {
     ...form.value,
     promptOverrides: normalizeAssistantPromptOverrides(form.value.promptOverrides),
     ...(apiProfileId !== undefined ? { apiProfileId } : {}),
+  }
+  const snapshot = {
+    ...draftSnapshot,
+    toolCallLimit:
+      (draftSnapshot.toolCallLimit as unknown) === '' ? undefined : draftSnapshot.toolCallLimit,
   }
   const keySnapshot = githubToken.value
   const readerChanged =
@@ -292,7 +364,7 @@ async function save(apiProfileId?: string): Promise<boolean> {
     emit('saved', saved)
     if (apiProfileId !== undefined) form.value.apiProfileId = apiProfileId
     if (readerChanged) savedGitHubToken.value = keySnapshot
-    savedForm.value = snapshot
+    savedForm.value = draftSnapshot
     status.value = '已保存'
     return true
   } catch (cause) {
@@ -352,6 +424,9 @@ async function requestLeave(promptOnly = false): Promise<boolean> {
   }
 }
 defineExpose({
+  openHistoryRecovery,
+  closeHistoryRecovery,
+  historyRecoveryOpen,
   requestLeave,
   requestLeavePrompt: () => requestLeave(true),
   requestLeaveTemplate,
@@ -691,6 +766,7 @@ async function compressContext() {
             :max="MAX_ASSISTANT_TOOL_CALL_LIMIT"
             step="1"
             aria-label="每次生成工具调用上限"
+            placeholder="留空不限次数"
         /></label>
         <label v-if="form.toolCallingEnabled" class="chat-settings-field chat-settings-toggle"
           ><span>允许运行页面脚本</span
@@ -815,8 +891,48 @@ async function compressContext() {
     </form>
     <p v-if="error || contextError" class="chat-error" role="alert">{{ error || contextError }}</p>
   </div>
+  <Teleport to="body">
+    <dialog
+      v-if="historyRecoveryOpen"
+      ref="recoveryDialog"
+      class="confirm-dialog__overlay is-centered"
+      aria-label="历史设置"
+      @click.self="closeHistoryRecovery"
+      @keydown.esc.stop.prevent="closeHistoryRecovery"
+      @cancel.prevent="closeHistoryRecovery"
+    >
+      <section class="confirm-dialog chat-history-recovery">
+        <h3>找回历史对话</h3>
+        <p>尝试补回旧对话、图片和未发送输入。现有对话与设置会保留，旧 APP 草稿另存副本。</p>
+        <p class="chat-history-recovery__hint">旧正文已删除且没有备份时，无法找回。</p>
+        <p v-if="recoveryStatus" role="status">{{ recoveryStatus }}</p>
+        <p v-if="recoveryError" role="alert">{{ recoveryError }}</p>
+        <footer>
+          <button type="button" autofocus @click="closeHistoryRecovery">关闭</button>
+          <button
+            type="button"
+            :class="{ 'confirm-dialog__confirm': !recoveringHistory }"
+            :disabled="busy && !recoveringHistory"
+            @click="recoveringHistory ? stopHistoryRecovery() : recoverHistory()"
+          >
+            {{ recoveringHistory ? '停止找回' : '找回历史' }}
+          </button>
+        </footer>
+      </section>
+    </dialog>
+  </Teleport>
 </template>
 <style scoped>
+.chat-history-recovery__hint {
+  font-size: 0.75rem;
+  color: var(--color-ink-soft);
+}
+.chat-history-recovery [role='status'] {
+  color: var(--color-accent);
+}
+.chat-history-recovery [role='alert'] {
+  color: var(--color-danger);
+}
 .chat-context-actions {
   padding: 0.25rem 1rem 1rem;
   display: flex;
@@ -833,10 +949,6 @@ async function compressContext() {
 .chat-context-actions button {
   min-height: 44px;
   padding: 8px 14px;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
-  background: var(--color-surface);
-  color: var(--color-accent);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
@@ -853,10 +965,6 @@ async function compressContext() {
 .chat-pet-assets button {
   min-height: 36px;
   padding: 6px 10px;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
-  background: var(--color-surface);
-  color: var(--color-accent);
   font: inherit;
   font-size: 12px;
   cursor: pointer;

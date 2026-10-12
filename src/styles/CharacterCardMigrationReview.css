@@ -10,7 +10,7 @@
   overscroll-behavior: contain;
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) max(1rem, var(--safe-bottom))
     max(1rem, var(--safe-left));
-  background: rgba(18, 24, 21, 0.52);
+  background: var(--overlay-background);
   backdrop-filter: blur(3px);
 }
 
@@ -24,15 +24,15 @@
   );
   overflow: hidden;
   color: var(--color-ink);
-  border: 1px solid rgba(31, 106, 84, 0.32);
-  border-radius: 1rem;
-  background: var(--color-surface);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--dialog-border, var(--color-line-strong));
+  border-radius: var(--dialog-radius, 1rem);
+  background: var(--dialog-background, var(--color-surface));
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 .migration-review__header {
   padding: 1.25rem 1.4rem 1rem;
-  border-bottom: 1px solid rgba(31, 106, 84, 0.16);
+  border-bottom: 1px solid var(--color-line);
 }
 
 .migration-review__eyebrow,
@@ -72,7 +72,7 @@
   display: grid;
   gap: 0.7rem;
   padding: 0.9rem;
-  border: 1px solid rgba(31, 106, 84, 0.19);
+  border: 1px solid var(--color-line);
   border-radius: 0.75rem;
   background: var(--color-surface-raised);
 }
@@ -83,12 +83,13 @@
   min-height: 44px;
   box-sizing: border-box;
   padding: 0.6rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.6rem;
-  background: var(--color-surface);
-  color: inherit;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  background: var(--control-background, var(--color-surface-raised));
+  color: var(--color-ink);
   font: inherit;
   font-size: 16px;
+  box-shadow: var(--control-shadow, none);
 }
 .migration-review__selection-tools {
   display: flex;
@@ -100,11 +101,12 @@
 .migration-review__selection-tools button {
   min-height: 44px;
   padding: 0.4rem 0.6rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
-  color: inherit;
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--glass-panel-strong));
   font: inherit;
+  box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 .migration-review__selection-row {
   display: grid;
@@ -154,7 +156,7 @@
   overflow: auto;
   margin: 0.3rem 0 0;
   padding: 0.6rem;
-  border: 1px solid rgba(32, 42, 38, 0.14);
+  border: 1px solid var(--color-line);
   border-radius: 0.5rem;
   background: var(--color-surface);
   font: inherit;
@@ -178,11 +180,12 @@
   width: 100%;
   min-height: 2.75rem;
   padding: 0.6rem 0.7rem;
-  border: 1px solid rgba(32, 42, 38, 0.25);
-  border-radius: 0.55rem;
-  background: var(--color-surface);
-  color: inherit;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  background: var(--control-background, var(--color-surface-raised));
+  color: var(--color-ink);
   font: inherit;
+  box-shadow: var(--control-shadow, none);
 }
 
 .migration-review__manual textarea {
@@ -196,30 +199,33 @@
   justify-content: flex-end;
   gap: 0.6rem;
   padding: 0.9rem 1.4rem;
-  border-top: 1px solid rgba(31, 106, 84, 0.16);
+  border-top: 1px solid var(--color-line);
 }
 
 .migration-review__footer button {
   min-height: 44px;
   padding: 0 1rem;
-  border: 1px solid rgba(32, 42, 38, 0.3);
-  border-radius: 0.6rem;
-  background: transparent;
-  color: inherit;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  background: var(--button-background, var(--glass-panel-strong));
+  color: var(--button-color, var(--color-ink));
   font: inherit;
   cursor: pointer;
+  box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 
 .migration-review__footer .migration-review__apply {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-on-accent);
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
+  box-shadow: var(--button-primary-shadow, var(--button-shadow, var(--glass-shadow)));
 }
 
 @media (max-width: 640px) {
   .migration-review__overlay {
     padding: max(0.5rem, var(--safe-top)) max(0.5rem, var(--safe-right))
       max(0.5rem, var(--safe-bottom)) max(0.5rem, var(--safe-left));
+    background: var(--overlay-background);
   }
 
   .migration-review {
@@ -227,7 +233,7 @@
     max-height: calc(
       var(--visual-viewport-height, 100dvh) - var(--safe-top) - var(--safe-bottom) - 1rem
     );
-    border-radius: 0.85rem;
+    border-radius: var(--dialog-radius, 0.85rem);
   }
 
   .migration-review__header,
@@ -251,5 +257,10 @@
     padding: 0 0.5rem;
     font-size: 0.8125rem;
     white-space: nowrap;
+    border: 1px solid var(--button-border, var(--color-line-strong));
+    border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+    color: var(--button-color, var(--color-ink));
+    background: var(--button-background, var(--glass-panel-strong));
+    box-shadow: var(--button-shadow, var(--glass-shadow));
   }
 }

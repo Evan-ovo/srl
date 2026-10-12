@@ -92,7 +92,6 @@ describe('assistant verified feature guidance', () => {
     ['NovelAI图生图要在哪里配置', 'image-generation'],
     ['生图结果怎么存到生图相册', 'image-album'],
     ['user才是老大怎么设置角色差分', 'user-persona'],
-    ['配了么套装怎么发送到酒馆', 'resource-bundle'],
     ['抽了么怎么筛选七日未见', 'draw'],
     ['收藏柜拖动后会移动原文件吗', 'folders'],
     ['reasoning_content的400错误和主API有关吗', 'api'],

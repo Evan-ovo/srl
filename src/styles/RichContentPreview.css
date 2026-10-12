@@ -19,9 +19,9 @@
   box-sizing: border-box;
   min-width: 0;
   min-height: 44px;
-  border: 1px solid var(--srl-border, #b8b8b0);
-  background: transparent;
-  color: inherit;
+  border: 1px solid var(--button-border, var(--color-line, #b8b8b0));
+  background: var(--button-background, transparent);
+  color: var(--button-color, inherit);
   font-family: inherit;
   font-size: 0.875rem;
   font-weight: 700;
@@ -30,8 +30,9 @@
 }
 
 .rich-content-preview__toolbar button.is-active {
-  background: var(--srl-accent, #1d684f);
-  color: #fff;
+  background: var(--selection-background, var(--color-accent));
+  color: var(--selection-color, var(--color-on-accent));
+  border-color: var(--selection-border, var(--color-accent));
 }
 
 .rich-content-preview__frame {
@@ -51,8 +52,9 @@
   background: transparent;
 }
 
-.rich-content-preview--immersive .rich-content-preview__frame > iframe,
-.rich-content-preview--bare .rich-content-preview__frame > iframe {
+:is(.rich-content-preview--immersive, .rich-content-preview--bare)
+  .rich-content-preview__frame
+  > iframe {
   min-height: var(--rich-preview-min-height, 1px);
 }
 
@@ -62,8 +64,8 @@
   bottom: 8px;
   padding: 4px 8px;
   border-radius: 999px;
-  background: rgb(18 27 23 / 72%);
-  color: #fff;
+  background: var(--viewer-control-background);
+  color: var(--viewer-color);
   font-size: 12px;
   pointer-events: none;
 }
@@ -87,8 +89,8 @@
   width: min(12rem, calc(100% - 32px));
   padding: 12px 16px;
   border-radius: 8px;
-  background: rgb(18 27 23 / 90%);
-  color: #fff;
+  background: var(--viewer-control-background);
+  color: var(--viewer-color);
   font-size: 14px;
   line-height: 1.4;
   text-align: center;
@@ -99,7 +101,7 @@
   height: 4px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgb(255 255 255 / 28%);
+  background: var(--color-line);
 }
 
 .rich-content-preview__loading-bar::before {
@@ -107,7 +109,7 @@
   width: 42%;
   height: 100%;
   border-radius: inherit;
-  background: #8bd7bc;
+  background: var(--color-accent);
   content: '';
   animation: rich-content-preview-loading 1s ease-in-out infinite;
 }
@@ -125,6 +127,7 @@
   .rich-content-preview__loading-bar::before {
     animation: none;
     transform: translateX(72%);
+    background: var(--color-accent);
   }
 }
 
@@ -148,6 +151,6 @@
   min-height: 96px;
   display: grid;
   place-items: center;
-  color: #6f7773;
+  color: var(--color-ink-soft);
   font-size: 13px;
 }

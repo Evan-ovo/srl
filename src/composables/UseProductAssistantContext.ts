@@ -134,7 +134,9 @@ export function useProductAssistantContext(options: {
           : '',
         request.toolCallingEnabled === false
           ? '工具调用已关闭：一次普通对话请求，压缩另计。'
-          : `工具上限 ${normalizeAssistantToolCallLimit(request.toolCallLimit)} 次，可能多次请求并计费。`,
+          : request.toolCallLimit == null
+            ? '工具不限次数，可能多次请求并计费，可随时停止。'
+            : `工具上限 ${normalizeAssistantToolCallLimit(request.toolCallLimit)} 次，可能多次请求并计费。`,
         request.history.some(
           (turn) => turn.role === 'user' && !turn.contextExcluded && turn.designReferences?.length,
         )

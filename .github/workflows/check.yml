@@ -11,46 +11,108 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      # 版本取自 package.json 的 packageManager 字段
       - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
+
+      # 与 VPS_UPDATE.sh 使用同样的安装方式，保证 CI 与部署环境一致。
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
       - name: Incremental privacy candidates
         env:
           AUDIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || inputs.privacy_base }}
         run: pnpm secret:scan --base "$AUDIT_BASE"
 
-  android:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
+      # CI verifies a new candidate. It must not rebuild an immutable Windows release as Linux bytes.
+      - name: 分配未发布候选构建编号
+        run: node scripts/BumpDeployVersion.mjs
+
+      - name: 安装 Chromium 与 WebKit
+        run: pnpm exec playwright-core install --with-deps chromium webkit
+
+      - name: 开发评审检查（接口手册、结构、助手说明与格式）
+        run: pnpm check:appearance-reference && pnpm check:structure && pnpm check:assistant-knowledge && pnpm format:check
+
+      - name: 共用候选门禁（含真实 APP 包与隔离浏览器）
+        run: pnpm check:candidate --run ci-candidate-${{ github.run_id }} --port 5180
+
+      - name: 全库 iOS 安全区与视口契约审计
+        run: pnpm audit:safe-area
+
+      - name: AI 生图与全局安全区移动键盘回归
+        shell: bash
+        run: |
+          chromium_status=0
+          SRL_STITCH_BROWSER_ENGINE=chromium pnpm audit:image-generation-viewport || chromium_status=$?
+          webkit_status=0
+          SRL_STITCH_BROWSER_ENGINE=webkit pnpm audit:image-generation-viewport || webkit_status=$?
+          if [ "$chromium_status" -ne 0 ] || [ "$webkit_status" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Chromium 与 WebKit 移动浏览器回归
+        shell: bash
+        run: |
+          set -uo pipefail
+          pnpm preview --host 127.0.0.1 --port 4173 > /tmp/srl-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4173/ >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/srl-preview.log
+            exit 1
+          fi
+
+          chromium_status=0
+          SRL_STITCH_BROWSER_ENGINE=chromium pnpm audit:stitch-browser-regression || chromium_status=$?
+          webkit_status=0
+          SRL_STITCH_BROWSER_ENGINE=webkit pnpm audit:stitch-browser-regression || webkit_status=$?
+
+          if [ "$chromium_status" -ne 0 ] || [ "$webkit_status" -ne 0 ]; then
+            cat /tmp/srl-preview.log
+            exit 1
+          fi
+
+      - name: 上传浏览器回归证据
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
         with:
-          distribution: temurin
-          java-version: '21'
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
+          name: stitch-browser-regression-${{ github.run_id }}
+          path: artifacts/preset-stitcher-browser-ci/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 上传隔离 APP 门禁证据
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
         with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm android:sync
-      - name: Compile Android debug variants
-        working-directory: android
-        run: bash ./gradlew :app:assembleDebug :nativeapp:assembleDebug --stacktrace --no-daemon
-      - name: Run Android JVM unit tests
-        working-directory: android
-        run: bash ./gradlew :app:testDebugUnitTest :nativeapp:testDebugUnitTest --stacktrace --no-daemon
+          name: isolated-app-audits-${{ github.run_id }}
+          path: .codex-tmp/ci-candidate-${{ github.run_id }}-*/
+          if-no-files-found: ignore
+          retention-days: 7

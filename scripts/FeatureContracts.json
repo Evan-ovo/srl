@@ -10,8 +10,23 @@
     },
     "chatReader": {
       "owner": "src/services/ChatReaderService.ts",
-      "tests": ["src/services/ChatReaderService.test.ts"],
-      "backup": { "policy": "supported", "scopes": ["resource.chat", "extra.chatReader"] },
+      "tests": [
+        "src/services/ChatReaderService.test.ts",
+        "src/components/ChatReaderApp.test.ts",
+        "src/components/ExternalAppHost.test.ts",
+        "src/services/ExternalAppSdkService.test.ts",
+        "src/parser/ChatResourceParser.test.ts",
+        "src/services/ExternalAppSdkRendering.test.ts",
+        "src/services/ChatReaderPortableData.test.ts",
+        "scripts/ChatReaderApp.test.ts",
+        "src/services/ChatReaderRendering.test.ts",
+        "src/utils/RenderCompatibilityScriptHost.test.ts",
+        "src/services/ExternalAppService.test.ts"
+      ],
+      "backup": {
+        "policy": "supported",
+        "scopes": ["resource.chat", "extra.chatReader"]
+      },
       "starter": "none",
       "starterReason": "阅读外观使用读了么自身设置；当前通用示例映射没有阅读器样式",
       "cleanup": { "policy": "app-owned", "owner": "src/storage/OfficialAppDataStorage.ts" }
@@ -25,7 +40,15 @@
         "src/components/LayoutSettingsPanel.test.ts",
         "src/composables/UseAppearanceSettings.test.ts",
         "src/services/NativePreviewAsset.test.ts",
-        "src/utils/PreviewResourcePreloader.test.ts"
+        "src/utils/PreviewResourcePreloader.test.ts",
+        "src/core/UiViewStarter.test.ts",
+        "src/services/UiCustomizationCompiler.test.ts",
+        "src/components/AppearanceCodeReference.test.ts",
+        "src/core/AppearanceReference.test.ts",
+        "scripts/AppearanceReferenceCatalog.test.ts",
+        "src/services/AppearanceReferenceService.test.ts",
+        "src/components/CustomUiFrame.test.ts",
+        "src/components/AppearanceUiEditor.test.ts"
       ],
       "backup": {
         "policy": "supported",
@@ -38,6 +61,56 @@
         "policy": "not-applicable",
         "reason": "系统入口不提供官方 APP 卸载；数据操作复用各自既有 Owner"
       }
+    },
+    "assistant": {
+      "owner": "src/services/ProductAssistantService.ts",
+      "tests": [
+        "src/components/ProductAssistant.test.ts",
+        "src/components/ProductAssistantResultViewer.test.ts",
+        "src/components/ProductAssistantAppPreview.test.ts",
+        "src/services/ProductAssistantService.test.ts",
+        "src/services/DiscordSetupService.test.ts",
+        "src/services/DiscordSetupPage.test.ts",
+        "src/services/DiscordSourceConnectionService.test.ts",
+        "src/services/DiscordSetupParameters.test.ts",
+        "src/components/DiscordSetupAssistant.test.ts",
+        "src/components/DiscordSetupHelp.test.ts",
+        "src/storage/IndexedDbDiscordSetupStorage.test.ts",
+        "src/services/ProductAssistantOnline.test.ts",
+        "src/services/MainApiService.test.ts",
+        "src/components/MainApiSettings.test.ts",
+        "src/services/ProductAssistantScreenshot.test.ts",
+        "src/components/ProductAssistantPet.test.ts",
+        "src/core/ProductAssistantPetState.test.ts",
+        "src/components/ProductAssistantGuidance.test.ts",
+        "src/components/ProductAssistantSettings.test.ts",
+        "src/components/ProductAssistantTaskTemplates.test.ts",
+        "src/services/ProductAssistantWorkspaceService.test.ts",
+        "src/services/ProductAssistantContext.test.ts",
+        "src/composables/UseProductAssistantContext.test.ts",
+        "src/components/ProductAssistantNavigationLink.test.ts",
+        "src/components/ProductAssistantTokenReview.test.ts",
+        "src/components/ConfirmDialog.test.ts",
+        "src/components/ProductAssistantMemory.test.ts",
+        "src/composables/UseConfirmDialog.test.ts",
+        "src/components/FeatureHub.test.ts",
+        "src/storage/OfficialAppDataStorage.test.ts",
+        "src/storage/IndexedDbProductAssistantStorage.test.ts",
+        "src/storage/AndroidNativeDexieCore.test.ts"
+      ],
+      "backup": {
+        "policy": "supported",
+        "scopes": ["extra.assistantData", "extra.appearance", "extra.credentials"],
+        "reason": "聊天、记忆、项目、模板、偏好和APK配置步骤元数据需单独选择蒜惹菈本地资料，续接/重开复用同一进度Owner；桌宠排查复用DiscordSourceConnectionService原连接检查，修复保留原任务对话，诊断许可只留运行期；助手备份只存模式与参数卡引用，参数卡需另选密钥资源范围；Bot私密字段沿原统一密码加密，配置浏览器Cookie、网页编辑全文与秘密不进入助手资料；作用域 CSS 随外观与 CSS 预设，API 密钥随凭据单独选择；桌宠图片为可重新下载的缓存"
+      },
+      "starter": "none",
+      "starterReason": "通用示例映射暂未声明助手专属示例；桌宠11种表情、独立被提起姿态、六帧透明跑步与尖角气泡由 ProductAssistantPet 管理",
+      "cleanup": {
+        "policy": "app-owned",
+        "owner": "src/storage/OfficialAppDataStorage.ts",
+        "reason": "助手对话、记忆、偏好、独立 APP 项目和任务模板由 OfficialAppDataStorage 清除；助手外观 CSS 单独选择是否清理。历史找回仅补缺失列表与旧库独立副本，停止/重做去重，不覆盖当前对话或清理旧库；已有回收站旧副本恢复档与外部ZIP不由该入口读取"
+      },
+      "appearance": "undefined；网页观察覆盖已渲染公开控件（屏幕外先focus）；原生点击、新窗口opener回传及暂停由DiscordSetupBrowserWindowTest隔离模拟器覆盖，模型不收网页截图。"
     },
     "folders": {
       "owner": "src/services/ExportService.ts",
@@ -129,22 +202,49 @@
     },
     "tavernBridge": {
       "owner": "src/services/TavernBridgeService.ts",
-      "tests": ["src/services/TavernBridgeService.test.ts"],
+      "tests": [
+        "src/services/TavernBridgeService.test.ts",
+        "src/components/TavernBridgeCenter.test.ts",
+        "src/services/RelayWorkerSettingsService.test.ts",
+        "src/components/RelayWorkerSettings.test.ts",
+        "cloudflare/WorkerBridge.test.js",
+        "src/components/TavernParcelExchange.test.ts",
+        "scripts/AuditEnvironment.test.mjs",
+        "src/services/ExportService.download.test.ts",
+        "src/services/BrowserStorageService.test.ts",
+        "src/components/LayoutSettingsPanel.test.ts",
+        "src/services/TavernChatImport.test.ts",
+        "src/services/RestoreService.test.ts"
+      ],
       "backup": {
         "policy": "partial",
-        "scopes": ["resource.characterCard", "resource.worldBook", "resource.preset"],
-        "reason": "已落库资源沿核心归档保存；临时互传会话不随备份恢复"
+        "scopes": [
+          "resource.characterCard",
+          "resource.worldBook",
+          "resource.preset",
+          "extra.generalPreferences",
+          "resource.chat",
+          "resource.script",
+          "resource.regex"
+        ],
+        "reason": "已落库资源沿核心归档保存；角色阅读脚本内嵌聊天资料随资源恢复；发送版本与修改版标签选择沿通用偏好保存，聊天角色脚本携带开关沿既有通用偏好保存；临时互传会话、自建中继地址及检测结果不随备份恢复"
       },
       "starter": "available",
       "cleanup": {
         "policy": "retain",
-        "reason": "互传会话随页面关闭结束；已归档资源和共用设置保留"
+        "reason": "互传会话随页面关闭结束；已归档资源和共用设置保留；中继码只允许检测通过的自建Worker，换地址/恢复默认/检测失败清除该地址的准入结果"
       }
     },
     "stitch": {
       "owner": "src/services/BrowserStorageService.ts",
-      "tests": ["src/services/BrowserStorageService.test.ts"],
-      "backup": { "policy": "supported", "scopes": ["resource.preset", "extra.stitchWork"] },
+      "tests": [
+        "src/services/BrowserStorageService.test.ts",
+        "src/components/PresetStitcherApp.test.ts"
+      ],
+      "backup": {
+        "policy": "supported",
+        "scopes": ["resource.preset", "extra.stitchWork"]
+      },
       "starter": "available",
       "cleanup": { "policy": "app-owned", "owner": "src/storage/OfficialAppDataStorage.ts" }
     },
@@ -191,17 +291,6 @@
         "policy": "partial",
         "scopes": ["resource.userPersona"],
         "reason": "已保存人设原件可归档；本机模板偏好未在现有额外范围中独立声明"
-      },
-      "starter": "available",
-      "cleanup": { "policy": "app-owned", "owner": "src/storage/OfficialAppDataStorage.ts" }
-    },
-    "resourceBundle": {
-      "owner": "src/components/ResourceBundleApp.vue",
-      "tests": ["src/components/ResourceBundleApp.test.ts"],
-      "backup": {
-        "policy": "partial",
-        "scopes": [],
-        "reason": "资源原件沿核心归档保存；配套模板与装配偏好需独立恢复验收，当前范围表未声明"
       },
       "starter": "available",
       "cleanup": { "policy": "app-owned", "owner": "src/storage/OfficialAppDataStorage.ts" }

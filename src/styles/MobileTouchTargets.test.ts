@@ -1,6 +1,7 @@
 /// <reference types="node" />
 
 import { readFileSync } from 'node:fs'
+import { JSDOM } from 'jsdom'
 import { describe, expect, it } from 'vitest'
 
 const cloudBackupCss = readFileSync(new URL('./CloudBackup.css', import.meta.url), 'utf8')
@@ -201,9 +202,34 @@ describe('移动端主要触控目标', () => {
   })
 
   it('资源详情的修改版下载按钮保留高对比主按钮背景', () => {
-    expect(glassRefinementCss).toMatch(
-      /\.resource-detail__summary-actions \.button--primary,[\s\S]*?color: #ffffff;[\s\S]*?linear-gradient/,
-    )
+    const dom = new JSDOM()
+    const { document, CSSStyleRule } = dom.window
+    const actions = document.createElement('div')
+    actions.className = 'resource-detail__summary-actions'
+    const button = document.createElement('button')
+    button.className = 'button button--primary'
+    actions.append(button)
+    const style = document.createElement('style')
+    style.textContent = glassRefinementCss
+    document.head.append(style)
+    try {
+      const primaryRule = Array.from(style.sheet!.cssRules).find(
+        (rule): rule is CSSStyleRule =>
+          rule instanceof CSSStyleRule &&
+          rule.selectorText.includes('resource-detail__summary-actions') &&
+          button.matches(rule.selectorText) &&
+          rule.style.getPropertyValue('background').includes('--button-primary-background'),
+      )
+      expect(primaryRule).toBeDefined()
+      expect(primaryRule!.style.getPropertyValue('color')).toBe(
+        'var(--button-primary-color, var(--color-on-accent))',
+      )
+      expect(primaryRule!.style.getPropertyValue('background')).toBe(
+        'var(--button-primary-background, var(--color-accent))',
+      )
+    } finally {
+      dom.window.close()
+    }
   })
 
   it('酒馆预览发送状态在手机端横跨资源详情摘要两列', () => {

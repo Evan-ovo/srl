@@ -4,11 +4,11 @@
   padding: clamp(1rem, 4vw, 3rem) clamp(0.75rem, 4vw, 4rem) 0;
   color: var(--color-ink);
   background:
-    linear-gradient(90deg, transparent 0 4.95rem, var(--color-grid) 5rem, transparent 5.05rem),
+    linear-gradient(90deg, transparent 0 4.95rem, var(--color-line) 5rem, transparent 5.05rem),
     repeating-linear-gradient(
       0deg,
       transparent 0 31px,
-      color-mix(in srgb, var(--color-grid) 70%, transparent) 32px
+      color-mix(in srgb, var(--color-line) 70%, transparent) 32px
     ),
     var(--color-canvas);
 }
@@ -48,9 +48,9 @@
 .frontend-workshop__header > button {
   width: var(--size-touch);
   height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-surface-raised));
 }
 .frontend-workshop__header small,
 .frontend-workshop header small {
@@ -172,8 +172,8 @@
   min-width: 0;
   min-height: 2.25rem;
   border: 0;
-  color: var(--color-ink-soft);
-  background: transparent;
+  color: var(--button-color, var(--color-ink-soft));
+  background: var(--button-background, transparent);
   font-size: var(--text-caption);
   white-space: normal;
   overflow-wrap: anywhere;
@@ -184,8 +184,8 @@
   content: '';
 }
 .frontend-workshop .frontend-workshop__steps button.is-active {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
   box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 .frontend-workshop__design-tabs {
@@ -216,9 +216,7 @@
 .frontend-workshop__proof {
   padding: 1rem;
 }
-.frontend-workshop__brief > header,
-.frontend-workshop__proof > header,
-.frontend-workshop__delivery > header {
+:is(.frontend-workshop__brief, .frontend-workshop__proof, .frontend-workshop__delivery) > header {
   display: flex;
   min-width: 0;
   align-items: center;

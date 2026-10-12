@@ -36,6 +36,41 @@ async function drain(): Promise<void> {
 }
 
 describe('ConfirmDialog + confirmAction', () => {
+  it('keeps task continuation disabled until the original unlock form reports readiness, resetting for the next prompt', async () => {
+    await drain()
+    const wrapper = mount(ConfirmDialog, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          SecretProtectionSettings: {
+            template: '<button class="unlock-test" @click="$emit(\'ready\')">本机解锁</button>',
+            emits: ['ready'],
+          },
+        },
+      },
+    })
+    try {
+      for (let index = 0; index < 2; index++) {
+        const pending = confirmAction({
+          title: '解锁部署密钥',
+          message: '本机密码',
+          centered: true,
+          secretUnlock: true,
+        })
+        await flushPromises()
+        expect(confirmButton()?.disabled).toBe(true)
+        document.querySelector<HTMLButtonElement>('.unlock-test')!.click()
+        await flushPromises()
+        expect(confirmButton()?.disabled).toBe(false)
+        confirmButton()!.click()
+        expect(await pending).toBe(true)
+        await flushPromises()
+      }
+    } finally {
+      wrapper.unmount()
+      await drain()
+    }
+  })
   it('renders the extra choice through the existing dialog and returns its distinct response', async () => {
     await drain()
     const wrapper = mount(ConfirmDialog, { attachTo: document.body })

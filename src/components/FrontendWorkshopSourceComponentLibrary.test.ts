@@ -668,12 +668,12 @@ describe('FrontendWorkshopSourceComponentLibrary', () => {
     expect(wrapper.emitted('projectComponentsChanged')).toBeUndefined()
   })
 
-  it('复用资源库正式玻璃变量与雾青蓝渐变，不建立组件库私有主题', () => {
+  it('复用公共弹窗与玻璃变量，保留组件网格，不建立组件库私有主题', () => {
     const css = readFileSync('src/styles/FrontendWorkshopSourceComponentLibrary.css', 'utf8')
     expect(css).toContain('var(--glass-panel')
     expect(css).toContain('var(--glass-border)')
     expect(css).toContain('var(--color-accent)')
-    expect(css).toContain('radial-gradient')
+    expect(css).toContain('background: var(--dialog-background, var(--color-canvas))')
     expect(css).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
     expect(css).not.toContain('overflow-x: auto')
     expect(css).not.toContain('--component-library-')

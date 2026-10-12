@@ -100,6 +100,7 @@ export interface AssistantContext {
   canUseNetwork?: boolean
   toolCallingEnabled?: boolean
   canRunPageScripts?: boolean
+  canConfigureDiscordBrowser?: boolean
   toolCallLimit?: number
   canSearchWeb?: boolean
   comparisonId?: string
@@ -157,6 +158,7 @@ export type AssistantReply =
   | AssistantAppCommand
   | { action: 'online'; operation: 'search-web' | 'read-webpage'; args: Record<string, string> }
   | { action: 'run-page-script'; code: string; answer: string }
+  | { action: 'discord-setup'; args: Record<string, string> }
   | { action: 'pet-expression'; expression: AssistantPetExpression; message: string }
   | { action: 'custom-tools'; operation: 'list' | 'run'; args: Record<string, string> }
   | { action: 'answer'; answer: string }
@@ -204,6 +206,7 @@ export interface AssistantExecution {
 }
 
 export interface AssistantRunResult {
+  toolBudgetExhausted?: boolean
   reasoning?: string
   petSummary?: string
   sources?: Array<{ title: string; url: string }>
@@ -244,6 +247,7 @@ export class ProductAssistantService {
       request = { ...request, toolCallingEnabled: false }
     const messages = buildAssistantMessages(request)
     const receipts: AssistantExecution[] = []
+    let taskConversationRequired = false
     let expected = request
     const readScopes = new Set<string>()
     let readGlobalCss = false
@@ -252,12 +256,16 @@ export class ProductAssistantService {
     const githubReads = new Map<string, { callId: string; data: Record<string, unknown> }>()
     let finishRepeatedReads = false
     let failedGithubRead = false
+    let githubReadStopReported = false
+    const discordTask = request.history.some(
+      (turn) => !turn.contextExcluded && turn.status === 'discord-setup-internal',
+    )
     const failedWrites = new Map<string, number>()
     let stopAfterRepeatedWriteFailure = false
     let captured = 0
     let allowedTools = getAssistantTurnTools(request)
     let count = 0
-    const toolCallLimit = normalizeAssistantToolCallLimit(request.toolCallLimit)
+    const toolCallLimit = normalizeAssistantToolCallLimit(request.toolCallLimit) ?? Infinity
     const check = () => {
       if (signal.aborted) throw new DOMException('已停止', 'AbortError')
     }
@@ -331,9 +339,24 @@ export class ProductAssistantService {
     const invoke = async (call: MainApiToolCall): Promise<Record<string, unknown>> => {
       if (request.toolCallingEnabled === false || host.getContext().toolCallingEnabled === false)
         throw new Error('工具调用已关闭，未执行工具')
-      if (!allowedTools.some((tool) => tool.name === call.name))
+      if (!allowedTools.some((tool) => tool.name === call.name)) {
+        if (
+          discordTask &&
+          (failedGithubRead || finishRepeatedReads) &&
+          ['read_webpage', 'search_web'].includes(call.name)
+        )
+          throw new Error(
+            '本轮 GitHub API 读取已停止；可以用已授权配置浏览器核验实际网页，不重复 API 请求',
+          )
         throw new Error('当前模式未开放这个工具，请先切换助手模式')
+      }
       const args = argumentsFor(call)
+      if (call.name === 'configure_discord_browser') {
+        if (!host.getContext().canConfigureDiscordBrowser)
+          throw new Error('当前 APK 没有配置浏览器能力')
+        const value = await execute({ action: 'discord-setup', args })
+        return { ok: value.ok !== false, text: value.text, ...value.data }
+      }
       if (call.name === 'select_mode') {
         if (!['appearance', 'features', 'creation'].includes(args.mode!))
           throw new Error('工作模式无效')
@@ -742,21 +765,31 @@ export class ProductAssistantService {
         check()
         if (round && host.getContext().toolCallingEnabled === false)
           return output('工具调用已关闭，已停止后续工具和模型请求。已完成的操作保留。')
+        const recoveringBrowser =
+          discordTask && allowedTools.some((tool) => tool.name === 'configure_discord_browser')
+        if (recoveringBrowser && (failedGithubRead || finishRepeatedReads))
+          allowedTools = allowedTools.filter(
+            (tool) => !['read_webpage', 'search_web'].includes(tool.name),
+          )
         const requestTools =
           count < toolCallLimit &&
-          !finishRepeatedReads &&
-          !failedGithubRead &&
+          (!finishRepeatedReads || recoveringBrowser) &&
+          (!failedGithubRead || recoveringBrowser) &&
           !stopAfterRepeatedWriteFailure
             ? allowedTools
             : []
-        if (finishRepeatedReads)
-          messages[0]!.content = `${String(messages[0]!.content)}\nGitHub 读取已重复或失败，本轮停止后续联网读取。仅根据真实回执简短回答；不足处如实说明，不再申请工具。`
-        if (failedGithubRead)
-          messages[0]!.content = `${String(messages[0]!.content)}\nGitHub 读取失败，本轮不再联网重试或换路径尝试；如实说明未读到内容。`
+        if ((failedGithubRead || finishRepeatedReads) && !githubReadStopReported) {
+          const reason = failedGithubRead ? 'GitHub 读取失败' : 'GitHub 读取已重复'
+          messages[0]!.content = `${String(messages[0]!.content)}\n${reason}。${recoveringBrowser ? '本轮停止 GitHub API 读取，不重复 API 请求；已授权的配置浏览器仍可用，请用 configure_discord_browser 观察实际网页处理用户的问题，不把 API 失败说成网页权限缺失或要求用户代提交。' : '本轮停止后续联网读取，不重试或换路径尝试；根据真实回执简短回答，不再申请工具，不足处如实说明。'}`
+          githubReadStopReported = true
+        }
         if (stopAfterRepeatedWriteFailure)
           messages[0]!.content = `${String(messages[0]!.content)}\n同一种美化写入已连续失败两次，停止本轮后续工具调用；根据失败回执简短说明原因，不要再次提交相同或改写后的全局/局部 CSS。`
-        if (count === toolCallLimit)
-          messages[0]!.content = `${String(messages[0]!.content)}\n工具次数已用完：仅根据真实回执说明完成、失败和待办事项，不能再调用工具。`
+        if (
+          count === toolCallLimit &&
+          allowedTools.some((tool) => tool.name === 'configure_discord_browser')
+        )
+          messages[0]!.content = `${String(messages[0]!.content)}\n网页配置回复限三句话：已核验的进展、真实等待原因、用户下一步（仅在必须接手时）。不要复述教程，不解释预算，不猜页面不稳或让用户代找公开按钮。`
         host.onPhase?.(round ? 'AI 正在根据工具结果继续处理…' : '正在理解你的要求…')
         const result = await this.api.completeWithUsage(messages, config, {
           signal,
@@ -787,11 +820,12 @@ export class ProductAssistantService {
             : { text: result.text.trim() }
           return {
             ...output(parsed.text),
+            ...(count === toolCallLimit ? { toolBudgetExhausted: true } : {}),
             petSummary: parsed.petSummary,
             reasoning: result.reasoning,
           }
         }
-        if (finishRepeatedReads)
+        if (finishRepeatedReads && !recoveringBrowser)
           return output(
             '已停止重复读取。已取得的资料保留；本次没有继续执行工具，请根据资料明确下一步问题。',
           )
@@ -800,9 +834,12 @@ export class ProductAssistantService {
             '同一项美化写入连续失败两次，已停止本轮工具调用；请查看失败原因后再决定是否重试。',
           )
         if (count + calls.length > toolCallLimit)
-          return output(
-            `本次已调用 ${count}/${toolCallLimit} 次工具，本批调用将超出上限，未执行。已完成的操作保留；可以发送“继续”接着做，或在设置中提高工具调用上限。`,
-          )
+          return {
+            ...output(
+              `本次已调用 ${count}/${toolCallLimit} 次工具，本批调用将超出上限，未执行。已完成的操作保留；可以发送“继续”接着做，或在设置中提高工具调用上限。`,
+            ),
+            toolBudgetExhausted: true,
+          }
         for (const call of calls) {
           if (!call.id || seen.has(call.id)) throw new Error('重复的工具调用 ID，已停止执行')
           seen.add(call.id)
@@ -851,6 +888,8 @@ export class ProductAssistantService {
             value = { ok: false, error: error instanceof Error ? error.message : '工具执行失败' }
           }
           if (value.ok === false && call.name === 'read_webpage') failedGithubRead = true
+          if (call.name === 'configure_discord_browser' && value.taskConversationRequired === true)
+            taskConversationRequired = true
           if (ASSISTANT_RETRYABLE_WRITES.has(call.name)) {
             if (value.ok === false) {
               const failures = (failedWrites.get(call.name) ?? 0) + 1
@@ -877,8 +916,14 @@ export class ProductAssistantService {
         }
         finishRepeatedReads = reusedReads === calls.length
         check()
+        if (taskConversationRequired) return output('已转到本次独立网页协助对话。')
         if (receipts.some((item) => item.navigation))
-          return output(receipts.map((item) => item.text).join('\n'))
+          return output(
+            receipts
+              .filter((item) => item.showInChat !== false)
+              .map((item) => item.text)
+              .join('\n'),
+          )
         // Finish every paired tool result before adding multimodal tool output. Both providers
         // already support images in user content; the label records the actual tool origin.
         for (const item of receipts.slice(receiptStart)) {
@@ -903,7 +948,10 @@ export class ProductAssistantService {
         ? '已停止后续操作。已完成的修改可撤销，已保存预设保留。'
         : `后续处理未完成：${problem.label}${problem.httpStatus ? `（HTTP ${problem.httpStatus}）` : ''}。${problem.nextStep}`
       return output(
-        `${receipts.map((item) => item.text).join('\n')}\n\n${warning}`,
+        `${receipts
+          .filter((item) => item.showInChat !== false)
+          .map((item) => item.text)
+          .join('\n')}\n\n${warning}`.trim(),
         warning,
         signal.aborted ? undefined : problem,
       )

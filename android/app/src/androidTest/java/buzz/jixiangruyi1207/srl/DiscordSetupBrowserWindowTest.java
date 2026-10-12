@@ -1,0 +1,348 @@
+package buzz.jixiangruyi1207.srl;
+
+import static org.junit.Assert.*;
+import static androidx.test.espresso.Espresso.onView;
+import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.matcher.ViewMatchers.withText;
+import static androidx.test.espresso.matcher.RootMatchers.isDialog;
+import static androidx.test.espresso.matcher.ViewMatchers.withContentDescription;
+import static androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom;
+import static androidx.test.espresso.matcher.ViewMatchers.isCompletelyDisplayed;
+import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.action.ViewActions.typeTextIntoFocusedView;
+import static androidx.test.espresso.Espresso.closeSoftKeyboard;
+
+import android.app.Dialog;
+import android.graphics.Bitmap;
+import android.view.WindowManager;
+import android.webkit.*;
+import androidx.test.core.app.ActivityScenario;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+
+/** Local HTML only, run on an explicitly selected isolated emulator; never logs into a site. */
+@RunWith(AndroidJUnit4.class)
+public class DiscordSetupBrowserWindowTest {
+    @Test public void agentTouchOpensPopupAndReturnsToItsOpener() throws Exception {
+        String parentUrl = "https://dash.cloudflare.com/account/workers-and-pages/create";
+        String popupUrl = "https://github.com/settings/installations/1234";
+        String parentHtml = "<!doctype html><meta name='viewport' content='width=device-width'><button style='width:200px;height:60px' onclick=\"document.body.dataset.trusted=event.isTrusted;window.open('" + popupUrl + "','authorize')\">Connect GitHub</button><script>addEventListener('message',e=>{if(e.origin==='https://github.com')document.body.dataset.connected=e.data})</script>";
+        String popupHtml = "<!doctype html><meta name='viewport' content='width=device-width'><button style='width:200px;height:60px' onclick=\"document.body.dataset.clicked=event.isTrusted;window.opener.postMessage('connected','https://dash.cloudflare.com');window.close()\">Save</button>";
+        DiscordSetupBrowserWindow[] window = new DiscordSetupBrowserWindow[1]; WebView[] parent = new WebView[1];
+        CountDownLatch loaded = new CountDownLatch(1), popupLoaded = new CountDownLatch(1), returned = new CountDownLatch(1);
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                window[0] = new DiscordSetupBrowserWindow(activity, event -> {});
+                window[0].open(null, "cf-deploy", "窗口回归", "隔离 HTML", new JSONArray(), "", false, false);
+                parent[0] = window[0].web;
+                WebViewClient parentClient = parent[0].getWebViewClient(); WebChromeClient parentChrome = parent[0].getWebChromeClient();
+                parent[0].setWebViewClient(new WebViewClient() {
+                    @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) { return fixtureHtml(parentHtml); }
+                    @Override public void onPageStarted(WebView view, String url, Bitmap icon) { parentClient.onPageStarted(view, url, icon); }
+                    @Override public void onPageFinished(WebView view, String url) { parentClient.onPageFinished(view, url); loaded.countDown(); }
+                });
+                parent[0].setWebChromeClient(new WebChromeClient() {
+                    @Override public boolean onCreateWindow(WebView view, boolean isDialog, boolean gesture, android.os.Message result) {
+                        assertTrue("native touch must supply user activation", gesture);
+                        boolean accepted = parentChrome.onCreateWindow(view, isDialog, gesture, result);
+                        if (accepted) {
+                            WebViewClient client = window[0].web.getWebViewClient(); WebChromeClient chrome = window[0].web.getWebChromeClient();
+                            window[0].web.setWebViewClient(new WebViewClient() {
+                                @Override public WebResourceResponse shouldInterceptRequest(WebView child, WebResourceRequest request) { return fixtureHtml(popupHtml); }
+                                @Override public void onPageStarted(WebView child, String url, Bitmap icon) { client.onPageStarted(child, url, icon); }
+                                @Override public void onPageFinished(WebView child, String url) { client.onPageFinished(child, url); popupLoaded.countDown(); }
+                            });
+                            window[0].web.setWebChromeClient(new WebChromeClient() {
+                                @Override public void onCloseWindow(WebView child) { chrome.onCloseWindow(child); returned.countDown(); }
+                            });
+                        }
+                        return accepted;
+                    }
+                });
+                window[0].agentRun("popup-test"); parent[0].loadUrl(parentUrl);
+            });
+            assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            clickFixture(scenario, window, true);
+            assertTrue(popupLoaded.await(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> { assertNotSame(parent[0], window[0].web); assertEquals(popupUrl, window[0].web.getUrl()); });
+            clickFixture(scenario, window, false);
+            boolean closedPopup = returned.await(10, TimeUnit.SECONDS);
+            if (!closedPopup) {
+                java.util.concurrent.BlockingQueue<String> diagnostic = new java.util.concurrent.LinkedBlockingQueue<>();
+                scenario.onActivity(activity -> window[0].web.evaluateJavascript("JSON.stringify({clicked:document.body.dataset.clicked,opener:!!opener})", diagnostic::offer));
+                fail("popup did not close: " + diagnostic.poll(5, TimeUnit.SECONDS));
+            }
+            CountDownLatch checked = new CountDownLatch(1);
+            scenario.onActivity(activity -> {
+                assertSame(parent[0], window[0].web); assertEquals("popup-test", window[0].agentRunId); assertFalse(window[0].paused);
+                parent[0].evaluateJavascript("document.body.dataset.trusted==='true' && document.body.dataset.connected==='connected'", raw -> { assertEquals("true", raw); checked.countDown(); });
+            });
+            assertTrue(checked.await(5, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> window[0].close());
+        }
+    }
+    private static WebResourceResponse fixtureHtml(String value) { return new WebResourceResponse("text/html", "UTF-8", new ByteArrayInputStream(value.getBytes(StandardCharsets.UTF_8))); }
+    private static void clickFixture(ActivityScenario<MainActivity> scenario, DiscordSetupBrowserWindow[] window, boolean checkPause) throws Exception {
+        CountDownLatch done = new CountDownLatch(1);
+        scenario.onActivity(activity -> window[0].web.evaluateJavascript("(()=>{let r=document.querySelector('button').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()", raw -> {
+            try {
+                JSONObject point = new JSONObject(raw);
+                if (checkPause) {
+                    window[0].setPaused(true); assertFalse(window[0].clickPublicTarget(point, window[0].documentId, "popup-test"));
+                    window[0].setPaused(false); assertFalse(window[0].clickPublicTarget(point, window[0].documentId, "old-run"));
+                }
+                assertTrue(window[0].clickPublicTarget(point, window[0].documentId, "popup-test")); done.countDown();
+            } catch (Exception error) { throw new RuntimeException(error); }
+        }));
+        assertTrue(done.await(5, TimeUnit.SECONDS));
+    }
+    @Test public void nativeCryptoProviderSealsBotTokenWithoutPlaintextReply() throws Exception {
+        java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance("RSA"); generator.initialize(2048);
+        java.security.KeyPair pair = generator.generateKeyPair();
+        String key = android.util.Base64.encodeToString(pair.getPublic().getEncoded(), android.util.Base64.NO_WRAP);
+        String token = "TEST_DISCORD_TOKEN_PLACEHOLDER";
+        java.util.Map<String, String> receipt = DiscordSetupSecretTransfer.seal(token, key);
+        assertEquals(3, receipt.size()); assertFalse(receipt.toString().contains(token));
+        byte[] iv = android.util.Base64.decode(receipt.get("iv"), android.util.Base64.NO_WRAP);
+        assertEquals(12, iv.length);
+        javax.crypto.Cipher rsa = javax.crypto.Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+        javax.crypto.spec.OAEPParameterSpec oaep = new javax.crypto.spec.OAEPParameterSpec("SHA-256", "MGF1", java.security.spec.MGF1ParameterSpec.SHA256, javax.crypto.spec.PSource.PSpecified.DEFAULT);
+        rsa.init(javax.crypto.Cipher.DECRYPT_MODE, pair.getPrivate(), oaep);
+        byte[] aesKey = rsa.doFinal(android.util.Base64.decode(receipt.get("key"), android.util.Base64.NO_WRAP));
+        javax.crypto.Cipher aes = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+        javax.crypto.spec.GCMParameterSpec gcm = new javax.crypto.spec.GCMParameterSpec(128, iv);
+        javax.crypto.spec.SecretKeySpec secretKey = new javax.crypto.spec.SecretKeySpec(aesKey, "AES");
+        byte[] encrypted = android.util.Base64.decode(receipt.get("data"), android.util.Base64.NO_WRAP);
+        aes.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, gcm);
+        aes.updateAAD("srl-discord-bot-transfer-v1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(token, new String(aes.doFinal(encrypted), java.nio.charset.StandardCharsets.UTF_8));
+        aes.init(javax.crypto.Cipher.DECRYPT_MODE, secretKey, gcm);
+        aes.updateAAD("wrong-purpose".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThrows(Exception.class, () -> aes.doFinal(encrypted));
+        rsa.init(javax.crypto.Cipher.DECRYPT_MODE, generator.generateKeyPair().getPrivate(), oaep);
+        assertThrows(Exception.class, () -> rsa.doFinal(android.util.Base64.decode(receipt.get("key"), android.util.Base64.NO_WRAP)));
+    }
+    private static final String URL = "https://discord.com/developers/applications/1234567890123456789/information";
+    private Dialog dialog(DiscordSetupBrowserWindow window) throws Exception {
+        java.lang.reflect.Field field = DiscordSetupBrowserWindow.class.getDeclaredField("dialog"); field.setAccessible(true); return (Dialog) field.get(window);
+    }
+    @Test public void loginBackAndExternalVerificationResumeUseTheCurrentTaskOnly() throws Exception {
+        String login = "https://dash.cloudflare.com/login";
+        DiscordSetupBrowserWindow[] window = new DiscordSetupBrowserWindow[1];
+        AtomicInteger resumes = new AtomicInteger(), pauses = new AtomicInteger(), loads = new AtomicInteger();
+        java.util.concurrent.BlockingQueue<String> loaded = new java.util.concurrent.LinkedBlockingQueue<>();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                window[0] = new DiscordSetupBrowserWindow(activity, event -> {
+                    if ("agent-resume".equals(event.optString("action"))) resumes.incrementAndGet();
+                    if ("agent-pause".equals(event.optString("action"))) pauses.incrementAndGet();
+                });
+                window[0].open(null, "d1-create", "创建 D1 数据库", "本机登录返回夹具", new JSONArray().put(new com.getcapacitor.JSObject().put("id", "d1-create")), "", false, false);
+                WebViewClient owner = window[0].web.getWebViewClient();
+                window[0].web.setWebViewClient(new WebViewClient() {
+                    @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                        return new WebResourceResponse("text/html", "UTF-8", new ByteArrayInputStream("<!doctype html><h1>Local verification fixture</h1>".getBytes(StandardCharsets.UTF_8)));
+                    }
+                    @Override public void onPageStarted(WebView view, String url, Bitmap icon) { owner.onPageStarted(view, url, icon); }
+                    @Override public void doUpdateVisitedHistory(WebView view, String url, boolean reload) { owner.doUpdateVisitedHistory(view, url, reload); }
+                    @Override public void onPageFinished(WebView view, String url) { owner.onPageFinished(view, url); loads.incrementAndGet(); loaded.offer(url); }
+                });
+                window[0].agentRun("verification-run");
+                window[0].web.loadUrl(login);
+            });
+            assertEquals(login, loaded.poll(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> { window[0].background(); window[0].foreground(); });
+            onView(withText("尚未完成")).inRoot(isDialog()).perform(click());
+            assertEquals("no refresh or model resume without user confirmation", 1, loads.get());
+            assertEquals(0, resumes.get());
+            scenario.onActivity(activity -> { window[0].background(); window[0].foreground(); });
+            onView(withText("已完成，继续")).inRoot(isDialog()).perform(click());
+            assertEquals(login, loaded.poll(15, TimeUnit.SECONDS));
+            assertEquals(1, resumes.get());
+            scenario.onActivity(activity -> {
+                window[0].background(); window[0].agentRun(""); window[0].foreground();
+                assertEquals("returning to the foreground cannot revive a stopped run", 1, resumes.get());
+                window[0].web.loadUrl("https://dash.cloudflare.com/account/d1/create");
+            });
+            assertEquals("https://dash.cloudflare.com/account/d1/create", loaded.poll(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> {
+                window[0].background(); window[0].foreground();
+                assertTrue(window[0].web.canGoBack());
+                window[0].agentRun("back-run"); window[0].setPaused(false);
+            });
+            onView(withContentDescription("返回上一网页")).inRoot(isDialog()).perform(click());
+            assertEquals(login, loaded.poll(15, TimeUnit.SECONDS));
+            assertEquals(1, pauses.get());
+            scenario.onActivity(activity -> { assertTrue(window[0].paused); assertEquals("", window[0].agentRunId); window[0].web.loadUrl("https://dash.cloudflare.com/account/d1/create"); });
+            assertEquals("https://dash.cloudflare.com/account/d1/create", loaded.poll(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> { window[0].agentRun("system-back-run"); window[0].setPaused(false); });
+            InstrumentationRegistry.getInstrumentation().getUiAutomation().executeShellCommand("input keyevent KEYCODE_BACK").close();
+            assertEquals("system Back stays within browser history", login, loaded.poll(15, TimeUnit.SECONDS));
+            assertEquals(2, pauses.get());
+            scenario.onActivity(activity -> { assertTrue(window[0].paused); assertEquals("", window[0].agentRunId); window[0].destroy(); });
+        }
+    }
+    @Test public void compactBrowserFailureAndSensitiveNavigation() throws Exception {
+        boolean dark = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("dark", "false"));
+        String capture = InstrumentationRegistry.getArguments().getString("capture", "discord-ui");
+        DiscordSetupBrowserWindow[] window = new DiscordSetupBrowserWindow[1];
+        WebViewClient[] client = new WebViewClient[1];
+        AtomicInteger pauses = new AtomicInteger();
+        CountDownLatch loaded = new CountDownLatch(1);
+        CountDownLatch failureLoaded = new CountDownLatch(1);
+        CountDownLatch retried = new CountDownLatch(1);
+        AtomicBoolean failNextLoad = new AtomicBoolean();
+        CountDownLatch sensitiveLoaded = new CountDownLatch(1), publicCommitted = new CountDownLatch(1);
+        AtomicBoolean returningToPublic = new AtomicBoolean();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                try {
+                    window[0] = new DiscordSetupBrowserWindow(activity, event -> { if ("agent-pause".equals(event.optString("action"))) pauses.incrementAndGet(); });
+                    JSONArray steps = new JSONArray().put(new JSONObject().put("id", "discord-app").put("title", "找到 Discord 三个配置值"));
+                    window[0].open(null, "discord-app", "找到 Discord 配置值", "打开自己的 App → General Information。Application ID 与 Public Key 可保存在本机；Bot Token 去 Bot 页由你保存，不读取。", steps, "", false, dark);
+                    File petFile = new File(activity.getExternalFilesDir(null), "test-pet.png");
+                    if (petFile.exists()) {
+                        Bitmap original = android.graphics.BitmapFactory.decodeFile(petFile.getAbsolutePath());
+                        Bitmap frame = Bitmap.createScaledBitmap(original, 176, 176, true);
+                        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream(); frame.compress(Bitmap.CompressFormat.PNG, 100, bytes);
+                        window[0].petFrame("data:image/png;base64," + android.util.Base64.encodeToString(bytes.toByteArray(), android.util.Base64.NO_WRAP));
+                        if (frame != original) frame.recycle(); original.recycle();
+                    }
+                    client[0] = window[0].web.getWebViewClient();
+                    window[0].web.setWebViewClient(new WebViewClient() {
+                        @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                            String html = "<!doctype html><meta name='viewport' content='width=device-width'><body style='margin:0;background:" + (dark ? "#1e1f22;color:#f2f3f5" : "#fff;color:#313338") + ";font:16px sans-serif;padding:24px'><small>本机测试页面 · 不连接 Discord</small><h2>General Information</h2><p>Application ID</p><input value='1234567890123456789' style='box-sizing:border-box;width:100%;padding:12px'><p>Public Key</p><input placeholder='示例字段' style='box-sizing:border-box;width:100%;padding:12px'><p>配置填好后，点击蒜惹菈继续。</p>";
+                            ByteArrayInputStream body = new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8));
+                            if (request.isForMainFrame() && failNextLoad.getAndSet(false)) return new WebResourceResponse("text/html", "UTF-8", 503, "Service Unavailable", java.util.Collections.emptyMap(), body);
+                            return new WebResourceResponse("text/html", "UTF-8", body);
+                        }
+                        @Override public void onPageStarted(WebView view, String url, Bitmap icon) { client[0].onPageStarted(view, url, icon); }
+                        @Override public void onPageCommitVisible(WebView view, String url) { client[0].onPageCommitVisible(view, url); if (returningToPublic.get() && URL.equals(url)) publicCommitted.countDown(); }
+                        @Override public void doUpdateVisitedHistory(WebView view, String url, boolean reload) { client[0].doUpdateVisitedHistory(view, url, reload); }
+                        @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) { client[0].onReceivedHttpError(view, request, response); }
+                        @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) { client[0].onReceivedError(view, request, error); }
+                        @Override public void onPageFinished(WebView view, String url) {
+                            client[0].onPageFinished(view, url);
+                            if ("https://discord.com/login".equals(url)) sensitiveLoaded.countDown();
+                            if (window[0].failed) failureLoaded.countDown(); else if (loaded.getCount() == 0) retried.countDown(); else loaded.countDown();
+                        }
+                    });
+                    window[0].web.loadUrl(URL);
+                } catch (Exception error) { throw new RuntimeException(error); }
+            });
+            assertTrue("local WebView fixture loaded", loaded.await(15, TimeUnit.SECONDS));
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            scenario.onActivity(activity -> window[0].setPaused(false));
+            scenario.onActivity(activity -> {
+                assertFalse(window[0].paused);
+                assertTrue("browser keeps the working area", window[0].web.getHeight() > activity.getResources().getDisplayMetrics().heightPixels * .65);
+                try { assertEquals(0, dialog(window[0]).getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE); } catch (Exception error) { throw new RuntimeException(error); }
+            });
+            screenshot(capture + "-page");
+            tapField(window[0].web);
+            InstrumentationRegistry.getInstrumentation().sendStringSync("test-public");
+            CountDownLatch typed = new CountDownLatch(1);
+            scenario.onActivity(activity -> window[0].web.evaluateJavascript("document.activeElement.value", value -> { assertEquals("\"test-public\"", value); typed.countDown(); }));
+            assertTrue("web input keeps the typed text", typed.await(5, TimeUnit.SECONDS));
+            screenshot(capture + "-browser-keyboard");
+            onView(withContentDescription("蒜惹菈，点击对话，拖动移动")).inRoot(isDialog()).check(matches(isCompletelyDisplayed()));
+            closeSoftKeyboard();
+            onView(withText("1/1  ·  找到 Discord 配置值  ›")).inRoot(isDialog()).perform(click());
+            onView(withText("知道了")).inRoot(isDialog()).check((view, error) -> {
+                if (error != null) throw error;
+                int[] location = new int[2]; view.getRootView().getLocationOnScreen(location);
+                android.graphics.Rect popup = new android.graphics.Rect(location[0], location[1], location[0] + view.getRootView().getWidth(), location[1] + view.getRootView().getHeight());
+                android.graphics.Rect screen = ((WindowManager) view.getContext().getSystemService(android.content.Context.WINDOW_SERVICE)).getCurrentWindowMetrics().getBounds();
+                int tolerance = Math.round(24 * view.getResources().getDisplayMetrics().density);
+                assertTrue("dialog centered horizontally: " + popup + " / " + screen, Math.abs(popup.centerX() - screen.centerX()) <= tolerance);
+                assertTrue("dialog centered vertically: " + popup + " / " + screen, Math.abs(popup.centerY() - screen.centerY()) <= tolerance);
+            });
+            screenshot(capture + "-details");
+            onView(withText("知道了")).inRoot(isDialog()).perform(click());
+            scenario.onActivity(activity -> { window[0].agentRun("test-agent-run"); window[0].setPaused(false); window[0].phase("正在查找 App 配置"); window[0].message("已找到本次 App，正在保存公开参数。\n\nApp ID 和公钥仅保存在本机部署资料卡，工具不会把原值发给模型。下一步会进入同一 App 的 Bot 页面，请完成网站验证并显示 Token。\n\n你可以单独确认加密保存当前 Token，也可自行保存并明确继续。完成之前不会进入 Cloudflare。\n\n之后助手会创建 D1、保存 UUID、Fork 指定仓库并填写 Wrangler。Worker 根网址保存到资源库，Discord 交互地址使用根网址加 /interactions。\n\n你只需接手登录、验证码、授权和密钥显示/填写；遇到多个无法确定的 App 会请你选择。操作结果会经过本机核验，点击并不代表部署完成。\n\n点击桌宠查看回复不会打断工作。需要自己操作时选择暂停。"); });
+            onView(withText(org.hamcrest.Matchers.startsWith("小助手操作中"))).inRoot(isDialog()).check(matches(isCompletelyDisplayed()));
+            screenshot(capture + "-working");
+            tapField(window[0].web);
+            scenario.onActivity(activity -> assertFalse("working page ignores user touch and hides webpage keyboard", window[0].web.hasFocus()));
+            onView(withContentDescription("蒜惹菈，点击对话，拖动移动")).inRoot(isDialog()).perform(click());
+            scenario.onActivity(activity -> { assertFalse("viewing pet keeps the agent running", window[0].paused); assertEquals("test-agent-run", window[0].agentRunId); });
+            onView(isAssignableFrom(android.widget.EditText.class)).inRoot(isDialog()).perform(click(), typeTextIntoFocusedView("Help me"));
+            onView(withText("Help me")).inRoot(isDialog()).check(matches(isCompletelyDisplayed()));
+            onView(withText("发送 / 继续")).inRoot(isDialog()).check(matches(isCompletelyDisplayed()));
+            onView(withText("暂停")).inRoot(isDialog()).check(matches(isCompletelyDisplayed()));
+            screenshot(capture + "-keyboard"); closeSoftKeyboard();
+            onView(withText("返回网页")).inRoot(isDialog()).perform(click());
+            assertEquals(0, pauses.get());
+            onView(withContentDescription("蒜惹菈，点击对话，拖动移动")).inRoot(isDialog()).perform(click());
+            onView(withText("暂停")).inRoot(isDialog()).perform(click());
+            scenario.onActivity(activity -> { assertTrue(window[0].paused); assertEquals("", window[0].agentRunId); });
+            assertEquals(1, pauses.get());
+            failNextLoad.set(true);
+            scenario.onActivity(activity -> window[0].web.loadUrl(URL + "?fixture=failure"));
+            assertTrue("main-frame HTTP failure is shown", failureLoaded.await(15, TimeUnit.SECONDS));
+            screenshot(capture + "-failure");
+            assertEquals(1, pauses.get());
+            scenario.onActivity(activity -> {
+                assertTrue(window[0].failed); assertTrue(window[0].paused);
+                assertTrue("page finish must not clear the failure", window[0].failed);
+            });
+            onView(withText("重试")).inRoot(isDialog()).perform(click());
+            assertTrue("manual retry loads fixture", retried.await(15, TimeUnit.SECONDS));
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            scenario.onActivity(activity -> { assertFalse(window[0].failed); assertTrue(window[0].paused); });
+            scenario.onActivity(activity -> window[0].web.loadUrl("https://discord.com/login"));
+            assertTrue("sensitive page loads", sensitiveLoaded.await(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> {
+                try {
+                    assertEquals("manual screenshots remain allowed on login pages", 0, dialog(window[0]).getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE);
+                    returningToPublic.set(true);
+                    window[0].open(URL, "discord-app", "找到 Discord 配置值", "打开自己的 App → General Information。", window[0].steps, "", false, dark);
+                    assertEquals("navigation does not force screenshot protection", 0, dialog(window[0]).getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE);
+                } catch (Exception error) { throw new RuntimeException(error); }
+            });
+            assertTrue("public replacement is visible", publicCommitted.await(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> { try { assertEquals(0, dialog(window[0]).getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE); } catch (Exception error) { throw new RuntimeException(error); } });
+            scenario.onActivity(activity -> window[0].destroy());
+        }
+    }
+    private void screenshot(String name) throws Exception {
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        CountDownLatch rendered = new CountDownLatch(1);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> android.view.Choreographer.getInstance().postFrameCallback(time -> android.view.Choreographer.getInstance().postFrameCallback(next -> rendered.countDown())));
+        assertTrue("current UI rendered before screenshot", rendered.await(5, TimeUnit.SECONDS));
+        Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot(); assertNotNull(bitmap);
+        File file = new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getExternalFilesDir(null), name + ".png");
+        try (FileOutputStream output = new FileOutputStream(file)) { bitmap.compress(Bitmap.CompressFormat.PNG, 100, output); }
+        bitmap.recycle();
+    }
+    private void tapField(WebView web) throws Exception {
+        android.app.UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+        CountDownLatch located = new CountDownLatch(1); float[] point = new float[2];
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> web.evaluateJavascript("(() => { const r = document.querySelector('input[placeholder]').getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2,width:innerWidth}; })()", value -> {
+            try {
+                JSONObject rect = new JSONObject(value); int[] origin = new int[2]; web.getLocationOnScreen(origin);
+                float scale = web.getWidth() / (float) rect.getDouble("width");
+                point[0] = origin[0] + (float) rect.getDouble("x") * scale; point[1] = origin[1] + (float) rect.getDouble("y") * scale; located.countDown();
+            } catch (Exception error) { throw new RuntimeException(error); }
+        }));
+        assertTrue("local fixture field is located", located.await(5, TimeUnit.SECONDS));
+        long now = android.os.SystemClock.uptimeMillis();
+        android.view.MotionEvent down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN, point[0], point[1], 0);
+        android.view.MotionEvent up = android.view.MotionEvent.obtain(now, now + 80, android.view.MotionEvent.ACTION_UP, point[0], point[1], 0);
+        down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN); up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+        assertTrue(automation.injectInputEvent(down, true)); assertTrue(automation.injectInputEvent(up, true)); down.recycle(); up.recycle();
+        automation.waitForIdle(300, 5000);
+    }
+}

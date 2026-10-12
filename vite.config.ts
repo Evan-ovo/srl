@@ -10,6 +10,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { buildDiscordManualWorkerSource } from './scripts/DiscordManualWorkerSource.ts'
 import { officialAppPackagesPlugin } from './scripts/OfficialAppPackages.js'
+import { appearanceReferencePlugin } from './scripts/AppearanceReferenceCatalog.js'
 import { isOfficialAppId } from './src/types/OfficialApp.js'
 
 import vue from '@vitejs/plugin-vue'
@@ -59,7 +60,6 @@ const appearanceStarterCssSources: Record<string, AppearanceStarterCssSource[]> 
     { file: 'ImageGenerationApp.css', selectorHint: /\.image-generation-app/u },
   ],
   'app:imageAlbum': [{ file: 'GeneratedImageAlbumApp.css', selectorHint: /\.generated-album/u }],
-  'app:resourceBundle': [{ file: 'ResourceBundleApp.css', selectorHint: /\.resource-bundle-app/u }],
   'app:extensions': [{ file: 'ExternalAppManager.css', selectorHint: /\.external-app-manager/u }],
   settings: [
     { file: 'AppearanceStudio.css', selectorHint: /\.(appearance|settings|layout-settings)-/u },
@@ -273,6 +273,7 @@ export default defineConfig({
       },
     },
     appearanceStarterCssSourcePlugin(),
+    appearanceReferencePlugin(),
     // SRL-PUBLIC-SYNC: BEGIN REPLACE id=official-app-package-build
     officialAppPackagesPlugin(buildInfo.buildId),
     // SRL-PUBLIC-SYNC: END REPLACE id=official-app-package-build

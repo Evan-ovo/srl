@@ -5,8 +5,16 @@ export async function tavernHttpFetch(
   input: string | URL | Request,
   init: RequestInit = {},
 ): Promise<Response> {
+  const appOrigin = typeof window === 'undefined' ? undefined : window.location.origin
+  const url = new URL(input instanceof Request ? input.url : String(input), appOrigin)
+  if (url.pathname.startsWith('/api/bridge/') && url.origin !== appOrigin) {
+    const headers = new Headers(init.headers)
+    headers.delete('Authorization')
+    headers.delete('Cookie')
+    headers.delete('X-CSRF-Token')
+    init = { ...init, headers, credentials: 'omit', redirect: 'error' }
+  }
   if (!Capacitor.isNativePlatform()) return fetch(input, init)
-  const url = new URL(input instanceof Request ? input.url : String(input), window.location.origin)
   if (
     !url.pathname.startsWith('/api/bridge/') &&
     !url.pathname.startsWith('/api/plugins/srl-bridge/')
@@ -39,6 +47,7 @@ export async function tavernHttpFetch(
       url: url.href,
       method: init.method || 'POST',
       headers,
+      disableRedirects: init.redirect === 'error',
       data,
       ...(dataType ? { dataType } : {}),
       connectTimeout: 15_000,

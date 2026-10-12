@@ -5,7 +5,9 @@ import {
   mainApiService,
   externalAppService,
   productAssistantWorkspaceService as workspace,
+  discordSetupService,
 } from '../core/AppContainer'
+import { hasDiscordSetupBrowser, discordSetupSession } from '../services/NativeDiscordSetupBrowser'
 import {
   newAssistantConversation,
   type AssistantConversation,
@@ -159,6 +161,7 @@ const unsubscribePreferences = workspace.onPreferencesChange((value) => {
   preferences.value = value
 })
 const conversationId = ref('')
+const conversationCustomTitle = ref<string>()
 watch(
   busy,
   (value) => {
@@ -186,12 +189,30 @@ const visibleHistory = computed(() =>
     .slice(-messageLimit.value)
     .filter(
       (turn) =>
-        showSummarized.value ||
-        turn.contextExcluded ||
-        !chatContext.summary.value ||
-        history.value.indexOf(turn) >= chatContext.summary.value.count,
+        !(turn.role === 'user' && turn.status === 'discord-setup-internal') &&
+        (showSummarized.value ||
+          turn.contextExcluded ||
+          !chatContext.summary.value ||
+          history.value.indexOf(turn) >= chatContext.summary.value.count),
     ),
 )
+const canReturnToDiscordBrowser = computed(
+  () =>
+    hasDiscordSetupBrowser() &&
+    discordSetupSession.active &&
+    discordSetupSession.webStepActive &&
+    Boolean(conversationId.value) &&
+    conversationId.value === discordSetupSession.assistantConversationId &&
+    !discordSetupSession.browserVisible &&
+    !settingsOpen.value,
+)
+async function returnToDiscordBrowser(showControls = false) {
+  try {
+    await discordSetupService.returnToBrowser(showControls)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '暂时无法返回配置网页'
+  }
+}
 const resultViewer =
   useTemplateRef<InstanceType<typeof ProductAssistantResultViewer>>('resultViewer')
 const fileInput = ref<HTMLInputElement>()
@@ -234,6 +255,7 @@ function conversation(): AssistantConversation {
   const draft = appSession.snapshot()
   return {
     id: conversationId.value,
+    customTitle: conversationCustomTitle.value,
     title: '',
     updatedAt: Date.now(),
     history: history.value,
@@ -263,6 +285,7 @@ async function loadConversation(value: AssistantConversation): Promise<void> {
   const sameConversation = conversationId.value === value.id
   await appSession.restore(value.draft)
   conversationId.value = value.id
+  conversationCustomTitle.value = value.customTitle
   projectReference.value =
     value.projectId && value.projectVersion
       ? {
@@ -323,6 +346,9 @@ unsubscribeConversation = workspace.onConversationChange?.((value, sourceId) => 
 unsubscribeActivity = workspace.onConversationActivityChange?.(applyRemoteActivity)
 onMounted(async () => {
   window.addEventListener(SRL_BACK_REQUEST_EVENT, handleSettingsBack, true)
+  window.addEventListener('srl:discord-setup-assist', continueDiscordSetup)
+  window.addEventListener('srl:discord-setup-stop', stopDiscordGeneration)
+  window.addEventListener('srl:discord-setup-fullscreen', receiveDiscordSetupDraft)
   try {
     await loadConversation(await workspace.initialize())
     preferences.value = workspace.preferences()
@@ -383,6 +409,7 @@ function getChatContext(): AssistantContext {
     canUseNetwork: preferences.value.networkEnabled === true,
     toolCallingEnabled: preferences.value.toolCallingEnabled !== false,
     canRunPageScripts: preferences.value.allowPageScripts === true,
+    canConfigureDiscordBrowser: hasDiscordSetupBrowser(),
     toolCallLimit: preferences.value.toolCallLimit,
     canSearchWeb: preferences.value.providerSearch === true,
     preferenceMemories: workspace
@@ -397,6 +424,36 @@ async function executeChatOperation(
   signal: AbortSignal,
   apiConfig?: MainApiConfig,
 ): Promise<AssistantExecution> {
+  if (reply.action === 'discord-setup') {
+    if (!hasDiscordSetupBrowser()) throw new Error('请使用支持配置浏览器的新版 Android APK')
+    const handoff = async () => {
+      const id = await discordSetupService.assistantConversationId?.()
+      if (!id || id === conversationId.value || !discordSetupService.continueInTaskConversation?.())
+        return
+      return {
+        text: '已转到本次独立网页协助对话。',
+        ok: true,
+        data: { taskConversationRequired: true },
+        showInChat: false,
+      }
+    }
+    if (!['start', 'return'].includes(reply.args.operation ?? '')) {
+      const routed = await handoff()
+      if (routed) return routed
+    }
+    const data = await discordSetupService.execute(reply.args, signal)
+    const routed = await handoff()
+    if (routed) return routed
+    return {
+      text:
+        data.ok === false
+          ? String(data.hint ?? '当前步骤等待用户操作')
+          : `当前步骤：${String(data.title ?? '网页配置')}`,
+      ok: data.ok !== false,
+      data,
+      showInChat: false,
+    }
+  }
   if (reply.action === 'run-page-script') {
     if (!workspace.preferences().allowPageScripts)
       throw new Error('页面脚本权限已关闭，请在小助手设置中开启后再运行。')
@@ -583,6 +640,11 @@ async function expandChat() {
   }
 }
 let controller: AbortController | undefined
+let discordGeneration = false
+let discordRunId: string | undefined
+function stopDiscordGeneration() {
+  if (discordGeneration) controller?.abort()
+}
 let alive = true
 onBeforeUnmount(() => {
   unsubscribePreferences()
@@ -592,6 +654,9 @@ onBeforeUnmount(() => {
   unsubscribeConversation?.()
   unsubscribeActivity?.()
   window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleSettingsBack, true)
+  window.removeEventListener('srl:discord-setup-assist', continueDiscordSetup)
+  window.removeEventListener('srl:discord-setup-stop', stopDiscordGeneration)
+  window.removeEventListener('srl:discord-setup-fullscreen', receiveDiscordSetupDraft)
   emit('activity', false)
   cancelPress()
   saveLater()
@@ -672,6 +737,114 @@ async function send(): Promise<void> {
   await persist()
   await scrollToLatest()
 }
+let discordConversationSwitch: Promise<boolean> | undefined
+function ensureDiscordSetupConversation(): Promise<boolean> {
+  if (discordConversationSwitch) return discordConversationSwitch
+  discordConversationSwitch = (async () => {
+    const id = await discordSetupService.assistantConversationId?.()
+    if (!id || id === conversationId.value) return true
+    if (busy.value || reading.value || initializing.value || !(await canLeaveSettings()))
+      return false
+    await persist()
+    const value = await workspace.continueDiscordSetupConversation(id)
+    if (!alive || id !== (await discordSetupService.assistantConversationId?.())) return false
+    await loadConversation(value)
+    settingsOpen.value = false
+    historyPage.value = false
+    promptPage.value = false
+    templatesPage.value = false
+    projectsPage.value = false
+    error.value = ''
+    return true
+  })().finally(() => {
+    discordConversationSwitch = undefined
+  })
+  return discordConversationSwitch
+}
+async function receiveDiscordSetupDraft(event?: Event): Promise<void> {
+  if (!alive || !props.visible || initializing.value) return
+  const draft = discordSetupService.peekAssistantDraft()
+  if (
+    !draft &&
+    event?.type !== 'srl:discord-setup-fullscreen' &&
+    !(props.compact && discordSetupSession.active && discordSetupSession.assistantConversationId)
+  )
+    return
+  try {
+    if (!(await ensureDiscordSetupConversation())) return
+    discordSetupService.takeAssistantDraft()
+    if (!draft) return
+    input.value = input.value.trim() ? `${input.value}\n\n${draft}` : draft
+    await persist()
+  } catch {
+    error.value = '小窗问题已保留在草稿中，但保存失败，请重试保存。'
+  }
+}
+async function continueDiscordSetup(event?: Event): Promise<void> {
+  if (
+    !alive ||
+    !props.visible ||
+    busy.value ||
+    reading.value ||
+    initializing.value ||
+    discordGeneration
+  )
+    return
+  const prompt = discordSetupService.peekAssistantRequest()
+  if (!prompt) {
+    const run = discordSetupService.agentRunId?.()
+    if (event?.type === 'srl:discord-setup-assist' && run && discordSetupSession.agentRunning) {
+      try {
+        const taskConversation = await discordSetupService.assistantConversationId?.()
+        // This idle window may show a different chat from the window executing the task.
+        if (taskConversation && workspace.conversationActivityOwner?.(taskConversation)) return
+        await discordSetupService.settleAssistantTurn?.(run)
+      } catch {
+        error.value = '网页状态检查失败，代理已停止；请关闭配置网页后再继续。'
+        await discordSetupService.pauseAgent?.(run).catch(() => {})
+      }
+    }
+    return
+  }
+  discordGeneration = true
+  discordRunId = discordSetupService.agentRunId?.()
+  const requestedRun = discordRunId
+  try {
+    if (!(await ensureDiscordSetupConversation())) {
+      await discordSetupService.pauseAgent?.(requestedRun)
+      return
+    }
+    if (
+      !alive ||
+      (requestedRun &&
+        (requestedRun !== discordSetupService.agentRunId?.() || !discordSetupSession.agentRunning))
+    )
+      return
+    discordSetupService.takeAssistantRequest()
+    history.value = retainAssistantHistory([
+      ...history.value,
+      { id: crypto.randomUUID(), role: 'user', text: prompt, status: 'discord-setup-internal' },
+    ])
+    await persist()
+    if (
+      requestedRun &&
+      (requestedRun !== discordSetupService.agentRunId?.() || !discordSetupSession.agentRunning)
+    )
+      return
+    await generate()
+  } catch {
+    await discordSetupService.pauseAgent?.(requestedRun)
+    error.value = '网页协助对话读取或启动失败，请重试；原聊天和当前草稿仍保留。'
+  } finally {
+    discordGeneration = false
+    discordRunId = undefined
+    void continueDiscordSetup()
+  }
+}
+watch([() => props.visible, initializing, busy, reading], () => {
+  void receiveDiscordSetupDraft()
+  void continueDiscordSetup()
+})
 async function generate(): Promise<void> {
   if (
     busy.value ||
@@ -689,10 +862,16 @@ async function generate(): Promise<void> {
   let petReplyText = ''
   let petSummary = ''
   try {
-    const prepared = await chatContext.prepareSend(
-      { ...getChatContext(), history: [...history.value], recentProblem: recentProblem.value },
-      signal,
-    )
+    const browserSuspended = await discordSetupService.suspendForModelConsent?.()
+    let prepared: Awaited<ReturnType<typeof chatContext.prepareSend>> | undefined
+    try {
+      prepared = await chatContext.prepareSend(
+        { ...getChatContext(), history: [...history.value], recentProblem: recentProblem.value },
+        signal,
+      )
+    } finally {
+      if (browserSuspended) await discordSetupService.restoreAfterModelConsent(Boolean(prepared))
+    }
     if (!prepared || !alive) return
     const { config, request } = prepared
     const turn = [...history.value].reverse().find((item) => item.role === 'user')!
@@ -702,6 +881,7 @@ async function generate(): Promise<void> {
     history.value = retainAssistantHistory(request.history)
     await scrollToLatest()
     let visibleReply: AssistantTurn | undefined
+    const discordCursor = discordSetupService.progressCursor?.()
     const receipts: AssistantExecution[] = []
     const showReply = (turn: AssistantTurn) => {
       if (!alive) return
@@ -719,10 +899,13 @@ async function generate(): Promise<void> {
         executeChatOperation(command, snapshot, executionSignal, config),
       onPhase: (value) => {
         phase.value = value
+        if (discordGeneration) void discordSetupService.showAssistantProgress?.(value)
         void scrollToLatest()
       },
       onToolCall: (call) => {
         if (!alive) return
+        if (discordGeneration)
+          void discordSetupService.showAssistantProgress?.('正在观察或操作当前配置步骤')
         call = { ...call, id: `${generationId}:${call.id}` }
         const index = calls.value.findIndex((item) => item.id === call.id)
         if (index < 0) calls.value.push(call)
@@ -773,6 +956,15 @@ async function generate(): Promise<void> {
       : result.warning
         ? '这次没有完成，点开看看原因。'
         : result.text || '这次没有收到回复，请点开看看。'
+    await discordSetupService.showAssistantReply?.(petReplyText)
+    if (discordGeneration && !result.warning && !signal.aborted && discordCursor !== undefined)
+      await discordSetupService.continueAfterProgress?.(discordRunId, discordCursor)
+    if (discordGeneration)
+      await discordSetupService.settleAssistantTurn?.(
+        discordRunId,
+        false,
+        result.toolBudgetExhausted === true,
+      )
     await scrollToLatest()
   } catch (cause) {
     if (alive) {
@@ -783,6 +975,9 @@ async function generate(): Promise<void> {
         : cause instanceof Error
           ? `${cause.message}\n${recentProblem.value?.nextStep ?? ''}`.trim()
           : '请求失败，请重试'
+      await discordSetupService.showAssistantReply?.(error.value)
+      if (discordGeneration && !signal.aborted)
+        await discordSetupService.settleAssistantTurn?.(discordRunId, true)
       await scrollToLatest()
     }
   } finally {
@@ -801,6 +996,7 @@ async function generate(): Promise<void> {
       if (alive)
         error.value = `保存或跳转失败，当前聊天保留：${cause instanceof Error ? cause.message : '请重试'}`
     } finally {
+      if (discordGeneration && signal.aborted) await discordSetupService.pauseAgent?.(discordRunId)
       if (alive) {
         if (!props.visible && petReplyText)
           finishAssistantPetReply(
@@ -988,6 +1184,10 @@ async function canLeaveSettings(): Promise<boolean> {
   return !settingsOpen.value || ((await settings.value?.requestLeave()) === true && alive)
 }
 async function back(): Promise<void> {
+  if (settings.value?.historyRecoveryOpen) {
+    settings.value.closeHistoryRecovery()
+    return
+  }
   if (templatesPage.value) {
     if (await settings.value?.requestLeaveTemplate()) templatesPage.value = false
   } else if (promptPage.value) {
@@ -1060,6 +1260,35 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
       </template>
       <template #actions>
+        <button
+          v-if="canReturnToDiscordBrowser"
+          type="button"
+          class="assistant-return-browser"
+          @click="returnToDiscordBrowser()"
+        >
+          返回网页配置
+        </button>
+        <button
+          v-if="settingsOpen && historyPage"
+          type="button"
+          class="feature-header-action"
+          aria-label="历史设置"
+          aria-haspopup="dialog"
+          @click="settings?.openHistoryRecovery()"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            aria-hidden="true"
+          >
+            <path
+              d="m9 3-.6 2.3-2 .9-2.2-.6-2 3.4 1.6 1.7v2.6l-1.6 1.7 2 3.4 2.2-.6 2 .9L9 21h4l.6-2.3 2-.9 2.2.6 2-3.4-1.6-1.7v-2.6L19.8 9l-2-3.4-2.2.6-2-.9L13 3z"
+            />
+            <circle cx="11" cy="12" r="3" />
+          </svg>
+        </button>
         <button
           v-if="settingsOpen && templatesPage"
           type="button"
@@ -1399,6 +1628,12 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
       </footer>
     </section>
     <form v-show="!settingsOpen && !runningTool" class="chat-composer" @submit.prevent="send">
+      <div v-if="canReturnToDiscordBrowser" class="chat-configuration-actions">
+        <span role="status">{{
+          discordSetupSession.agentRunning ? '小助手操作中' : '已暂停'
+        }}</span>
+        <button type="button" @click="returnToDiscordBrowser(true)">网页配置操作</button>
+      </div>
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
       <div v-if="editingId" class="chat-editing">
         <span>编辑消息</span

@@ -1,6 +1,29 @@
 /** @vitest-environment jsdom */
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest'
+const originalShowModal = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'showModal')
+const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
+beforeAll(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, 'showModal', {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.setAttribute('open', '')
+    },
+  })
+  Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.removeAttribute('open')
+    },
+  })
+})
+afterAll(() => {
+  if (originalShowModal)
+    Object.defineProperty(HTMLDialogElement.prototype, 'showModal', originalShowModal)
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal')
+  if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, 'close', originalClose)
+  else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
+})
 const { hasPetAssets, clearPetAssets, downloadPetAssets } = vi.hoisted(() => ({
   hasPetAssets: vi.fn(async () => true),
   clearPetAssets: vi.fn(async () => undefined),
@@ -12,7 +35,9 @@ vi.mock('../services/ProductAssistantPetAssets', () => ({
   downloadAssistantPetAssets: downloadPetAssets,
 }))
 import ProductAssistantSettings from './ProductAssistantSettings.vue'
+import type { AssistantHistoryRecoveryOptions } from '../services/ProductAssistantWorkspaceService'
 import { DEFAULT_ASSISTANT_PROMPTS } from '../core/ProductAssistantKnowledge'
+import { useConfirmDialogState } from '../composables/UseConfirmDialog'
 import type {
   AssistantPreferences,
   ProductAssistantWorkspaceService,
@@ -44,6 +69,7 @@ function render(
     rename,
   }
   const wrapper = mount(ProductAssistantSettings, {
+    global: { stubs: { Teleport: true } },
     props: {
       workspace: workspace as unknown as ProductAssistantWorkspaceService,
       preferences: {
@@ -59,6 +85,108 @@ function render(
   })
   return { wrapper, rename, workspace }
 }
+
+describe('manual history recovery', () => {
+  const result = {
+    scanned: 2,
+    total: 2,
+    recovered: 1,
+    repaired: 1,
+    conflicts: 0,
+    invalid: 0,
+    missingProjects: 0,
+    cancelled: false,
+  }
+  it('opens without running, closes without writes, and keeps results inside the dialog', async () => {
+    const { wrapper, workspace } = render()
+    const recover = vi.fn(async () => ({ ...result }))
+    Object.assign(workspace, { recoverHistory: recover })
+    await flushPromises()
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    await wrapper.vm.openHistoryRecovery()
+    await wrapper.get('dialog button').trigger('click')
+    await flushPromises()
+    expect(recover).not.toHaveBeenCalled()
+    await wrapper.vm.openHistoryRecovery()
+    await wrapper.get('dialog .confirm-dialog__confirm').trigger('click')
+    await flushPromises()
+    expect(recover).toHaveBeenCalledOnce()
+    expect(wrapper.get('dialog [role="status"]').text()).toContain('找回 1 条，修复列表 1 条')
+    expect(wrapper.get('.chat-settings').text()).not.toContain('找回 1 条')
+    await wrapper.get('dialog').trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('dialog').exists()).toBe(false)
+    expect(wrapper.find('.chat-history-search').exists()).toBe(true)
+    wrapper.unmount()
+  })
+  it.each(['停止找回', '关闭'])(
+    'stops the actual work through %s and preserves the partial result',
+    async (action) => {
+      const { wrapper, workspace } = render()
+      let signal: AbortSignal | undefined
+      const recover = vi.fn(
+        (options: AssistantHistoryRecoveryOptions) =>
+          new Promise((resolve) => {
+            signal = options.signal
+            options.onProgress?.({ ...result, scanned: 1 })
+            signal?.addEventListener('abort', () => resolve({ ...result, cancelled: true }), {
+              once: true,
+            })
+          }),
+      )
+      Object.assign(workspace, { recoverHistory: recover })
+      await flushPromises()
+      await wrapper.vm.openHistoryRecovery()
+      await wrapper
+        .findAll('button')
+        .find((item) => item.text() === '找回历史')!
+        .trigger('click')
+      await flushPromises()
+      expect(signal?.aborted).toBe(false)
+      await wrapper
+        .findAll('button')
+        .find((item) => item.text() === action)!
+        .trigger('click')
+      await flushPromises()
+      expect(signal?.aborted).toBe(true)
+      if (action === '关闭') {
+        expect(wrapper.find('dialog').exists()).toBe(false)
+        await wrapper.vm.openHistoryRecovery()
+      }
+      expect(wrapper.text()).toContain('已停止：找回 1 条')
+      expect(recover).toHaveBeenCalledOnce()
+      wrapper.unmount()
+    },
+  )
+  it('stops on unmount and never starts recovery just by reopening history', async () => {
+    const { wrapper, workspace } = render()
+    let signal: AbortSignal | undefined
+    Object.assign(workspace, {
+      recoverHistory: (options: AssistantHistoryRecoveryOptions) =>
+        new Promise((resolve) => {
+          signal = options.signal
+          signal?.addEventListener('abort', () => resolve({ ...result, cancelled: true }), {
+            once: true,
+          })
+        }),
+    })
+    await flushPromises()
+    await wrapper.vm.openHistoryRecovery()
+    await wrapper
+      .findAll('button')
+      .find((item) => item.text() === '找回历史')!
+      .trigger('click')
+    await flushPromises()
+    wrapper.unmount()
+    await flushPromises()
+    expect(signal?.aborted).toBe(true)
+    const reopened = render()
+    const recover = vi.fn()
+    Object.assign(reopened.workspace, { recoverHistory: recover })
+    await flushPromises()
+    expect(recover).not.toHaveBeenCalled()
+    reopened.wrapper.unmount()
+  })
+})
 describe('history rename', () => {
   it('edits original prompt sections as unsaved drafts, preserves failed writes and restores a selected default', async () => {
     const { wrapper } = render()
@@ -218,6 +346,68 @@ describe('network settings workflow', () => {
     }
   })
 
+  it('clears a saved tool limit to unlimited through the settings form', async () => {
+    const { wrapper, workspace } = render({ toolCallLimit: 16 })
+    try {
+      await wrapper.setProps({ historyPage: false })
+      const limit = wrapper.get<HTMLInputElement>('[aria-label="每次生成工具调用上限"]')
+      expect(limit.element.value).toBe('16')
+      await limit.setValue('')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      expect(workspace.savePreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ toolCallLimit: undefined }),
+      )
+      expect(limit.element.value).toBe('')
+      expect(wrapper.get('.chat-settings-save [role="status"]').text()).toBe('已保存')
+      expect(await wrapper.vm.requestLeave()).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+  it('saves and exits after clearing optional numeric settings', async () => {
+    const { wrapper, workspace } = render({ toolCallLimit: 100, compressionTokenThreshold: 1000 })
+    const dialog = useConfirmDialogState()
+    try {
+      await wrapper.setProps({ historyPage: false })
+      await wrapper.get('[aria-label="每次生成工具调用上限"]').setValue('')
+      await wrapper.get('[aria-label="自动压缩 token 阈值"]').setValue('')
+      const leaving = wrapper.vm.requestLeave()
+      await flushPromises()
+      expect(dialog.activeDialog.value?.confirmLabel).toBe('保存并退出')
+      dialog.respond('confirm')
+      await expect(leaving).resolves.toBe(true)
+      expect(workspace.savePreferences).toHaveBeenCalledOnce()
+      expect(workspace.savePreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ toolCallLimit: undefined, compressionTokenThreshold: '' }),
+      )
+      expect(wrapper.get('.chat-settings-save [role="status"]').text()).toBe('已保存')
+    } finally {
+      if (dialog.activeDialog.value) dialog.respond('cancel')
+      wrapper.unmount()
+    }
+  })
+  it('keeps edits made while a settings save is pending as unsaved', async () => {
+    const { wrapper, workspace } = render({ toolCallLimit: 100 })
+    let finishSave!: (value: AssistantPreferences) => void
+    workspace.savePreferences.mockImplementationOnce(
+      () => new Promise<AssistantPreferences>((resolve) => (finishSave = resolve)),
+    )
+    try {
+      await wrapper.setProps({ historyPage: false })
+      const limit = wrapper.get<HTMLInputElement>('[aria-label="每次生成工具调用上限"]')
+      await limit.setValue('')
+      await wrapper.get('form').trigger('submit')
+      await flushPromises()
+      await limit.setValue('32')
+      finishSave(workspace.savePreferences.mock.calls[0]![0])
+      await flushPromises()
+      expect(limit.element.value).toBe('32')
+      expect(wrapper.get('.chat-settings-save [role="status"]').text()).toBe('有修改，待保存')
+    } finally {
+      wrapper.unmount()
+    }
+  })
   it('keeps switches as drafts until saved and clears stale success after another change', async () => {
     const { wrapper } = render()
     const savePreferences = vi.fn(async (value: AssistantPreferences) => ({ ...value }))
@@ -231,7 +421,8 @@ describe('network settings workflow', () => {
       const tools = wrapper.get<HTMLInputElement>('[aria-label="工具调用"]')
       expect(tools.element.checked).toBe(true)
       const limit = wrapper.get<HTMLInputElement>('[aria-label="每次生成工具调用上限"]')
-      expect(limit.element.value).toBe('16')
+      expect(limit.element.value).toBe('')
+      expect(limit.element.placeholder).toBe('留空不限次数')
       await limit.setValue('32')
       const budget = wrapper.get<HTMLInputElement>('[aria-label="自动压缩 token 阈值"]')
       expect(budget.element.placeholder).toBe('留空不自动压缩')

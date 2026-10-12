@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useAssistantHelpContext } from '../composables/UseAssistantHelpContext'
 import ResourceImageViewer from './ResourceImageViewer.vue'
 
-import { DISCORD_BRIDGE_DEPLOY_URL } from '../services/DiscordBridgeDeployService'
+import {
+  DISCORD_BRIDGE_DEPLOY_URL,
+  DISCORD_BRIDGE_WRANGLER_TEMPLATE,
+} from '../services/DiscordBridgeDeployService'
 
 const props = withDefaults(
   defineProps<{
@@ -21,6 +25,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{ close: [] }>()
 const copyStatus = ref('')
+useAssistantHelpContext('discord-bridge', () => props.open)
 const previewImage = ref<{ source: string; alt: string }>()
 
 function openScreenshot(event: MouseEvent | KeyboardEvent): void {
@@ -69,6 +74,7 @@ async function copyText(value: string, message: string): Promise<void> {
       <aside
         v-if="open"
         class="discord-guide-drawer"
+        data-assistant-help-context="discord-bridge"
         :data-assistant-focus="
           props.deploymentMode === 'github'
             ? 'discord-github-tutorial-content'
@@ -309,26 +315,9 @@ async function copyText(value: string, message: string): Promise<void> {
                 D1 Database ID、Discord Application ID 和同一 App 的 Public
                 Key。其它固定字段照抄；不要把 Bot Token 放进这个文件。
               </p>
-              <pre class="discord-guide-config"><code>{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "srl-discord-source-bridge",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-08-26",
-  "keep_vars": true,
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "srl-discord-source-handoff",
-      "database_id": "【粘贴 Cloudflare 的 Database ID】",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "vars": {
-    "DISCORD_APPLICATION_ID": "【粘贴 Discord Application ID】",
-    "DISCORD_PUBLIC_KEY": "【粘贴同一 App 的 Public Key】",
-    "HANDOFF_TTL_SECONDS": "1200"
-  }
-}</code></pre>
+              <pre
+                class="discord-guide-config"
+              ><code>{{ DISCORD_BRIDGE_WRANGLER_TEMPLATE }}</code></pre>
               <figure
                 class="discord-guide-screenshot"
                 role="button"

@@ -546,9 +546,14 @@ export class ExternalAppService {
     await this.updateHealth(appId, { dataBytes: 0, dataEntries: 0 })
   }
 
-  async hasPermission(appId: string, permission: ExternalAppPermission): Promise<boolean> {
+  async hasPermission(
+    appId: string,
+    permission: ExternalAppPermission | ExternalAppPermission[],
+  ): Promise<boolean> {
     const app = await this.storage.getSummary(appId)
-    return Boolean(app?.enabled && getGrantedExternalAppPermissions(app).includes(permission))
+    const required = Array.isArray(permission) ? permission : [permission]
+    const granted = app ? getGrantedExternalAppPermissions(app) : []
+    return Boolean(app?.enabled && required.every((item) => granted.includes(item)))
   }
 
   async hasPersistentPermission(

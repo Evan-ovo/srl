@@ -14,6 +14,54 @@ import { replacePreviewPickMacros } from './RichPreviewMessagePreparation'
 const staticPolicy = { allowRemoteResources: false, allowScripts: false }
 const scriptPolicy = { allowRemoteResources: true, allowScripts: true }
 
+it('carries each vendor source once for archived script floors while preserving ordered child initialization', () => {
+  const jquery = 'window.JQUERY_VENDOR_ONCE={};'
+  const vue = 'window.VUE_VENDOR_ONCE={};'
+  const css = '.FONT_VENDOR_ONCE{color:blue}'
+  const snapshot = {
+    message_id: 0,
+    last_message_id: 0,
+    name: '角色',
+    role: 'assistant' as const,
+    is_hidden: false,
+    message: '正文',
+    data: {},
+    extra: {},
+    swipe_id: 0,
+  }
+  const result = buildRichContentPreview(
+    Array(8).fill('```html\n<body>状态</body>\n```').join('\n\n'),
+    '角色',
+    scriptPolicy,
+    [{ id: 'phone', name: '手机', content: 'console.log("phone")' }],
+    { archivedMessage: snapshot, vendorLibs: { jquery, vue, fontAwesomeCss: css } },
+  )
+  for (const marker of ['JQUERY_VENDOR_ONCE', 'VUE_VENDOR_ONCE', 'FONT_VENDOR_ONCE'])
+    expect(result.document.split(marker)).toHaveLength(2)
+  const body = readOuterBody(result.document)
+  const children = [
+    ...body.querySelectorAll<HTMLIFrameElement>(
+      '.TH-render iframe,#srl-tavern-helper-script-runtimes iframe',
+    ),
+  ]
+  expect(children).toHaveLength(9)
+  for (const frame of children) {
+    const child = frame.srcdoc
+    expect(child).toContain('__SRL_PREVIEW_VENDOR_DOCUMENTS__')
+    expect(child).not.toContain('VUE_VENDOR_ONCE')
+    expect(child.indexOf('document.write')).toBeLessThan(child.indexOf('body>'))
+  }
+  const prose = buildRichContentPreview(
+    '正文',
+    '角色',
+    scriptPolicy,
+    [{ id: 'phone', name: '手机', content: 'console.log("phone")' }],
+    { archivedMessage: snapshot, vendorLibs: { jquery, vue, fontAwesomeCss: css } },
+  )
+  expect(prose.document).not.toContain('FONT_VENDOR_ONCE')
+  expect(prose.document).toContain('VUE_VENDOR_ONCE')
+})
+
 it('matches both archived iframe documents to the reader color scheme without changing card colors', () => {
   const snapshot = {
     message_id: 0,

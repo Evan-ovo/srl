@@ -23,20 +23,15 @@ body,
 }
 
 body {
-  background:
-    radial-gradient(circle at 8% 4%, rgba(102, 207, 213, 0.31), transparent 27rem),
-    radial-gradient(circle at 94% 14%, rgba(123, 160, 228, 0.2), transparent 28rem),
-    radial-gradient(circle at 51% 94%, rgba(132, 222, 208, 0.16), transparent 31rem),
-    radial-gradient(circle at 78% 72%, rgba(196, 170, 235, 0.09), transparent 24rem),
-    linear-gradient(160deg, #effbfc 0%, #eaf3fb 48%, #f6fbfb 100%);
-}
-
-:root[data-theme='dark'] body {
-  background:
-    radial-gradient(circle at 10% 2%, rgba(91, 190, 194, 0.17), transparent 27rem),
-    radial-gradient(circle at 96% 13%, rgba(105, 137, 198, 0.15), transparent 29rem),
-    radial-gradient(circle at 72% 76%, rgba(138, 104, 175, 0.07), transparent 24rem),
-    linear-gradient(160deg, #1a2b33 0%, #223841 52%, #17262d 100%);
+  background: var(
+    --page-background,
+    radial-gradient(
+      circle at 8% 4%,
+      color-mix(in srgb, var(--color-accent) 14%, transparent),
+      transparent 27rem
+    ),
+    var(--color-canvas)
+  );
 }
 
 #app :where(button, input, select, textarea) {

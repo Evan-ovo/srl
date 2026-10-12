@@ -678,6 +678,7 @@ export function useApp() {
     // Close the route sheet first so progress and confirmation UI cannot stack on it.
     isImportChooserOpen.value = false
     let savedRoute = false
+    let importCommitted = false
     try {
       if (!batch.route && batch.setRoute) {
         await batch.setRoute(route)
@@ -718,8 +719,16 @@ export function useApp() {
         pendingSharedFileBatch.value = undefined
         return
       }
+      importCommitted = true
       await batch.acknowledge()
     } catch (error) {
+      if (importCommitted) {
+        const reason = error instanceof Error ? `：${error.message}` : ''
+        showNotice(`资源已导入，但系统分享暂存清理未完成${reason}；不会重复导入。`, 9000)
+        pendingSharedFileBatch.value = undefined
+        isImportChooserOpen.value = false
+        return
+      }
       if (batch.onFailure) {
         await batch.onFailure(error instanceof Error ? error.message : '云端资源导入或确认失败')
         pendingSharedFileBatch.value = undefined
@@ -787,9 +796,10 @@ export function useApp() {
     try {
       await batch.acknowledge()
     } catch {
-      pendingSharedFileBatch.value = batch
-      isImportChooserOpen.value = true
-      showNotice('导入已完成，但系统分享暂存未清理；可以重试清理或保留后续处理。', 9000)
+      deferredSharedImportBatches.delete(recoveryId)
+      if (pendingSharedFileBatch.value === batch) pendingSharedFileBatch.value = undefined
+      isImportChooserOpen.value = false
+      showNotice('导入已完成，但系统分享暂存未清理；不会重复导入。', 9000)
       return
     }
     deferredSharedImportBatches.delete(recoveryId)

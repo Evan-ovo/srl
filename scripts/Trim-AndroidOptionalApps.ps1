@@ -27,6 +27,8 @@ if ($env:SRL_ANDROID_PREINSTALL_OFFICIAL_APPS -eq '1') {
     if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) { throw 'Preinstalled APP catalog missing.' }
     $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
     foreach ($app in $catalog.apps.PSObject.Properties) {
+        if (($app.Name -in @('assistant', 'resourcePlaza') -and $env:SRL_ANDROID_BUNDLE_OPTIONAL_OFFICIAL_APPS -ne '1') -or
+            ($selectedAppIds.Count -gt 0 -and $app.Name -notin $selectedAppIds)) { continue }
         $relativePackage = ([string]$app.Value.url).TrimStart('/')
         if ($relativePackage -notmatch "^official-apps/$([regex]::Escape($manifest.shellVersion))/$([regex]::Escape($app.Name))-[a-f0-9]{16}\.srlapp$" -or $relativePackage.Contains('..')) {
             throw "Invalid preinstalled APP package URL: $($app.Value.url)"

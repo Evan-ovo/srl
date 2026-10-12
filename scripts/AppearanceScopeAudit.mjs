@@ -2,6 +2,9 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import console from 'node:console'
+import { auditCabinetThumbnails } from './CabinetThumbnailAudit.mjs'
+import { auditSharedAppearance } from './SharedAppearanceAudit.mjs'
+import { captureAppearanceControls } from './AppearanceControlsCapture.mjs'
 import {
   auditEnvironment,
   launchAuditBrowser,
@@ -15,6 +18,9 @@ const environment = auditEnvironment(undefined, 'appearance')
 const browser = await launchAuditBrowser(environment)
 let context
 try {
+  await captureAppearanceControls(browser, environment)
+  await auditSharedAppearance(browser)
+  await auditCabinetThumbnails(browser, environment)
   context = await browser.newContext({
     viewport: { width: 390, height: 844 },
     storageState: environment.storageState,
@@ -88,7 +94,7 @@ try {
     createdAt: '',
     updatedAt: '',
   }
-  await page.locator('.appearance-studio input[type="file"]').setInputFiles({
+  await page.locator('[data-appearance-preset-import]').setInputFiles({
     name: 'audit.srl-style.json',
     mimeType: 'application/json',
     buffer: Buffer.from(JSON.stringify({ format: 'srl-appearance-preset', version: 1, preset })),
@@ -100,6 +106,17 @@ try {
       (value) => document.documentElement.setAttribute('data-theme', value),
       theme,
     )
+    await page.getByRole('button', { name: '清空草稿', exact: true }).click()
+    const confirmation = page.getByRole('alertdialog', { name: '清空草稿', exact: true })
+    await confirmation.waitFor({ state: 'visible' })
+    const danger = await confirmation.locator('.confirm-dialog__confirm').evaluate((element) => {
+      const css = getComputedStyle(element)
+      return { background: css.backgroundColor, color: css.color }
+    })
+    assert.equal(danger.background, theme === 'dark' ? 'rgb(240, 168, 176)' : 'rgb(168, 73, 90)')
+    assert.equal(danger.color, theme === 'dark' ? 'rgb(23, 39, 46)' : 'rgb(255, 255, 255)')
+    await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+    await confirmation.waitFor({ state: 'hidden' })
     for (const [width, height] of [
       [320, 800],
       [375, 812],

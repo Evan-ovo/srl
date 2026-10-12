@@ -31,16 +31,11 @@
   min-width: 44px;
   min-height: 44px;
   padding: 0.5rem 0.625rem;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-sm, 8px);
-  color: var(--color-accent);
-  background: transparent;
-  box-shadow: none;
   font-size: 0.8125rem;
 }
 .persona-app__actions .button:not(:disabled):hover {
-  background: var(--color-accent-soft);
-  box-shadow: none;
+  background: var(--button-background, var(--color-accent-soft));
+  box-shadow: var(--button-shadow, none);
 }
 .persona-app__description-heading {
   justify-content: space-between;
@@ -54,11 +49,7 @@
   width: 100%;
   min-width: 0;
   min-height: var(--size-touch);
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-sm, 8px);
   padding: 0.625rem;
-  color: var(--color-ink);
-  background: var(--color-surface);
   font: inherit;
   font-size: 1rem;
 }
@@ -275,9 +266,6 @@
   min-height: 44px;
   padding: 0.5rem 0.625rem;
   font-size: 0.875rem;
-  border-color: transparent;
-  color: var(--color-accent);
-  background: transparent;
 }
 .persona-app__inherited-text,
 .persona-app__original-text p,
@@ -354,7 +342,7 @@
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.65rem 0.85rem;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   font-size: 0.875rem;
   cursor: pointer;
   list-style-position: inside;
@@ -394,7 +382,7 @@
   display: grid;
   place-items: center;
   padding: 1rem;
-  background: rgb(10 15 25 / 45%);
+  background: var(--overlay-background);
   backdrop-filter: blur(3px);
 }
 .persona-app__rename-dialog {
@@ -402,10 +390,7 @@
   width: min(100%, 26rem);
   gap: 1rem;
   padding: 1rem;
-  border: 1px solid var(--color-line);
-  border-radius: 1rem;
-  background: var(--glass-panel-strong, var(--color-surface));
-  box-shadow: 0 1rem 2.5rem rgb(5 10 20 / 20%);
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
 }
 .persona-app__rename-dialog h2 {
   margin: 0;
@@ -415,10 +400,6 @@
   width: 100%;
   min-height: 2.8rem;
   padding: 0.6rem 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.65rem;
-  background: var(--glass-panel, var(--color-surface));
-  color: var(--color-ink);
   font: inherit;
 }
 .persona-app__rename-actions {
@@ -429,15 +410,6 @@
 .persona-app__rename-actions button {
   min-height: 2.6rem;
   padding: 0.5rem 0.85rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.65rem;
-  background: var(--glass-panel, var(--color-surface));
-  color: var(--color-ink);
-}
-.persona-app__rename-actions button[type='submit'] {
-  border-color: transparent;
-  background: var(--color-accent);
-  color: var(--color-on-accent, white);
 }
 .persona-app__navigation,
 .persona-app__character-picker,
@@ -487,7 +459,7 @@
   cursor: pointer;
 }
 .persona-app__profile-character-delete:hover {
-  background: var(--color-danger-soft, rgb(180 45 65 / 9%));
+  background: var(--color-danger-soft);
 }
 .persona-app__navigation-item > span:first-child {
   display: grid;
@@ -650,7 +622,6 @@
   gap: 0.25rem;
 }
 .persona-app__addition .persona-app__actions .button {
-  border-color: transparent;
   padding-inline: 0.375rem;
 }
 .persona-app__addition .persona-app__field {
@@ -658,9 +629,6 @@
 }
 .persona-app .persona-app__addition textarea {
   padding: 0.75rem;
-  border-color: var(--color-line);
-  background: var(--color-surface);
-  box-shadow: none;
   line-height: 1.75;
 }
 .persona-app__disclosure {
@@ -682,8 +650,7 @@
   gap: 0.75rem;
   padding-bottom: 0.75rem;
 }
-.persona-app__bindings > .persona-app__field,
-.persona-app__bindings > .persona-app__toolbar {
+.persona-app__bindings > :is(.persona-app__field, .persona-app__toolbar) {
   margin-bottom: 0.75rem;
 }
 .persona-app__characters {

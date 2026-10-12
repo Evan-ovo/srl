@@ -330,6 +330,209 @@ describe('native tool calling transport', () => {
       { role: 'tool', content: '{"ok":true}', tool_call_id: 'call1' },
     ])
   })
+  it.each(['calls', 'tool_calls'])(
+    'recovers complete DSML %s through the existing tool protocol',
+    async (wrapper) => {
+      const dsml = `<｜DSML｜${wrapper}><｜DSML｜invoke name="read_css"><｜DSML｜parameter name="scope" string="true">library</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜${wrapper}>`
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  finish_reason: 'stop',
+                  message: { content: dsml, reasoning_content: 'original reasoning' },
+                },
+              ],
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              choices: [{ finish_reason: 'stop', message: { content: '已读取' } }],
+            }),
+          ),
+        )
+      vi.stubGlobal('fetch', fetcher)
+      const service = new MainApiService()
+      const deepseek = {
+        ...config,
+        url: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-flash',
+      }
+      const first = await service.completeWithUsage(
+        [{ role: 'user', content: '读样式' }],
+        deepseek,
+        { tools },
+      )
+      expect(first.text).toBe('')
+      expect(first.toolCalls).toHaveLength(1)
+      expect(first.toolCalls![0]).toMatchObject({
+        name: 'read_css',
+        arguments: '{"scope":"library"}',
+      })
+      expect(first.toolCalls![0]!.id).toBeTruthy()
+      expect(first.reasoning).toBe('original reasoning')
+      await service.completeWithUsage(
+        [
+          {
+            role: 'assistant',
+            content: first.text,
+            toolCalls: first.toolCalls,
+            reasoning: first.reasoning,
+          },
+          { role: 'tool', toolCallId: first.toolCalls![0]!.id, content: '{"ok":true}' },
+        ],
+        deepseek,
+        { tools },
+      )
+      const replay = JSON.parse(fetcher.mock.calls[1]![1].body).messages
+      expect(replay[0]).toMatchObject({
+        content: null,
+        reasoning_content: 'original reasoning',
+        tool_calls: [
+          {
+            id: first.toolCalls![0]!.id,
+            function: { name: 'read_css', arguments: '{"scope":"library"}' },
+          },
+        ],
+      })
+      expect(replay[1].tool_call_id).toBe(first.toolCalls![0]!.id)
+      expect(fetcher).toHaveBeenCalledTimes(2)
+    },
+  )
+  it.each(['｜', '|', '｜｜', '||'])(
+    'preserves DSML %s parameter types and call order',
+    async (pipe) => {
+      const token = `${pipe}DSML${pipe}`
+      const content = `<${token}tool_calls><${token}invoke name="read_css"><${token}parameter name="scope" string="true">a & <b>\n c</${token}parameter><${token}parameter name="options" string="false">{"offset":2,"enabled":false,"items":["x"],"empty":null}</${token}parameter></${token}invoke><${token}invoke name="read_css"></${token}invoke></${token}tool_calls>`
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content } }] }))),
+      )
+      const reply = await new MainApiService().completeWithUsage(
+        [{ role: 'user', content: '读' }],
+        config,
+        { tools },
+      )
+      expect(reply.toolCalls).toHaveLength(2)
+      expect(JSON.parse(reply.toolCalls![0]!.arguments)).toEqual({
+        scope: 'a & <b>\n c',
+        options: { offset: 2, enabled: false, items: ['x'], empty: null },
+      })
+      expect(reply.toolCalls![1]!.arguments).toBe('{}')
+      expect(reply.toolCalls![0]!.id).not.toBe(reply.toolCalls![1]!.id)
+    },
+  )
+  it.each(['｜DSML｜', '｜｜DSML｜｜ '])(
+    'keeps native calls authoritative over %s text without executing twice',
+    async (marker) => {
+      const content = `<${marker}calls><${marker}invoke name="read_css"></${marker}invoke></${marker}calls>`
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content,
+                    tool_calls: [
+                      {
+                        id: 'native',
+                        type: 'function',
+                        function: { name: 'read_css', arguments: '{}' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          ),
+        ),
+      )
+      const reply = await new MainApiService().completeWithUsage(
+        [{ role: 'user', content: '读' }],
+        config,
+        { tools },
+      )
+      expect(reply.toolCalls).toEqual([{ id: 'native', name: 'read_css', arguments: '{}' }])
+      expect(reply.text).toBe('')
+    },
+  )
+  it.each([
+    '<｜DSML｜calls><｜DSML｜invoke name="unknown"></｜DSML｜invoke></｜DSML｜calls>',
+    '<｜DSML｜calls><｜DSML｜invoke name="read_css"><｜DSML｜parameter name="scope" string="true">library</｜DSML｜parameter><｜DSML｜parameter name="scope" string="true">other</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜calls>',
+    '<｜DSML｜calls><｜DSML｜invoke name="read_css"><｜DSML｜parameter name="scope" string="false">not-json</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜calls>',
+    '<｜DSML｜calls><｜DSML｜invoke name="read_css">',
+    '<｜DSML｜calls></｜DSML｜calls>',
+    '<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="unknown"></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>',
+    '<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="read_css">',
+    '<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="read_css"><｜｜DSML｜｜ parameter name="scope" string="true">a</｜｜DSML｜｜ parameter><｜｜DSML｜｜ parameter name="scope" string="true">b</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>',
+  ])('rejects ambiguous/incomplete DSML without a retry or a success reply', async (content) => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content } }] }),
+        ),
+      )
+    vi.stubGlobal('fetch', fetcher)
+    await expect(
+      new MainApiService().completeWithUsage([{ role: 'user', content: '读' }], config, { tools }),
+    ).rejects.toThrow('工具调用')
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
+  it.each(['｜DSML｜', '｜｜DSML｜｜ '])(
+    'does not turn quoted %s examples into tools',
+    async (marker) => {
+      const content = `这是协议示例：\n\`\`\`xml\n<${marker}calls><${marker}invoke name="read_css"></${marker}invoke></${marker}calls>\n\`\`\``
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content } }] }))),
+      )
+      const reply = await new MainApiService().completeWithUsage(
+        [{ role: 'user', content: '解释协议' }],
+        config,
+        { tools },
+      )
+      expect(reply.text).toBe(content)
+      expect(reply.toolCalls).toBeUndefined()
+    },
+  )
+  it.each(['｜DSML｜', '｜｜DSML｜｜ '])(
+    'does not execute %s blocks when tools are disabled',
+    async (marker) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: `<${marker}calls><${marker}invoke name="read_css"></${marker}invoke></${marker}calls>`,
+                  },
+                },
+              ],
+            }),
+          ),
+        ),
+      )
+      await expect(
+        new MainApiService().completeWithUsage([{ role: 'user', content: '读' }], {
+          ...config,
+          stream: false,
+        }),
+      ).rejects.toThrow('工具调用')
+    },
+  )
   it('preserves signed Anthropic blocks and groups all results into one user message', async () => {
     const content = [
       { type: 'thinking', thinking: 'thinking', signature: 'signed' },

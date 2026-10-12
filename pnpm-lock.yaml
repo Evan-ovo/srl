@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@capacitor/android@8.4.2': cc2edb15070d5d0262baf5633e06455e79c176acc17031f31856a5fdd469d10a
+  '@capacitor/android@8.4.2': 74159435b98f5a21ff3c5c0ec5a631bce5cdd32e20dffccb3d2b5cf459d2f081
 
 importers:
 
@@ -95,7 +95,7 @@ importers:
     devDependencies:
       '@capacitor/android':
         specifier: ^8.4.2
-        version: 8.4.2(patch_hash=cc2edb15070d5d0262baf5633e06455e79c176acc17031f31856a5fdd469d10a)(@capacitor/core@8.4.2)
+        version: 8.4.2(patch_hash=74159435b98f5a21ff3c5c0ec5a631bce5cdd32e20dffccb3d2b5cf459d2f081)(@capacitor/core@8.4.2)
       '@capacitor/cli':
         specifier: ^8.4.2
         version: 8.4.2
@@ -4631,7 +4631,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@capacitor/android@8.4.2(patch_hash=cc2edb15070d5d0262baf5633e06455e79c176acc17031f31856a5fdd469d10a)(@capacitor/core@8.4.2)':
+  '@capacitor/android@8.4.2(patch_hash=74159435b98f5a21ff3c5c0ec5a631bce5cdd32e20dffccb3d2b5cf459d2f081)(@capacitor/core@8.4.2)':
     dependencies:
       '@capacitor/core': 8.4.2
 

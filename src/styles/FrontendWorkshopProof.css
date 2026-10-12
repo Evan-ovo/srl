@@ -44,9 +44,8 @@
 .frontend-workshop__proof-settings[open] > summary {
   border-bottom: 1px solid var(--color-line);
 }
-.frontend-workshop__proof-settings .frontend-workshop__compatibility,
-.frontend-workshop__proof-settings .frontend-workshop__sample,
-.frontend-workshop__proof-settings .frontend-workshop__error {
+.frontend-workshop__proof-settings
+  :is(.frontend-workshop__compatibility, .frontend-workshop__sample, .frontend-workshop__error) {
   margin-inline: 0.7rem;
 }
 .frontend-workshop__proof-settings .frontend-workshop__compatibility {
@@ -90,9 +89,9 @@
   white-space: nowrap;
 }
 .frontend-workshop__version-controls > button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .frontend-workshop__version-manager {
   display: grid;
@@ -137,12 +136,12 @@
   align-content: center;
   gap: 0.15rem;
   padding: 0.45rem;
-  border-color: var(--color-line);
+  border-color: var(--button-border, var(--color-line));
   text-align: left;
   scroll-snap-align: start;
 }
 .frontend-workshop__version-manager > div button.is-current {
-  box-shadow: inset 0 -0.15rem 0 var(--color-accent);
+  box-shadow: var(--button-shadow, inset 0 -0.15rem 0 var(--color-accent));
 }
 .frontend-workshop__version-manager > div button.is-selected {
   color: var(--color-danger);
@@ -157,7 +156,7 @@
 }
 .frontend-workshop__version-manager > button {
   min-height: var(--size-touch);
-  color: var(--color-on-accent);
+  color: var(--button-color, var(--color-on-accent));
   border-color: var(--color-danger);
   background: var(--color-danger);
 }
@@ -221,7 +220,7 @@
 .frontend-workshop__stress-tests button {
   min-height: var(--control-visual-secondary);
   padding-inline: 0.55rem;
-  border-color: var(--color-line);
+  border-color: var(--button-border, var(--color-line));
   font-size: var(--text-caption);
 }
 .frontend-workshop__mvu-turns {
@@ -265,9 +264,9 @@
   padding: 0;
 }
 .frontend-workshop__mvu-turns > div button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
   box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 .frontend-workshop__sample-issues {
@@ -306,7 +305,7 @@
   min-width: 2.125rem;
   min-height: 2.125rem;
   padding: 0 0.55rem;
-  border-color: var(--color-line);
+  border-color: var(--button-border, var(--color-line));
   font-size: var(--text-caption);
   white-space: nowrap;
 }
@@ -314,9 +313,9 @@
   border-left: 0;
 }
 .frontend-workshop__previewbar button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .frontend-workshop__preview-note {
   margin: 0.45rem 0 0;
@@ -415,8 +414,8 @@
   overflow: auto;
   margin: 0;
   padding: 0.8rem;
-  color: #dbece5;
-  background: #16231e;
+  color: var(--color-ink);
+  background: var(--control-background, var(--color-surface-raised));
   font: var(--text-caption)/1.55 var(--font-code);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -556,7 +555,7 @@
   width: max-content;
   margin-top: 0.22rem;
   padding: 0.12rem 0.32rem;
-  color: var(--color-muted);
+  color: var(--color-ink-soft);
   border: 1px solid var(--color-line);
   border-radius: 999px;
   font: var(--weight-ui) var(--text-caption)/1.3 var(--font-ui);
@@ -578,14 +577,14 @@
   max-width: calc(100% - 1.4rem);
   margin: 0 0.7rem 0.7rem;
   padding-inline: 0.85rem;
-  color: white;
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
 }
 .frontend-workshop__review-apply:disabled {
-  color: var(--color-muted);
+  color: var(--color-ink-soft);
   border-color: var(--color-line);
-  background: var(--color-surface-soft);
+  background: var(--color-surface);
 }
 .frontend-workshop__review-apply.is-applied {
   color: var(--color-accent);
@@ -598,7 +597,7 @@
 .frontend-workshop__review-prompt > summary {
   min-height: var(--size-touch);
   padding: 0.6rem 0;
-  color: var(--color-accent);
+  color: var(--button-color, var(--color-accent));
   cursor: pointer;
   font-size: var(--text-caption);
   font-weight: 800;
@@ -608,7 +607,7 @@
   border-top: 1px solid var(--color-line);
 }
 .frontend-workshop__refine button {
-  color: var(--color-accent);
+  color: var(--button-color, var(--color-accent));
 }
 .frontend-workshop__generation-failure {
   display: grid;
@@ -616,9 +615,9 @@
   margin-top: 0.55rem;
   padding: 0.65rem 0.7rem;
   color: var(--color-ink);
-  border: 1px solid color-mix(in srgb, #b64035 55%, var(--color-line));
-  border-left: 0.24rem solid #b64035;
-  background: color-mix(in srgb, #b64035 6%, var(--color-surface));
+  border: 1px solid color-mix(in srgb, var(--color-danger) 55%, var(--color-line));
+  border-left: 0.24rem solid var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 6%, var(--color-surface));
 }
 .frontend-workshop__generation-failure strong {
   color: var(--color-danger);
@@ -635,7 +634,7 @@
 }
 .frontend-workshop__generation-failure small,
 .frontend-workshop__generation-failure em {
-  color: var(--color-muted);
+  color: var(--color-ink-soft);
   font-size: var(--text-caption);
   font-style: normal;
 }
@@ -656,7 +655,7 @@
   padding: max(0.75rem, var(--safe-top)) max(0.75rem, var(--safe-right))
     max(0.75rem, var(--safe-bottom)) max(0.75rem, var(--safe-left));
   overflow: auto;
-  background: rgba(26, 20, 17, 0.82);
+  background: var(--overlay-background);
 }
 .frontend-workshop__manual-repair-dialog > section {
   display: grid;
@@ -666,10 +665,11 @@
   overflow: auto;
   padding: 0.9rem;
   color: var(--color-ink);
-  border: 1px solid var(--color-line);
+  border: 1px solid var(--dialog-border, var(--glass-border));
   border-top: 0.28rem solid var(--color-danger);
-  background: var(--color-surface);
-  box-shadow: 0 1.25rem 3rem rgba(0, 0, 0, 0.32);
+  background: var(--dialog-background, var(--color-surface));
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
+  border-radius: var(--dialog-radius, 0px);
 }
 .frontend-workshop__manual-repair-dialog header,
 .frontend-workshop__manual-repair-dialog footer {
@@ -686,9 +686,9 @@
   gap: 0.35rem;
 }
 .frontend-workshop__manual-repair-dialog button.is-guide {
-  color: var(--color-accent);
-  border-color: var(--color-line-strong);
-  background: var(--color-accent-soft);
+  color: var(--button-color, var(--color-accent));
+  border-color: var(--button-border, var(--color-line-strong));
+  background: var(--button-background, var(--color-accent-soft));
 }
 .frontend-workshop__manual-repair-dialog header strong {
   display: block;
@@ -708,9 +708,9 @@
   min-height: var(--control-visual-secondary);
 }
 .frontend-workshop__manual-repair-dialog footer .is-primary {
-  color: white;
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
 }
 .frontend-workshop__manual-repair-issues {
   padding: 0.65rem 0.75rem;
@@ -734,7 +734,7 @@
   margin: 0.35rem 0 0;
   overflow: auto;
   border: 1px solid var(--color-line);
-  background: var(--color-surface-soft);
+  background: var(--color-surface);
 }
 .frontend-workshop__manual-repair-code code span {
   display: block;
@@ -743,14 +743,14 @@
   white-space: pre;
 }
 .frontend-workshop__manual-repair-code code span.is-error {
-  color: #8f211a;
-  background: #ffd9d5;
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
 }
 .frontend-workshop__manual-repair-code code b {
   display: inline-block;
   width: 2.2rem;
   margin-right: 0.5rem;
-  color: var(--color-muted);
+  color: var(--color-ink-soft);
   text-align: right;
   user-select: none;
 }
@@ -761,8 +761,8 @@
   margin-top: 0.35rem;
   padding: 0.65rem;
   color: var(--color-ink);
-  border: 1px solid var(--color-line);
-  background: var(--color-surface-soft);
+  border: 1px solid var(--control-border, var(--color-line));
+  background: var(--control-background, var(--color-surface));
   font:
     var(--text-caption)/1.5 ui-monospace,
     SFMono-Regular,
@@ -778,7 +778,7 @@
   z-index: 80;
 }
 .frontend-workshop__manual-repair-guide > section {
-  border-top-color: #256b59;
+  border-top-color: var(--color-success);
 }
 .frontend-workshop__manual-repair-guide-list {
   display: grid;
@@ -786,12 +786,12 @@
 }
 .frontend-workshop__manual-repair-guide-list article {
   padding: 0.62rem 0.7rem;
-  border-left: 0.2rem solid #3f8c77;
-  background: var(--color-surface-soft);
+  border-left: 0.2rem solid var(--color-success);
+  background: var(--color-surface);
 }
 .frontend-workshop__manual-repair-guide-list strong {
   display: block;
-  color: #174f40;
+  color: var(--color-success);
   font-size: var(--text-body-strong);
 }
 .frontend-workshop__manual-repair-guide-list p {
@@ -807,9 +807,9 @@
   margin: 0.42rem 0 0;
   padding: 0.5rem 0.58rem;
   overflow: auto;
-  color: #173d34;
-  border: 1px solid #b8d6cc;
-  background: #f5fbf8;
+  color: var(--color-ink);
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-raised);
   font:
     var(--text-caption)/1.5 ui-monospace,
     SFMono-Regular,
@@ -869,7 +869,7 @@
 }
 .frontend-workshop__conversation > div p.is-user {
   justify-self: end;
-  color: white;
+  color: var(--color-on-accent);
   border-color: var(--color-accent);
   background: var(--color-accent);
 }
@@ -893,7 +893,7 @@
   align-items: end;
   padding: max(0.5rem, var(--safe-top)) max(0.5rem, var(--safe-right))
     max(0.5rem, var(--safe-bottom)) max(0.5rem, var(--safe-left));
-  background: rgba(26, 20, 17, 0.72);
+  background: var(--overlay-background);
 }
 .frontend-workshop__conversation-dialog > section {
   display: grid;
@@ -902,10 +902,11 @@
   margin-inline: auto;
   overflow: hidden;
   color: var(--color-ink);
-  border: 1px solid var(--color-line-strong);
+  border: 1px solid var(--dialog-border, var(--color-line-strong));
   border-top: 0.3rem solid var(--color-accent);
-  background: var(--color-surface);
-  box-shadow: 0 -1rem 2.5rem rgba(0, 0, 0, 0.3);
+  background: var(--dialog-background, var(--color-surface));
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
+  border-radius: var(--dialog-radius, 0px);
 }
 .frontend-workshop__conversation-dialog > section > header {
   display: flex;
@@ -940,7 +941,7 @@
   max-height: min(48dvh, 25rem);
   overflow: auto;
   padding: 0.75rem 0.85rem;
-  background: var(--color-surface-soft);
+  background: var(--color-surface);
 }
 .frontend-workshop__conversation-dialog-history p {
   display: grid;
@@ -954,7 +955,7 @@
 }
 .frontend-workshop__conversation-dialog-history p.is-user {
   justify-self: end;
-  color: white;
+  color: var(--color-on-accent);
   border-color: var(--color-accent);
   background: var(--color-accent);
 }

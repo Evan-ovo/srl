@@ -199,11 +199,11 @@ export function useLibraryNavigation(getContext: () => LibraryNavigationContext)
     } else if (link.kind === 'sharedImport') {
       if (/^discord-url-[a-f0-9-]{36}$/u.test(link.token))
         await context.openSharedImport?.(link.token)
-    } else if (link.kind === 'inbox') {
-      writeAppResumeState({ feature: 'featureHub', subpage: 'inbox' })
-      sessionStorage.setItem('srl.native.shortcut', 'inbox')
+    } else if (link.kind === 'inbox' || link.kind === 'assistant') {
+      writeAppResumeState({ feature: 'featureHub', subpage: link.kind })
+      sessionStorage.setItem('srl.native.shortcut', link.kind)
       context.isFeatureHubOpen.value = true
-      window.dispatchEvent(new CustomEvent('srl:native-shortcut', { detail: 'inbox' }))
+      window.dispatchEvent(new CustomEvent('srl:native-shortcut', { detail: link.kind }))
     }
   }
 

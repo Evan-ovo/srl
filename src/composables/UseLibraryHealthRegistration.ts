@@ -20,18 +20,12 @@ export function useLibraryHealthRegistration(context: LibraryHealthRegistrationC
     async scan() {
       const missing = rebuildResourceReferenceIndex(
         context.resources.value,
-        browserStorageService.getChatLoadouts(),
         browserStorageService.getCabinetResourceIds(),
       )
       return missing.map((reference) => ({
         id: `missing-reference:${reference.ownerType}:${reference.ownerId}:${reference.missingResourceId}`,
         kind: 'missing-resource-reference',
-        label:
-          reference.ownerType === 'relation'
-            ? '失效资源关联'
-            : reference.ownerType === 'loadout'
-              ? '失效聊天装配引用'
-              : '失效界面固定项',
+        label: reference.ownerType === 'relation' ? '失效资源关联' : '失效界面固定项',
         details: `${reference.ownerLabel} 引用了不存在的资源 ${reference.missingResourceId}`,
         severity: reference.ownerType === 'relation' ? ('error' as const) : ('warning' as const),
         ...(reference.ownerType === 'ui'

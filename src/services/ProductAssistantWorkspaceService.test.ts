@@ -46,6 +46,56 @@ afterEach(async () => {
   }
 })
 describe('assistant workspace with actual indexed settings', () => {
+  it('keeps each restarted web task separate and resumes only its own conversation', async () => {
+    const { workspace } = setup()
+    const ordinary = await workspace.initialize()
+    ordinary.input = '普通聊天未发送草稿'
+    ordinary.history = [{ role: 'user', text: '普通聊天内容' }]
+    await workspace.save(ordinary, true)
+    const first = await workspace.continueDiscordSetupConversation('agent-task-one')
+    expect(first.history).toEqual([])
+    expect(first.input).toBe('')
+    first.history = [{ role: 'assistant', text: '第一项任务进展' }]
+    await workspace.save(first)
+    const second = await workspace.continueDiscordSetupConversation('agent-task-two')
+    expect(second.history).toEqual([])
+    expect((await workspace.continueDiscordSetupConversation(first.id)).history).toEqual(
+      first.history,
+    )
+    expect((await workspace.switch(ordinary.id)).input).toBe('普通聊天未发送草稿')
+    expect((await workspace.switch(ordinary.id)).history).toEqual(ordinary.history)
+  })
+  it('coalesces manual recoveries and queues autosaves until recovery has settled', async () => {
+    const { workspace, storage } = setup()
+    const chat = await workspace.initialize()
+    const result = {
+      scanned: 0,
+      total: 0,
+      recovered: 0,
+      repaired: 0,
+      conflicts: 0,
+      invalid: 0,
+      missingProjects: 0,
+      cancelled: false,
+    }
+    let finish!: (value: typeof result) => void
+    const recover = vi.spyOn(storage, 'recoverHistory').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const first = workspace.recoverHistory()
+    expect(workspace.recoverHistory()).toBe(first)
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledOnce())
+    const save = workspace.save({ ...chat, input: '等待恢复后的输入' })
+    expect((await storage.read(chat.id))?.input).toBe('')
+    finish(result)
+    await first
+    await save
+    expect((await storage.read(chat.id))?.input).toBe('等待恢复后的输入')
+    expect(await storage.active()).toBe(chat.id)
+  })
   it('broadcasts the live conversation snapshot while persisting unfinished tool calls as cancelled', async () => {
     const { workspace, storage } = setup()
     const chat = await workspace.initialize()
@@ -224,7 +274,7 @@ describe('assistant workspace with actual indexed settings', () => {
     await storage.savePreferences({ name: '蒜惹菈', avatar: '', apiProfileId: '' })
     await workspace.initialize()
     expect(workspace.preferences().toolCallingEnabled).toBe(true)
-    expect(workspace.preferences().toolCallLimit).toBe(16)
+    expect(workspace.preferences().toolCallLimit).toBeUndefined()
     await workspace.savePreferences({
       ...workspace.preferences(),
       toolCallingEnabled: false,
@@ -261,9 +311,26 @@ describe('assistant workspace with actual indexed settings', () => {
       await expect(
         workspace.savePreferences({ ...workspace.preferences(), toolCallLimit }),
       ).rejects.toThrow('工具调用上限')
-      expect(workspace.preferences().toolCallLimit).toBe(16)
+      expect(workspace.preferences().toolCallLimit).toBeUndefined()
     },
   )
+  it('persists clearing a configured tool limit as unlimited through the original owner', async () => {
+    const { workspace, storage, api, credentials } = setup()
+    await workspace.initialize()
+    expect(workspace.preferences().toolCallLimit).toBeUndefined()
+    await workspace.savePreferences({ ...workspace.preferences(), toolCallLimit: 16 })
+    const reopened = new ProductAssistantWorkspaceService(storage, api, credentials)
+    await reopened.initialize()
+    expect(reopened.preferences().toolCallLimit).toBe(16)
+    await reopened.savePreferences({
+      ...reopened.preferences(),
+      toolCallLimit: '' as unknown as number,
+    })
+    const cleared = new ProductAssistantWorkspaceService(storage, api, credentials)
+    await cleared.initialize()
+    expect(cleared.preferences().toolCallLimit).toBeUndefined()
+    expect((await storage.preferences())?.toolCallLimit).toBeUndefined()
+  })
   it('defaults missing compression thresholds to blank and round-trips a million tokens or a blank', async () => {
     const { workspace, storage, api } = setup()
     await workspace.initialize()

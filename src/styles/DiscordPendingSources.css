@@ -52,10 +52,6 @@
 .discord-pending--page .discord-pending__actions a {
   min-height: 38px;
   padding: 7px 11px;
-  border: 1px solid var(--color-line);
-  border-radius: 9px;
-  background: var(--color-surface-raised);
-  color: var(--color-ink);
   font-size: 12px;
   font-weight: 600;
 }
@@ -182,8 +178,8 @@
 .discord-pending__actions a {
   padding: 0;
   border: 0;
-  background: transparent;
-  color: var(--color-accent);
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-accent));
   font-size: 0.7rem;
   font-weight: 800;
   text-decoration: none;

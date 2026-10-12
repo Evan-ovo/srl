@@ -8,6 +8,32 @@ export const DISCORD_BRIDGE_DEPLOY_URL = `https://deploy.workers.cloudflare.com/
   DISCORD_BRIDGE_PUBLIC_REPOSITORY_URL,
 )}`
 
+/** Shared by the GitHub tutorial and the APK browser; Bot Token never belongs in this file. */
+export const DISCORD_BRIDGE_WRANGLER_TEMPLATE = JSON.stringify(
+  {
+    $schema: 'node_modules/wrangler/config-schema.json',
+    name: 'srl-discord-source-bridge',
+    main: 'src/index.ts',
+    compatibility_date: '2026-08-26',
+    keep_vars: true,
+    d1_databases: [
+      {
+        binding: 'DB',
+        database_name: 'srl-discord-source-handoff',
+        database_id: '【粘贴 Cloudflare 的 Database ID】',
+        migrations_dir: 'migrations',
+      },
+    ],
+    vars: {
+      DISCORD_APPLICATION_ID: '【粘贴 Discord Application ID】',
+      DISCORD_PUBLIC_KEY: '【粘贴同一 App 的 Public Key】',
+      HANDOFF_TTL_SECONDS: '1200',
+    },
+  },
+  null,
+  2,
+)
+
 const MANUAL_SCHEMA_HELPER = `
 let manualSchemaReady: Promise<void> | undefined
 

@@ -21,6 +21,8 @@ export interface ConfirmDialogOptions {
   danger?: boolean
   centered?: boolean
   tokenReview?: AssistantTokenReview
+  /** Uses the existing password settings owner; passwords never enter this queue. */
+  secretUnlock?: boolean
 }
 
 export interface ChoiceDialogOptions extends ConfirmDialogOptions {
@@ -29,9 +31,12 @@ export interface ChoiceDialogOptions extends ConfirmDialogOptions {
   additionalLabel?: string
 }
 
-export interface ActiveConfirmDialog extends Required<Omit<ConfirmDialogOptions, 'tokenReview'>> {
+export interface ActiveConfirmDialog extends Required<
+  Omit<ConfirmDialogOptions, 'tokenReview' | 'secretUnlock'>
+> {
   id: number
   tokenReview?: AssistantTokenReview
+  secretUnlock?: boolean
   alternativeLabel?: string
   additionalLabel?: string
 }
@@ -68,6 +73,7 @@ export function confirmAction(
     danger: options.danger ?? false,
     centered: options.centered ?? false,
     tokenReview: options.tokenReview,
+    secretUnlock: options.secretUnlock,
   }
   return new Promise<boolean>((resolve) => {
     const cancel = () => {
@@ -96,7 +102,11 @@ export function confirmAction(
 }
 
 /** 弹出带第三个明确选项的确认框，与 confirmAction 共用同一根节点、队列和焦点规则。 */
-export function chooseAction(options: ChoiceDialogOptions): Promise<ConfirmDialogResponse> {
+export function chooseAction(
+  options: ChoiceDialogOptions,
+  signal?: AbortSignal,
+): Promise<ConfirmDialogResponse> {
+  if (signal?.aborted) return Promise.resolve('cancel')
   const dialog: ActiveConfirmDialog = {
     id: nextId++,
     message: options.message,
@@ -110,7 +120,26 @@ export function chooseAction(options: ChoiceDialogOptions): Promise<ConfirmDialo
     tokenReview: options.tokenReview,
   }
   return new Promise<ConfirmDialogResponse>((resolve) => {
-    const pending = { dialog, resolve }
+    const cancel = () => {
+      if (activeDialog.value?.id === dialog.id) {
+        activeDialog.value = undefined
+        activeResolve = undefined
+        pending.resolve('cancel')
+        const next = queue.shift()
+        if (next) present(next)
+      } else {
+        const index = queue.findIndex((item) => item.dialog.id === dialog.id)
+        if (index >= 0) queue.splice(index, 1)[0]!.resolve('cancel')
+      }
+    }
+    const pending = {
+      dialog,
+      resolve: (response: ConfirmDialogResponse) => {
+        signal?.removeEventListener('abort', cancel)
+        resolve(response)
+      },
+    }
+    signal?.addEventListener('abort', cancel, { once: true })
     if (activeDialog.value) queue.push(pending)
     else present(pending)
   })

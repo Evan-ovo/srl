@@ -293,8 +293,8 @@ function loaderFor(path: string): Loader {
 
 function replaceVueImports(source: string): string {
   return source
-    .replace(/\bimport\s+type\s*\{[\s\S]*?\}\s*from\s*['"]vue['"]\s*;?/gu, '')
-    .replace(/\bimport\s*\{([\s\S]*?)\}\s*from\s*['"]vue['"]\s*;?/gu, (_match, raw: string) => {
+    .replace(/\bimport\s+type\s*\{[^{}]*\}\s*from\s*['"]vue['"]\s*;?/gu, '')
+    .replace(/\bimport\s*\{([^{}]*)\}\s*from\s*['"]vue['"]\s*;?/gu, (_match, raw: string) => {
       const entries = raw
         .split(',')
         .map((entry) => entry.trim())
@@ -587,7 +587,18 @@ export class FrontendWorkshopBrowserSourceCompilerService {
             const extension = pathExtension(args.path)
             if (extension === 'vue') {
               const compiled = await compileVueSfc(args.path, readText(files, args.path))
-              vueStyles.set(args.path, compiled.css)
+              vueStyles.set(
+                args.path,
+                compiled.css.replace(
+                  /url\(\s*(['"]?)([^'"()]+)\1\s*\)/giu,
+                  (match, _quote, reference: string) => {
+                    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/iu.test(reference)) return match
+                    const path = resolveRelativePath(files, args.path, reference)
+                    if (!path) throw new Error(`Vue 样式素材不存在：${reference}`)
+                    return `url("${dataUrl(path, files.get(path)!)}")`
+                  },
+                ),
+              )
               return {
                 contents: compiled.code,
                 loader: compiled.loader,

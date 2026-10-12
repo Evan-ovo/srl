@@ -15,7 +15,7 @@
   min-height: 2.25rem;
   margin: 0.5rem 1rem;
   color: var(--color-ink);
-  background: var(--color-paper);
+  background: var(--control-background, var(--color-surface-raised));
 }
 
 .version-recognition__pagination {
@@ -56,10 +56,6 @@
 .version-recognition button {
   min-height: var(--size-touch);
   padding: 0 0.8rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.65rem;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
   font: inherit;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -179,9 +175,9 @@
 }
 
 .version-recognition__workflows > button[aria-pressed='true'] {
-  border-color: var(--color-accent);
+  border-color: var(--selection-border, var(--color-accent));
   box-shadow: inset 0 0 0 1px var(--color-accent);
-  background: var(--color-accent-soft);
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .version-recognition__workflow-title {
@@ -298,7 +294,7 @@
 }
 
 .version-recognition__history-items > label.is-selected {
-  border-color: var(--color-accent);
+  border-color: var(--selection-border, var(--color-accent));
   box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
@@ -328,7 +324,7 @@
 }
 
 .version-recognition__groups > article.is-selected {
-  border-color: var(--color-accent);
+  border-color: var(--selection-border, var(--color-accent));
   box-shadow: inset 3px 0 0 var(--color-accent);
 }
 
@@ -383,9 +379,9 @@
 
 .version-recognition__workflow-pane > footer button {
   flex: 0 0 auto;
-  color: white;
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
 }
 
 .version-recognition__workflow-pane > footer button:disabled {

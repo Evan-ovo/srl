@@ -422,3 +422,174 @@ describe('DiscordSourceSettingsService', () => {
     expect(store.values.has('discord-source:inbox-secret')).toBe(false)
   })
 })
+
+describe('confirmed setup connection replacement', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.resetModules()
+  })
+  const original = {
+    applicationId: '123',
+    publicKey: 'old-public',
+    botToken: 'old-secret',
+    workerBaseUrl: 'https://old.workers.dev',
+  }
+  it('reuses the same normalized connection without confirmation or backup', async () => {
+    const service = await import('./DiscordSourceSettingsService')
+    const store = new MemoryCredentialStore()
+    await service.saveDiscordSourceConnectionSettings(original, store)
+    const preserve = vi.fn(async () => true)
+    await service.replaceDiscordSourceConnectionSettings(
+      { ...original, workerBaseUrl: original.workerBaseUrl + '/' },
+      preserve,
+      undefined,
+      store,
+    )
+    expect(preserve).not.toHaveBeenCalled()
+  })
+  it.each(['workerBaseUrl', 'publicKey', 'botToken', 'applicationId'] as const)(
+    'keeps the original when a %s conflict is declined',
+    async (key) => {
+      const service = await import('./DiscordSourceSettingsService')
+      const store = new MemoryCredentialStore()
+      await service.saveDiscordSourceConnectionSettings(original, store)
+      const previous = service.loadDiscordSourceConnectionSettings()
+      const replacement = {
+        ...original,
+        [key]: key === 'workerBaseUrl' ? 'https://new.workers.dev' : 'new-value',
+      }
+      const preserve = vi.fn(async () => false)
+      expect(
+        await service.replaceDiscordSourceConnectionSettings(
+          replacement,
+          preserve,
+          undefined,
+          store,
+        ),
+      ).toBeUndefined()
+      expect(service.loadDiscordSourceConnectionSettings()).toEqual(previous)
+      expect(store.values.get('discord-source:bot-token')).toBe('old-secret')
+    },
+  )
+  it('preserves pairing and secrets before switching, without deleting old cloud content', async () => {
+    const service = await import('./DiscordSourceSettingsService')
+    const store = new MemoryCredentialStore()
+    await service.saveDiscordSourceConnectionSettings(original, store)
+    await service.saveDiscordInboxPairing(
+      {
+        libraryId: 'old-inbox',
+        name: 'Old',
+        secret: 'inbox-secret',
+        code: 'pair-code',
+        expiresAt: 100,
+      },
+      store,
+    )
+    const preserve = vi.fn(async (previous) => {
+      expect(previous).toMatchObject({
+        ...original,
+        inboxSecret: 'inbox-secret',
+        inboxLibraryId: 'old-inbox',
+      })
+      expect(store.values.get('discord-source:bot-token')).toBe('old-secret')
+      return true
+    })
+    const next = await service.replaceDiscordSourceConnectionSettings(
+      { ...original, botToken: 'new-secret', workerBaseUrl: 'https://new.workers.dev' },
+      preserve,
+      undefined,
+      store,
+    )
+    expect(next).toMatchObject({ workerBaseUrl: 'https://new.workers.dev', botToken: 'new-secret' })
+    expect(next?.inboxLibraryId).toBeUndefined()
+    expect(preserve).toHaveBeenCalledOnce()
+    expect(localStorage.getItem('srl.discord-source.connection.v1')).not.toContain('new-secret')
+  })
+  it('never writes after preservation fails or cancellation occurs during confirmation', async () => {
+    const service = await import('./DiscordSourceSettingsService')
+    const store = new MemoryCredentialStore()
+    await service.saveDiscordSourceConnectionSettings(original, store)
+    const next = { ...original, botToken: 'new-secret' }
+    await expect(
+      service.replaceDiscordSourceConnectionSettings(
+        next,
+        async () => {
+          throw new Error('backup failed')
+        },
+        undefined,
+        store,
+      ),
+    ).rejects.toThrow('backup failed')
+    const controller = new AbortController()
+    await expect(
+      service.replaceDiscordSourceConnectionSettings(
+        next,
+        async () => {
+          controller.abort()
+          return true
+        },
+        controller.signal,
+        store,
+      ),
+    ).rejects.toThrow()
+    expect(service.loadDiscordSourceConnectionSettings().botToken).toBe('old-secret')
+  })
+  it('preserves the old pairing before a known D1 change on the same Worker and reuses the applied target', async () => {
+    const service = await import('./DiscordSourceSettingsService')
+    const store = new MemoryCredentialStore()
+    await service.saveDiscordSourceConnectionSettings(original, store)
+    await service.saveDiscordInboxPairing(
+      { libraryId: 'old-inbox', name: 'Old', secret: 'inbox-secret', code: '', expiresAt: 100 },
+      store,
+    )
+    const before = service.loadDiscordSourceConnectionSettings()
+    const declined = vi.fn(async () => false)
+    expect(
+      await service.replaceDiscordSourceConnectionSettings(
+        original,
+        declined,
+        undefined,
+        store,
+        true,
+      ),
+    ).toBeUndefined()
+    expect(service.loadDiscordSourceConnectionSettings()).toEqual(before)
+    const preserve = vi.fn(async (previous) => {
+      expect(previous).toMatchObject({ inboxLibraryId: 'old-inbox', inboxSecret: 'inbox-secret' })
+      return true
+    })
+    const next = await service.replaceDiscordSourceConnectionSettings(
+      original,
+      preserve,
+      undefined,
+      store,
+      true,
+    )
+    expect(next?.inboxLibraryId).toBeUndefined()
+    expect(store.values.has('discord-source:inbox-secret')).toBe(false)
+    await service.replaceDiscordSourceConnectionSettings(original, preserve, undefined, store)
+    expect(preserve).toHaveBeenCalledOnce()
+  })
+  it('restores credentials and pairing when a later credential operation fails', async () => {
+    const service = await import('./DiscordSourceSettingsService')
+    const store = new MemoryCredentialStore()
+    await service.saveDiscordSourceConnectionSettings(original, store)
+    await service.saveDiscordInboxPairing(
+      { libraryId: 'old-inbox', name: 'Old', secret: 'inbox-secret', code: '', expiresAt: 100 },
+      store,
+    )
+    const previous = service.loadDiscordSourceConnectionSettings()
+    vi.spyOn(store, 'clear').mockRejectedValueOnce(new Error('clear failed'))
+    await expect(
+      service.replaceDiscordSourceConnectionSettings(
+        { ...original, botToken: 'new-secret', workerBaseUrl: 'https://new.workers.dev' },
+        async () => true,
+        undefined,
+        store,
+      ),
+    ).rejects.toThrow('clear failed')
+    expect(service.loadDiscordSourceConnectionSettings()).toEqual(previous)
+    expect(store.values.get('discord-source:bot-token')).toBe('old-secret')
+    expect(store.values.get('discord-source:inbox-secret')).toBe('inbox-secret')
+  })
+})

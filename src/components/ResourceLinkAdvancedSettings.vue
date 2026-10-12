@@ -1,10 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import DiscordSetupAssistant from './DiscordSetupAssistant.vue'
+import { discordSetupService } from '../core/AppContainer'
+import { hasDiscordSetupBrowser } from '../services/NativeDiscordSetupBrowser'
+import { useAssistantHelpContext } from '../composables/UseAssistantHelpContext'
 
 import { useTransientStatus } from '../composables/UseTransientStatus'
 import { assistantGuidance } from '../core/ProductAssistantGuidance'
 import { DISCORD_BRIDGE_PUBLIC_REPOSITORY_URL } from '../services/DiscordBridgeDeployService'
 import {
+  checkDiscordWorker,
+  diagnoseDiscordConfiguration,
+  type DiscordDiagnosticState,
   getDiscordWorkerEndpoints,
   normalizeDiscordWorkerBaseUrl,
 } from '../services/DiscordSourceConnectionService'
@@ -23,41 +30,12 @@ const props = withDefaults(
   { contextResourceId: undefined, title: '来源链接高级设置', backLabel: '返回来源与链接' },
 )
 const emit = defineEmits<{ close: [] }>()
+useAssistantHelpContext('discord-bridge')
 
 type ConnectionState = 'idle' | 'testing' | 'connected' | 'stale' | 'error'
-type DiagnosticState =
-  | 'idle'
-  | 'checking'
-  | 'ready'
-  | 'd1-error'
-  | 'discord-missing'
-  | 'discord-invalid'
-  | 'worker-error'
-  | 'outdated'
-  | 'need-token'
+type DiagnosticState = 'idle' | 'checking' | DiscordDiagnosticState
 type CommandState =
   'idle' | 'checking' | 'registering' | 'registered' | 'missing' | 'stale' | 'error'
-
-interface WorkerHealthPayload {
-  ok?: unknown
-  database?: unknown
-  discordConfigured?: unknown
-  discordVariables?: {
-    applicationId?: unknown
-    publicKey?: unknown
-    botToken?: unknown
-  }
-  applicationId?: unknown
-}
-
-interface CommandStatusPayload {
-  ok?: unknown
-  applicationId?: unknown
-  applicationIdMatches?: unknown
-  publicKeyMatches?: unknown
-  commandRegistered?: unknown
-  error?: unknown
-}
 
 const applicationId = ref('')
 const publicKey = ref('')
@@ -72,6 +50,12 @@ const connectionState = ref<ConnectionState>('idle')
 const diagnosticState = ref<DiagnosticState>('idle')
 const commandState = ref<CommandState>('idle')
 const { statusMessage, setStatus, showTransientStatus } = useTransientStatus()
+let detachSetupForm: (() => void) | undefined
+let disposed = false
+onMounted(() => {
+  detachSetupForm = discordSetupService.attachLocalForm(persistSettings)
+})
+onBeforeUnmount(() => detachSetupForm?.())
 
 watch(
   assistantGuidance,
@@ -166,7 +150,43 @@ function openDiscordHandoffPaste(): void {
   emit('close')
 }
 
-onMounted(() => {
+function acceptSetupWorker(event: Event) {
+  const value = (event as CustomEvent<{ workerUrl?: string }>).detail?.workerUrl
+  if (value) workerUrl.value = normalizeDiscordWorkerBaseUrl(value)
+  void applySetupDraft()
+}
+async function applySetupDraft(): Promise<boolean> {
+  if (!hasDiscordSetupBrowser()) return false
+  try {
+    const draft = await discordSetupService.localConnectionDraft()
+    if (disposed) return true
+    if (!draft) return false
+    applicationId.value = draft.applicationId!
+    publicKey.value = draft.publicKey!
+    workerUrl.value = draft.workerUrl!
+    if (draft.needsToken) {
+      botToken.value = ''
+      setStatus('请填写本次 Bot Token 再保存；原连接仍保留，尚未切换。')
+      return true
+    }
+  } catch (error) {
+    if (disposed) return true
+    setStatus(error instanceof Error ? error.message : '本次配置参数尚未准备好。')
+    return true
+  }
+  return false
+}
+function acceptSetupCredentials() {
+  botToken.value = loadDiscordSourceConnectionSettings().botToken
+}
+onBeforeUnmount(() => {
+  disposed = true
+  window.removeEventListener('srl:discord-setup-worker', acceptSetupWorker)
+  window.removeEventListener('srl:discord-setup-credentials', acceptSetupCredentials)
+})
+onMounted(async () => {
+  window.addEventListener('srl:discord-setup-worker', acceptSetupWorker)
+  window.addEventListener('srl:discord-setup-credentials', acceptSetupCredentials)
   const settings = loadDiscordSourceConnectionSettings()
   applicationId.value = settings.applicationId
   publicKey.value = settings.publicKey
@@ -174,6 +194,8 @@ onMounted(() => {
   workerUrl.value = settings.workerBaseUrl
   credentialPersistence.value = settings.credentialPersistence === 'session' ? 'session' : 'local'
   applyCachedStatus()
+  if (await applySetupDraft()) return
+  if (disposed) return
   if (settings.workerBaseUrl) {
     void verifyWorker(true)
     if (settings.botToken) void checkCommandStatus(true)
@@ -183,34 +205,6 @@ onMounted(() => {
 function normalizeWorkerDraft(): void {
   const normalized = normalizeDiscordWorkerBaseUrl(workerUrl.value)
   if (normalized) workerUrl.value = normalized
-}
-
-function payloadApplicationId(value: unknown): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
-  const candidate = (value as { applicationId?: unknown }).applicationId
-  return typeof candidate === 'string' ? candidate.trim() : ''
-}
-
-function assertApplicationIdMatches(payload: unknown): void {
-  const localId = applicationId.value.trim()
-  const remoteId = payloadApplicationId(payload)
-  if (localId && remoteId && localId !== remoteId) {
-    throw new Error(
-      `Worker 使用的是 Application ID ${remoteId}，与当前填写的 ${localId} 不一致。请统一 Discord App 与 Worker 配置。`,
-    )
-  }
-}
-
-function missingDiscordVariables(payload: WorkerHealthPayload): string[] | undefined {
-  const checks = payload.discordVariables
-  if (!checks || typeof checks !== 'object') return undefined
-  const names = [
-    ['applicationId', 'DISCORD_APPLICATION_ID'],
-    ['publicKey', 'DISCORD_PUBLIC_KEY'],
-    ['botToken', 'DISCORD_BOT_TOKEN'],
-  ] as const
-  if (names.some(([key]) => typeof checks[key] !== 'boolean')) return undefined
-  return names.filter(([key]) => checks[key] === false).map(([, name]) => name)
 }
 
 function cachedWorkerWasHealthy(): boolean {
@@ -226,13 +220,21 @@ async function persistSettings(): Promise<boolean> {
   normalizeWorkerDraft()
   let saved: Awaited<ReturnType<typeof saveDiscordSourceConnectionSettings>>
   try {
-    saved = await saveDiscordSourceConnectionSettings({
+    const save = hasDiscordSetupBrowser()
+      ? discordSetupService.saveLocalConnectionSettings.bind(discordSetupService)
+      : saveDiscordSourceConnectionSettings
+    const result = await save({
       applicationId: applicationId.value,
       publicKey: publicKey.value,
       botToken: botToken.value,
       workerBaseUrl: workerUrl.value,
       credentialPersistence: credentialPersistence.value,
     })
+    if (!result) {
+      setStatus('已停止本次切换，原连接保持不变。')
+      return false
+    }
+    saved = result
   } catch (error) {
     setStatus(error instanceof Error ? error.message : 'Bot Token 未能保存到本机。')
     connectionState.value = 'error'
@@ -279,18 +281,11 @@ async function verifyWorker(background = false): Promise<boolean> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 6_000)
   try {
-    const response = await fetch(endpoints.value.healthUrl, {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-      signal: controller.signal,
-    })
-    const payload = (await response.json()) as WorkerHealthPayload
-    if (payload.database === false)
-      throw new Error('D1 查询或 handoffs 迁移表检查失败。请检查绑定、Database ID 和迁移。')
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    if (payload.database !== true) throw new Error('Worker 的 /health 响应缺少 D1 检查结果。')
-    assertApplicationIdMatches(payload)
+    await checkDiscordWorker(
+      { workerBaseUrl: workerUrl.value, applicationId: applicationId.value },
+      'health',
+      controller.signal,
+    )
     saveDiscordSourceConnectionStatus({ workerVerifiedAt: Date.now() })
     connectionState.value = 'connected'
     if (!background) showTransientStatus('Worker 已连接。SRL 已自动生成 Discord 所需地址。')
@@ -321,30 +316,15 @@ async function checkCommandStatus(background = false): Promise<boolean | undefin
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 8_000)
   try {
-    const response = await fetch(endpoints.value.statusUrl, {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-      headers: { Authorization: `Bearer ${botToken.value.trim()}` },
-      signal: controller.signal,
-    })
-    if (response.status === 404) {
-      throw new Error('当前 Bridge 版本还不支持真实命令状态检查，请更新并重新部署。')
-    }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const payload = (await response.json()) as CommandStatusPayload
-    assertApplicationIdMatches(payload)
-    if (payload.applicationIdMatches === false) {
-      throw new Error('Cloudflare 中的 Application ID 与 Bot Token 所属的 Discord App 不一致。')
-    }
-    if (payload.publicKeyMatches === false) {
-      throw new Error(
-        'Cloudflare 中的 Public Key 与 Bot Token 所属 Discord App 的 Public Key 不一致。',
-      )
-    }
-    if (typeof payload.commandRegistered !== 'boolean') {
-      throw new Error('Worker 没有返回有效的消息命令状态。')
-    }
+    const payload = await checkDiscordWorker(
+      {
+        workerBaseUrl: workerUrl.value,
+        applicationId: applicationId.value,
+        botToken: botToken.value,
+      },
+      'status',
+      controller.signal,
+    )
     const checkedAt = Date.now()
     saveDiscordSourceConnectionStatus({
       workerVerifiedAt: checkedAt,
@@ -382,162 +362,33 @@ async function diagnoseConfiguration(): Promise<void> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 15_000)
   try {
-    const healthResponse = await fetch(endpoints.value.healthUrl, {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-      signal: controller.signal,
-    })
-    let health: WorkerHealthPayload = {}
-    try {
-      health = (await healthResponse.json()) as WorkerHealthPayload
-    } catch {
-      throw new Error(`Worker /health 没有返回有效 JSON（HTTP ${healthResponse.status}）。`)
-    }
-
-    const missingVariables = missingDiscordVariables(health)
-    if (health.database !== true) {
-      connectionState.value = 'error'
-      diagnosticState.value = 'd1-error'
-      const missing = missingVariables?.length
-        ? ` 同时发现 Worker 缺少：${missingVariables.join('、')}。`
-        : ''
-      setStatus(
-        `Worker 已响应，但 D1 或 handoffs 迁移表检查失败（HTTP ${healthResponse.status}）。检查数据库是否创建在当前 Cloudflare 账号、Database ID 和 DB 绑定是否对应，并确认迁移已完成。${missing}`,
-      )
-      return
-    }
-    if (!healthResponse.ok || health.ok !== true) {
-      throw new Error(`Worker /health 检查失败（HTTP ${healthResponse.status}）。`)
-    }
-    saveDiscordSourceConnectionStatus({ workerVerifiedAt: Date.now() })
-    connectionState.value = 'connected'
-
-    const workerApplicationId = payloadApplicationId(health)
-    const localApplicationId = applicationId.value.trim()
-    if (localApplicationId && workerApplicationId && localApplicationId !== workerApplicationId) {
-      diagnosticState.value = 'discord-invalid'
-      setStatus(
-        `D1 正常，但 Worker 的 Application ID（${workerApplicationId}）与本机填写的 ID 不同。检查 wrangler.jsonc 是否来自同一个 Discord App。`,
-      )
-      return
-    }
-
-    if (!missingVariables) {
-      diagnosticState.value = 'outdated'
-      setStatus(
-        health.discordConfigured === false
-          ? 'D1 正常，但当前 Worker 版本未提供三项 Discord 变量的逐项检查。更新并重新部署 Bridge 后再检查。'
-          : 'D1 正常，但当前 Worker 版本不支持完整配置核验。更新并重新部署 Bridge 后再检查。',
-      )
-      return
-    }
-    if (missingVariables.length || health.discordConfigured !== true) {
-      diagnosticState.value = 'discord-missing'
-      setStatus(
-        missingVariables.length
-          ? `D1 正常；Worker 缺少 Discord 变量：${missingVariables.join('、')}。检查 wrangler.jsonc 中的 Application ID / Public Key，并在 Cloudflare Production 添加 Bot Token Secret。`
-          : 'D1 正常，但 Worker 报告 Discord 配置未完成；检查三个值是否已部署到 Production。',
-      )
-      return
-    }
-    if (!botToken.value.trim()) {
-      diagnosticState.value = 'need-token'
-      setStatus(
-        'D1 正常，Worker 中三项 Discord 值均已填写；请在本机填入 Bot Token，才能向 Discord API 核验它们是否有效。',
-      )
-      return
-    }
-
-    const discordResponse = await fetch(endpoints.value.statusUrl, {
-      method: 'GET',
-      cache: 'no-store',
-      credentials: 'omit',
-      headers: { Authorization: `Bearer ${botToken.value.trim()}` },
-      signal: controller.signal,
-    })
-    let discord: CommandStatusPayload = {}
-    try {
-      discord = (await discordResponse.json()) as CommandStatusPayload
-    } catch {
-      discord = {}
-    }
-    if (discordResponse.status === 401) {
-      diagnosticState.value = 'discord-invalid'
-      setStatus('D1 正常，但本机 Bot Token 与 Cloudflare 中的 DISCORD_BOT_TOKEN Secret 不一致。')
-      return
-    }
-    if (discordResponse.status === 404) {
-      diagnosticState.value = 'outdated'
-      setStatus('D1 正常，但当前 Worker 没有凭证核验接口。更新并重新部署 Bridge 后再检查。')
-      return
-    }
-    if (!discordResponse.ok) {
-      const detail =
-        typeof discord.error === 'string' ? discord.error : `HTTP ${discordResponse.status}`
-      diagnosticState.value = 'discord-invalid'
-      setStatus(
-        /\b401\b/u.test(detail)
-          ? 'D1 正常，但 Discord 拒绝了 Bot Token。请确认 Token 来自当前 App 的 Bot 页面且未重置后仍使用旧值。'
-          : `D1 正常，但 Discord 凭证核验失败：${detail}`,
-      )
-      return
-    }
-    if (
-      typeof discord.applicationIdMatches !== 'boolean' ||
-      typeof discord.publicKeyMatches !== 'boolean'
-    ) {
-      diagnosticState.value = 'outdated'
-      setStatus(
-        'D1 正常，但当前 Worker 版本没有返回 Application ID / Public Key 的真实性核验结果。更新并重新部署 Bridge 后再检查。',
-      )
-      return
-    }
-    if (!discord.applicationIdMatches) {
-      diagnosticState.value = 'discord-invalid'
-      setStatus('D1 正常，但 DISCORD_APPLICATION_ID 与 Bot Token 所属 App 不一致。')
-      return
-    }
-    if (!discord.publicKeyMatches) {
-      diagnosticState.value = 'discord-invalid'
-      setStatus('D1 正常，但 DISCORD_PUBLIC_KEY 与 Bot Token 所属 App 的 Public Key 不一致。')
-      return
-    }
-    if (typeof discord.commandRegistered === 'boolean') {
-      const checkedAt = Date.now()
-      saveDiscordSourceConnectionStatus({
-        workerVerifiedAt: checkedAt,
-        commandCheckedAt: checkedAt,
-        commandRegistered: discord.commandRegistered,
-      })
-      commandState.value = discord.commandRegistered ? 'registered' : 'missing'
-    }
-    diagnosticState.value = 'ready'
-    setStatus(
-      discord.commandRegistered === false
-        ? '核验通过：Worker 可访问、D1 查询成功，Bot Token 有效，Application ID 和 Public Key 匹配；消息命令还未注册。'
-        : '核验通过：Worker 可访问、D1 查询成功，Bot Token 有效，Application ID 和 Public Key 与同一个 Discord App 匹配。',
+    const result = await diagnoseDiscordConfiguration(
+      {
+        workerBaseUrl: workerUrl.value,
+        applicationId: applicationId.value,
+        publicKey: publicKey.value,
+        botToken: botToken.value,
+      },
+      controller.signal,
     )
-  } catch (error) {
-    if (error instanceof Error && /Application ID/u.test(error.message)) {
-      diagnosticState.value = 'discord-invalid'
-    } else {
-      diagnosticState.value = 'worker-error'
+    diagnosticState.value = result.state
+    connectionState.value = result.workerHealthy ? 'connected' : 'error'
+    if (result.workerHealthy) saveDiscordSourceConnectionStatus({ workerVerifiedAt: Date.now() })
+    if (typeof result.commandRegistered === 'boolean') {
+      saveDiscordSourceConnectionStatus({
+        commandCheckedAt: Date.now(),
+        commandRegistered: result.commandRegistered,
+      })
+      commandState.value = result.commandRegistered ? 'registered' : 'missing'
     }
-    const message =
-      error instanceof DOMException && error.name === 'AbortError'
-        ? '检查超时。'
-        : error instanceof TypeError
-          ? '无法访问 Worker /health。检查 Worker URL、workers.dev 是否启用，以及部署是否完成。'
-          : error instanceof Error
-            ? error.message
-            : '未知错误'
-    setStatus(message)
+    setStatus(result.message)
+  } catch {
+    diagnosticState.value = 'worker-error'
+    setStatus('检查已停止或超时，请确认后重新检查。')
   } finally {
     window.clearTimeout(timer)
   }
 }
-
 async function registerCommand(): Promise<void> {
   if (!(await persistSettings()) || !endpoints.value || !botToken.value.trim()) return
   commandState.value = 'registering'
@@ -545,28 +396,16 @@ async function registerCommand(): Promise<void> {
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 8_000)
   try {
-    const response = await fetch(endpoints.value.registerUrl, {
-      method: 'POST',
-      cache: 'no-store',
-      credentials: 'omit',
-      headers: {
-        Authorization: `Bearer ${botToken.value.trim()}`,
-        'Content-Type': 'application/json',
+    const result = await checkDiscordWorker(
+      {
+        workerBaseUrl: workerUrl.value,
+        applicationId: applicationId.value,
+        botToken: botToken.value,
       },
-      body: JSON.stringify({ applicationId: applicationId.value.trim() }),
-      signal: controller.signal,
-    })
-    let payload: CommandStatusPayload = {}
-    try {
-      payload = (await response.json()) as CommandStatusPayload
-    } catch {
-      payload = {}
-    }
-    if (response.status === 409 && payload.error === 'application_id_mismatch') {
-      assertApplicationIdMatches(payload)
-    }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    assertApplicationIdMatches(payload)
+      'register',
+      controller.signal,
+    )
+    if (!result.commandRegistered) throw new Error('注册请求已发送，但真实命令尚未核验通过')
     const checkedAt = Date.now()
     saveDiscordSourceConnectionStatus({
       workerVerifiedAt: checkedAt,
@@ -607,6 +446,7 @@ async function clearBotToken(): Promise<void> {
     >
       <section
         class="resource-source-advanced"
+        data-assistant-help-context="discord-bridge"
         role="dialog"
         aria-modal="true"
         aria-labelledby="resource-source-advanced-title"
@@ -621,6 +461,7 @@ async function clearBotToken(): Promise<void> {
           </div>
         </header>
 
+        <DiscordSetupAssistant />
         <DiscordInboxPanel mode="pairing" />
 
         <div class="resource-source-status-strip" aria-label="Discord 来源状态">
@@ -725,7 +566,7 @@ async function clearBotToken(): Promise<void> {
             </div>
           </label>
 
-          <label>
+          <label data-sensitive>
             <span>Bot Token</span>
             <div>
               <input

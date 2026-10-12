@@ -1,6 +1,7 @@
 /* global document, innerWidth, localStorage, caches, window, indexedDB, fetch, getComputedStyle, navigator, Response, Cache, Request, location */
 import assert from 'node:assert/strict'
 import console from 'node:console'
+import { auditButtonMaterial } from './SharedAppearanceAudit.mjs'
 import process from 'node:process'
 import { mkdir, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -276,6 +277,9 @@ try {
   page.on('request', captureLegacyModule)
   await page.reload()
   await page.getByRole('button', { name: '功能', exact: true }).click()
+  // Reload first renders shared features, then asynchronously restores installed APPs.
+  // This fixture starts on page one; wait for Draw's actual card before enumerating pages.
+  await page.locator('.feature-app--draw').waitFor({ state: 'visible' })
   await openAuditFeature(page, '抽了么')
   await page.getByRole('button', { name: '下载兼容版本', exact: true }).waitFor()
   assert.deepEqual(legacyModuleRequests, [], 'Legacy component imported before compatibility check')
@@ -339,6 +343,14 @@ try {
       await page.evaluate((theme) => {
         document.documentElement.dataset.theme = theme
       }, theme)
+      await auditButtonMaterial(
+        page.locator('.official-app-manager__updates-dialog'),
+        `APP updates/${width}/${theme}`,
+      )
+      if (width === 390 && theme === 'light')
+        await page.screenshot({
+          path: resolve(environment.outputDir, 'update-dialog-material-390.png'),
+        })
       await page
         .locator('.official-app-manager__updates-footer')
         .getByRole('button', { name: '稍后处理' })

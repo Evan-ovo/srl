@@ -3,6 +3,32 @@ import { describe, expect, it } from 'vitest'
 import { extractTavernHelperScripts, readTavernHelperScriptBlob } from './TavernHelperScriptParser'
 
 describe('TavernHelperScriptParser', () => {
+  it('preserves hidden buttons and disabled static controls through helper-record roundtrips', () => {
+    const input = {
+      type: 'script',
+      id: 'phone',
+      name: '手机',
+      content: 'run()',
+      button: {
+        enabled: true,
+        buttons: [
+          { name: '开关', visible: true },
+          { name: '隐形', visible: false },
+        ],
+      },
+    }
+    const first = extractTavernHelperScripts([input], { source: 'character' })[0]!
+    expect(first.buttonDefinitions).toEqual(input.button.buttons)
+    expect(
+      extractTavernHelperScripts([{ ...first, type: 'script' }], { source: 'bound' })[0]
+        ?.buttonDefinitions,
+    ).toEqual(input.button.buttons)
+    expect(
+      extractTavernHelperScripts([{ ...input, button: { ...input.button, enabled: false } }], {
+        source: 'character',
+      })[0]?.buttonDefinitions?.every((button) => !button.visible),
+    ).toBe(true)
+  })
   it('honors folder and script enable switches', () => {
     const scripts = extractTavernHelperScripts(
       [

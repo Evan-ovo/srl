@@ -68,11 +68,7 @@ export function useLibraryRefresh(getContext: () => LibraryRefreshContext) {
     ])
     if (current !== generation) return
     publishResources(storedResources, current)
-    rebuildResourceReferenceIndex(
-      storedResources,
-      browserStorageService.getChatLoadouts(),
-      browserStorageService.getCabinetResourceIds(),
-    )
+    rebuildResourceReferenceIndex(storedResources, browserStorageService.getCabinetResourceIds())
     context.categories.value = storedCategories
     await nextTick()
     markLibraryListRendered(context.managedResources.value.length)

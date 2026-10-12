@@ -1,6 +1,7 @@
 import { FEATURE_APP_REGISTRY, type FeatureAppDescriptor } from './FeatureAppRegistry'
 import { isOfficialAppId } from '../types/OfficialApp'
 import type { CustomCssPreset, CustomCssScope } from '../types/BrowserPreferences'
+import { normalizeUiViews } from './UiCustomization'
 
 export const SCOPED_CSS_REMOVED_EVENT = 'srl:scoped-css-removed'
 export const APPLIED_CSS_CHANGED_EVENT = 'srl:applied-css-changed'
@@ -30,6 +31,12 @@ export function appearanceScopes(
   registry: readonly FeatureAppDescriptor[] = FEATURE_APP_REGISTRY,
 ): AppearanceScope[] {
   return [
+    {
+      value: 'shell',
+      title: '整个应用界面',
+      selector: '.app-shell',
+      hint: '侧栏、底栏与当前页面的整体布局',
+    },
     { value: 'library', title: '资源库', selector: '.library', hint: '主界面、筛选栏与资源卡片' },
     {
       value: 'details',
@@ -104,13 +111,14 @@ export function parseAppearancePreset(value: unknown): CustomCssPreset {
     )
   )
     throw new Error('外观预设格式无效')
-  if (JSON.stringify(preset).length > 200_000) throw new Error('外观预设超过 200000 字符')
+  const views = normalizeUiViews(preset.views, true)
   const now = new Date().toISOString()
   return {
     id: crypto.randomUUID(),
     name: preset.name.slice(0, 160),
     globalCss: preset.globalCss,
     scopedCss: { ...preset.scopedCss },
+    ...(preset.views !== undefined ? { views } : {}),
     createdAt: now,
     updatedAt: now,
   }

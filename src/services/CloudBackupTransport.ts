@@ -5,8 +5,11 @@ import type {
   WebDavBackupConfig,
 } from '../types/CloudBackup'
 import { isCapacitorApp } from '../utils/CapacitorDetection'
-// SRL-PUBLIC-SYNC: PUBLIC-ONLY id=koofr-public-endpoint-import
-import { publicWorkerEndpoint } from './PublicWorkerSettingsService'
+import {
+  acquireRelayWorkerTarget,
+  relayWorkerEndpoint,
+  resolveRelayWorkerTarget,
+} from './RelayWorkerSettingsService'
 import { hashCloudBlob } from './CloudArchiveCodec'
 import * as CloudBackupGitHubTransport from './CloudBackupGitHubTransport'
 import {
@@ -37,6 +40,26 @@ import { isNativeCloudTransferAvailable, nativeWebDavFetch } from './NativeCloud
 
 /** Shared transport state and provider dispatch for one backup service instance. */
 export class CloudBackupTransport {
+  private relayWorkerScope?: ReturnType<typeof acquireRelayWorkerTarget> & { users: number }
+
+  protected async withRelayWorkerTarget<T>(
+    provider: CloudBackupProvider | undefined,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    if (provider !== 'webdav' || isCapacitorApp()) return run()
+    const scope = this.relayWorkerScope ?? { ...acquireRelayWorkerTarget(), users: 0 }
+    this.relayWorkerScope = scope
+    scope.users += 1
+    try {
+      return await run()
+    } finally {
+      scope.users -= 1
+      if (!scope.users) {
+        scope.release()
+        this.relayWorkerScope = undefined
+      }
+    }
+  }
   protected readonly transportState: Pick<
     CloudBackupTransportContext,
     | 'webDavCapabilities'
@@ -151,9 +174,10 @@ export class CloudBackupTransport {
     if (isCapacitorApp()) return measuredFetch(url, init)
 
     // SRL-PUBLIC-SYNC: BEGIN WORKER-URL id=koofr-proxy
-    const proxyUrl = publicWorkerEndpoint('/api/cloud/proxy/koofr')
-    proxyUrl.searchParams.set('url', url)
+    const relayTarget = this.relayWorkerScope?.target ?? resolveRelayWorkerTarget()
     const proxyFetch = async (): Promise<Response> => {
+      const path = `/api/cloud/proxy/koofr?url=${encodeURIComponent(url)}`
+      const proxyUrl = relayTarget.custom ? relayWorkerEndpoint(path, relayTarget).href : path
       const headers = new Headers(init.headers)
       if (init.body instanceof Blob) {
         headers.set('X-SRL-Content-Length', String(init.body.size))
@@ -161,10 +185,11 @@ export class CloudBackupTransport {
       const proxyInit = {
         ...init,
         headers,
-        credentials: 'omit' as const,
+        credentials: relayTarget.custom ? ('omit' as const) : ('same-origin' as const),
+        redirect: 'error' as const,
         cache: 'no-store' as const,
       }
-      return measuredFetch(proxyUrl.href, proxyInit)
+      return measuredFetch(proxyUrl, proxyInit)
     }
     // SRL-PUBLIC-SYNC: END WORKER-URL id=koofr-proxy
     try {
@@ -177,6 +202,11 @@ export class CloudBackupTransport {
     } catch (error) {
       if (isCloudRequestTimeout(error) || (error instanceof Error && /（413）/.test(error.message)))
         throw error
+      if (relayTarget.custom)
+        throw new Error(
+          '自建中继未完成 Koofr 请求。请检查设置 → 自部署 Worker 中的地址、部署状态及 CORS 配置；不会自动切回官方中继。',
+          { cause: error },
+        )
       throw cloudProxyUnavailableError(error)
     }
   }

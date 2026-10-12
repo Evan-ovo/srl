@@ -113,10 +113,11 @@
   max-height: min(76dvh, 42rem);
   padding: 0.85rem;
   overflow-y: auto;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-panel) var(--radius-panel) var(--radius-card) var(--radius-card);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--dialog-border, var(--color-line-strong));
+  border-radius: var(--dialog-radius, var(--radius-panel)) var(--dialog-radius, var(--radius-panel))
+    var(--radius-card) var(--radius-card);
+  background: var(--dialog-background, var(--color-surface-raised));
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 .frontend-workbench__image-template-drawer > header {
@@ -174,10 +175,10 @@
   min-width: 0;
   min-height: var(--size-touch);
   padding: 0.55rem 0.65rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--radius-control));
   color: var(--color-ink);
-  background: var(--color-surface);
+  background: var(--control-background, var(--color-surface));
   font-size: 1rem;
 }
 

@@ -1,10 +1,6 @@
 import type { UserPersonaTemplate } from '../types/UserPersona'
 import type { PresetFavoriteSnapshot } from '../utils/PresetStitcher'
-import {
-  type PresetStitchTemplate,
-  type ChatLoadout,
-  type CabinetLayoutEntry,
-} from '../types/BrowserPreferences'
+import { type PresetStitchTemplate, type CabinetLayoutEntry } from '../types/BrowserPreferences'
 
 export function normalizeCabinetLayout(value: unknown): CabinetLayoutEntry[] {
   if (!Array.isArray(value)) return []
@@ -129,45 +125,6 @@ export function normalizeStitchTemplates(value: unknown): PresetStitchTemplate[]
       updatedAt: Number.isFinite(candidate.updatedAt) ? Number(candidate.updatedAt) : Date.now(),
     })
     if (normalized.length >= 30) break
-  }
-  return normalized
-}
-
-export function normalizeChatLoadouts(value: unknown): ChatLoadout[] {
-  if (!Array.isArray(value)) return []
-  const ids = new Set<string>()
-  const normalized: ChatLoadout[] = []
-  for (const item of value) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
-    const candidate = item as Partial<ChatLoadout>
-    const id = typeof candidate.id === 'string' ? candidate.id.trim().slice(0, 120) : ''
-    const name = typeof candidate.name === 'string' ? candidate.name.trim().slice(0, 80) : ''
-    const primaryResourceId =
-      typeof candidate.primaryResourceId === 'string'
-        ? candidate.primaryResourceId.trim().slice(0, 160)
-        : ''
-    const resourceIds = Array.isArray(candidate.resourceIds)
-      ? Array.from(
-          new Set(
-            candidate.resourceIds.flatMap((resourceId) =>
-              typeof resourceId === 'string' && resourceId.trim()
-                ? [resourceId.trim().slice(0, 160)]
-                : [],
-            ),
-          ),
-        ).filter((resourceId) => resourceId !== primaryResourceId)
-      : []
-    if (!id || !name || !primaryResourceId || !resourceIds.length || ids.has(id)) continue
-    ids.add(id)
-    normalized.push({
-      id,
-      name,
-      primaryResourceId,
-      resourceIds: resourceIds.slice(0, 100),
-      createdAt: Number.isFinite(candidate.createdAt) ? Number(candidate.createdAt) : Date.now(),
-      updatedAt: Number.isFinite(candidate.updatedAt) ? Number(candidate.updatedAt) : Date.now(),
-    })
-    if (normalized.length >= 50) break
   }
   return normalized
 }

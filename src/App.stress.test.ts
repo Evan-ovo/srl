@@ -382,7 +382,7 @@ describe('App 资源量压力回归', () => {
         await search.setValue(`压力资源 ${String(target).padStart(5, '0')}`)
         await nextTick()
         searchDurations.push(performance.now() - searchStartedAt)
-        expect(wrapper.get('.toolbar__result').text()).toContain('显示 1 项')
+        expect(wrapper.get('.toolbar__result').text()).toContain('1 项')
       }
       expect(wrapper.findAll('resource-card-stub')).toHaveLength(1)
 
@@ -409,15 +409,20 @@ describe('App 资源量压力回归', () => {
 
       await wrapper.get('select[aria-label="每页资源数量"]').setValue(96)
       await vi.waitFor(() => expect(wrapper.findAll('resource-card-stub')).toHaveLength(96))
-      expect(wrapper.get('.pagination').text()).toContain(`第 1 / ${Math.ceil(count / 96)} 页`)
+      const pageInput = wrapper.get('input[aria-label="跳转到资源页"]')
+      expect((pageInput.element as HTMLInputElement).value).toBe('1')
 
       const nextButton = wrapper
         .get('.pagination')
         .findAll('button')
         .find((button) => button.text() === '下一页')!
       await nextButton.trigger('click')
-      expect(wrapper.get('.pagination').text()).toContain(`第 2 / ${Math.ceil(count / 96)} 页`)
+      expect((pageInput.element as HTMLInputElement).value).toBe('2')
       expect(wrapper.findAll('resource-card-stub')).toHaveLength(Math.min(96, count - 96))
+
+      await pageInput.setValue('4')
+      expect((pageInput.element as HTMLInputElement).value).toBe('4')
+      expect(wrapper.findAll('resource-card-stub')).toHaveLength(96)
 
       stressMetrics.push({
         count,

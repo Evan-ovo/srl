@@ -24,6 +24,7 @@ import type {
 } from '../services/TavernBridgeProtocol'
 
 import { tavernBridgeService } from '../services/TavernBridgeService'
+import { getDeviceRelayStatus } from '../services/RelayWorkerSettingsService'
 
 import { RESOURCE_TYPE, type ResourceSummary } from '../types/Resource'
 
@@ -138,7 +139,6 @@ export interface UseTavernTransferActionsContext {
   deviceCode: import('vue').Ref<string, string>
   selectedTavernIds: import('vue').Ref<Set<string>>
   includeChatScripts: import('vue').Ref<boolean>
-  selectedChatScriptIds?: import('vue').Ref<Set<string>>
   tavernReceiveFilter: import('vue').Ref<TavernReceiveFilter, TavernReceiveFilter>
   tavernReceiveFilters: import('vue').ComputedRef<
     { key: TavernReceiveFilter; label: string; count: number }[]
@@ -253,6 +253,16 @@ export function acceptPairing(operations: UseTavernTransferActionsContext): void
 export async function joinDeviceRelay(operations: UseTavernTransferActionsContext): Promise<void> {
   operations.error.value = ''
   if (operations.busy.value) return
+  const relayStatus = getDeviceRelayStatus()
+  if (!relayStatus.enabled) {
+    await confirmAction({
+      title: '中继码',
+      message: relayStatus.message,
+      confirmLabel: '知道了',
+      centered: true,
+    })
+    return
+  }
   const code = operations.deviceCode.value.trim().toUpperCase()
   if (!/^[2-9A-HJ-NP-Z]{8}$/u.test(code)) {
     operations.error.value = '请输入酒馆显示的 8 位设备码'
@@ -458,9 +468,7 @@ export async function pullFromTavern(operations: UseTavernTransferActionsContext
     ...(item.kind === 'chat'
       ? {
           carryReadingScripts: operations.includeChatScripts.value,
-          readingScriptIds: operations.includeChatScripts.value
-            ? [...(operations.selectedChatScriptIds?.value || [])]
-            : [],
+          readingScriptIds: [],
         }
       : {}),
   }))

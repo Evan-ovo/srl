@@ -262,8 +262,7 @@
   color: var(--color-ink-soft);
   font-size: var(--text-caption);
 }
-.is-horizontal .fw-effect-sticky-subject,
-.is-depth .fw-effect-sticky-subject {
+:is(.is-horizontal, .is-depth) .fw-effect-sticky-subject {
   height: 50px;
   gap: 0;
   margin: 0;
@@ -271,12 +270,10 @@
   border-radius: 0;
   top: 0;
 }
-.is-horizontal .fw-effect-sticky-subject strong,
-.is-depth .fw-effect-sticky-subject strong {
+:is(.is-horizontal, .is-depth) .fw-effect-sticky-subject strong {
   font-size: 1rem;
 }
-.is-horizontal .fw-effect-sticky-subject small,
-.is-depth .fw-effect-sticky-subject small {
+:is(.is-horizontal, .is-depth) .fw-effect-sticky-subject small {
   display: none;
 }
 .fw-effect-horizontal-window {

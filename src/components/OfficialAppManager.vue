@@ -606,10 +606,6 @@ button {
   min-height: 44px;
   flex-shrink: 0;
   padding: 0.4rem 0.65rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
 }
 .official-app-manager__update-dot {
   display: inline-block;
@@ -686,7 +682,7 @@ button {
   font: inherit;
 }
 .official-app-manager__dialog::backdrop {
-  background: rgba(18, 24, 21, 0.45);
+  background: var(--overlay-background);
   backdrop-filter: blur(2px);
 }
 .official-app-manager__dialog fieldset {

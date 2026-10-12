@@ -18,11 +18,6 @@
 .frontend-workshop-source-history-panel select {
   min-height: var(--control-visual-secondary);
   padding: 0 8px;
-  border: 1px solid currentColor;
-  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
   font: inherit;
   font-size: var(--text-caption);
 }

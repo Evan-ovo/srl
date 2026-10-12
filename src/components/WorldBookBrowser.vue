@@ -4,7 +4,9 @@ import FeatureBackButton from './FeatureBackButton.vue'
 import type { WorldBookEntry, WorldBookMode } from '../utils/WorldBookEntries'
 import '../styles/WorldBookBrowser.css'
 
-const props = defineProps<{ entries: WorldBookEntry[] }>()
+const props = withDefaults(defineProps<{ entries: WorldBookEntry[]; pageInputLabel?: string }>(), {
+  pageInputLabel: '跳转到世界书条目页',
+})
 const query = ref('')
 const status = ref('all')
 const mode = ref<WorldBookMode | 'all'>('all')
@@ -64,6 +66,19 @@ function closeDetail(): boolean {
 function changePage(offset: number) {
   page.value = Math.min(pageCount.value, Math.max(1, page.value + offset))
   root.value?.scrollIntoView({ block: 'start' })
+}
+function selectPageInput(event: FocusEvent) {
+  ;(event.currentTarget as HTMLInputElement).select()
+}
+function jumpToPage(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  const requested = /^\d+$/u.test(input.value) ? Number(input.value) : Number.NaN
+  if (!Number.isSafeInteger(requested) || requested < 1) {
+    input.value = String(page.value)
+    return
+  }
+  changePage(requested - page.value)
+  input.value = String(page.value)
 }
 watch([query, status, mode, position], () => {
   page.value = 1
@@ -217,7 +232,20 @@ defineExpose({ closeDetail })
       </p>
       <nav v-if="filtered.length > PAGE_SIZE" class="lore-pagination" aria-label="世界书分页">
         <button type="button" :disabled="page === 1" @click="changePage(-1)">上一页</button
-        ><span>{{ page }} / {{ pageCount }}</span
+        ><span
+          ><input
+            class="inline-page-jump"
+            :style="{ width: `${String(page).length}ch` }"
+            :value="page"
+            type="text"
+            inputmode="numeric"
+            :maxlength="String(pageCount).length"
+            :aria-label="pageInputLabel"
+            @focus="selectPageInput"
+            @change="jumpToPage"
+            @keydown.enter.prevent="jumpToPage"
+          />
+          / {{ pageCount }}</span
         ><button type="button" :disabled="page === pageCount" @click="changePage(1)">下一页</button>
       </nav>
     </template>

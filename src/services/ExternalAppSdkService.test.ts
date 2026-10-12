@@ -26,8 +26,10 @@ function createSdk(permissions: string[]) {
   const externalApps = {
     get: vi.fn(async () => ({ id: 'app', enabled: true, manifest: { permissions } })),
     getSummary: vi.fn(async () => ({ id: 'app', enabled: true, manifest: { permissions } })),
-    hasPermission: vi.fn(async (_id: string, permission: string) =>
-      permissions.includes(permission),
+    hasPermission: vi.fn(async (_id: string, permission: string | string[]) =>
+      (Array.isArray(permission) ? permission : [permission]).every((item) =>
+        permissions.includes(item),
+      ),
     ),
   }
   const resources = {

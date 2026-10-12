@@ -3,7 +3,8 @@ import { mount, flushPromises, DOMWrapper, type VueWrapper } from '@vue/test-uti
 import { ref } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { assistantPetCue, publishAssistantPetCue } from '../core/ProductAssistantPetState'
-import { assistantGuidanceAnchor } from '../core/ProductAssistantGuidance'
+import { assistantGuidanceAnchor, setAssistantHelpSurface } from '../core/ProductAssistantGuidance'
+import { discordSetupSession } from '../services/NativeDiscordSetupBrowser'
 const { petWorkspace, confirmPetAssets, loadPetAssets, downloadPetAssets, releasePetAssets } =
   vi.hoisted(() => ({
     petWorkspace: {
@@ -16,6 +17,17 @@ const { petWorkspace, confirmPetAssets, loadPetAssets, downloadPetAssets, releas
     releasePetAssets: vi.fn(),
   }))
 vi.mock('../core/AppContainer', () => ({ productAssistantWorkspaceService: petWorkspace }))
+vi.mock('./DiscordSetupHelp.vue', () => ({
+  default: { props: ['open'], template: '<div v-if="open" class="help-wizard">配置选择</div>' },
+}))
+vi.mock('../services/NativeDiscordSetupBrowser', async () => {
+  const { reactive } = await import('vue')
+  return {
+    hasDiscordSetupBrowser: () => true,
+    discordSetupSession: reactive({ active: false, browserVisible: false }),
+    nativeDiscordSetupBrowser: { pet: vi.fn() },
+  }
+})
 vi.mock('../composables/UseConfirmDialog', () => ({ confirmAction: confirmPetAssets }))
 vi.mock('../services/ProductAssistantPetAssets', () => ({
   downloadAssistantPetAssets: downloadPetAssets,
@@ -49,6 +61,7 @@ const addMediaListener = vi.fn((_event: string, listener: () => void) => {
 })
 const removeMediaListener = vi.fn()
 beforeEach(() => {
+  discordSetupSession.active = false
   preferences.value = {
     name: '蒜惹菈',
     desktopPet: true,
@@ -104,6 +117,26 @@ function renderPet() {
   })
   return document.querySelector<HTMLButtonElement>('.assistant-pet')!
 }
+it('reuses the existing compact pet dialog for browser chat and closes it when returning to the browser', async () => {
+  discordSetupSession.active = true
+  discordSetupSession.assistantConversationId = 'setup-chat'
+  discordSetupSession.browserVisible = false
+  renderPet()
+  try {
+    window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+    await flushPromises()
+    const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
+    expect(dialog.open).toBe(true)
+    expect(dialog.querySelector('[data-compact="true"]')).not.toBeNull()
+    discordSetupSession.browserVisible = true
+    await flushPromises()
+    expect(dialog.open).toBe(false)
+  } finally {
+    discordSetupSession.active = false
+    discordSetupSession.assistantConversationId = ''
+    discordSetupSession.browserVisible = false
+  }
+})
 it('rests and walks only while idle, pauses for chat and shows actual generation activity', async () => {
   vi.useFakeTimers()
   const pet = renderPet()
@@ -136,6 +169,58 @@ it('rests and walks only while idle, pauses for chat and shows actual generation
   wrapper = undefined
   expect(vi.getTimerCount()).toBe(0)
   expect(removeMediaListener).toHaveBeenCalledWith('change', mediaChanged)
+})
+it('offers contextual help after three taps and opens the route chooser only on yes', async () => {
+  const owner = Symbol('tutorial')
+  const tutorial = document.createElement('section')
+  tutorial.dataset.assistantHelpContext = 'discord-bridge'
+  document.body.append(tutorial)
+  vi.spyOn(tutorial, 'getClientRects').mockReturnValue([
+    new DOMRect(0, 0, 320, 500),
+  ] as unknown as DOMRectList)
+  setAssistantHelpSurface(owner, 'discord-bridge')
+  try {
+    const pet = renderPet()
+    const tap = async () => {
+      pet.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true }))
+      await flushPromises()
+    }
+    await tap()
+    await tap()
+    expect(document.querySelector('.assistant-pet-dialog')).toBeNull()
+    expect(document.querySelector('.assistant-pet-help-question')).toBeNull()
+    await tap()
+    expect(document.querySelector('.assistant-pet-help-question')?.textContent).toContain(
+      '需要我的帮助嘛？',
+    )
+    Array.from(document.querySelectorAll('.assistant-pet-help-question button'))
+      .find((button) => button.textContent === '不是')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(document.querySelector('.help-wizard')).toBeNull()
+    await tap()
+    await tap()
+    await tap()
+    Array.from(document.querySelectorAll('.assistant-pet-help-question button'))
+      .find((button) => button.textContent === '是')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+    expect(document.querySelector('.help-wizard')).not.toBeNull()
+    setAssistantHelpSurface(owner)
+    await flushPromises()
+    expect(document.querySelector('.help-wizard')).toBeNull()
+  } finally {
+    setAssistantHelpSurface(owner)
+  }
+})
+it('keeps the operation pet visible when the full assistant hides the normal pet', async () => {
+  const pet = renderPet()
+  await wrapper!.setProps({ hidden: true })
+  expect(pet.style.display).toBe('none')
+  discordSetupSession.active = true
+  await flushPromises()
+  expect(pet.style.display).not.toBe('none')
+  expect(pet.classList.contains('assistant-pet--assistance')).toBe(true)
 })
 it('stops idle timers when reduced motion or page visibility changes, and wakes without timer duplication', async () => {
   vi.useFakeTimers()
@@ -333,6 +418,16 @@ it('asks before downloading pet pictures and remembers the light SVG choice', as
   expect(petWorkspace.savePreferences).toHaveBeenCalledWith(
     expect.objectContaining({ petAssetMode: 'svg' }),
   )
+})
+it('uses the local SVG during a browser task without hiding asset consent behind the native window', async () => {
+  discordSetupSession.active = true
+  preferences.value.petAssetMode = undefined
+  const pet = renderPet()
+  await flushPromises()
+  expect(pet.querySelector('.assistant-pet-orb')).not.toBeNull()
+  expect(confirmPetAssets).not.toHaveBeenCalled()
+  expect(downloadPetAssets).not.toHaveBeenCalled()
+  expect(petWorkspace.savePreferences).not.toHaveBeenCalled()
 })
 it('downloads only after the confirmation and switches to cached artwork', async () => {
   preferences.value.petAssetMode = undefined

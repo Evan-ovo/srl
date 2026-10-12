@@ -23,7 +23,7 @@
   font-size: var(--text-body-strong);
 }
 .frontend-workbench__canvas-label small {
-  color: var(--color-ink-soft, #718188);
+  color: var(--color-ink-soft);
 }
 .frontend-workbench__canvas-scroll {
   min-width: 0;
@@ -73,7 +73,7 @@
   opacity: 0.45;
 }
 .frontend-workbench__canvas-node > small {
-  color: var(--color-ink-soft, #718188);
+  color: var(--color-ink-soft);
   font-size: 10px;
 }
 .frontend-workbench__canvas-node > strong {
@@ -99,12 +99,12 @@
   place-content: center;
   gap: 4px;
   text-align: center;
-  color: var(--color-ink-soft, #718188);
+  color: var(--color-ink-soft);
 }
 .frontend-workbench__empty-canvas strong {
   font-family: var(--font-ui);
   font-size: 1.45rem;
-  color: var(--color-ink, #243238);
+  color: var(--color-ink);
 }
 
 .frontend-workbench__scale-handle,
@@ -130,8 +130,8 @@
   width: 9px;
   height: 9px;
   content: '';
-  border: 2px solid var(--color-accent, #477d78);
-  background: #fff;
+  border: 2px solid var(--color-accent);
+  background: var(--color-surface-raised);
 }
 .frontend-workbench__rotate-handle {
   top: -17px;
@@ -145,9 +145,9 @@
   width: 10px;
   height: 10px;
   content: '';
-  border: 2px solid var(--color-accent, #477d78);
+  border: 2px solid var(--color-accent);
   border-radius: 50%;
-  background: #fff;
+  background: var(--color-surface-raised);
 }
 .frontend-workbench__selection-actions {
   position: absolute;
@@ -155,16 +155,14 @@
   right: 18px;
   display: flex;
   min-height: 44px;
-  border: 1px solid var(--color-line-strong, #becacf);
-  background: #fff;
+  border: 1px solid var(--color-line-strong);
+  background: var(--color-surface-raised);
 }
 .frontend-workbench__selection-actions button {
   min-height: 44px;
   padding: 2px 6px;
-  border: 0;
-  border-right: 1px solid var(--color-line, #dbe3e5);
-  border-radius: 0;
-  background: transparent;
+  border-right: 1px solid var(--color-line);
+  border-radius: var(--button-radius, 0);
   font-size: 10px;
 }
 .frontend-workbench__selection-actions button:last-child {
@@ -175,9 +173,9 @@
   right: 0;
   bottom: -24px;
   padding: 2px 5px;
-  border: 1px solid var(--color-line, #dbe3e5);
-  background: #fff;
-  color: var(--color-ink-soft, #718188);
+  border: 1px solid var(--color-line);
+  background: var(--color-surface-raised);
+  color: var(--color-ink-soft);
   font-size: 10px;
 }
 

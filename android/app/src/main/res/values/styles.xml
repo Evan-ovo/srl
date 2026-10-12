@@ -19,4 +19,20 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>
+
+    <!-- Native setup dialogs follow the same Foundation light/dark colors as the tool window. -->
+    <style name="DiscordSetupDialogLight" parent="@android:style/Theme.DeviceDefault.Light.Dialog.Alert">
+        <item name="android:colorAccent">#1d707b</item>
+        <item name="android:colorBackground">#fbfefe</item>
+        <item name="android:colorBackgroundFloating">#fbfefe</item>
+        <item name="android:textColorPrimary">#183842</item>
+        <item name="android:textColorSecondary">#59727c</item>
+    </style>
+    <style name="DiscordSetupDialogDark" parent="@android:style/Theme.DeviceDefault.Dialog.Alert">
+        <item name="android:colorAccent">#92d7d3</item>
+        <item name="android:colorBackground">#293f48</item>
+        <item name="android:colorBackgroundFloating">#293f48</item>
+        <item name="android:textColorPrimary">#eef8f8</item>
+        <item name="android:textColorSecondary">#b5c8cc</item>
+    </style>
 </resources>

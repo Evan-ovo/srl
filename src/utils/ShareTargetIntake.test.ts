@@ -6,6 +6,7 @@ import {
   clearShareTargetQuery,
   downloadSharedDiscordAttachment,
   shouldAutoResumeSharedImport,
+  shouldShowSharedImportRouteChoices,
   takeSharedFileBatch,
   takeSharedFileBatches,
   cloudWebResourceBatch,
@@ -30,6 +31,11 @@ vi.mock('@capacitor/core', () => ({
 }))
 
 type StoredEntry = Response
+
+it('hides route choices whenever a shared batch already has a saved route', () => {
+  expect(shouldShowSharedImportRouteChoices({ route: 'resource' })).toBe(false)
+  expect(shouldShowSharedImportRouteChoices({})).toBe(true)
+})
 
 it('keeps independent downloaded attachments and acknowledgements separate, preserving native sizes', async () => {
   native.enabled = true

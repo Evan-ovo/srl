@@ -1,11 +1,13 @@
 const PENDING_APPEARANCE_KEY = 'srl.appearance.pending.v1'
 const LAST_GOOD_APPEARANCE_KEY = 'srl.appearance.lastGood.v1'
 const GUARD_HOST_ID = 'srl-appearance-safe-layer'
+import { CUSTOM_UI_VIEWS_KEY, CUSTOM_UI_VIEWS_CHANGED } from '../types/UiCustomization'
 
 interface PendingAppearance {
   previousCss: string
   nextCss: string
   expiresAt: number
+  previousViews?: string
 }
 
 interface AppearanceTransactionOptions {
@@ -17,6 +19,8 @@ interface AppearanceTransactionOptions {
   onRollback?(): void
   durationMs?: number
   autoKeep?: boolean
+  previousViews?: string
+  title?: string
 }
 
 function parsePendingAppearance(): PendingAppearance | null {
@@ -42,7 +46,7 @@ function parsePendingAppearance(): PendingAppearance | null {
   return null
 }
 
-function createProtectedHost(id: string): { host: HTMLDivElement; root: ShadowRoot } {
+export function createProtectedHost(id: string): { host: HTMLDivElement; root: ShadowRoot } {
   document.getElementById(id)?.remove()
   const host = document.createElement('div')
   host.id = id
@@ -69,6 +73,9 @@ export function recoverInterruptedAppearance(): string | undefined {
   try {
     localStorage.removeItem(PENDING_APPEARANCE_KEY)
     localStorage.setItem(LAST_GOOD_APPEARANCE_KEY, pending.previousCss)
+    if (typeof pending.previousViews === 'string')
+      localStorage.setItem(CUSTOM_UI_VIEWS_KEY, pending.previousViews)
+    window.dispatchEvent(new Event(CUSTOM_UI_VIEWS_CHANGED))
   } catch {
     /* Still render the previous CSS if diagnostic storage is unavailable. */
   }
@@ -114,6 +121,7 @@ class AppearanceTransactionManager {
       previousCss: options.previousCss,
       nextCss: options.nextCss,
       expiresAt: Date.now() + durationMs,
+      ...(options.previousViews !== undefined ? { previousViews: options.previousViews } : {}),
     }
     localStorage.setItem(PENDING_APPEARANCE_KEY, JSON.stringify(pending))
     options.persist(options.nextCss)
@@ -129,6 +137,7 @@ class AppearanceTransactionManager {
       @media(max-width:520px){.guard{align-items:stretch;flex-direction:column}.actions button{flex:1}}
     </style><div class="guard" role="alert"><div class="copy"><strong>自定义 CSS 已临时应用</strong><span data-countdown></span></div><div class="actions"><button type="button" data-rollback>立即恢复</button><button type="button" class="keep" data-keep>保留更改</button></div></div>`
     const countdown = root.querySelector<HTMLElement>('[data-countdown]')
+    if (options.title) root.querySelector('strong')!.textContent = options.title
     if (options.autoKeep) {
       root.querySelector('strong')!.textContent = '美化已应用'
       root.querySelector('[data-rollback]')!.textContent = '撤销'

@@ -1,4 +1,7 @@
 import type { AppDatabase } from '../database/AppDatabase'
+import type Dexie from 'dexie'
+import { hashBytes } from '../services/HashService'
+import { isAndroidNativeAppDatabaseActive } from './AndroidNativeDexieCore'
 import type { AppSetting } from '../types/Resource'
 import type {
   ProductAssistantStorage,
@@ -11,6 +14,8 @@ import type {
   AssistantProjectSummary,
   AssistantProjectReference,
   AssistantTaskTemplate,
+  AssistantHistoryRecoveryOptions,
+  AssistantHistoryRecoveryResult,
 } from '../services/ProductAssistantWorkspaceService'
 const chatPrefix = 'assistant.chat:'
 const summaryPrefix = 'assistant.summary:'
@@ -26,8 +31,242 @@ type MessageIndex = Omit<AssistantMessageMatch, 'title'> & { role: 'user' | 'ass
 /** Chat bodies and drafts are local settings, read only when opening a conversation. */
 export class IndexedDbProductAssistantStorage implements ProductAssistantStorage {
   private readonly database: AppDatabase
-  constructor(database: AppDatabase) {
+  private readonly openRecoverySource: () => Promise<Dexie | undefined>
+  constructor(database: AppDatabase, openRecoverySource?: () => Promise<Dexie | undefined>) {
     this.database = database
+    this.openRecoverySource =
+      openRecoverySource ??
+      (async () => {
+        if (!isAndroidNativeAppDatabaseActive()) return undefined
+        const { openRetainedIndexedDbIfPresent } = await import('./AndroidNativeAppDatabaseRuntime')
+        return openRetainedIndexedDbIfPresent(database.name)
+      })
+  }
+  async recoverHistory(
+    options: AssistantHistoryRecoveryOptions,
+  ): Promise<AssistantHistoryRecoveryResult> {
+    const result: AssistantHistoryRecoveryResult = {
+      scanned: 0,
+      total: 0,
+      recovered: 0,
+      repaired: 0,
+      conflicts: 0,
+      invalid: 0,
+      missingProjects: 0,
+      cancelled: false,
+    }
+    const validChat = (value: unknown, id: string): value is AssistantConversation => {
+      if (!value || typeof value !== 'object') return false
+      const chat = value as AssistantConversation
+      return (
+        chat.id === id &&
+        typeof chat.title === 'string' &&
+        Number.isFinite(chat.updatedAt) &&
+        typeof chat.input === 'string' &&
+        Array.isArray(chat.images) &&
+        Array.isArray(chat.history) &&
+        chat.history.every(
+          (turn) =>
+            turn &&
+            ['user', 'assistant'].includes(turn.role) &&
+            typeof turn.text === 'string' &&
+            (turn.toolCalls === undefined ||
+              (Array.isArray(turn.toolCalls) &&
+                turn.toolCalls.every((call) => call && typeof call === 'object'))),
+        )
+      )
+    }
+    const summary = (chat: AssistantConversation): IndexedSummary => ({
+      id: chat.id,
+      title: chat.customTitle || chat.title,
+      updatedAt: chat.updatedAt,
+      ...(chat.customTitle ? { customTitle: chat.customTitle } : {}),
+      searchVersion: 1,
+    })
+    const fingerprint = async (value: unknown) =>
+      await hashBytes(new TextEncoder().encode(JSON.stringify(value)))
+    const stopped = () => options.signal?.aborted === true
+    const progress = () => options.onProgress?.({ ...result })
+    let source: Dexie | undefined
+    try {
+      if (stopped()) return { ...result, cancelled: true }
+      source = await this.openRecoverySource()
+      const sources = [
+        this.database,
+        ...(source?.tables.some((table) => table.name === 'settings') ? [source] : []),
+      ]
+      for (const connection of sources)
+        result.total += await connection
+          .table('settings')
+          .where('id')
+          .startsWith(chatPrefix)
+          .count()
+      progress()
+      for (const connection of sources) {
+        let after: string | undefined
+        while (!stopped()) {
+          // Page keys only: at most one chat body and its project are materialized per record.
+          const keys = (await connection
+            .table('settings')
+            .where('id')
+            .between(after ?? chatPrefix, chatPrefix + '\uffff', after === undefined, true)
+            .limit(20)
+            .primaryKeys()) as string[]
+          if (!keys.length) break
+          for (const key of keys) {
+            if (stopped()) break
+            const row = (await connection.table('settings').get(key)) as AppSetting | undefined
+            if (!validChat(row?.value, key.slice(chatPrefix.length))) {
+              result.invalid++
+            } else if (connection === this.database) {
+              const repaired = await this.database.transaction(
+                'rw',
+                this.database.settings,
+                async () => {
+                  if (
+                    stopped() ||
+                    (await this.database.settings.get(summaryPrefix + key.slice(chatPrefix.length)))
+                  )
+                    return false
+                  const latest = await this.database.settings.get(key)
+                  if (!validChat(latest?.value, key.slice(chatPrefix.length))) return false
+                  await this.indexMessages(latest.value)
+                  await this.database.settings.put({
+                    id: summaryPrefix + latest.value.id,
+                    value: summary(latest.value),
+                    updatedAt: latest.updatedAt,
+                  })
+                  return true
+                },
+              )
+              if (repaired) {
+                if (
+                  !(await this.database.settings.get(summaryPrefix + key.slice(chatPrefix.length)))
+                )
+                  throw new Error('历史列表写入后未能读回；已停止找回，旧数据保留')
+                result.repaired++
+              }
+            } else {
+              const original = row!.value as AssistantConversation
+              const metadata = (await connection.table('settings').get(summaryPrefix + original.id))
+                ?.value as IndexedSummary | undefined
+              const customTitle =
+                typeof metadata?.customTitle === 'string'
+                  ? metadata.customTitle
+                  : original.customTitle
+              const oldProject = original.projectId
+                ? ((await connection.table('settings').get(projectPrefix + original.projectId))
+                    ?.value as AssistantProject | undefined)
+                : undefined
+              const draft = original.draft ?? oldProject?.draft
+              const id = 'recovered-' + (await fingerprint({ original, title: customTitle, draft }))
+              const projectId =
+                draft?.manifest && typeof draft.manifest.id === 'string'
+                  ? 'recovered-' + (await fingerprint(draft))
+                  : undefined
+              const chat: AssistantConversation = {
+                ...original,
+                id,
+                title: (customTitle || original.title).slice(0, 54) + '（找回）',
+              }
+              chat.customTitle = chat.title
+              delete chat.draft
+              delete chat.projectId
+              delete chat.projectVersion
+              if (projectId) {
+                chat.projectId = projectId
+                chat.projectVersion = 1
+              }
+              // Interrupted tool calls are records, never work to be resumed by recovery.
+              chat.history = original.history.map((turn) => ({
+                ...turn,
+                toolCalls: turn.toolCalls?.map((call) =>
+                  call.state === 'running' ? { ...call, state: 'cancelled' } : call,
+                ),
+              }))
+              const outcome = await this.database.transaction(
+                'rw',
+                this.database.settings,
+                async () => {
+                  if (stopped() || (await this.database.settings.get(chatPrefix + id)))
+                    return undefined
+                  const current = (await this.database.settings.get(key))?.value as
+                    AssistantConversation | undefined
+                  if (current && JSON.stringify(current) === JSON.stringify(original)) {
+                    const currentTitle = (
+                      await this.database.settings.get(summaryPrefix + original.id)
+                    )?.value as IndexedSummary | undefined
+                    const currentDraft = original.projectId
+                      ? (await this.project(original.projectId))?.draft
+                      : current.draft
+                    if (
+                      JSON.stringify(currentDraft) === JSON.stringify(draft) &&
+                      (currentTitle?.customTitle || current.customTitle) === customTitle
+                    )
+                      return undefined
+                  }
+                  if (
+                    projectId &&
+                    draft &&
+                    !(await this.database.settings.get(projectPrefix + projectId))
+                  ) {
+                    const project: AssistantProject = {
+                      id: projectId,
+                      name: draft.manifest.name + '（找回）',
+                      version: 1,
+                      updatedAt: original.updatedAt,
+                      draft: { ...draft, manifest: { ...draft.manifest, id: projectId } },
+                    }
+                    const { draft: _draft, ...projectSummary } = project
+                    await this.database.settings.bulkPut([
+                      {
+                        id: projectPrefix + projectId,
+                        value: project,
+                        updatedAt: project.updatedAt,
+                      },
+                      {
+                        id: projectSummaryPrefix + projectId,
+                        value: projectSummary,
+                        updatedAt: project.updatedAt,
+                      },
+                    ])
+                  }
+                  // Reuse an already recovered project's current version without overwriting its edits.
+                  if (projectId) chat.projectVersion = (await this.project(projectId))!.version
+                  await this.indexMessages(chat)
+                  await this.database.settings.bulkPut([
+                    { id: chatPrefix + id, value: chat, updatedAt: chat.updatedAt },
+                    { id: summaryPrefix + id, value: summary(chat), updatedAt: chat.updatedAt },
+                  ])
+                  return { conflict: !!current }
+                },
+              )
+              if (outcome) {
+                const saved = await this.database.settings.get(chatPrefix + id)
+                if (JSON.stringify(saved?.value) !== JSON.stringify(chat))
+                  throw new Error('找回的聊天写入后未能完整读回；已停止，旧数据保留')
+                if (projectId && draft) {
+                  const savedProject = await this.project(projectId)
+                  if (!savedProject || savedProject.draft.manifest.id !== projectId)
+                    throw new Error('找回的 APP 项目未能读回；旧项目仍保留')
+                }
+                result.recovered++
+                if (outcome.conflict) result.conflicts++
+                if (original.projectId && !projectId) result.missingProjects++
+              }
+            }
+            result.scanned++
+            progress()
+          }
+          after = keys.at(-1)
+        }
+        if (stopped()) break
+      }
+      result.cancelled = stopped()
+      return result
+    } finally {
+      source?.close()
+    }
   }
   async exportPortableState(): Promise<AppSetting[]> {
     return (await this.database.settings.where('id').startsWith('assistant.').toArray()).map(

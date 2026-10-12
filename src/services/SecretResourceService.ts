@@ -14,6 +14,11 @@ const ITERATIONS = 310_000
 const CONFIG_ID = 'personal-resources.password'
 const VERIFIER = 'srl-personal-resources-v1'
 const encoder = new TextEncoder()
+export interface SecretBrowserTransfer {
+  key: string
+  iv: string
+  data: string
+}
 function base64(bytes: Uint8Array): string {
   return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
 }
@@ -89,6 +94,56 @@ export class SecretResourceService {
 
   isUnlocked(): boolean {
     return Boolean(this.sessionPassword)
+  }
+  /** One local encrypted transfer. Only the consumer sees plaintext; never return it to tools. */
+  async receiveBrowserSecret(
+    capture: (publicKey: string) => Promise<SecretBrowserTransfer>,
+    consume: (secret: string) => Promise<void>,
+  ): Promise<void> {
+    if (!this.isUnlocked()) throw new Error('请先解锁统一密码')
+    const pair = await crypto.subtle.generateKey(
+      {
+        name: 'RSA-OAEP',
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: 'SHA-256',
+      },
+      false,
+      ['encrypt', 'decrypt'],
+    )
+    const publicKey = base64(new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey)))
+    const transfer = await capture(publicKey)
+    if (!this.isUnlocked()) throw new Error('统一密码已锁定，密钥未保存')
+    if (
+      [transfer.key, transfer.iv, transfer.data].some(
+        (value) => typeof value !== 'string' || value.length > 4096,
+      )
+    )
+      throw new Error('本机密钥转填格式无效')
+    let raw: Uint8Array<ArrayBuffer> | undefined
+    let plain: Uint8Array<ArrayBuffer> | undefined
+    try {
+      raw = new Uint8Array(
+        await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, pair.privateKey, bytes(transfer.key)),
+      )
+      if (raw.length !== 32 || bytes(transfer.iv).length !== 12)
+        throw new Error('本机密钥转填格式无效')
+      plain = new Uint8Array(
+        await crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv: bytes(transfer.iv),
+            additionalData: encoder.encode('srl-discord-bot-transfer-v1'),
+          },
+          await importKey(raw),
+          bytes(transfer.data),
+        ),
+      )
+      await consume(new TextDecoder().decode(plain))
+    } finally {
+      raw?.fill(0)
+      plain?.fill(0)
+    }
   }
   lock(): void {
     this.sessionPassword = ''

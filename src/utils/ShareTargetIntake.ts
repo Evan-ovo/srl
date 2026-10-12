@@ -249,6 +249,10 @@ export function shouldAutoResumeSharedImport(
   return Boolean(batch.route) && !batch.interrupted
 }
 
+export function shouldShowSharedImportRouteChoices(batch: Pick<SharedFileBatch, 'route'>): boolean {
+  return !batch.route
+}
+
 function isSharedImportRoute(value: unknown): value is SharedImportRoute {
   return (
     value === 'libraryBackup' ||

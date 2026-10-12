@@ -19,3 +19,18 @@ index fd71370945b645c9e9cb7ed1a5030c30bd08b8b7..b613b4d92cbd458d2729bc9592025cce
                      } catch(e) { console.error('Error injecting safe area CSS:', e); }
                      """,
                      (int) topPx,
+diff --git a/capacitor/src/main/java/com/getcapacitor/BridgeWebChromeClient.java b/capacitor/src/main/java/com/getcapacitor/BridgeWebChromeClient.java
+index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000 100644
+--- a/capacitor/src/main/java/com/getcapacitor/BridgeWebChromeClient.java
++++ b/capacitor/src/main/java/com/getcapacitor/BridgeWebChromeClient.java
+@@ -378,7 +378,9 @@ public class BridgeWebChromeClient extends WebChromeClient {
+         if (fileChooserParams.getAcceptTypes().length > 1 || intent.getType().startsWith(".")) {
+             String[] validTypes = getValidTypes(fileChooserParams.getAcceptTypes());
+             intent.putExtra(Intent.EXTRA_MIME_TYPES, validTypes);
+-            if (intent.getType().startsWith(".")) {
++            if (validTypes.length > 1) {
++                intent.setType("*/*");
++            } else if (intent.getType().startsWith(".")) {
+                 intent.setType(validTypes[0]);
+             }
+         }

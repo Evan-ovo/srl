@@ -16,6 +16,14 @@ import {
 } from '../services/ProductAssistantPetAssets'
 import { assistantPetCue, type AssistantPetExpression } from '../core/ProductAssistantPetState'
 import { assistantGuidanceAnchor } from '../core/ProductAssistantGuidance'
+import { assistantHelpContext, visibleAssistantHelpContext } from '../core/ProductAssistantGuidance'
+import {
+  hasDiscordSetupBrowser,
+  nativeDiscordSetupBrowser,
+  discordSetupSession,
+} from '../services/NativeDiscordSetupBrowser'
+import { renderAssistantPetFrame } from '../services/ProductAssistantPetFrame'
+import DiscordSetupHelp from './DiscordSetupHelp.vue'
 import type { FeatureHubProps } from '../composables/UseFeatureHub'
 
 const props = defineProps<
@@ -54,6 +62,13 @@ const pageHidden = ref(document.hidden)
 const expression = ref<AssistantPetExpression>()
 const speech = ref('')
 const travelling = ref(false)
+const helpQuestion = ref(false)
+const helpMenuOpen = ref(false)
+const helpAvailable = computed(
+  () => hasDiscordSetupBrowser() && assistantHelpContext.value === 'discord-bridge',
+)
+const petVisible = computed(() => !props.hidden || discordSetupSession.active)
+const assistanceLayer = computed(() => helpAvailable.value || discordSetupSession.active)
 const portal = shallowRef<HTMLElement | string>('body')
 const idleSteps = [
   { pose: 'idle', duration: 10000 },
@@ -86,6 +101,8 @@ const canWander = computed(
     !assistantGuidanceAnchor.value &&
     !reducedMotion.value &&
     !pageHidden.value &&
+    !helpQuestion.value &&
+    !discordSetupSession.active &&
     preferences.value.petWalkingAnimation !== false,
 )
 const running = computed(
@@ -193,6 +210,9 @@ async function initializePetAssets() {
   if (preferences.value.petAssetMode === 'svg') return
   await refreshPetAssets()
   if (!alive || Object.keys(petAssets.value).length) return
+  // A pet mounted for a browser task uses local SVG while pictures are absent;
+  // asset-download consent must not be hidden behind the native browser.
+  if (discordSetupSession.active) return
   const accepted = await confirmAction({
     title: '蒜惹菈桌宠图片还没下载',
     message: '配套图片约 3.5 MiB。下载后可使用动态表情；清除图片后会改用轻量 SVG 悬浮球。',
@@ -245,6 +265,8 @@ let press:
   | undefined
 let suppressClick = false
 let lastTap = 0
+let helpTapCount = 0
+let helpTapStarted = 0
 let guideSpeech = ''
 const style = computed(() => ({
   left: `${position.value.x}px`,
@@ -440,6 +462,7 @@ watch(assistantGuidanceAnchor, () => void goToFeature())
 onMounted(() => {
   void initializePetAssets()
   window.addEventListener('srl:assistant-pet-assets-updated', refreshPetAssetsAfterDownload)
+  window.addEventListener('srl:discord-setup-quick-chat', openTaskChat)
   const saved = preferences.value.petPosition
   position.value = saved
     ? { x: saved.x * Math.max(1, innerWidth - 96), y: saved.y * Math.max(1, innerHeight - 154) }
@@ -460,6 +483,11 @@ async function showChat() {
   open.value = true
   await nextTick()
   dialog.value?.show()
+}
+function openTaskChat() {
+  if (!discordSetupSession.active || !discordSetupSession.assistantConversationId) return
+  expanded.value = false
+  void showChat()
 }
 function down(event: PointerEvent) {
   if (event.button !== 0) return
@@ -491,7 +519,10 @@ function move(event: PointerEvent) {
 async function up(event: PointerEvent) {
   if (!press || press.id !== event.pointerId) return
   const dragged = press.dragged
-  if (dragged) lastTap = 0
+  if (dragged) {
+    lastTap = 0
+    helpTapCount = 0
+  }
   suppressClick ||= dragged
   press = undefined
   held.value = false
@@ -519,6 +550,25 @@ function click(event: MouseEvent) {
   // Touch browsers do not consistently produce dblclick. Count two genuine
   // taps here; keyboard activation remains a single accessible operation.
   const now = performance.now()
+  if (
+    event.detail !== 0 &&
+    helpAvailable.value &&
+    visibleAssistantHelpContext() === 'discord-bridge'
+  ) {
+    if (!helpTapStarted || now - helpTapStarted > 900) {
+      helpTapStarted = now
+      helpTapCount = 0
+    }
+    lastTap = 0
+    if (++helpTapCount === 3) {
+      helpTapCount = 0
+      helpTapStarted = 0
+      close()
+      clearCue()
+      helpQuestion.value = true
+    }
+    return
+  }
   if (event.detail === 0 || (lastTap && now - lastTap < 350)) {
     lastTap = 0
     void showChat()
@@ -527,12 +577,46 @@ function click(event: MouseEvent) {
     say('我在呢～')
   }
 }
+function answerHelp(accepted: boolean) {
+  helpQuestion.value = false
+  if (accepted) helpMenuOpen.value = true
+}
+watch(assistantHelpContext, () => {
+  helpTapCount = 0
+  helpTapStarted = 0
+  helpQuestion.value = false
+  helpMenuOpen.value = false
+})
+let petFrameVersion = 0
+watch(
+  [button, petImage, pose, helpAvailable, () => discordSetupSession.active],
+  async () => {
+    if (!hasDiscordSetupBrowser() || (!helpAvailable.value && !discordSetupSession.active)) return
+    const version = ++petFrameVersion
+    await nextTick()
+    if (!button.value) return
+    try {
+      const dataUrl = await renderAssistantPetFrame(button.value)
+      if (dataUrl && alive && version === petFrameVersion)
+        await nativeDiscordSetupBrowser.pet({ dataUrl })
+    } catch {
+      /* Keep the existing pet and the native window's visible fallback. */
+    }
+  },
+  { flush: 'post', immediate: true },
+)
 function close() {
   resizing = undefined
   expanded.value = false
   dialog.value?.close()
   open.value = false
 }
+watch(
+  () => discordSetupSession.browserVisible,
+  (visible) => {
+    if (visible) close()
+  },
+)
 function assistantActivity(value: boolean) {
   busy.value = value
   emit('activity', value)
@@ -573,6 +657,7 @@ onBeforeUnmount(() => {
   motionQuery?.removeEventListener('change', syncMotion)
   document.removeEventListener('visibilitychange', syncVisibility)
   window.removeEventListener('srl:assistant-pet-assets-updated', refreshPetAssetsAfterDownload)
+  window.removeEventListener('srl:discord-setup-quick-chat', openTaskChat)
   dialog.value?.close()
   window.removeEventListener('resize', clamp)
 })
@@ -581,12 +666,13 @@ onBeforeUnmount(() => {
 <template>
   <Teleport :to="portal">
     <button
-      v-show="!hidden"
+      v-show="petVisible"
       ref="button"
       class="assistant-pet"
       :class="{
         'assistant-pet--walk': pose === 'walk' && canWander,
         'assistant-pet--travelling': travelling,
+        'assistant-pet--assistance': assistanceLayer,
       }"
       :data-pose="pose"
       :style="style"
@@ -641,11 +727,28 @@ onBeforeUnmount(() => {
         <circle cx="65" cy="55" r="3.5" fill="#ef9db6" opacity=".8" />
       </svg>
     </button>
+    <div
+      v-if="helpQuestion && petVisible && !pageHidden"
+      class="assistant-pet-bubble assistant-pet-bubble--assistance assistant-pet-help-question"
+      :class="{ 'assistant-pet-bubble--below': bubbleBelow }"
+      :style="bubbleStyle"
+      role="group"
+      aria-label="需要我的帮助嘛？"
+    >
+      <span>需要我的帮助嘛？</span>
+      <div>
+        <button type="button" @click="answerHelp(true)">是</button
+        ><button type="button" @click="answerHelp(false)">不是</button>
+      </div>
+    </div>
     <button
-      v-if="speech && !hidden && !pageHidden && !travelling"
+      v-else-if="speech && petVisible && !pageHidden && !travelling"
       ref="bubble"
       class="assistant-pet-bubble"
-      :class="{ 'assistant-pet-bubble--below': bubbleBelow }"
+      :class="{
+        'assistant-pet-bubble--below': bubbleBelow,
+        'assistant-pet-bubble--assistance': assistanceLayer,
+      }"
       :style="bubbleStyle"
       type="button"
       aria-label="打开详细对话"
@@ -698,6 +801,7 @@ onBeforeUnmount(() => {
         </svg>
       </button>
     </dialog>
+    <DiscordSetupHelp v-model:open="helpMenuOpen" />
   </Teleport>
 </template>
 

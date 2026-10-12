@@ -33,6 +33,10 @@ import { usePreviewBudget } from '../composables/UsePreviewBudget'
 import { usePreviewPolicy } from '../composables/UsePreviewPolicy'
 import FeatureAppHeader from './FeatureAppHeader.vue'
 import AppearanceOriginalCssActions from './AppearanceOriginalCssActions.vue'
+import AppearanceUiEditor from './AppearanceUiEditor.vue'
+import AppearanceCodeReference from './AppearanceCodeReference.vue'
+import { normalizeUiViews } from '../core/UiCustomization'
+import type { CustomUiViews, UiApplyOptions } from '../types/UiCustomization'
 import {
   BrowserStorageService,
   CABINET_COLUMN_OPTIONS,
@@ -92,7 +96,7 @@ const emit = defineEmits<{
   'update:resourceCardHeightMode': [value: ResourceCardHeightMode]
   'update:noImageResourceCoverMode': [value: NoImageResourceCoverMode]
   'update:uiFontScale': [value: UiFontScale]
-  'save-css': [value: string]
+  'save-css': [value: string, options?: UiApplyOptions]
   'save-assistant-css': [value: string]
   'assistant-visibility': [value: boolean]
   'assistant-activity': [value: boolean]
@@ -132,10 +136,10 @@ const cabinetDensities: Array<{
   { value: 4, title: '标准', description: '每页 12 个' },
 ]
 
-const fontScales: Array<{ value: UiFontScale; title: string; description: string }> = [
-  { value: 'small', title: '紧凑', description: '同屏更多内容' },
-  { value: 'standard', title: '标准', description: '默认显示大小' },
-  { value: 'large', title: '放大', description: '正文更易阅读' },
+const fontScales: Array<{ value: UiFontScale; title: string }> = [
+  { value: 'small', title: '紧凑' },
+  { value: 'standard', title: '标准' },
+  { value: 'large', title: '放大' },
 ]
 
 const layouts: Array<{
@@ -252,7 +256,11 @@ function createPreset(name = '我的样式', css = ''): CustomCssPreset {
 }
 
 function clonePreset(value: CustomCssPreset): CustomCssPreset {
-  return { ...value, scopedCss: { ...(value.scopedCss ?? {}) } }
+  return {
+    ...value,
+    scopedCss: { ...(value.scopedCss ?? {}) },
+    ...(value.views ? { views: normalizeUiViews(value.views) } : {}),
+  }
 }
 
 const storedPresets = storage.getCustomUiPresets()
@@ -323,18 +331,20 @@ const hasUnsavedChanges = computed(() => {
   return (
     saved.name !== draft.value.name ||
     saved.globalCss !== draft.value.globalCss ||
-    JSON.stringify(saved.scopedCss ?? {}) !== JSON.stringify(draft.value.scopedCss ?? {})
+    JSON.stringify(saved.scopedCss ?? {}) !== JSON.stringify(draft.value.scopedCss ?? {}) ||
+    JSON.stringify(saved.views ?? {}) !== JSON.stringify(draft.value.views ?? {})
   )
 })
 const presetState = computed(() => {
-  if (!savedDraft.value) return '新预设 · 尚未保存'
-  if (hasUnsavedChanges.value) return '有未保存修改'
-  return '预设已保存'
+  if (!savedDraft.value) return '未保存'
+  if (hasUnsavedChanges.value) return '待保存'
+  return '已保存'
 })
 const hasCssContent = computed(
   () =>
     Boolean(draft.value.globalCss.trim()) ||
-    Object.values(draft.value.scopedCss ?? {}).some((value) => Boolean(value?.trim())),
+    Object.values(draft.value.scopedCss ?? {}).some((value) => Boolean(value?.trim())) ||
+    Object.keys(draft.value.views ?? {}).length > 0,
 )
 
 const compilePreset = compileAppearancePreset
@@ -364,10 +374,14 @@ async function selectPreset(event: Event): Promise<void> {
   }
   const selected = presets.value.find((item) => item.id === id)
   if (!selected) return
+  if (!(await confirmViewScripts(selected.views))) {
+    select.value = activePresetId.value
+    return
+  }
   activePresetId.value = id
   draft.value = clonePreset(selected)
   storage.setActiveCustomUiPresetId(id)
-  emit('save-css', compilePreset(selected))
+  applyPreset(selected, compilePreset(selected))
   flash(`已切换到「${selected.name}」`)
 }
 
@@ -437,13 +451,35 @@ function persistPreset(candidate: CustomCssPreset, apply = true): boolean {
   activePresetId.value = saved.id
   draft.value = clonePreset(saved)
   storage.setActiveCustomUiPresetId(saved.id)
-  if (apply) emit('save-css', compilePreset(saved))
+  if (apply) applyPreset(saved, compilePreset(saved))
   flash(`「${saved.name}」已保存${apply ? '，请确认保留试用样式' : ''}`)
   return true
 }
 
-function savePreset(): void {
-  persistPreset(draft.value)
+async function confirmViewScripts(views?: CustomUiViews): Promise<boolean> {
+  const enabled = Object.entries(views ?? {}).filter(([, view]) => view?.enabled)
+  if (!enabled.length) return true
+  const current = storage.getCustomUiViews()
+  if (
+    enabled.every(
+      ([key, view]) => JSON.stringify(current[key as CustomCssScope]) === JSON.stringify(view),
+    )
+  )
+    return true
+  return confirmAction({
+    title: '应用自定义界面',
+    message: `将运行 ${enabled.length} 个界面的自定义源码。脚本可读取这些页面当前显示的非敏感内容，并调用原有界面操作；不提供数据库或凭据访问。${previewPolicy.value.allowRemoteResources ? '已允许 HTTPS 网络，源码可以发送它读取的界面内容。' : '网络访问关闭。'}可在保护提示中撤销，或点“恢复原界面”。`,
+    confirmLabel: '运行并试用',
+    danger: true,
+  })
+}
+function applyPreset(preset: CustomCssPreset, css: string) {
+  if (preset.views || Object.keys(storage.getCustomUiViews()).length)
+    emit('save-css', css, { views: preset.views ?? {} })
+  else emit('save-css', css)
+}
+async function savePreset(): Promise<void> {
+  if (await confirmViewScripts(draft.value.views)) persistPreset(draft.value)
 }
 // SRL-PUBLIC-SYNC: END REPLACE id=appearance-preset-persistence
 function getAssistantContext(): AssistantContext {
@@ -524,6 +560,7 @@ async function executeAssistantReply(
   if (
     reply.action === 'app' ||
     reply.action === 'online' ||
+    reply.action === 'discord-setup' ||
     reply.action === 'custom-tools' ||
     reply.action === 'navigate' ||
     reply.action === 'view-current-ui' ||
@@ -657,8 +694,6 @@ async function executeAssistantReply(
     const candidate = clonePreset(draft.value)
     candidate.globalCss = reply.css === '' ? '' : validateAssistantCss(reply.css, { global: true })
     const compiled = compilePreset(candidate)
-    if (compiled.length > 200_000)
-      throw new Error('合并后的 CSS 超过 200000 字符，请精简预设后再试')
     const previous = {
       draft: clonePreset(draft.value),
       before: storage.getCustomUiCss(),
@@ -761,8 +796,6 @@ async function executeAssistantReply(
     const candidate = clonePreset(draft.value)
     candidate.scopedCss[scope.value] = reply.css === '' ? '' : validateAssistantCss(reply.css)
     const compiled = compilePreset(candidate)
-    if (compiled.length > 200_000)
-      throw new Error('合并后的 CSS 超过 200000 字符，请精简预设后再试')
     const previous = {
       draft: clonePreset(draft.value),
       before: storage.getCustomUiCss(),
@@ -846,7 +879,7 @@ async function deletePreset(): Promise<void> {
   activePresetId.value = next.id
   draft.value = clonePreset(next)
   storage.setActiveCustomUiPresetId(presets.value.length ? next.id : '')
-  emit('save-css', presets.value.length ? compilePreset(next) : '')
+  applyPreset(next, presets.value.length ? compilePreset(next) : '')
   flash('预设已删除')
 }
 
@@ -905,11 +938,12 @@ async function importPresets(event: Event): Promise<void> {
   const prepared: CustomCssPreset[] = []
   try {
     for (const file of files) {
-      if (file.size > 2 * 1024 * 1024) throw new Error('外观文件超过 2 MB')
+      if (file.size > (/\.json$/iu.test(file.name) ? 30 : 2) * 1024 * 1024)
+        throw new Error('外观文件超过源码与素材预算')
       const text = await file.text()
       const imported = /\.json$/i.test(file.name)
         ? parseAppearancePreset(JSON.parse(text))
-        : createPreset(file.name.replace(/\.css$/i, '') || '导入样式', text.slice(0, 200_000))
+        : createPreset(file.name.replace(/\.css$/i, '') || '导入样式', text)
       prepared.push(imported)
     }
   } catch (error) {
@@ -925,7 +959,7 @@ async function importPresets(event: Event): Promise<void> {
   if (files.length) {
     storage.setCustomUiPresets(presets.value)
     storage.setActiveCustomUiPresetId(activePresetId.value)
-    emit('save-css', compilePreset(draft.value))
+    applyPreset(draft.value, compilePreset(draft.value))
     flash(
       selectedFiles.length === files.length
         ? `已导入 ${files.length} 个 CSS 预设`
@@ -938,6 +972,7 @@ async function importPresets(event: Event): Promise<void> {
 const previewDocument = computed(() => {
   const css = sanitizeCssForPreview(previewCss.value, {
     allowExternalResources: previewPolicy.value.allowRemoteResources,
+    preserveLength: true,
   })
   const csp = previewPolicy.value.allowRemoteResources
     ? "default-src 'none'; style-src 'unsafe-inline' https: http:; img-src data: https: http:; font-src data: https: http:; script-src 'none'"
@@ -987,7 +1022,6 @@ const previewDocument = computed(() => {
       <section class="appearance-panel">
         <header>
           <div>
-            <small>THEME</small>
             <h2>界面明暗</h2>
           </div>
         </header>
@@ -1018,7 +1052,6 @@ const previewDocument = computed(() => {
       <section class="appearance-panel appearance-panel--font-scale">
         <header>
           <div>
-            <small>TYPE SIZE</small>
             <h2>文字大小</h2>
           </div>
           <span>不会缩放整个页面</span>
@@ -1036,8 +1069,7 @@ const previewDocument = computed(() => {
           >
             <span class="font-scale-option__sample" aria-hidden="true">字</span>
             <span
-              ><strong>{{ option.title }}</strong
-              ><small>{{ option.description }}</small></span
+              ><strong>{{ option.title }}</strong></span
             >
             <i aria-hidden="true">{{ uiFontScale === option.value ? '✓' : '' }}</i>
           </button>
@@ -1047,7 +1079,6 @@ const previewDocument = computed(() => {
       <section class="appearance-panel appearance-panel--layout">
         <header>
           <div>
-            <small>RESOURCE VIEW</small>
             <h2>资源排版</h2>
           </div>
           <span>不会改变筛选</span>
@@ -1116,22 +1147,15 @@ const previewDocument = computed(() => {
 
       <section class="appearance-panel appearance-panel--code">
         <header>
-          <div>
-            <small>CUSTOM CSS</small>
-            <h2>可分享的自定义样式</h2>
-          </div>
-          <AppearanceOriginalCssActions />
+          <h2>自定义 CSS</h2>
+          <AppearanceCodeReference />
+          <AppearanceOriginalCssActions class="appearance-code-tools" />
         </header>
-        <p>
-          每个预设互相独立，可导出为 CSS 文件分享。写错导致界面无法操作时，按 Alt + Shift + 0
-          清除当前样式。
-        </p>
 
         <section class="appearance-preset-manager">
           <header>
             <div>
-              <small>PRESET LIBRARY</small><strong>预设库</strong
-              ><span>{{ presets.length }} / 30 份保存在本机</span>
+              <strong>预设库</strong><span>{{ presets.length }} / 30 份保存在本机</span>
             </div>
             <i :class="{ 'is-dirty': hasUnsavedChanges }">{{ presetState }}</i>
           </header>
@@ -1151,17 +1175,22 @@ const previewDocument = computed(() => {
             /></label>
           </div>
           <div class="appearance-preset-tools">
-            <button type="button" @click="newPreset"><b>＋</b><span>新建空白预设</span></button>
-            <button type="button" @click="importInput?.click()">
-              <b>↑</b><span>导入 CSS / 预设</span>
+            <button type="button" class="appearance-action-hit" @click="newPreset">
+              <span class="appearance-action-face"><b>＋</b><span>新建空白预设</span></span>
             </button>
-            <button type="button" @click="exportPreset"><b>↓</b><span>导出 CSS</span></button>
-            <button type="button" @click="exportEditablePreset">
-              <b>↓</b><span>导出可编辑预设</span>
+            <button type="button" class="appearance-action-hit" @click="importInput?.click()">
+              <span class="appearance-action-face"><b>↑</b><span>导入 CSS / 预设</span></span>
+            </button>
+            <button type="button" class="appearance-action-hit" @click="exportPreset">
+              <span class="appearance-action-face"><b>↓</b><span>导出 CSS</span></span>
+            </button>
+            <button type="button" class="appearance-action-hit" @click="exportEditablePreset">
+              <span class="appearance-action-face"><b>↓</b><span>导出可编辑预设</span></span>
             </button>
           </div>
           <input
             ref="importInput"
+            data-appearance-preset-import
             hidden
             type="file"
             accept=".css,.json,text/css,application/json"
@@ -1181,7 +1210,7 @@ const previewDocument = computed(() => {
 
         <details class="appearance-advanced">
           <summary data-assistant-focus="appearance-css">
-            <span><strong>按界面编辑 CSS</strong></span>
+            <span><strong>按界面编辑 CSS / 源码</strong></span>
           </summary>
           <div
             class="appearance-scope-tabs"
@@ -1230,29 +1259,54 @@ const previewDocument = computed(() => {
             <AppearanceOriginalCssActions v-if="selectedScope" :scope="selectedScope" />
           </div>
           <label class="appearance-code-editor">
+            <small
+              >未修改的样式沿用全局；用 :scope 设置局部变量。公共弹窗请在全局 CSS 中修改。</small
+            >
             <textarea
               v-model="activeScopedCss"
               spellcheck="false"
               placeholder="在此填写本界面的自定义 CSS"
             ></textarea>
           </label>
+          <AppearanceUiEditor
+            v-if="selectedScope?.selector"
+            :scope="activeScope"
+            :title="selectedScope.title"
+            :views="draft.views ?? {}"
+            :css="compilePreset(draft)"
+            @update:views="draft.views = $event"
+          />
         </details>
 
         <div class="appearance-code-actions">
-          <span role="status">{{ copyStatus }}</span
-          ><button type="button" @click="preview">保存前预览</button
-          ><button type="button" @click="clearDraft">清空草稿</button
-          ><button type="button" @click="deletePreset">
-            {{ savedDraft ? '删除预设' : '放弃草稿' }}</button
-          ><button v-if="savedDraft" type="button" @click="saveAsNewPreset">另存为新预设</button
-          ><button
-            class="button--primary"
+          <span role="status">{{ copyStatus }}</span>
+          <button type="button" class="appearance-action-hit" @click="preview">
+            <span class="appearance-action-face">保存前预览</span>
+          </button>
+          <button type="button" class="appearance-action-hit" @click="clearDraft">
+            <span class="appearance-action-face">清空草稿</span>
+          </button>
+          <button type="button" class="appearance-action-hit" @click="deletePreset">
+            <span class="appearance-action-face">{{ savedDraft ? '删除预设' : '放弃草稿' }}</span>
+          </button>
+          <button
+            v-if="savedDraft"
+            type="button"
+            class="appearance-action-hit"
+            @click="saveAsNewPreset"
+          >
+            <span class="appearance-action-face">另存为新预设</span>
+          </button>
+          <button
+            class="button--primary appearance-action-hit"
             type="button"
             :disabled="!hasUnsavedChanges"
             data-assistant-focus="appearance-save"
             @click="savePreset"
           >
-            {{ hasUnsavedChanges ? '保存并应用' : '已保存' }}
+            <span class="appearance-action-face">{{
+              hasUnsavedChanges ? '保存并应用' : '已保存'
+            }}</span>
           </button>
         </div>
       </section>

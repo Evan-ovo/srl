@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 // SRL-PUBLIC-SYNC: PUBLIC-ONLY id=worker-settings-next-tick-import
-import { nextTick } from 'vue'
 import { platform } from '../core/PlatformService'
 import { resetPerformanceMonitorPosition } from '../core/PerformanceMonitor'
 import { forceRefresh, manualCheckForUpdate } from '../core/ServiceWorkerUpdate'
@@ -25,18 +24,12 @@ import {
 } from '../services/DiscordInboxAutomationSettings'
 import type { NativeSystemUiState } from '../core/NativeSystemUi'
 // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=worker-settings-import
-import {
-  loadPublicWorkerBaseUrl,
-  normalizePublicWorkerBaseUrl,
-  savePublicWorkerBaseUrl,
-} from '../services/PublicWorkerSettingsService'
 // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=worker-settings-import
 import MainApiSettings from './MainApiSettings.vue'
+import RelayWorkerSettings from './RelayWorkerSettings.vue'
 import SecretProtectionSettings from './SecretProtectionSettings.vue'
 import ResourceHealthCenter from './ResourceHealthCenter.vue'
 
-// SRL-PUBLIC-SYNC: PUBLIC-ONLY id=worker-deploy-guide-import
-import PublicWorkerDeployGuidePage from './PublicWorkerDeployGuidePage.vue'
 const props = defineProps<{
   vaultEnabled: boolean
   allowRemotePreviews: boolean
@@ -110,74 +103,6 @@ const isDownloadingOfflineResources = ref(false)
 const inboxAutomationSettings = ref<DiscordInboxAutomationSettings>({
   ...DEFAULT_DISCORD_INBOX_AUTOMATION_SETTINGS,
 })
-// SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=worker-settings-state
-const publicWorkerBaseUrl = ref(loadPublicWorkerBaseUrl())
-const publicWorkerMessage = ref('')
-const publicWorkerCheckMessage = ref('')
-const isCheckingPublicWorker = ref(false)
-const showPublicWorkerGuide = ref(false)
-const publicWorkerGuideButton = ref<HTMLButtonElement | null>(null)
-function closePublicWorkerGuide(): void {
-  showPublicWorkerGuide.value = false
-  void nextTick(() => publicWorkerGuideButton.value?.focus())
-}
-function normalizeWorkerBaseUrlField(): void {
-  try {
-    const normalized = normalizePublicWorkerBaseUrl(publicWorkerBaseUrl.value)
-    if (normalized) publicWorkerBaseUrl.value = normalized
-  } catch {
-    // Keep incomplete input available for correction; save/check shows the validation message.
-  }
-}
-function saveWorkerBaseUrl(): void {
-  try {
-    publicWorkerBaseUrl.value = savePublicWorkerBaseUrl(publicWorkerBaseUrl.value)
-    publicWorkerMessage.value = publicWorkerBaseUrl.value
-      ? 'Worker 地址已保存在本机'
-      : '已清除 Worker 地址'
-  } catch (error) {
-    publicWorkerMessage.value = error instanceof Error ? error.message : 'Worker 地址无效'
-  }
-}
-async function checkWorkerBaseUrl(): Promise<void> {
-  if (isCheckingPublicWorker.value) return
-
-  let baseUrl: string
-  try {
-    baseUrl = normalizePublicWorkerBaseUrl(publicWorkerBaseUrl.value)
-    if (!baseUrl) throw new Error('请先填写 Worker 地址')
-    publicWorkerBaseUrl.value = baseUrl
-  } catch (error) {
-    publicWorkerCheckMessage.value = error instanceof Error ? error.message : 'Worker 地址无效'
-    return
-  }
-
-  isCheckingPublicWorker.value = true
-  publicWorkerCheckMessage.value = '正在检查…'
-  try {
-    const response = await fetch(`${baseUrl}/api/cloud/health`, {
-      headers: { accept: 'application/json' },
-    })
-    const payload = (await response.json().catch(() => null)) as {
-      ok?: unknown
-      service?: unknown
-    } | null
-    if (!response.ok) throw new Error(`检查失败（HTTP ${response.status}）`)
-    if (payload?.ok !== true || payload.service !== 'srl-koofr-worker')
-      throw new Error('该地址没有返回有效的 SRL Worker 状态')
-    publicWorkerCheckMessage.value = '检查通过，Worker 已部署'
-  } catch (error) {
-    publicWorkerCheckMessage.value =
-      error instanceof TypeError
-        ? '无法访问 Worker，请检查地址和部署状态'
-        : error instanceof Error
-          ? error.message
-          : 'Worker 检查失败'
-  } finally {
-    isCheckingPublicWorker.value = false
-  }
-}
-// SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=worker-settings-state
 let offlineDownloadController: AbortController | undefined
 onMounted(async () => {
   const [storage, security, saf, systemUi, offline, automation] = await Promise.all([
@@ -347,6 +272,7 @@ async function clearOfflineResources(): Promise<void> {
       <div class="settings-sections">
         <SecretProtectionSettings />
         <MainApiSettings />
+        <RelayWorkerSettings />
         <section class="settings-section">
           <header>
             <div><h3>修改版导出与互传</h3></div>
@@ -367,65 +293,6 @@ async function clearOfflineResources(): Promise<void> {
             <i aria-hidden="true"></i>
           </label>
         </section>
-        <!-- SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=worker-settings-ui -->
-        <section class="settings-section">
-          <header>
-            <div>
-              <h3>自部署 Worker</h3>
-            </div>
-            <div class="public-worker-settings__tools">
-              <button
-                ref="publicWorkerGuideButton"
-                class="public-worker-settings__help"
-                type="button"
-                aria-label="打开 SRL-Worker-Public 部署教程"
-                title="SRL-Worker-Public 部署教程"
-                @click="showPublicWorkerGuide = true"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <circle cx="12" cy="12" r="9" />
-                  <path
-                    d="M9.8 9a2.25 2.25 0 1 1 3.72 1.7c-.98.83-1.52 1.24-1.52 2.55M12 16.8v.1"
-                  />
-                </svg>
-              </button>
-              <span class="public-worker-settings__local">本机</span>
-            </div>
-          </header>
-          <label class="settings-number-row">
-            <span>
-              <strong>SRL Worker 地址</strong>
-              <small>
-                部署自己的 SRL-Worker-Public 后填写 HTTPS 域名根地址。用于酒馆设备码中继、加密暂存和
-                Koofr 云备份中转；Discord Bridge 仍在其自己的连接设置中配置。
-              </small>
-            </span>
-            <input
-              v-model="publicWorkerBaseUrl"
-              type="url"
-              inputmode="url"
-              autocomplete="url"
-              class="public-worker-settings__url"
-              placeholder="https://your-worker.workers.dev"
-              aria-label="SRL Worker 地址"
-              @input="publicWorkerCheckMessage = ''"
-              @blur="normalizeWorkerBaseUrlField"
-            />
-          </label>
-          <div class="public-worker-settings__controls">
-            <div class="settings-number-row__control">
-              <button type="button" :disabled="isCheckingPublicWorker" @click="checkWorkerBaseUrl">
-                {{ isCheckingPublicWorker ? '检查中…' : '检查 Worker' }}
-              </button>
-              <button type="button" @click="saveWorkerBaseUrl">保存 Worker 地址</button>
-            </div>
-            <small v-if="publicWorkerCheckMessage" role="status">{{
-              publicWorkerCheckMessage
-            }}</small>
-            <small v-if="publicWorkerMessage" role="status">{{ publicWorkerMessage }}</small>
-          </div>
-        </section>
-        <!-- SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=worker-settings-ui -->
         <section v-if="isNativeApk" class="settings-section">
           <header>
             <div>
@@ -561,7 +428,7 @@ async function clearOfflineResources(): Promise<void> {
         <section class="settings-section settings-section--preview-safety">
           <header>
             <div>
-              <h3>HTML / CSS 预览安全</h3>
+              <h3>预览与自定义 Vue 联网</h3>
             </div>
             <span>全局生效</span>
           </header>
@@ -573,7 +440,8 @@ async function clearOfflineResources(): Promise<void> {
               <strong>允许远程资源</strong>
               <small
                 >可加载 URL 直链背景、图片、样式与字体。远程服务器可能记录你的
-                IP、访问时间、浏览器信息和来源地址；不会执行 JavaScript。</small
+                IP、访问时间、浏览器信息和来源地址。已启用的自定义 Vue 也可访问 HTTPS
+                网站，并发送它读取的界面内容；此开关不会开启资源脚本。</small
               >
             </span>
             <input
@@ -1018,9 +886,7 @@ async function clearOfflineResources(): Promise<void> {
       </footer>
     </section>
     <!-- SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=worker-deploy-guide-page -->
-    <PublicWorkerDeployGuidePage v-if="showPublicWorkerGuide" @close="closePublicWorkerGuide" />
     <!-- SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=worker-deploy-guide-page -->
   </div>
 </template>
 <!-- SRL-PUBLIC-SYNC: PUBLIC-ONLY id=worker-settings-css -->
-<style scoped src="../styles/PublicWorkerSettings.css"></style>

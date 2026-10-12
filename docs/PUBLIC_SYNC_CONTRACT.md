@@ -8,6 +8,8 @@ APP 管理、安装、更新、卸载、内容修订号和加载门使用当前�
 
 同步后应覆盖所有共享源码、样式、读了么 HTML/脚本、运行时、APP 打包配置和相关测试。逐项核查保留替换区内的上游变化；特别是 Worker 地址适配不能保留整段旧业务实现。复核主库中尚未完整标记的账号绑定、广场 ID 等代码，避免残留导入和入口。
 
+Public 不提供官版内置的公共中继，也不设默认中继地址。`RelayWorkerSettingsService` 统一管理用户自部署 Worker 的目标、检查结果与活动操作；通过既有 `PublicWorkerSettingsService` 地址存储保持设置兼容。用户未填写自部署地址时，Koofr 中转、设备码和加密暂存均不可用；设备码仍要求检查通过。Discord Bridge 继续使用独立设置。
+
 所有内置 APP 均通过 `FeatureAppLoaders` → `OfficialAppGate` → `OfficialAppRuntime` 加载，网页与包内 UI 入口由 `OfficialAppPackages` 维护。`FeatureAppLoaders.test.ts` 检查全部 APP 使用同一加载链，并核查前端了么、缝了么和助手的实际打包入口。同步后运行相关回归、类型检查、构建与包完整性检查；真机和线上验收单独记录。
 
 品牌、图标、应用 ID、签名与部署地址保持 Public 身份。公开前按 README 执行增量隐私和提交邮箱检查；同步本身不推送、部署或构建 APK。

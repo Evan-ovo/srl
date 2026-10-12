@@ -107,7 +107,7 @@ defineExpose({ prepareSave })
 .structured-content-editor__note {
   margin: 0 0 8px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--color-ink-soft);
 }
 .structured-content-editor__toolbar {
   display: flex;
@@ -121,7 +121,7 @@ defineExpose({ prepareSave })
   font-size: 14px;
 }
 .structured-content-editor__toolbar small {
-  color: var(--text-secondary);
+  color: var(--color-ink-soft);
 }
 .structured-content-editor__scope {
   display: flex;

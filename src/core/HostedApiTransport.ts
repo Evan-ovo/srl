@@ -2,6 +2,7 @@ import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core'
 
 import { transferNativeStream } from './NativeStreamTransfer'
 
+
 interface NativeHostedUploadResult {
   status: number
   headers?: Record<string, string>
@@ -20,6 +21,7 @@ interface NativeHostedUploadPlugin {
   commitImageUpload(options: { token: string }): Promise<NativeHostedUploadResult>
   abortImageUpload(options: { token: string }): Promise<void>
 }
+
 
 export interface SelfHostedImageUploadOptions {
   blob: Blob
@@ -78,6 +80,7 @@ async function browserMultipartUploadBlob(blob: Blob): Promise<Blob> {
   return materialized
 }
 
+
 function browserSafeNativeHeaders(headers: Record<string, string> | undefined): Headers {
   const safe = new Headers()
   for (const [name, value] of Object.entries(headers ?? {})) {
@@ -87,6 +90,7 @@ function browserSafeNativeHeaders(headers: Record<string, string> | undefined): 
   }
   return safe
 }
+
 
 function responseBody(data: unknown, status: number, headers: Headers): BodyInit | null {
   if ([204, 205, 304].includes(status) || data == null) return null
@@ -103,7 +107,7 @@ function nativeHostedUploadResponse(result: NativeHostedUploadResult): Response 
   })
 }
 
-async function streamNativeImageUpload(
+async function streamNativeUpload(
   blob: Blob,
   signal: AbortSignal | undefined,
   begin: () => Promise<{ token: string }>,
@@ -117,7 +121,7 @@ async function streamNativeImageUpload(
       totalBytes: blob.size,
       append: (data) => nativeHostedUpload.appendImageUpload({ token, data }),
     })
-    if (transferred !== blob.size) throw new Error('图床图片原生暂存大小不一致')
+    if (transferred !== blob.size) throw new Error('原生上传暂存大小不一致')
     const result = await nativeHostedUpload.commitImageUpload({ token })
     token = ''
     return nativeHostedUploadResponse(result)
@@ -126,6 +130,8 @@ async function streamNativeImageUpload(
     throw error
   }
 }
+
+
 
 /**
  * 用户自建 ImgBed 的 Android 上传入口。
@@ -154,7 +160,7 @@ export async function selfHostedImageUpload(
     throw new TypeError('Android 自建图床只允许无 URL 凭据的 HTTPS 上传地址')
   }
 
-  return streamNativeImageUpload(options.blob, options.signal, () =>
+  return streamNativeUpload(options.blob, options.signal, () =>
     nativeHostedUpload.beginSelfHostedImageUpload({
       url: url.toString(),
       fileName: options.fileName,

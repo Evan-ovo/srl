@@ -38,7 +38,6 @@ describe('Feature App Shell contract', () => {
       'FrontendWorkshopWorkbench.vue',
       'GeneratedImageAlbumApp.vue',
       'PresetStitcherApp.vue',
-      'ResourceBundleApp.vue',
       'TavernBridgeCenter.vue',
       'UserPersonaApp.vue',
     ]) {

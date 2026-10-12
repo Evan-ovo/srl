@@ -196,17 +196,13 @@ function handleBack(): void {
 }
 .similar-name-groups__mode button {
   min-height: 40px;
-  border: 1px solid transparent;
-  border-radius: 0.55rem;
-  background: transparent;
-  color: var(--color-ink-soft);
   font: 600 0.875rem/1.4 var(--font-body);
   cursor: pointer;
 }
 .similar-name-groups__mode button[aria-pressed='true'] {
-  border-color: var(--color-line);
-  background: var(--color-surface);
-  color: var(--color-accent);
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
+  color: var(--selection-color, var(--color-ink));
   box-shadow: 0 1px 3px var(--color-shadow);
 }
 .similar-name-groups__summary,
@@ -235,8 +231,8 @@ function handleBack(): void {
   min-height: 44px;
   padding: 0 0.5rem;
   border: 0;
-  background: transparent;
-  color: var(--color-accent);
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-accent));
   font: 600 0.8rem/1.4 var(--font-body);
   cursor: pointer;
 }
@@ -261,7 +257,7 @@ function handleBack(): void {
   padding-right: 0.35rem;
 }
 .similar-name-groups__resources > li.is-selected {
-  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .similar-name-groups__resource-choice {
   display: flex;
@@ -279,10 +275,10 @@ function handleBack(): void {
   flex: 0 0 18px;
   width: 18px;
   height: 18px;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, 5px);
+  background: var(--control-background, var(--color-surface));
   margin: 0;
-  border: 1px solid var(--color-ink-soft);
-  border-radius: 5px;
-  background: var(--color-surface);
   cursor: pointer;
 }
 .similar-name-groups__resource-choice input:checked {
@@ -325,8 +321,8 @@ function handleBack(): void {
   gap: 0.75rem;
   padding: 0.7rem 0.85rem;
   border: 0;
-  background: transparent;
-  color: inherit;
+  background: var(--button-background, transparent);
+  color: var(--button-color, inherit);
   text-align: left;
   cursor: pointer;
 }

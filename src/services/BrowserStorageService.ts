@@ -1,4 +1,10 @@
 export { type BridgeTransferDraft, PROJECT_NOTICE_VERSION } from './BrowserDevicePreferences'
+import { normalizeUiViews } from '../core/UiCustomization'
+import {
+  CUSTOM_UI_VIEWS_KEY,
+  CUSTOM_UI_VIEWS_CHANGED,
+  type CustomUiViews,
+} from '../types/UiCustomization'
 import {
   exportStitchWork,
   importStitchWork,
@@ -26,10 +32,6 @@ import {
   setStitchFavorites,
   getStitchTemplates,
   setStitchTemplates,
-  getChatLoadouts,
-  setChatLoadouts,
-  getResourceBundles,
-  setResourceBundles,
   getStitchMainSide,
   setStitchMainSide,
   getFrontendWorkshopDrawerSize,
@@ -54,8 +56,6 @@ import type { PresetFavoriteSnapshot } from '../utils/PresetStitcher'
 
 import {
   type PresetStitchTemplate,
-  type ChatLoadout,
-  type ResourceBundleTemplate,
   type StorageHealth,
   type LayoutMode,
   type UiFontScale,
@@ -87,8 +87,6 @@ import * as operationsBrowserPreferenceNormalization from './BrowserPreferenceNo
 
 export {
   type PresetStitchTemplate,
-  type ChatLoadout,
-  type ResourceBundleTemplate,
   type StorageHealth,
   type LayoutMode,
   type UiFontScale,
@@ -237,10 +235,17 @@ export class BrowserStorageService {
       customCss: this.getCustomUiCss(),
       presets: this.getCustomUiPresets(),
       activePresetId: this.getActiveCustomUiPresetId(),
+      views: this.getCustomUiViews(),
     }
   }
 
   importAppearanceSettings(value: PortableAppearanceSettings): void {
+    // Restoring a theme must not silently execute scripts or restore network permission.
+    const views = normalizeUiViews(value?.views, true)
+    const presets = (Array.isArray(value?.presets) ? value.presets : []).map((preset) => ({
+      ...preset,
+      ...(preset.views ? { views: normalizeUiViews(preset.views, true) } : {}),
+    }))
     try {
       localStorage.setItem('srl-theme', value?.theme === 'dark' ? 'dark' : 'light')
     } catch {
@@ -253,10 +258,11 @@ export class BrowserStorageService {
         : 'standard',
     )
     this.setCustomUiCss(typeof value?.customCss === 'string' ? value.customCss : '')
-    this.setCustomUiPresets(Array.isArray(value?.presets) ? value.presets : [])
+    this.setCustomUiPresets(presets)
     this.setActiveCustomUiPresetId(
       typeof value?.activePresetId === 'string' ? value.activePresetId : '',
     )
+    this.setCustomUiViews(views)
   }
 
   exportGeneralPreferences(): PortableGeneralPreferences {
@@ -288,7 +294,6 @@ export class BrowserStorageService {
       stitchTemplates: this.getStitchTemplates(),
       stitchMainSide: this.getStitchMainSide(),
       frontendWorkshopRecentColors: this.getFrontendWorkshopRecentColors(),
-      chatLoadouts: this.getChatLoadouts(),
     }
   }
 
@@ -327,7 +332,6 @@ export class BrowserStorageService {
     this.setStitchTemplates(value?.stitchTemplates ?? [])
     this.setStitchMainSide(value?.stitchMainSide === 'left' ? 'left' : 'right')
     this.setFrontendWorkshopRecentColors(value?.frontendWorkshopRecentColors ?? [])
-    this.setChatLoadouts(value?.chatLoadouts ?? value?.resourceBundles ?? [])
     this.writeSearchHistory(
       (Array.isArray(value?.searchHistory) ? value.searchHistory : [])
         .filter((item): item is string => typeof item === 'string')
@@ -500,6 +504,23 @@ export class BrowserStorageService {
     } catch {
       return []
     }
+  }
+
+  getCustomUiViews(): CustomUiViews {
+    try {
+      return normalizeUiViews(JSON.parse(localStorage.getItem(CUSTOM_UI_VIEWS_KEY) ?? '{}'))
+    } catch {
+      return {}
+    }
+  }
+
+  setCustomUiViews(value: CustomUiViews): void {
+    const clean = normalizeUiViews(value)
+    const serialized = JSON.stringify(clean)
+    localStorage.setItem(CUSTOM_UI_VIEWS_KEY, serialized)
+    if (localStorage.getItem(CUSTOM_UI_VIEWS_KEY) !== serialized)
+      throw new Error('界面源码未保存成功；请检查本机空间，草稿仍保留')
+    window.dispatchEvent(new Event(CUSTOM_UI_VIEWS_CHANGED))
   }
 
   setCustomUiPresets(value: CustomCssPreset[]): void {
@@ -935,24 +956,6 @@ export class BrowserStorageService {
 
   setStitchTemplates(value: PresetStitchTemplate[]): PresetStitchTemplate[] {
     return setStitchTemplates(value)
-  }
-
-  getChatLoadouts(): ChatLoadout[] {
-    return getChatLoadouts()
-  }
-
-  setChatLoadouts(value: ChatLoadout[]): ChatLoadout[] {
-    return setChatLoadouts(value)
-  }
-
-  /** @deprecated 使用 getChatLoadouts。 */
-  getResourceBundles(): ResourceBundleTemplate[] {
-    return getResourceBundles()
-  }
-
-  /** @deprecated 使用 setChatLoadouts。 */
-  setResourceBundles(value: ResourceBundleTemplate[]): ResourceBundleTemplate[] {
-    return setResourceBundles(value)
   }
 
   getStitchMainSide(): 'left' | 'right' {

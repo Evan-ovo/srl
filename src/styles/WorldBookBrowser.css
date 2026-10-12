@@ -2,12 +2,8 @@
   min-width: 0;
   color: var(--color-ink);
   font-family: var(--font-body);
-  --lore-blue: #2564ad;
-  --lore-green: #207343;
-}
-[data-theme='dark'] .lore-browser {
-  --lore-blue: #88bcff;
-  --lore-green: #81dba6;
+  --lore-blue: var(--color-accent);
+  --lore-green: var(--color-success);
 }
 .structured-world-book {
   min-width: 0;
@@ -26,9 +22,11 @@
   min-height: 44px;
   padding: 0 10px;
   gap: 8px;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--glass-radius-control);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  background: var(--control-background, var(--color-surface-raised));
+  color: var(--color-ink);
+  box-shadow: var(--control-shadow, none);
 }
 .lore-search:focus-within {
   border-color: var(--color-accent);
@@ -56,6 +54,7 @@
   background: transparent;
   font: inherit;
   font-size: 16px;
+  box-shadow: none;
 }
 .lore-search input::placeholder {
   color: var(--color-ink-soft);
@@ -73,14 +72,15 @@
   gap: 6px;
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--glass-panel-strong));
   font: inherit;
   font-size: 14px;
   cursor: pointer;
   list-style: none;
+  box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 .lore-filters > summary::-webkit-details-marker {
   display: none;
@@ -89,8 +89,8 @@
   display: contents;
 }
 .lore-filters[open] > summary {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
+  color: var(--button-color, var(--color-accent));
+  border-color: var(--button-border, var(--color-accent));
 }
 .lore-filters__fields {
   grid-column: 1 / -1;
@@ -114,12 +114,13 @@
   min-width: 0;
   min-height: 44px;
   padding: 0 8px;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 8px;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
   color: var(--color-ink);
-  background: var(--color-surface-raised);
+  background: var(--control-background, var(--color-surface-raised));
   font: inherit;
   font-size: 16px;
+  box-shadow: var(--control-shadow, none);
 }
 .lore-filters__actions {
   grid-column: 1 / -1;
@@ -206,17 +207,18 @@
   min-width: 0;
   min-height: 44px;
   padding: 8px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--color-ink);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  background: var(--button-background, var(--glass-panel-strong));
+  color: var(--button-color, var(--color-ink));
   font: inherit;
   line-height: 1.4;
   text-align: left;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 .lore-row:hover {
-  background: color-mix(in srgb, var(--color-accent-soft) 45%, transparent);
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .lore-row:focus-visible,
 .lore-browser button:focus-visible,
@@ -378,13 +380,13 @@
 }
 .lore-conditions > summary {
   padding: 12px 0;
-  border-radius: 6px;
+  border-radius: var(--button-radius, 6px);
   font-size: 14px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 .lore-conditions > summary:active {
-  background: var(--color-accent-soft);
+  background: var(--button-background, var(--color-accent-soft));
 }
 .lore-conditions > summary > span {
   margin-left: 6px;

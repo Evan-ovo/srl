@@ -177,12 +177,13 @@ export class OfficialAppService {
   }
 
   async list(): Promise<InstalledOfficialApp[]> {
-    const apps = await this.storage.list()
+    const apps = (await this.storage.list()).filter((app) => isOfficialAppId(app.id))
     this.publishInstalled(apps)
     return apps
   }
 
   async getInstalled(id: OfficialAppId): Promise<InstalledOfficialApp | undefined> {
+    if (!isOfficialAppId(id)) return undefined
     return this.storage.get
       ? this.storage.get(id)
       : (await this.list()).find((app) => app.id === id)

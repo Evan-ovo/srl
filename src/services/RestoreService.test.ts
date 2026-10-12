@@ -148,7 +148,7 @@ describe('RestoreService', () => {
     expect(staging.chunkCount).toBe(stagedChunks)
   })
 
-  it('restores embedded chat portraits/rules and keeps identical prose from different characters separate', async () => {
+  it('restores embedded chat portraits, rules and scripts without a separate script resource', async () => {
     const content = '{"name":"角色","is_user":false,"mes":"同一正文"}'
     const first = {
       ...(await createResource('chat-a', null, content)),
@@ -160,7 +160,19 @@ describe('RestoreService', () => {
           name: '同名',
           avatar: 'a.png',
           thumbnail: 'data:image/webp;base64,dGh1bWJuYWls',
-          card: { extensions: { regex_scripts: [{ scriptName: '状态栏' }] } },
+          card: {
+            scripts: [
+              {
+                type: 'script',
+                id: 'role-phone',
+                name: '手机',
+                content: 'rolePhone()',
+                data: { theme: 'night' },
+                buttonDefinitions: [{ name: '显隐', visible: true }],
+              },
+            ],
+            extensions: { regex_scripts: [{ scriptName: '状态栏' }] },
+          },
         },
       },
     }

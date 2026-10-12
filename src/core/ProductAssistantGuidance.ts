@@ -184,6 +184,29 @@ export const ASSISTANT_GUIDES: readonly AssistantGuide[] = [
 ]
 export const assistantGuidance = shallowRef<AssistantGuide>()
 export const assistantGuidanceAnchor = shallowRef<{ element: HTMLElement; text: string }>()
+/** Explicit mounted help surfaces; future tutorials add a reviewed context ID here. */
+export type AssistantHelpContext = 'discord-bridge'
+export const assistantHelpContext = shallowRef<AssistantHelpContext>()
+const helpSurfaces = new Map<symbol, AssistantHelpContext>()
+export function setAssistantHelpSurface(owner: symbol, context?: AssistantHelpContext) {
+  if (context) helpSurfaces.set(owner, context)
+  else helpSurfaces.delete(owner)
+  assistantHelpContext.value = [...helpSurfaces.values()].at(-1)
+}
+export function visibleAssistantHelpContext(): AssistantHelpContext | undefined {
+  const context = assistantHelpContext.value
+  if (!context) return
+  return [
+    ...document.querySelectorAll<HTMLElement>(`[data-assistant-help-context="${context}"]`),
+  ].some(
+    (element) =>
+      element.getClientRects().length &&
+      !element.closest('[inert]') &&
+      getComputedStyle(element).visibility !== 'hidden',
+  )
+    ? context
+    : undefined
+}
 export function findAssistantGuide(id: string, destination?: string) {
   return ASSISTANT_GUIDES.find(
     (guide) => guide.id === id && (!destination || guide.destination === destination),

@@ -166,10 +166,6 @@ async function cleanSelected(): Promise<void> {
 .extracted-cleaner__toolbar button {
   min-height: 44px;
   padding: 0 0.9rem;
-  border: 1px solid rgba(32, 42, 38, 0.25);
-  border-radius: 0.6rem;
-  background: transparent;
-  color: inherit;
 }
 
 .extracted-cleaner__list {
@@ -187,7 +183,7 @@ async function cleanSelected(): Promise<void> {
   align-items: center;
   justify-content: space-between;
   padding: 0.55rem 0.7rem;
-  border: 1px solid rgba(32, 42, 38, 0.18);
+  border: 1px solid var(--color-line);
   border-radius: 0.75rem;
 }
 
@@ -210,18 +206,14 @@ async function cleanSelected(): Promise<void> {
   flex: none;
   min-height: 44px;
   padding: 0 0.8rem;
-  border: 1px solid rgba(32, 42, 38, 0.25);
-  border-radius: 0.6rem;
-  background: transparent;
-  color: inherit;
 }
 
 .extracted-cleaner__badge {
   margin-left: 0.4rem;
   padding: 0.1rem 0.45rem;
   border-radius: 999px;
-  background: rgba(178, 58, 46, 0.14);
-  color: #a4362b;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
   font-style: normal;
   font-size: 0.72rem;
   vertical-align: middle;

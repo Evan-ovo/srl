@@ -278,7 +278,7 @@ function formatBytes(bytes: number): string {
             :class="{ 'is-active': activeCategoryId === category.id }"
             @click="activeCategoryId = category.id"
           >
-            <i :style="{ backgroundColor: category.color }"></i>{{ category.name }}
+            <i :style="{ '--folder-indicator-default': category.color }"></i>{{ category.name }}
             {{ categoryCount(category.id) }}
           </button>
         </div>
@@ -386,7 +386,7 @@ function formatBytes(bytes: number): string {
   margin: 0.5rem 1rem;
   min-height: 2.25rem;
   color: var(--color-ink);
-  background: var(--color-paper);
+  background: var(--control-background, var(--color-surface-raised));
 }
 .backup-scope-tree {
   display: grid;
@@ -505,7 +505,7 @@ function formatBytes(bytes: number): string {
 }
 .backup-scope-tree__scope-row:hover,
 .backup-scope-tree__scope-row.is-selected {
-  background: color-mix(in srgb, var(--color-accent-soft) 26%, var(--glass-panel-muted));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .backup-scope-tree__scope-row > span:nth-child(2) {
   min-width: 0;
@@ -570,16 +570,16 @@ function formatBytes(bytes: number): string {
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0.4rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  background: var(--glass-panel-muted);
-  color: var(--color-ink-soft);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--glass-radius-control));
+  background: var(--button-background, var(--glass-panel-strong));
+  color: var(--button-color, var(--color-ink));
   font-size: 0.6rem;
 }
 .backup-scope-tree__filters button.is-active {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent-soft) 44%, var(--glass-panel-muted));
-  color: var(--color-ink);
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
+  color: var(--selection-color, var(--color-ink));
   font-weight: 750;
 }
 nav.backup-scope-tree__filters button {
@@ -591,7 +591,7 @@ nav.backup-scope-tree__filters button {
   height: 0.42rem;
   border: 1px solid var(--color-line-strong);
   border-radius: 50%;
-  background: var(--color-ink-soft);
+  background: var(--folder-indicator-color, var(--folder-indicator-default, var(--color-ink-soft)));
 }
 .backup-scope-tree__resources {
   display: grid;

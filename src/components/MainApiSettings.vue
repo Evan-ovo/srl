@@ -495,7 +495,7 @@ async function loadModels(): Promise<void> {
   place-items: center;
   min-width: var(--size-touch);
   min-height: var(--size-touch);
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   cursor: pointer;
   list-style: none;
   font-size: 0.875rem;
@@ -511,10 +511,10 @@ async function loadModels(): Promise<void> {
   display: grid;
   width: 112px;
   padding: 4px;
-  border: 1px solid var(--color-line);
-  border-radius: 0.625rem;
-  background: var(--color-surface-raised);
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--color-ink) 12%, transparent);
+  border: 1px solid var(--dialog-border, var(--glass-border));
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
+  background: var(--dialog-background);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 .main-api-settings__profilemenu button {
   width: 100%;
@@ -528,13 +528,12 @@ async function loadModels(): Promise<void> {
   align-items: center;
   gap: 0.5rem;
   min-height: var(--size-touch);
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   cursor: pointer;
   font-size: 0.875rem;
   list-style: none;
 }
-.main-api-settings__advanced > summary::-webkit-details-marker,
-.main-api-settings__help > summary::-webkit-details-marker {
+:is(.main-api-settings__advanced, .main-api-settings__help) > summary::-webkit-details-marker {
   display: none;
 }
 .main-api-settings__chevron {
@@ -566,9 +565,9 @@ async function loadModels(): Promise<void> {
   inset: 4px 0;
   box-sizing: border-box;
   height: 36px;
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
-  background: var(--color-surface);
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  background: var(--control-background);
   pointer-events: none;
 }
 .main-api-settings label.main-api-settings__parameter-line {
@@ -596,7 +595,7 @@ async function loadModels(): Promise<void> {
   min-height: var(--size-touch);
   padding: 0 0.625rem;
   border: 0;
-  border-radius: 0.5rem;
+  border-radius: var(--control-radius, var(--glass-radius-control));
   background: transparent;
   color: var(--color-ink);
   font: inherit;
@@ -653,19 +652,17 @@ async function loadModels(): Promise<void> {
   justify-content: center;
   min-height: 36px;
   padding: 0 0.875rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
-  background: var(--color-surface-raised);
   cursor: pointer;
+  font: inherit;
 }
 .main-api-settings .is-danger {
   border-color: var(--color-danger);
   color: var(--color-danger);
 }
 .main-api-settings .is-primary .main-api-settings__button-face {
-  color: var(--color-on-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
 }
 .main-api-settings button:disabled {
   opacity: 0.5;
@@ -680,7 +677,7 @@ async function loadModels(): Promise<void> {
   align-items: center;
   gap: 0.375rem;
   min-height: var(--size-touch);
-  color: var(--color-ink-soft);
+  color: var(--button-color, var(--color-ink-soft));
   font-size: 0.75rem;
   cursor: pointer;
   list-style: none;
@@ -697,10 +694,10 @@ async function loadModels(): Promise<void> {
 }
 .main-api-settings :deep(.inline-model-picker input) {
   position: relative;
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
   font-size: 0.875rem;
-  background: var(--color-surface);
+  background: var(--control-background);
 }
 .main-api-settings :deep(.inline-model-picker__field::before) {
   content: '';
@@ -708,9 +705,9 @@ async function loadModels(): Promise<void> {
   align-self: center;
   height: 36px;
   box-sizing: border-box;
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
-  background: var(--color-surface);
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  background: var(--control-background);
   pointer-events: none;
 }
 .main-api-settings :deep(.inline-model-picker__field > input) {
@@ -733,9 +730,9 @@ async function loadModels(): Promise<void> {
   position: absolute;
   z-index: -1;
   inset: 4px 0;
-  border: 1px solid var(--color-line);
-  border-radius: 0.5rem;
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--glass-radius-control));
+  background: var(--button-background, var(--glass-panel-strong));
   pointer-events: none;
 }
 </style>

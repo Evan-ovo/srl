@@ -70,14 +70,12 @@ const { loadDrawState, listExternalApps, listOfficialApps, installedListeners } 
     listOfficialApps: vi.fn(async () =>
       [
         'draw',
-        'resourcePlaza',
         'assistant',
         'stitch',
         'frontendWorkshop',
         'imageGeneration',
         'imageAlbum',
         'userPersona',
-        'resourceBundle',
         'tavernBridge',
       ].map((id) => ({ id })),
     ),
@@ -92,8 +90,6 @@ vi.mock('../core/AppContainer', () => ({
     onPreviewPolicyChange: vi.fn(() => () => {}),
     getDrawShowNames: vi.fn(() => false),
     setDrawShowNames: vi.fn(),
-    getChatLoadouts: vi.fn(() => []),
-    setChatLoadouts: vi.fn((value) => value),
     getUserPersonaTemplates: vi.fn(() => []),
     setUserPersonaTemplates: vi.fn((value) => value),
   },
@@ -306,7 +302,6 @@ describe('FeatureHub', () => {
       'feature-app--imageGeneration',
       'feature-app--imageAlbum',
       'feature-app--persona',
-      'feature-app--bundle',
       'feature-app--extensions',
     ])
     expect(wrapper.find('.feature-app--extensions').exists()).toBe(true)
@@ -476,16 +471,17 @@ describe('FeatureHub', () => {
     expect(wrapper.get('.async-panel-loading').text()).toContain('正在打开user才是老大')
   })
 
-  it('opens the resource bundle app from the feature desktop', async () => {
+  it('removes the retired bundle launcher from every desktop page', async () => {
     const wrapper = render()
     await flushPromises()
-    await wrapper.get('button[aria-label="下一页应用"]').trigger('click')
-
-    expect(wrapper.get('.feature-app--bundle').text()).toContain('配了么')
-    await wrapper.get('.feature-app--bundle').trigger('click')
-
-    expect(wrapper.attributes('data-feature-page')).toBe('resourceBundle')
-    expect(wrapper.get('.async-panel-loading').text()).toContain('正在打开配了么')
+    for (let page = 0; page < 5 && !wrapper.find('.feature-app--persona').exists(); page += 1) {
+      expect(wrapper.find('.feature-app--bundle').exists()).toBe(false)
+      const next = wrapper.find('button[aria-label="下一页应用"]')
+      if (!next.exists() || (next.element as HTMLButtonElement).disabled) break
+      await next.trigger('click')
+    }
+    expect(wrapper.find('.feature-app--bundle').exists()).toBe(false)
+    expect(wrapper.find('.feature-app--persona').exists()).toBe(true)
   })
 
   it('生图和相册使用各自路由，不依赖最近使用记录猜测入口', async () => {

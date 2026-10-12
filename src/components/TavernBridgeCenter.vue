@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { watch } from 'vue'
+import { useDeviceRelayStatus } from '../services/RelayWorkerSettingsService'
 
 import { assistantGuidance } from '../core/ProductAssistantGuidance'
 import FeatureAppHeader from './FeatureAppHeader.vue'
@@ -17,6 +18,7 @@ const props = withDefaults(defineProps<TavernBridgeCenterProps>(), {
   initialLocalIds: () => [],
 })
 const emit = defineEmits<TavernBridgeCenterEvents>()
+const deviceRelayStatus = useDeviceRelayStatus()
 const {
   state,
   busy,
@@ -60,13 +62,6 @@ const {
   tavernPageCount,
   selectAllTavern,
   selectedTavernIds,
-  selectedChatScriptIds,
-  chatScriptItems,
-  chatScriptSearch,
-  matchingChatScripts,
-  visibleChatScripts,
-  chatScriptLimit,
-  loadChatScriptSources,
   showOnlySelectedTavern,
   toggleSelection,
   tavernResourceLabel,
@@ -195,16 +190,18 @@ watch(
               autocapitalize="characters"
               maxlength="8"
               placeholder="AB23CD45"
+              :disabled="!deviceRelayStatus.enabled || busy"
             />
           </label>
           <button
             class="tavern-bridge__primary"
             type="submit"
             :disabled="busy"
+            :data-relay-enabled="deviceRelayStatus.enabled"
             data-assistant-focus="tavern-transfer-entry"
             data-assistant-focus-text="点这里连接酒馆，再把资源发送过去哦～"
           >
-            {{ busy ? '正在连接' : '连接酒馆' }}
+            {{ busy ? '正在连接' : deviceRelayStatus.enabled ? '连接酒馆' : '中继码未开启' }}
           </button>
           <small>在酒馆扩展生成八位设备码，两分钟内输入。</small>
         </form>
@@ -857,7 +854,7 @@ watch(
                 :disabled="busy"
                 @change="saveChatCarryScripts"
             /></label>
-            <p>随聊天接收，读了么默认不运行。</p>
+            <p>仅携带角色脚本，随聊天资料保存；全局和预设脚本请自行添加。读了么默认不运行。</p>
           </div>
           <div class="tavern-transfer-settings__setting">
             <div class="tavern-transfer-settings__row">
@@ -885,64 +882,6 @@ watch(
               }}
             </p>
           </div>
-          <details
-            v-if="includeChatScripts && state.status === 'connected'"
-            class="tavern-bridge-chat-scripts"
-          >
-            <summary>
-              <span>附带其他酒馆脚本</span
-              ><small>{{
-                selectedChatScriptIds.size ? '已选 ' + selectedChatScriptIds.size : '可选'
-              }}</small>
-            </summary>
-            <p>选择酒馆的全局或预设脚本，最多 8 份。卡内脚本会自动携带。</p>
-            <div class="tavern-bridge-chat-script-tools">
-              <input
-                v-if="chatScriptItems.length"
-                v-model="chatScriptSearch"
-                type="search"
-                placeholder="搜索脚本"
-                aria-label="查找可附带脚本"
-              />
-              <button
-                type="button"
-                aria-label="读取可附带脚本"
-                :disabled="busy || !state.capabilities?.includes('chat-reading-scripts-v1')"
-                @click="loadChatScriptSources"
-              >
-                {{ chatScriptItems.length ? '刷新' : '读取脚本' }}
-              </button>
-            </div>
-            <small v-if="!state.capabilities?.includes('chat-reading-scripts-v1')"
-              >需更新酒馆扩展才能选择额外脚本。</small
-            >
-            <template v-if="chatScriptItems.length">
-              <div class="tavern-bridge-chat-script-list">
-                <label v-for="item in visibleChatScripts" :key="item.id">
-                  <input
-                    v-model="selectedChatScriptIds"
-                    :aria-label="item.name + ' ' + tavernResourceLabel(item.kind)"
-                    type="checkbox"
-                    :value="item.id"
-                    :disabled="
-                      busy ||
-                      (selectedChatScriptIds.size >= 8 && !selectedChatScriptIds.has(item.id))
-                    "
-                  />
-                  <span class="tavern-bridge-chat-script-name">{{ item.name }}</span
-                  ><small>{{ item.kind === 'scriptGlobal' ? '全局' : '预设' }}</small>
-                </label>
-              </div>
-              <button
-                v-if="matchingChatScripts.length > chatScriptLimit"
-                type="button"
-                @click="chatScriptLimit += 50"
-              >
-                再显示 50 项
-              </button>
-            </template>
-          </details>
-
           <p v-if="error" role="alert">{{ error }}</p>
         </div>
       </dialog>

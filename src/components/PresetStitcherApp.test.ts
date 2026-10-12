@@ -217,6 +217,7 @@ describe('PresetStitcherApp', () => {
     favoriteStore = []
     checkpointStore = undefined
     templateStore = []
+    presetTexts['base-1'] = JSON.stringify(basePreset)
     storageApi.getPresetStitchDraft.mockReturnValue(undefined as never)
     storageApi.getStitchMainSide.mockReturnValue('right')
     Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [] })
@@ -224,6 +225,56 @@ describe('PresetStitcherApp', () => {
       configurable: true,
       value: vi.fn(),
     })
+  })
+
+  it('可以输入页码快速跳转到大量主预设条目的指定页', async () => {
+    const prompts = Array.from({ length: 25 }, (_, index) => ({
+      identifier: `entry-${index + 1}`,
+      name: `测试条目 ${index + 1}`,
+      role: 'system',
+      content: `内容 ${index + 1}`,
+    }))
+    presetTexts['base-1'] = JSON.stringify({
+      prompts,
+      prompt_order: [
+        {
+          character_id: 100001,
+          order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })),
+        },
+      ],
+    })
+    const wrapper = render()
+    await pickBaseAndSource(wrapper)
+
+    const input = wrapper
+      .find('nav[aria-label="主预设条目分页"]')
+      .find('input[aria-label="跳转到主预设条目页"]')
+    expect(wrapper.find('nav[aria-label="主预设条目分页"]').findAll('button')).toHaveLength(2)
+    await input.setValue('3')
+    await input.trigger('change')
+
+    expect((input.element as HTMLInputElement).value).toBe('3')
+    expect(wrapper.find('.stitch-pane--target').text()).toContain('测试条目 21')
+    expect(wrapper.find('.stitch-pane--target').text()).toContain('测试条目 25')
+    expect(wrapper.find('.stitch-pane--target').text()).not.toContain('测试条目 20')
+    wrapper.unmount()
+  })
+
+  it('可以输入页码快速跳转到填充预设条目的指定页', async () => {
+    const wrapper = render()
+    await pickBaseAndSource(wrapper)
+
+    const input = wrapper
+      .find('nav[aria-label="填充条目分页"]')
+      .find('input[aria-label="跳转到填充预设条目页"]')
+    await input.setValue('2')
+    await input.trigger('change')
+
+    expect((input.element as HTMLInputElement).value).toBe('2')
+    expect(wrapper.find('.stitch-pane--source').text()).toContain('补充段 9')
+    expect(wrapper.find('.stitch-pane--source').text()).toContain('补充段 10')
+    expect(wrapper.find('.stitch-pane--source').text()).not.toContain('思维链')
+    wrapper.unmount()
   })
 
   it('可以新建主预设条目，并将其加入当前装配', async () => {
@@ -442,11 +493,26 @@ describe('PresetStitcherApp', () => {
     expect(wrapper.findAll('.stitch-pane--source .stitch-entry')).toHaveLength(10)
     const sourcePagination = wrapper.find('.stitch-pane--source .stitch-pagination')
     expect(sourcePagination.attributes('aria-label')).toBe('填充条目分页')
-    expect(sourcePagination.text()).toContain('1 / 2')
+    expect(sourcePagination.findAll('button')).toHaveLength(2)
+    expect(
+      sourcePagination.find('input[aria-label="跳转到填充预设条目页"]').attributes('type'),
+    ).toBe('text')
+    expect(
+      (
+        sourcePagination.find('input[aria-label="跳转到填充预设条目页"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe('1')
     expect(sourceRow(wrapper, '文风段').find('strong').attributes('title')).toBe('文风段')
     await wrapper.find('.stitch-pane--source .stitch-pagination button:last-child').trigger('click')
     expect(wrapper.findAll('.stitch-pane--source .stitch-entry')).toHaveLength(2)
-    expect(wrapper.find('.stitch-pane--source .stitch-pagination').text()).toContain('2 / 2')
+    expect(
+      (
+        wrapper
+          .find('.stitch-pane--source .stitch-pagination')
+          .find('input[aria-label="跳转到填充预设条目页"]').element as HTMLInputElement
+      ).value,
+    ).toBe('2')
   })
 
   it('点选插入位置后加入条目，主预设工作副本同步且底板结构项不可移除', async () => {
@@ -580,6 +646,42 @@ describe('PresetStitcherApp', () => {
     expect(wrapper.findAll('textarea').map((item) => item.element.value)).toEqual(
       expect.arrayContaining([expect.stringContaining('{{setvar::mood::warm}}')]),
     )
+  })
+
+  it('写入聊天变量时可在变量值中快捷插入填写占位', async () => {
+    const wrapper = render()
+    await pickBaseAndSource(wrapper)
+    await wrapper.find('.stitch-pane__add-entry').trigger('click')
+    const editor = wrapper.find('.stitch-editor')
+    await editor
+      .findAll('.stitch-editor__macros button')
+      .find((button) => button.text() === '写入聊天变量')!
+      .trigger('click')
+
+    const writer = wrapper.find('.stitch-variable-writer')
+    await writer.find('input').setValue('tone')
+    const value = writer.find('textarea')
+    await value.setValue('前后')
+    ;(value.element as HTMLTextAreaElement).setSelectionRange(1, 1)
+    await writer.find('.stitch-variable-writer__slot-button').trigger('click')
+
+    const slotWriter = wrapper.find('.stitch-slot-writer')
+    await slotWriter.find('input').setValue('文风')
+    await slotWriter.find('.button--primary').trigger('click')
+    const variableText = (
+      wrapper.find('.stitch-variable-writer textarea').element as HTMLTextAreaElement
+    ).value
+    const slotMacro = variableText.match(/\{\{srl_slot::[a-f\d-]{36}::文风\}\}/u)?.[0]
+    expect(variableText).toContain('{{srl_slot::')
+    expect(slotMacro).toBeTruthy()
+    expect(variableText).toBe(`前${slotMacro}后`)
+    expect(writer.exists()).toBe(true)
+
+    await wrapper.find('.stitch-variable-writer .button--primary').trigger('click')
+    expect((editor.find('textarea').element as HTMLTextAreaElement).value).toBe(
+      `{{setvar::tone::前${slotMacro}后}}`,
+    )
+    wrapper.unmount()
   })
 
   it('高亮条目宏，可复制正文、按变量读写筛选，并读取未使用的已写变量', async () => {

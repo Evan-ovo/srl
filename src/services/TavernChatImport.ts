@@ -16,7 +16,10 @@ import { hashBlob } from './HashService'
 import { isRecord } from '../utils/UnknownValue'
 import { chatCharacterThumbnailData, chatCharacterSummary } from './ChatReaderCharacter'
 import { materializeNativeFile } from '../core/NativeFileSource'
-import { extractTavernHelperScripts } from '../utils/TavernHelperScriptParser'
+import {
+  extractTavernHelperScripts,
+  type HelperScriptRecord,
+} from '../utils/TavernHelperScriptParser'
 
 function resourceOf(result: ImportResult): Resource {
   if (result.status === 'failed') throw new Error(result.message)
@@ -27,7 +30,12 @@ function resourceOf(result: ImportResult): Resource {
 /** Owned by one serial import batch; only the current card and lightweight summaries survive. */
 export interface TavernChatImportBatch {
   summaries?: ResourceListSummary[]
-  character?: { hash: string; parsed: ParsedResource; thumbnail?: Blob }
+  character?: {
+    hash: string
+    parsed: ParsedResource
+    thumbnail?: Blob
+    scripts?: Array<HelperScriptRecord & { type: 'script' }>
+  }
 }
 
 /** Archive framing only; parsing, persistence and relationships use their existing owners. */
@@ -48,8 +56,6 @@ export async function importTavernChat(
     presetRules,
     regexContext,
     hasRegexSnapshot,
-    readingScripts,
-    hasReadingScriptSnapshot,
     carryReadingScripts,
   } = await readChatArchive(file)
   // Validate both before the first write. A filename or chat speaker never proves card identity.
@@ -76,28 +82,17 @@ export async function importTavernChat(
   const parsedCard = isRecord(cardParsed.metadata.card) ? cardParsed.metadata.card : {}
   const body = isRecord(parsedCard.data) ? parsedCard.data : parsedCard
   const extensions = isRecord(body.extensions) ? body.extensions : {}
-  const companionScripts = (
-    carryReadingScripts
-      ? [
-          ...extractTavernHelperScripts(body, { source: 'character' }),
-          ...readingScripts.flatMap((source) => {
-            const scripts = extractTavernHelperScripts(source.scripts, {
-              source: 'bound',
-              fallbackName: source.sourceName,
-            })
-            if (!scripts.length) throw new Error('聊天随附脚本来源无法识别，请重新导出')
-            return scripts.map((script) => ({
-              ...script,
-              folder: [source.sourceName, script.folder].filter(Boolean).join(' / '),
-            }))
-          }),
-        ]
-      : []
-  ).map((script) => ({ ...script, type: 'script', enabled: false }))
-  if (companionScripts.length > 64) throw new Error('聊天随附脚本超过 64 个，请减少所选来源')
-  const scriptText = JSON.stringify({ scripts: companionScripts, sourceName: '聊天随附脚本' })
-  if (new TextEncoder().encode(scriptText).length > 2 * 1024 * 1024)
-    throw new Error('聊天随附脚本超过 2 MiB，请减少所选来源')
+  if (carryReadingScripts && !batch.character.scripts) {
+    const scripts = extractTavernHelperScripts(body, { source: 'character' }).map((script) => ({
+      ...script,
+      type: 'script' as const,
+    }))
+    if (scripts.length > 64) throw new Error('角色阅读脚本超过 64 个，请减少卡内脚本')
+    if (new TextEncoder().encode(JSON.stringify(scripts)).length > 2 * 1024 * 1024)
+      throw new Error('角色阅读脚本超过 2 MiB，请减少卡内脚本')
+    batch.character.scripts = scripts
+  }
+  const characterScripts = carryReadingScripts ? (batch.character.scripts ?? []) : []
   let character = exact ? await resources.get(exact.id) : undefined
   const extractedResources: Resource[] = []
   if (!character && saveCharacter) {
@@ -111,10 +106,12 @@ export async function importTavernChat(
     throw new Error('配套角色卡保存校验失败，聊天尚未绑定')
   const companion = {
     hash: cardHash,
+    carryReadingScripts,
     name: cardParsed.name,
     avatar,
     card: {
       name: cardParsed.name,
+      ...(characterScripts.length ? { scripts: characterScripts } : {}),
       extensions: {
         regex_scripts: Array.isArray(extensions.regex_scripts) ? extensions.regex_scripts : [],
       },
@@ -174,25 +171,9 @@ export async function importTavernChat(
     tavernChatSource: { avatar, chatName: chat.name, cardHash },
   }
   if (!bound && character) await new ChatReaderService(resources).bind(imported.id, character.id)
-  if (companionScripts.length) {
-    const scriptFile = new File([scriptText], '聊天随附脚本.json', { type: 'application/json' })
-    const scriptResult = await resources.importPreparedFile(
-      scriptFile,
-      await parser.parse(scriptFile),
-    )
-    const script = resourceOf(scriptResult)
-    const savedScript = await resources.get(script.id)
-    if (
-      !savedScript ||
-      savedScript.type !== RESOURCE_TYPE.SCRIPT ||
-      (await hashBlob(savedScript.originalBlob)) !== (await hashBlob(scriptFile))
-    )
-      throw new Error('聊天随附脚本保存校验失败，请保留酒馆原件后重试')
-    if (scriptResult.status === 'imported') extractedResources.push(script)
-    metadata.chatReadingScriptId = script.id
-  } else if (hasReadingScriptSnapshot) {
-    metadata.chatReadingScriptId = null
-  }
+  // Character code travels in the existing reading companion; no standalone script resource.
+  // Reimports retire the legacy automatic reference, while keeping its original resource intact.
+  metadata.chatReadingScriptId = null
   if (displayRules.length || presetRules.length) {
     const regexFile = new File(
       [

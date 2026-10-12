@@ -382,10 +382,6 @@ async function navigateTo(id: string): Promise<void> {
   flex: none;
   min-height: 2.125rem;
   padding: 0 0.65rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.3rem;
-  background: var(--color-accent-soft);
-  color: var(--color-ink);
   font-size: 0.7rem;
   font-weight: 750;
 }
@@ -472,7 +468,7 @@ async function navigateTo(id: string): Promise<void> {
   z-index: 2;
   inset: 0;
   border: 0;
-  background: rgb(18 30 34 / 20%);
+  background: var(--overlay-background);
 }
 .github-repository-detail__nav {
   position: fixed;
@@ -484,7 +480,7 @@ async function navigateTo(id: string): Promise<void> {
   transform: translateX(100%);
   border-left: 1px solid var(--color-line);
   background: var(--color-surface);
-  box-shadow: -0.75rem 0 2rem rgb(25 51 60 / 12%);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
   transition: transform 160ms ease;
 }
 .github-repository-detail__nav.is-open {
@@ -512,8 +508,8 @@ async function navigateTo(id: string): Promise<void> {
 }
 .github-repository-detail__nav header button {
   border: 0;
-  background: transparent;
-  color: var(--color-ink-soft);
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-ink-soft));
   font-size: 1.2rem;
 }
 .github-repository-detail__nav > button {
@@ -523,12 +519,12 @@ async function navigateTo(id: string): Promise<void> {
   padding: 0.8rem 1rem;
   border: 0;
   border-bottom: 1px solid var(--color-line);
-  background: transparent;
-  color: var(--color-ink);
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-ink));
   text-align: left;
 }
 .github-repository-detail__nav > button:hover {
-  background: var(--color-accent-soft);
+  background: var(--button-background, var(--color-accent-soft));
 }
 .github-repository-detail__nav > button strong {
   font-size: 0.76rem;

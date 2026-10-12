@@ -25,7 +25,6 @@ describe('FeatureAppRegistry', () => {
       'imageGeneration',
       'imageAlbum',
       'userPersona',
-      'resourceBundle',
       'extensions',
     ])
     // SRL-PUBLIC-SYNC: END REPLACE id=feature-app-registry-order-test
@@ -44,7 +43,6 @@ describe('FeatureAppRegistry', () => {
         folderCount: 2,
         presetCount: 4,
         userPersonaCount: 5,
-        resourceBundleCount: 6,
         enabledExternalAppCount: 7,
       }),
     ).toBe('7 个已启用')

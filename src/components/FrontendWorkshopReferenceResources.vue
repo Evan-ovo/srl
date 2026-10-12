@@ -244,6 +244,6 @@ textarea {
   min-height: 160px;
   font-size: 16px;
   color: var(--color-ink);
-  background: var(--color-surface);
+  background: var(--control-background, var(--color-surface));
 }
 </style>

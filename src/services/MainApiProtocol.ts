@@ -3,6 +3,7 @@ import type {
   MainApiMessage,
   MainApiProtocol,
   MainApiTokenUsage,
+  MainApiTool,
   MainApiToolCall,
 } from './MainApiService'
 export function responseTextFromJson(
@@ -128,6 +129,60 @@ export function responseToolCalls(
     seen.add(id)
     return { id, name, arguments: args }
   })
+}
+
+/** Recover a complete assistant DSML reply, never examples embedded in ordinary text. */
+export function normalizeDsmlToolReply(
+  text: string,
+  nativeCalls: MainApiToolCall[],
+  offeredTools: readonly MainApiTool[],
+): { text: string; toolCalls: MainApiToolCall[] } {
+  const unchanged = { text, toolCalls: nativeCalls }
+  const source = text.trim()
+  // "calls" is the wrapper observed in a provider reply; V4's published name is "tool_calls".
+  if (!/^<([｜|]{1,2})DSML\1[ \t]*(?:tool_calls|calls)(?:>|\s|$)/u.test(source)) return unchanged
+  if (nativeCalls.length) return { text: '', toolCalls: nativeCalls }
+  const invalid = () => new Error('API 的文字工具调用格式不完整或不在本轮工具范围内；未执行操作')
+  if (!offeredTools.length) throw invalid()
+  const block = source.match(
+    /^<(([｜|]{1,2})DSML\2)[ \t]*(tool_calls|calls)>([\s\S]*)<\/\1[ \t]*\3>\s*(?:<｜end▁of▁sentence｜>)?$/u,
+  )
+  if (!block) throw invalid()
+  const marker = block[1]!.replace(/\|/gu, '\\|')
+  const calls: MainApiToolCall[] = []
+  let remaining = block[4]!.trim()
+  const invocation = new RegExp(
+    `^<${marker}[ \\t]*invoke name="([^"<>]+)">([\\s\\S]*?)<\\/${marker}[ \\t]*invoke>`,
+    'u',
+  )
+  const parameter = new RegExp(
+    `^<${marker}[ \\t]*parameter name="([^"<>]+)" string="(true|false)">([\\s\\S]*?)<\\/${marker}[ \\t]*parameter>`,
+    'u',
+  )
+  while (remaining) {
+    const invoke = remaining.match(invocation)
+    if (!invoke || !offeredTools.some((tool) => tool.name === invoke[1])) throw invalid()
+    const args: Record<string, unknown> = Object.create(null)
+    let parameters = invoke[2]!.trim()
+    while (parameters) {
+      const entry = parameters.match(parameter)
+      if (!entry || Object.hasOwn(args, entry[1]!)) throw invalid()
+      try {
+        args[entry[1]!] = entry[2] === 'true' ? entry[3]! : JSON.parse(entry[3]!)
+      } catch {
+        throw invalid()
+      }
+      parameters = parameters.slice(entry[0].length).trim()
+    }
+    calls.push({
+      id: `dsml_${crypto.randomUUID()}`,
+      name: invoke[1]!,
+      arguments: JSON.stringify(args),
+    })
+    remaining = remaining.slice(invoke[0].length).trim()
+  }
+  if (!calls.length) throw invalid()
+  return { text: '', toolCalls: calls }
 }
 
 function reasoningFragments(value: unknown): string[] {

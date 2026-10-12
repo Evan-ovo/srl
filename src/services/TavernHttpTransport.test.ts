@@ -11,6 +11,37 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 describe('APK relay transport', () => {
+  it('omits official credentials and rejects redirects on custom Worker requests in both transports', async () => {
+    const init = {
+      method: 'POST',
+      credentials: 'include' as const,
+      headers: {
+        Authorization: 'Bearer official-fixture',
+        Cookie: 'official-fixture',
+        'X-CSRF-Token': 'official-fixture',
+      },
+      body: '{}',
+    }
+    vi.mocked(Capacitor.isNativePlatform).mockReturnValueOnce(false)
+    const fetcher = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetcher)
+    await tavernHttpFetch('https://worker.example/api/bridge/join', init)
+    const request = fetcher.mock.calls[0]![1]
+    expect(request).toMatchObject({ credentials: 'omit', redirect: 'error' })
+    expect(new Headers(request.headers).has('Authorization')).toBe(false)
+    expect(new Headers(request.headers).has('Cookie')).toBe(false)
+    expect(new Headers(request.headers).has('X-CSRF-Token')).toBe(false)
+    vi.mocked(CapacitorHttp.request).mockResolvedValue({
+      status: 200,
+      data: '{}',
+      headers: {},
+      url: 'https://worker.example/api/bridge/join',
+    })
+    await tavernHttpFetch('https://worker.example/api/bridge/join', init)
+    expect(CapacitorHttp.request).toHaveBeenLastCalledWith(
+      expect.objectContaining({ disableRedirects: true, headers: {} }),
+    )
+  })
   it('sends bounded binary chunks via native HTTP even when the URL shares the bundled app origin', async () => {
     vi.mocked(CapacitorHttp.request).mockResolvedValue({
       status: 204,

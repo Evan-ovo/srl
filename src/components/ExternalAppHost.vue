@@ -1035,7 +1035,7 @@ onBeforeUnmount(() => {
           'external-app-host__workspace--starting': isBuiltinReader && !readerReady,
         }"
         :style="{
-          '--external-app-splash': app.manifest.splashColor || '#237f87',
+          '--external-app-splash': app.manifest.splashColor || 'var(--color-accent)',
           ...(isBuiltinReader ? readerAppearance : {}),
         }"
         :aria-label="official ? '读了么阅读工作区' : '第三方 APP 独立工作区'"

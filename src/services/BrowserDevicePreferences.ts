@@ -8,8 +8,6 @@ import type { PresetFavoriteSnapshot } from '../utils/PresetStitcher'
 
 import {
   type PresetStitchTemplate,
-  type ChatLoadout,
-  type ResourceBundleTemplate,
   type PresetStitchDraft,
   type ProjectNoticeStoragePlugin,
   type TavernSendContent,
@@ -64,10 +62,6 @@ export function getNativeProjectNoticeStorage(): ProjectNoticeStoragePlugin | un
 }
 
 export const USER_PERSONA_TEMPLATES_KEY = 'srl.userPersona.templates'
-
-export const RESOURCE_BUNDLES_KEY = 'srl.resourceBundles.templates'
-
-export const CHAT_LOADOUTS_KEY = 'srl.chatLoadouts'
 export function exportStitchWork(): {
   draft?: PresetStitchDraft
   checkpoint?: PresetStitchDraft
@@ -363,34 +357,6 @@ export function setStitchTemplates(value: PresetStitchTemplate[]): PresetStitchT
   return normalized
 }
 
-export function getChatLoadouts(): ChatLoadout[] {
-  try {
-    const current = localStorage.getItem(CHAT_LOADOUTS_KEY)
-    const legacy = localStorage.getItem(RESOURCE_BUNDLES_KEY)
-    return normalizeChatLoadouts(JSON.parse(current ?? legacy ?? '[]'))
-  } catch {
-    return []
-  }
-}
-
-export function setChatLoadouts(value: ChatLoadout[]): ChatLoadout[] {
-  const normalized = normalizeChatLoadouts(value)
-  try {
-    localStorage.setItem(CHAT_LOADOUTS_KEY, JSON.stringify(normalized))
-  } catch {
-    // 装载方案是可恢复偏好，写入失败不影响资源本体或永久资源关系。
-  }
-  return normalized
-}
-
-export function getResourceBundles(): ResourceBundleTemplate[] {
-  return getChatLoadouts()
-}
-
-export function setResourceBundles(value: ResourceBundleTemplate[]): ResourceBundleTemplate[] {
-  return setChatLoadouts(value)
-}
-
 export function getStitchMainSide(): 'left' | 'right' {
   try {
     return localStorage.getItem(PRESET_STITCH_MAIN_SIDE_KEY) === 'left' ? 'left' : 'right'
@@ -523,8 +489,4 @@ export function normalizeStitchFavorites(value: unknown): PresetFavoriteSnapshot
 
 export function normalizeStitchTemplates(value: unknown): PresetStitchTemplate[] {
   return operationsBrowserPreferenceNormalization.normalizeStitchTemplates(value)
-}
-
-export function normalizeChatLoadouts(value: unknown): ChatLoadout[] {
-  return operationsBrowserPreferenceNormalization.normalizeChatLoadouts(value)
 }

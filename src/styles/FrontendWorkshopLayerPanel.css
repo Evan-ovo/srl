@@ -74,7 +74,6 @@
   min-width: 0;
   min-height: var(--size-touch);
   padding: 0.4rem 0.5rem;
-  border-radius: var(--radius-control);
   font-size: var(--text-body);
 }
 
@@ -95,10 +94,10 @@
   width: 100%;
   padding: 0;
   border: 0;
-  border-radius: 0;
-  color: var(--color-accent);
-  background: transparent;
-  box-shadow: none;
+  border-radius: var(--button-radius, 0);
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, transparent);
+  box-shadow: var(--button-shadow, none);
 }
 
 .frontend-workbench__layer-popover > article > button:not(.frontend-workbench__layer-name) svg {
@@ -174,8 +173,8 @@
 }
 
 .frontend-workbench__all-layers.is-active {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .frontend-workbench__layer-order {
@@ -192,8 +191,8 @@
   place-items: center;
   padding: 0;
   border: 0;
-  color: var(--color-ink-soft);
-  background: transparent;
+  color: var(--button-color, var(--color-ink-soft));
+  background: var(--button-background, transparent);
   cursor: pointer;
   list-style: none;
   touch-action: none;
@@ -221,7 +220,7 @@
   border: 1px solid var(--color-line);
   border-radius: var(--radius-control);
   background: var(--color-surface-raised);
-  box-shadow: 0 0.45rem 1.2rem rgb(38 62 78 / 12%);
+  box-shadow: var(--glass-shadow);
 }
 
 .frontend-workbench__layer-order:not([open]) > span {
@@ -231,9 +230,6 @@
 .frontend-workbench__layer-order button {
   min-height: var(--control-visual);
   padding: 0.3rem 0.55rem;
-  border: 0;
-  color: var(--color-ink);
-  background: transparent;
   font-size: var(--text-caption);
   text-align: start;
   white-space: normal;
@@ -273,7 +269,8 @@
   border-radius: 0;
   background: linear-gradient(
     90deg,
-    rgb(22 52 63 / 20%) 0 var(--frontend-workbench-layer-leading-space),
+    color-mix(in srgb, var(--color-accent) 20%, transparent) 0
+      var(--frontend-workbench-layer-leading-space),
     var(--color-surface-raised) var(--frontend-workbench-layer-leading-space) 100%
   );
   box-shadow: none;
@@ -319,7 +316,6 @@
   position: relative;
   min-width: var(--size-touch);
   min-height: var(--size-touch);
-  border: 0;
 }
 
 .frontend-workbench__layer-popover > header button::before {
@@ -327,7 +323,7 @@
 }
 
 .frontend-workbench__layer-popover > header button:not(.button--primary) {
-  background: transparent;
+  background: var(--button-background, var(--color-accent));
 }
 
 .frontend-workbench__layer-popover > header .frontend-workbench__layer-create {
@@ -370,15 +366,13 @@
 .frontend-workbench__layer-popover > footer button {
   min-width: 0;
   min-height: var(--control-visual-secondary);
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius-control);
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
 .frontend-workbench__layer-popover > footer button:not(.button--primary) {
-  color: var(--color-accent);
-  background: var(--color-surface);
+  color: var(--button-color, var(--color-on-accent));
+  background: var(--button-background, var(--color-accent));
 }
 
 .frontend-workbench__hidden-nodes > small {
@@ -395,10 +389,6 @@
   justify-content: space-between;
   gap: 0.4rem;
   padding: 0.35rem 0.5rem;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
-  color: var(--color-ink);
-  background: var(--color-surface);
   font-size: var(--text-caption);
 }
 
@@ -464,7 +454,7 @@
       max(0.75rem, var(--safe-bottom)) 0.75rem;
     border-left: 1px solid var(--color-line-strong);
     background: var(--color-surface-raised);
-    box-shadow: -0.8rem 0 2rem rgb(12 34 27 / 14%);
+    box-shadow: var(--glass-shadow);
   }
 
   .frontend-workbench__layer-popover.is-left {

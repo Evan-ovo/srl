@@ -369,51 +369,6 @@ describe('BrowserStorageService cabinet desktop resources', () => {
     expect(service.getStitchTemplates()).toEqual(templates)
   })
 
-  it('persists chat loadouts and migrates legacy portable preferences', () => {
-    const service = new BrowserStorageService()
-    const bundles = service.setChatLoadouts([
-      {
-        id: 'bundle-1',
-        name: '  北境完整套装  ',
-        primaryResourceId: 'character-1',
-        resourceIds: ['world-1', 'preset-1', 'world-1', 'character-1'],
-        createdAt: 1,
-        updatedAt: 2,
-      },
-      {
-        id: 'invalid',
-        name: '没有配套资源',
-        primaryResourceId: 'character-2',
-        resourceIds: [],
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ])
-
-    expect(bundles).toEqual([
-      {
-        id: 'bundle-1',
-        name: '北境完整套装',
-        primaryResourceId: 'character-1',
-        resourceIds: ['world-1', 'preset-1'],
-        createdAt: 1,
-        updatedAt: 2,
-      },
-    ])
-    expect(service.exportGeneralPreferences().chatLoadouts).toEqual(bundles)
-
-    localStorage.clear()
-    service.importGeneralPreferences({
-      previewPolicy: { allowRemoteResources: false, allowScripts: false },
-      extractCharacterAssets: false,
-      hideCharacterAssets: true,
-      hideChatDisplayRegex: true,
-      searchHistory: [],
-      resourceBundles: bundles,
-    })
-    expect(service.getChatLoadouts()).toEqual(bundles)
-  })
-
   it('saves and clears one manual preset stitch checkpoint', () => {
     const service = new BrowserStorageService()
     const checkpoint = {

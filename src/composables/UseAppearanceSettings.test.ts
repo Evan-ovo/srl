@@ -57,6 +57,22 @@ const { useAppearanceSettings } = await import('./UseAppearanceSettings')
 describe('useAppearanceSettings', () => {
   let notices: string[]
 
+  it('存储不足以记录恢复信息时不开始试用，也不覆盖当前界面', () => {
+    const appearance = create()
+    const previous = appearance.customUiCss.value
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('本机存储已满', 'QuotaExceededError')
+    })
+    try {
+      appearance.saveCustomUiCss('.example{color:red}')
+      expect(appearance.customUiCss.value).toBe(previous)
+      expect(storage.setCustomUiCss).not.toHaveBeenCalled()
+      expect(notices.some((notice) => notice.includes('外观试用未开始'))).toBe(true)
+    } finally {
+      set.mockRestore()
+    }
+  })
+
   beforeEach(() => {
     document
       .getElementById('srl-appearance-safe-layer')
@@ -159,10 +175,17 @@ describe('useAppearanceSettings', () => {
     expect(notices).toEqual(['自定义 CSS 已清除'])
   })
 
-  it('自定义 CSS 截断到 20 万字符，防止超长输入撑爆存储', () => {
+  it('超过20万字符的外观CSS完整应用并在确认后保存末尾规则', () => {
     const appearance = create()
-    appearance.saveCustomUiCss('a'.repeat(250_000))
-    expect(appearance.customUiCss.value).toHaveLength(200_000)
+    const css = `/*${'a'.repeat(250_000)}*/\n.tail { color: #123456; }`
+    appearance.saveCustomUiCss(css)
+    expect(appearance.customUiCss.value).toBe(css)
+    expect(document.getElementById('srl-custom-ui-style')?.textContent).toBe(css)
+    document
+      .getElementById('srl-appearance-safe-layer')
+      ?.shadowRoot?.querySelector<HTMLButtonElement>('[data-keep]')
+      ?.click()
+    expect(storage.setCustomUiCss).toHaveBeenCalledWith(css)
   })
 
   it('关闭远程资源开关会连同脚本一起关闭', () => {

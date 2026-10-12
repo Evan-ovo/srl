@@ -6,11 +6,11 @@
   z-index: 29;
   width: fit-content;
   overflow: hidden;
-  border: 1px solid rgba(126, 209, 210, 0.3);
-  border-radius: 1rem;
-  background: linear-gradient(145deg, #164c56, #103b45);
-  color: #e8fbfb;
-  box-shadow: 0 0.85rem 2rem rgba(12, 48, 57, 0.22);
+  border: 1px solid var(--notice-border, var(--glass-border));
+  border-radius: var(--notice-radius, 1rem);
+  background: var(--notice-background, var(--glass-panel-strong));
+  color: var(--notice-color, var(--color-ink));
+  box-shadow: var(--notice-shadow, var(--glass-shadow));
   font-family: var(--font-ui, ui-sans-serif, sans-serif);
 }
 
@@ -41,14 +41,14 @@
 #srl-performance-monitor summary > i {
   width: 0.5rem;
   height: 0.5rem;
-  border: 2px solid #b8f2e9;
+  border: 2px solid var(--color-accent);
   border-radius: 50%;
-  box-shadow: 0 0 0 0.22rem rgba(184, 242, 233, 0.13);
+  box-shadow: 0 0 0 0.22rem color-mix(in srgb, var(--color-accent) 13%, transparent);
 }
 
 #srl-performance-monitor summary > b {
   margin-left: 0.08rem;
-  color: #9bd6d2;
+  color: var(--color-ink-soft);
   font-size: 1rem;
   font-weight: 500;
 }
@@ -58,7 +58,7 @@
 }
 
 #srl-performance-monitor[open] summary {
-  border-bottom: 1px solid rgba(184, 242, 233, 0.18);
+  border-bottom: 1px solid var(--color-line);
 }
 
 #srl-performance-monitor[open] summary > b {
@@ -83,7 +83,7 @@
 }
 
 .srl-performance-monitor__body > header small {
-  color: #83c4c0;
+  color: var(--color-ink-soft);
   font-size: 0.57rem;
   font-weight: 800;
   letter-spacing: 0.16em;
@@ -100,18 +100,18 @@
   gap: 0.75rem;
   margin: 0;
   padding: 0.52rem 0;
-  border-top: 1px solid rgba(184, 242, 233, 0.12);
+  border-top: 1px solid var(--color-line);
   font-size: 0.7rem;
 }
 
 .srl-performance-monitor__metric span {
-  color: #add7d6;
+  color: var(--color-ink-soft);
 }
 
 .srl-performance-monitor__metric strong {
   max-width: 11.5rem;
-  color: #fff;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--color-ink);
+  font-family: var(--font-code, ui-monospace, monospace);
   font-size: 0.69rem;
   font-weight: 650;
   text-align: right;
@@ -121,8 +121,8 @@
 .srl-performance-monitor__note {
   margin: 0.55rem 0 0;
   padding: 0.6rem 0 0;
-  border-top: 1px solid rgba(184, 242, 233, 0.12);
-  color: #add7d6;
+  border-top: 1px solid var(--color-line);
+  color: var(--color-ink-soft);
   font-size: 0.66rem;
   line-height: 1.55;
 }
@@ -130,11 +130,12 @@
 .srl-performance-monitor__copy {
   min-height: 2.75rem;
   margin-top: 0.6rem;
-  border: 1px solid #83c4c0;
-  border-radius: 0.5rem;
-  color: #e8fbfb;
-  background: #164c56;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--glass-panel-strong));
   font-size: 0.8rem;
+  box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 
 .srl-performance-monitor__diagnostic-text:not([hidden]) {
@@ -142,6 +143,11 @@
   min-height: 5rem;
   margin-top: 0.5rem;
   font-size: 16px;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  color: var(--color-ink);
+  background: var(--control-background, var(--color-surface-raised));
+  box-shadow: var(--control-shadow, none);
 }
 
 /* 未拖动时保留原桌面默认位置；一旦拖动，内联 left/top 成为唯一位置来源。 */

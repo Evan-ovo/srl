@@ -8,11 +8,7 @@ import {
   type SrlBackRequestDetail,
 } from '../composables/UseBackStack'
 
-import {
-  browserStorageService,
-  characterDrawService,
-  externalAppService,
-} from '../core/AppContainer'
+import { characterDrawService, externalAppService } from '../core/AppContainer'
 import { readAppResumeState, writeAppResumeState } from '../core/AppResumeState'
 import { createAsyncPanel } from '../core/AsyncPanel'
 import {
@@ -106,7 +102,7 @@ export type FeatureHubEvents = {
   'update:resourceCardHeightMode': [value: ResourceCardHeightMode]
   'update:noImageResourceCoverMode': [value: NoImageResourceCoverMode]
   'update:uiFontScale': [value: UiFontScale]
-  'save-css': [value: string]
+  'save-css': [value: string, options?: import('../types/UiCustomization').UiApplyOptions]
   'save-assistant-css': [value: string]
   'library-changed': []
   'import-files': [files: File[], onComplete?: () => void]
@@ -150,7 +146,6 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
 
   const UserPersonaApp = createRegisteredAsyncPanel('userPersona')
 
-  const ResourceBundleApp = createRegisteredAsyncPanel('resourceBundle')
   const ChatReaderApp = createRegisteredAsyncPanel('chatReader')
 
   const ExternalAppManager = createRegisteredAsyncPanel('extensions')
@@ -183,14 +178,12 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
   function handleNativeShortcut(event?: Event): void {
     const detail = event instanceof CustomEvent ? String(event.detail ?? '') : ''
     const action = detail || sessionStorage.getItem('srl.native.shortcut') || ''
-    if (action !== 'cloud' && action !== 'inbox') return
+    if (action !== 'cloud' && action !== 'inbox' && action !== 'assistant') return
     activePage.value = action
     sessionStorage.removeItem('srl.native.shortcut')
   }
 
   const drawState = ref<CharacterDrawState>(createEmptyCharacterDrawState())
-
-  const bundleSendIds = ref<string[]>([])
 
   const externalApps = ref<InstalledExternalAppSummary[]>([])
   // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=official-app-install-state
@@ -286,7 +279,6 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
       userPersonaCount: props.resources.filter(
         (resource) => resource.type === RESOURCE_TYPE.USER_PERSONA,
       ).length,
-      resourceBundleCount: browserStorageService.getChatLoadouts().length,
       enabledExternalAppCount: enabledExternalApps.value.length,
     }
   }
@@ -297,7 +289,6 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
 
   function openBuiltInFeatureApp(id: BuiltInFeatureAppId): void {
     const descriptor = getFeatureAppDescriptor(id)
-    if (descriptor.id === 'tavernBridge') bundleSendIds.value = []
     activePage.value = descriptor.page
   }
 
@@ -495,11 +486,6 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
     if (index >= 0) setFeatureDesktopPage(Math.floor(index / FEATURE_DESKTOP_PAGE_SIZE))
   }
 
-  function sendBundleToTavern(resourceIds: string[]): void {
-    bundleSendIds.value = resourceIds
-    activePage.value = 'tavernBridge'
-  }
-
   const backStack = useBackStack([
     {
       id: 'feature-page',
@@ -644,15 +630,12 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
     // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=official-app-panel-export
     AppearanceStudio,
     TavernBridgeCenter,
-    bundleSendIds,
     PresetStitcherApp,
     FrontendWorkshopApp,
     ImageGenerationApp,
     GeneratedImageAlbumApp,
     UserPersonaApp,
-    ResourceBundleApp,
     ChatReaderApp,
-    sendBundleToTavern,
     ExternalAppManager,
     handleExternalAppsChanged,
     handleExternalAppInstalled,

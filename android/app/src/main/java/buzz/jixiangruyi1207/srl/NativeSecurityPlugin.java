@@ -2,11 +2,17 @@ package buzz.jixiangruyi1207.srl;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.view.WindowManager;
 import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
+import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.FragmentActivity;
 import com.getcapacitor.JSObject;
@@ -83,6 +89,7 @@ public class NativeSecurityPlugin extends Plugin {
         if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) { JSObject result = new JSObject(); result.put("granted", true); call.resolve(result); return; }
         requestPermissionForAlias("notifications", call, "notificationPermissionResult");
     }
+
 
     @PermissionCallback
     private void notificationPermissionResult(PluginCall call) {

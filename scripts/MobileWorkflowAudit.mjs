@@ -472,7 +472,7 @@ try {
   await page.getByRole('button', { name: '关闭' }).click()
   await closeNotice()
 
-  await page.getByRole('button', { name: '多选整理' }).click()
+  await page.getByRole('button', { name: '多选' }).click()
   await page.getByRole('button', { name: '选择 移动端审计世界书' }).click()
   await page.locator('.batch-bar__button--danger').click()
   const batchDeleteDialog = page.getByRole('alertdialog', { name: '批量删除' })

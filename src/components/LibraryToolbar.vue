@@ -111,14 +111,16 @@ const openSimilarNameGroups = toRef(input.model, 'openSimilarNameGroups')
           <option value="size">文件大小</option>
         </select>
       </label>
-      <span class="toolbar__result"> 显示 {{ filteredResourceCount }} 项 </span>
+      <span class="toolbar__result" :aria-label="`显示 ${filteredResourceCount} 项`">
+        {{ filteredResourceCount }} 项
+      </span>
       <div class="toolbar__actions">
         <button
           class="batch-toggle toolbar__similar-names"
           type="button"
           @click="openSimilarNameGroups"
         >
-          名称相似资源
+          名称相似
         </button>
         <button
           class="batch-toggle"
@@ -126,7 +128,7 @@ const openSimilarNameGroups = toRef(input.model, 'openSimilarNameGroups')
           type="button"
           @click="toggleBatchMode"
         >
-          {{ isBatchMode ? '退出多选' : '多选整理' }}
+          {{ isBatchMode ? '退出多选' : '多选' }}
         </button>
       </div>
     </div>

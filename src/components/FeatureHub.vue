@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, provide, ref, toRef, watch } from 'vue'
+import type { UiApplyOptions } from '../types/UiCustomization'
 import {
   createFolderThumbnailCache,
   folderThumbnailCacheKey,
@@ -31,6 +32,10 @@ watch(
 )
 onUnmounted(() => folderThumbnailCache.clear())
 const emit = defineEmits<FeatureHubEvents>()
+function saveAppearance(value: string, options?: UiApplyOptions) {
+  if (options) emit('save-css', value, options)
+  else emit('save-css', value)
+}
 const controller = useFeatureHub(props, emit)
 const assistantPages = ref<Array<'appearance' | 'assistant'>>([])
 const assistantVisibility = ref({ appearance: false, assistant: false })
@@ -83,15 +88,12 @@ const {
   OfficialAppManager,
   AppearanceStudio,
   TavernBridgeCenter,
-  bundleSendIds,
   PresetStitcherApp,
   FrontendWorkshopApp,
   ImageGenerationApp,
   GeneratedImageAlbumApp,
   UserPersonaApp,
-  ResourceBundleApp,
   ChatReaderApp,
-  sendBundleToTavern,
   ExternalAppManager,
   handleExternalAppsChanged,
   handleExternalAppInstalled,
@@ -268,7 +270,6 @@ watch(assistantBusy, (busy) => emit('assistant-activity', busy), { immediate: tr
         v-else-if="activePage === 'tavernBridge'"
         :resources="resources"
         :categories="categories"
-        :initial-local-ids="bundleSendIds"
         @back="activePage = 'home'"
         @import-files="forwardImportFiles"
       />
@@ -299,14 +300,6 @@ watch(assistantBusy, (busy) => emit('assistant-activity', busy), { immediate: tr
         @open-history="emit('openPersonaHistory', $event)"
       />
       <ChatReaderApp v-else-if="activePage === 'chatReader'" @back="activePage = 'home'" />
-      <ResourceBundleApp
-        v-else-if="activePage === 'resourceBundle'"
-        :resources="resources"
-        :categories="categories"
-        @back="activePage = 'home'"
-        @library-changed="emit('library-changed')"
-        @send-to-tavern="sendBundleToTavern"
-      />
       <ExternalAppManager
         v-else-if="activePage === 'extensions'"
         :shared-files="sharedAppFiles ?? []"
@@ -354,7 +347,7 @@ watch(assistantBusy, (busy) => emit('assistant-activity', busy), { immediate: tr
       @update:resource-card-height-mode="emit('update:resourceCardHeightMode', $event)"
       @update:no-image-resource-cover-mode="emit('update:noImageResourceCoverMode', $event)"
       @update:ui-font-scale="emit('update:uiFontScale', $event)"
-      @save-css="emit('save-css', $event)"
+      @save-css="saveAppearance"
       @save-assistant-css="emit('save-assistant-css', $event)"
       @assistant-visibility="setAssistantVisible($event, assistantPage)"
       @assistant-activity="setAssistantActivity($event, assistantPage)"

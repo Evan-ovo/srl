@@ -9,8 +9,8 @@
   --glass-panel-muted: rgba(255, 255, 255, 0.4);
   --glass-border: rgba(255, 255, 255, 0.56);
   --glass-shadow: 0 0.8rem 2rem rgba(45, 91, 111, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.68);
-  --glass-radius-panel: 1.35rem;
-  --glass-radius-control: 0.82rem;
+  --glass-radius-panel: var(--radius-panel);
+  --glass-radius-control: var(--radius-control);
   color-scheme: light;
   --color-canvas: #e8f3f5;
   --color-surface: #f2f9fa;
@@ -25,14 +25,26 @@
   --color-on-accent: #ffffff;
   --color-danger: #a8495a;
   --color-danger-soft: #f7e7ea;
+  --color-on-danger: #ffffff;
+  --color-success: #1f6a54;
+  --color-success-soft: #e3f6ee;
   --color-warning: #9a6a24;
   --color-warning-ink: #765018;
   --color-warning-line: rgba(154, 106, 36, 0.42);
   --color-warning-soft: #f7efdf;
   --color-shadow: rgba(38, 85, 104, 0.16);
-  --font-display: 'Iowan Old Style', 'Palatino Linotype', 'Source Han Serif SC', serif;
-  --font-body: Aptos, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-label: 'Aptos Narrow', 'Arial Narrow', sans-serif;
+  /* 公共材质：弹窗、通知与控件消费同一变量，布局仍归各页面。 */
+  --overlay-background: rgba(28, 57, 67, 0.58);
+  --dialog-background: linear-gradient(145deg, var(--color-surface-raised), var(--color-surface));
+  --control-background: rgba(255, 255, 255, 0.62);
+  --control-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.84), 0 0.45rem 1rem rgba(60, 105, 122, 0.06);
+  /* 图片阅读器保持高对比；需要换色时只改这一组，不触碰图片内容。 */
+  --viewer-background: #111713;
+  --viewer-color: #ffffff;
+  --viewer-control-background: rgba(8, 12, 10, 0.7);
+  --viewer-control-border: rgba(255, 255, 255, 0.38);
+  --viewer-control-shadow: 0 0.35rem 1.25rem rgb(0 0 0 / 28%);
   --text-caption: 0.75rem;
   --text-label: 0.75rem;
   --text-body: 0.875rem;
@@ -47,7 +59,6 @@
   --line-caption: 1.35;
   --line-body: 1.55;
   --line-title: 1.18;
-  --feature-title-font: var(--font-display);
   --feature-title-size: var(--text-title-lg);
   --feature-title-line-height: var(--line-title);
   --layout-sidebar: clamp(13.5rem, 17vw, 15.625rem);
@@ -72,9 +83,9 @@
   --icon-md: 1.25rem;
   --icon-lg: 1.5rem;
   --icon-stroke: 1.75;
-  --radius-control: 0.5rem;
+  --radius-control: 0.82rem;
   --radius-card: 0.75rem;
-  --radius-panel: 1rem;
+  --radius-panel: 1.35rem;
   --size-card-min: clamp(13rem, 18vw, 15rem);
   --mobile-gutter: clamp(1rem, 4.5vw, 1.5rem);
   --safe-top: env(safe-area-inset-top, 0px);
@@ -95,6 +106,10 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  --color-brand-discord: #5865f2;
+  --color-brand-github: #2b3a40;
+  --color-on-brand: #fff;
+  --feature-icon-color: #fff;
 }
 
 /*
@@ -107,7 +122,8 @@
   --safe-bottom: 0px !important;
 }
 
-:root[data-theme='dark'] {
+/* 默认主题不提高特异性，用户后载入的 :root 变量可同时覆盖浅深色。 */
+:root:where([data-theme='dark']) {
   --glass-panel: linear-gradient(145deg, rgba(48, 73, 83, 0.88), rgba(31, 52, 62, 0.82));
   --glass-panel-strong: linear-gradient(145deg, rgba(57, 84, 94, 0.94), rgba(38, 61, 71, 0.9));
   --glass-panel-muted: rgba(38, 61, 71, 0.74);
@@ -126,11 +142,17 @@
   --color-on-accent: #17272e;
   --color-danger: #f0a8b0;
   --color-danger-soft: #573a43;
+  --color-on-danger: #17272e;
+  --color-success: #a4e0c6;
+  --color-success-soft: #224b3c;
   --color-warning: #e2bd78;
   --color-warning-ink: #f3dba8;
   --color-warning-line: rgba(226, 189, 120, 0.38);
   --color-warning-soft: #4a4032;
   --color-shadow: rgba(4, 15, 20, 0.26);
+  --overlay-background: rgba(4, 15, 21, 0.76);
+  --control-background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
+  --control-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 :root[data-font-scale='small'] {
@@ -214,7 +236,7 @@
   min-height: 2.75rem;
   border: 1px solid color-mix(in srgb, var(--beauty-accent) 70%, transparent);
   border-radius: 0.6rem;
-  box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.12);
+  box-shadow: var(--notice-shadow, var(--glass-shadow));
 }
 
 .resource-card__beauty-message--user {
@@ -303,17 +325,17 @@
 .character-greetings__controls button {
   width: var(--size-touch);
   height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-surface-raised));
   font-size: 1rem;
   cursor: pointer;
 }
 
 .character-greetings__controls button:hover,
 .character-greetings__controls button:focus-visible {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  border-color: var(--button-border, var(--color-accent));
+  background: var(--button-background, var(--color-accent-soft));
   outline: 0;
 }
 
@@ -374,7 +396,7 @@
   justify-content: space-between;
   min-height: var(--size-touch);
   padding: 0.75rem 1rem;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   font-size: 0.8125rem;
   font-weight: 700;
   cursor: pointer;
@@ -706,9 +728,9 @@
 }
 
 .world-browser__filters button.is-active {
-  border-color: var(--color-accent);
-  color: var(--color-surface-raised);
-  background: var(--color-accent);
+  border-color: var(--selection-border, var(--color-accent));
+  color: var(--selection-color, var(--color-surface-raised));
+  background: var(--selection-background, var(--color-accent));
 }
 
 .world-browser__list {
@@ -732,15 +754,18 @@
   min-height: 4rem;
   padding: 0.625rem 0.25rem;
   border: 0;
-  color: var(--color-ink);
-  background: transparent;
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, transparent);
   text-align: left;
   cursor: pointer;
 }
 
 .world-browser__list li > button:hover,
 .world-browser__list li > button:focus-visible {
-  background: color-mix(in srgb, var(--color-accent-soft) 52%, transparent);
+  background: var(
+    --button-background,
+    color-mix(in srgb, var(--color-accent-soft) 52%, transparent)
+  );
   outline: 0;
 }
 
@@ -1070,7 +1095,7 @@
 .regex-raw-rule > summary {
   min-height: var(--size-touch);
   padding: 0.75rem 0;
-  color: var(--color-accent);
+  color: var(--button-color, var(--color-accent));
   font-size: 0.6875rem;
   font-weight: 700;
   cursor: pointer;
@@ -1150,9 +1175,9 @@
   min-height: 8.25rem;
   padding: 1.15rem 1.25rem;
   overflow: hidden;
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
   text-align: left;
   cursor: pointer;
 }
@@ -1171,7 +1196,7 @@
 
 .preset-dossier__entries button:hover,
 .preset-dossier__entries button:focus-visible {
-  border-color: var(--color-accent);
+  border-color: var(--button-border, var(--color-accent));
   outline: 0;
 }
 
@@ -1217,7 +1242,7 @@
   gap: 1rem;
   min-height: var(--size-touch);
   padding: 0.75rem 0.25rem;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   font-size: 0.8125rem;
   cursor: pointer;
 }
@@ -1397,9 +1422,9 @@
   gap: 0.35rem;
   min-height: var(--size-touch);
   padding: 0 0.75rem;
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-accent);
-  background: transparent;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, transparent);
   font: inherit;
   font-size: 0.6875rem;
   font-weight: 700;
@@ -1409,8 +1434,8 @@
 
 .standalone-greeting-list > article > header > button:hover,
 .standalone-greeting-list > article > header > button:focus-visible {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  border-color: var(--button-border, var(--color-accent));
+  background: var(--button-background, var(--color-accent-soft));
   outline: 0;
 }
 
@@ -1453,8 +1478,8 @@
   min-height: calc(var(--size-touch) - 0.5rem);
   padding: 0.35rem 0.625rem;
   border: 0;
-  color: var(--color-ink-soft);
-  background: transparent;
+  color: var(--button-color, var(--color-ink-soft));
+  background: var(--button-background, transparent);
   font: inherit;
   font-size: 0.6875rem;
   cursor: pointer;
@@ -1465,8 +1490,8 @@
 }
 
 .rich-content-preview__toolbar button.is-active {
-  color: var(--color-surface-raised);
-  background: var(--color-accent);
+  color: var(--selection-color, var(--color-surface-raised));
+  background: var(--selection-background, var(--color-accent));
 }
 
 .rich-content-preview iframe {
@@ -1569,15 +1594,14 @@
   min-height: var(--size-touch);
   padding: 0.45rem 0.75rem;
   border: 1px solid var(--color-accent);
-  color: var(--color-surface-raised);
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  background: var(--button-primary-background, var(--color-accent));
   font: inherit;
   font-size: 0.6875rem;
   cursor: pointer;
 }
 
-.quick-reply-list article > .rich-content-preview,
-.standalone-greeting-list article > .rich-content-preview {
+:is(.quick-reply-list, .standalone-greeting-list) article > .rich-content-preview {
   border-width: 0;
 }
 
@@ -1613,7 +1637,7 @@
 .beauty-preview__frame-wrap {
   position: relative;
   overflow: hidden;
-  background: #191b20;
+  background: var(--color-surface-raised);
 }
 
 .beauty-preview__canvas {
@@ -1644,8 +1668,8 @@
   width: min(10rem, calc(100% - 1.5rem));
   padding: 0.4rem 0.5rem;
   border-radius: 0.5rem;
-  color: #fff;
-  background: rgb(10 22 18 / 82%);
+  color: var(--viewer-color);
+  background: var(--viewer-control-background);
   font-size: 0.75rem;
   line-height: 1.2;
   pointer-events: none;
@@ -1656,7 +1680,7 @@
   height: 0.1875rem;
   overflow: hidden;
   border-radius: 999px;
-  background: rgb(255 255 255 / 28%);
+  background: var(--color-line);
 }
 
 .beauty-preview__loading i::before {
@@ -1717,10 +1741,10 @@
 .beauty-preview__controls select {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--color-line);
-  border-radius: 5px;
+  border: 1px solid var(--control-border, var(--color-line));
+  border-radius: var(--control-radius, 5px);
   color: var(--color-ink);
-  background: var(--color-surface-raised);
+  background: var(--control-background, var(--color-surface-raised));
   padding: 0.35rem 0.2rem;
   font: inherit;
 }
@@ -1770,9 +1794,9 @@
   min-width: 5.5rem;
   min-height: var(--size-touch);
   padding: 0 0.75rem;
-  border: 1px solid var(--color-accent);
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-accent));
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-surface-raised));
   font: inherit;
   font-size: 0.75rem;
   font-weight: 700;
@@ -1860,7 +1884,7 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   place-items: stretch;
-  background: rgba(0, 0, 0, 0.92);
+  background: var(--overlay-background);
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
 }
 
@@ -1928,10 +1952,8 @@
     align-self: center;
   }
 
-  .character-greetings__actions > span,
-  .embedded-assets > header > span,
-  .structured-record__header > span,
-  .beauty-preview__header > span {
+  :is(.character-greetings__actions, .structured-record__header, .beauty-preview__header) > span,
+  .embedded-assets > header > span {
     text-align: left;
   }
 
@@ -2063,21 +2085,19 @@ html {
   -webkit-text-size-adjust: 100%;
 }
 
+/* 桌面经典滚动条会占宽；固定槽位避免首页展开时重新挤压布局。 */
+@media (hover: hover) and (pointer: fine) {
+  html {
+    scrollbar-gutter: stable;
+  }
+}
+
 body {
   min-height: 100vh;
   min-height: 100svh;
   min-height: var(--app-viewport-height);
   margin: 0;
   overflow-x: hidden;
-  background:
-    radial-gradient(circle at 82% 8%, rgba(102, 207, 213, 0.13), transparent 28rem),
-    repeating-linear-gradient(
-      90deg,
-      transparent 0,
-      transparent 79px,
-      rgba(53, 106, 122, 0.025) 80px
-    ),
-    var(--color-canvas);
 }
 
 #app {
@@ -2114,8 +2134,368 @@ label:has(input:focus-visible) {
   outline-offset: 3px;
 }
 
-button {
+:where(button) {
   color: inherit;
+}
+
+/* 公共控件的基础规则唯一归属；各面板只补布局和必要的尺寸差异。 */
+.button,
+.import-choice-card,
+.batch-bar__button,
+.batch-bar__close,
+:where(
+  .feature-desktop__pagination > button:not(.feature-desktop__page-dot),
+  .confirm-dialog button,
+  :is(
+      .relay-worker-guide__command,
+      .source-link-row__footer,
+      .version-recognition,
+      .feedback-center__community-search,
+      .feedback-admin__toolbar,
+      .discord-guide-copy-list,
+      .github-repository-detail__section-heading,
+      .similar-name-groups__mode,
+      .extracted-cleaner__toolbar,
+      .parsed-tag-cleaner__toolbar,
+      .parsed-tag-cleaner__resource,
+      .official-app-install,
+      .draw-carousel__controls,
+      .gallery-reveal__actions,
+      .stitch,
+      .stitch-sheet,
+      .stitch-editor,
+      .fw-workbench,
+      .source-ai-workspace,
+      .frontend-workshop-source-session__preview,
+      .frontend-workshop-source-editor,
+      .frontend-workshop-source-history-panel,
+      .frontend-workshop-source-components,
+      .source-inspector-body,
+      .source-inspector-tabs,
+      .fw-layer-panel,
+      .fw-greeting-strip,
+      .fw-ai-component-draft,
+      .fw-inspector,
+      .frontend-workbench__tool-rail,
+      .frontend-image-picker,
+      .image-generation-app,
+      .generated-album,
+      .generated-album__settings,
+      .generated-album__detail,
+      .persona-app,
+      .persona-app__rename-dialog,
+      .tavern-bridge,
+      .tavern-transfer-settings,
+      .tavern-parcel,
+      .author-tools-dialog,
+      .product-assistant,
+      .chat-history-recovery,
+      .chat-message-menu,
+      .chat-tool-result,
+      .chat-reasoning-viewer,
+      .chat-image-viewer,
+      .cloud-scope-dialog,
+      .discord-inbox,
+      .discord-inbox-pairing,
+      .discord-inbox-dialog,
+      .discord-downloads,
+      .discord-inbox-center__secondary,
+      .native-inbox-mode,
+      .external-app-manager,
+      .external-app-manager__panel,
+      .folder-type-filter,
+      .folder-organizer__selection,
+      .folder-rename__cover-actions,
+      .auth-access-notice
+    )
+    button,
+  .discord-pending--page .discord-pending__actions :is(button, a),
+  :is(
+      .source-link-row__summary,
+      .discord-manual-value,
+      .version-diff__header,
+      .resource-picker__list,
+      .github-resource-overview__card,
+      .gallery-reveal__header,
+      .folder-library__shortcuts,
+      .folder-organizer__cabinet-action,
+      .folder-organizer__folder-action
+    )
+    > button,
+  .feedback-admin__settings > header button,
+  .feedback-admin__browser-dialog header button,
+  .feedback-admin__profile-dialog > header button,
+  .discord-intake > footer button,
+  .character-record__edit-button,
+  .github-resource-overview__trigger,
+  .extracted-cleaner__list li > button,
+  .feature-hub[data-feature-page='draw'] button,
+  .draw-carousel__done,
+  .frontend-workshop-source-editor__tools summary,
+  .author-tool-detail__actions a,
+  .cloud-center button:not(.tutorial-real-shot, .tutorial-shot button),
+  .folder-library__manage,
+  .folder-library__organize,
+  .folder-library__edit,
+  .folder-tray > header button,
+  .folder-tray__resource,
+  .folder-organizer__resource,
+  .folder-detail__resource,
+  .folder-detail__more,
+  .appearance-card-orientation > header button,
+  .folder-organizer__close,
+  .folder-rename__cover-actions label,
+  .folder-rename__sheet footer button,
+  .auth-login-dialog__back
+),
+.main-api-settings__button-face,
+:where(.relay-worker-settings, .official-app-manager, .inline-model-picker) button,
+:where(.resource-source-add-actions, .discord-thread-toolbar, .discord-refresh-actions)
+  :is(a, button),
+:where(.activity-center__panel) button,
+:where(
+    .project-notice__footer,
+    .action-sheet__actions,
+    .appearance-preset-tools,
+    .appearance-code-actions,
+    .appearance-original-css-actions,
+    .appearance-panel--preview > header
+  )
+  > button {
+  min-height: var(--size-touch);
+  padding: 0 0.75rem;
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, var(--control-radius, var(--glass-radius-control)));
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--glass-panel-strong));
+  box-shadow: var(--button-shadow, var(--glass-shadow));
+  font-size: var(--text-label);
+  font-weight: var(--weight-ui);
+  cursor: pointer;
+}
+
+.button--primary,
+button.confirm-dialog__confirm,
+.project-notice__footer button,
+button:where(
+  .draw-actions__primary,
+  .draw-carousel__primary,
+  .gallery-reveal__primary,
+  .tavern-bridge__primary,
+  .tavern-parcel__primary,
+  .image-generation-app .btn.primary,
+  .image-generation-primary,
+  .frontend-image-picker__primary,
+  .source-ai-workspace__composer button,
+  .source-inspector-body button.is-primary,
+  :is(.chat-settings-save, .folder-organizer__cabinet-action, .folder-organizer__folder-action)
+    > button,
+  .cloud-scope-dialog__confirm,
+  .discord-inbox__receive,
+  .discord-inbox-dialog__primary,
+  .external-app-manager__confirm,
+  .folder-library__organize,
+  .folder-rename__sheet button[type='submit']
+) {
+  border-color: var(--button-primary-border, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
+  background: var(--button-primary-background, var(--color-accent));
+}
+
+:where(
+  :is(.cloud-provider-tabs, .cloud-schedule__modes, .folder-type-filter) button.is-active,
+  .folder-library__edit[aria-pressed='true'],
+  .folder-tray__resource--selected,
+  .folder-organizer__resource--selected
+) {
+  border-color: var(--selection-border, var(--color-accent));
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
+  box-shadow: var(--selection-shadow, var(--control-shadow));
+}
+
+.field__control,
+.batch-bar__move select,
+:is(.batch-bar__tags, .settings-number-row__control) input,
+:where(
+  .source-link-row__grid input,
+  .source-link-row__grid select,
+  :is(
+      .source-link-row__grid,
+      .feedback-center__form,
+      .feedback-center__reply,
+      .feedback-admin__reply,
+      .discord-intake__paste-field,
+      .resource-link-card,
+      .resource-version-card__note,
+      .version-import-dialog__note,
+      .stitch,
+      .stitch-sheet,
+      .stitch-editor,
+      .fw-workbench,
+      .source-ai-workspace,
+      .frontend-workshop-source-editor,
+      .frontend-workshop-source-components,
+      .source-property,
+      .fw-greeting-strip,
+      .source-inspector-body,
+      .image-generation-app,
+      .persona-app,
+      .tavern-parcel,
+      .product-assistant,
+      .external-app-manager__panel
+    )
+    textarea,
+  .feedback-center__community-search input,
+  .feedback-center__form input,
+  .feedback-center__form select,
+  .feedback-admin__login input,
+  .feedback-admin__filters input,
+  .feedback-admin__filters select,
+  .feedback-admin__status,
+  .feedback-admin__settings input,
+  .feedback-admin__moderation input,
+  .resource-source-add-field input,
+  .resource-link-card input,
+  .resource-link-card select,
+  .resource-relations__search input,
+  .resource-relations__search select,
+  .color-input,
+  .feature-hub[data-feature-page='draw'] select,
+  :is(.stitch, .fw-workbench, .image-generation-app)
+    input:not([type='checkbox'], [type='radio'], [type='file'], [type='range'], [type='color']),
+  .stitch select,
+  :is(
+      .stitch-sheet,
+      .frontend-workshop-source-components,
+      .frontend-image-picker,
+      .generated-album,
+      .generated-album__detail,
+      .persona-app,
+      .tavern-bridge,
+      .tavern-parcel
+    )
+    input:not([type='checkbox'], [type='radio'], [type='file']),
+  .stitch-sheet select,
+  .stitch-editor input:not([type='checkbox'], [type='radio']),
+  .stitch-editor select,
+  .fw-workbench select,
+  .source-ai-workspace select,
+  .frontend-workshop-source-history-panel select,
+  .frontend-workshop-source-components select,
+  .source-property input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']),
+  .source-property select,
+  .fw-layer-panel input,
+  .fw-ai-component-draft input,
+  .source-inspector-body
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']),
+  .source-inspector-body select,
+  .frontend-image-picker select,
+  .image-generation-app select,
+  .generated-album select,
+  .generated-album__detail select,
+  .persona-app select,
+  .persona-app__rename-dialog input,
+  .tavern-bridge select,
+  .tavern-parcel select,
+  .product-assistant input:not([type='checkbox'], [type='radio'], [type='file'], [role='switch']),
+  .product-assistant select,
+  .export-option--split select,
+  .vault-password-form input[type='password'],
+  .vault-password-form input[type='text'],
+  .recycle-bin-tools input,
+  .auth-form input,
+  .cloud-config input:not([type='checkbox']),
+  .cloud-config select,
+  .discord-inbox-pairing input,
+  .external-app-manager__panel input:not([type='radio'], [type='checkbox'], [type='file']),
+  .external-app-manager__panel select,
+  .folder-rename__sheet input:not([type='file']),
+  .folder-detail__search,
+  .folder-tray__search
+),
+:where(.relay-worker-settings, .inline-model-picker) input,
+:where(.appearance-preset-fields) :is(input, select) {
+  min-height: var(--size-touch);
+  padding: 0 0.75rem;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  color: var(--color-ink);
+  background: var(--control-background);
+  box-shadow: var(--control-shadow);
+  font-size: var(--text-label);
+}
+
+:where(.chat-settings-toggle, .tavern-transfer-settings__row) input[role='switch'] {
+  box-sizing: border-box;
+  justify-self: end;
+  width: 44px;
+  height: 26px;
+  min-height: 26px;
+  flex-shrink: 0;
+  margin: 9px 0;
+  padding: 3px;
+  appearance: none;
+  border-radius: var(--control-radius, 20px);
+  cursor: pointer;
+  border: 1px solid var(--control-border, var(--color-line));
+  background: var(--control-background, var(--color-line));
+}
+:where(.chat-settings-toggle, .tavern-transfer-settings__row) input[role='switch']::before {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  content: '';
+}
+:where(.chat-settings-toggle, .tavern-transfer-settings__row) input[role='switch']:checked {
+  border-color: var(--button-primary-border, var(--color-accent));
+  background: var(--button-primary-background, var(--color-accent));
+}
+:is(.chat-settings-toggle, .tavern-transfer-settings__row)
+  input[type='checkbox'][role='switch']:checked::before {
+  transform: translateX(18px);
+  background: var(--button-primary-color, var(--color-on-accent));
+}
+
+.field__control {
+  width: 100%;
+}
+
+:where(
+  .confirm-dialog,
+  .project-notice,
+  .action-sheet__panel,
+  .version-diff,
+  .official-app-manager__dialog,
+  .cloud-scope-dialog,
+  .stitch-sheet__panel,
+  .stitch-tools__menu,
+  .frontend-workshop-source-editor__tool-menu,
+  .stitch-entry__detail,
+  .source-ai-workspace__settings,
+  .fw-popover,
+  .chat-message-menu,
+  .persona-app__rename-dialog,
+  .generated-album__settings,
+  .generated-album__detail,
+  .author-tools-dialog__sheet,
+  .tavern-transfer-settings,
+  .chat-history-recovery,
+  .chat-tool-result,
+  .chat-reasoning-viewer,
+  .frontend-workshop-source-components__sheet,
+  .frontend-workshop-source-components__detail,
+  .discord-inbox-dialog,
+  .external-app-manager__panel,
+  .folder-organizer__sheet,
+  .folder-rename__sheet
+) {
+  border: 1px solid var(--dialog-border, var(--glass-border));
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
+  background: var(--dialog-background);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 #app :where(button:not(:disabled)):active {

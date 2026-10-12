@@ -26,7 +26,15 @@ import {
   extractTavernHelperScripts,
   readTavernHelperScriptBlob,
 } from '../utils/TavernHelperScriptParser'
-import { detectVendorLibNeeds, loadPreviewVendorLibs } from '../utils/PreviewVendorLibs'
+import {
+  detectVendorLibNeeds,
+  loadPreviewVendorLibs,
+  mergePreviewVendorLibNeeds,
+} from '../utils/PreviewVendorLibs'
+import {
+  archivedScriptHostContext,
+  type PreviewScriptHostContext,
+} from '../utils/RenderCompatibilityScriptHost'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import type { ResourceReadSource } from '../types/ResourceReadSource'
 import { isEmbeddedRegex } from './ResourceEmbeddedAssets'
@@ -316,10 +324,18 @@ export async function interactiveChatWithScripts(
   readerCss: string,
   blendColor?: string,
   panelTheme?: 'paper' | 'green' | 'night',
+  hostInputs?: { card: unknown; userName?: string; regexes: PreviewScriptHostContext['regexes'] },
 ) {
-  const libs = await loadPreviewVendorLibs(
-    detectVendorLibNeeds(source + '\n' + scripts.map((script) => script.content).join('\n')),
-  )
+  const libs = await loadPreviewVendorLibs({
+    ...mergePreviewVendorLibNeeds([source, ...scripts.map((script) => script.content)]),
+    toastr: true,
+  })
+  const characterData =
+    isRecord(hostInputs?.card) && isRecord(hostInputs.card.data)
+      ? hostInputs.card.data
+      : isRecord(hostInputs?.card)
+        ? hostInputs.card
+        : {}
   return buildRichContentPreview(
     source,
     snapshot.name,
@@ -329,7 +345,16 @@ export async function interactiveChatWithScripts(
       vendorLibs: libs,
       renderShell: 'content',
       contentTheme: theme,
-      previewSessionContext: {},
+      previewSessionContext: hostInputs
+        ? {
+            character: {
+              name: typeof characterData.name === 'string' ? characterData.name : undefined,
+              data: characterData,
+            },
+            user: { name: hostInputs.userName },
+            scriptHost: archivedScriptHostContext(hostInputs.card, hostInputs.regexes),
+          }
+        : {},
       archivedMessage: snapshot,
       archivedReaderCss: readerCss,
       archivedPanelAppearance: { blendColor, panelTheme, colorScheme: theme },
@@ -412,11 +437,12 @@ export async function chatRegexProfileRules(
   card: Record<string, unknown>,
   options: ChatRenderOptions,
   profile: Record<string, unknown> = {},
+  preparedRules = chatRegexRules(card, options),
 ) {
   const { hashBytes } = await import('./HashService')
   const encoder = new TextEncoder()
   const result = []
-  for (const { rule, ...item } of chatRegexRules(card, options)) {
+  for (const { rule, ...item } of preparedRules) {
     const source = Object.fromEntries(
       Object.entries(rule)
         .filter(([key]) => !['enabled', 'disabled'].includes(key))
@@ -434,6 +460,7 @@ export function chatRenderInput(
   entry: ChatReadPage['messages'][number],
   card: Record<string, unknown>,
   options: ChatRenderOptions,
+  preparedRules = chatRegexRules(card, options),
 ): ChatRenderInput {
   const message = entry.message
   const extra = isRecord(message.extra) ? message.extra : {}
@@ -449,7 +476,7 @@ export function chatRenderInput(
   const placement = message.is_user ? 1 : extra.type === 'narrator' ? 3 : 2
   // ST also uses is_system for prompt-hidden chat. Only its own system notices skip formatting.
   const isSystemNotice = message.is_system && message.name === 'SillyTavern System'
-  const scripts = chatRegexRules(card, options).map((item) => ({ ...item.rule, id: item.key }))
+  const scripts = preparedRules.map((item) => ({ ...item.rule, id: item.key }))
   const diagnostics: string[] = []
   return {
     source,

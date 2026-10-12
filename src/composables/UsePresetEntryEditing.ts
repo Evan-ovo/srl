@@ -31,6 +31,7 @@ interface PresetEntryEditingContext {
   editorTextarea: Readonly<ShallowRef<HTMLTextAreaElement | null>>
   variableName: Ref<string, string>
   variableValue: Ref<string, string>
+  variableValueSelection: Ref<{ start: number; end: number }, { start: number; end: number }>
   variableWriterOpen: Ref<boolean, boolean>
   slotName: Ref<string, string>
   slotId: Ref<string, string>
@@ -157,6 +158,24 @@ export function usePresetEntryEditing(getContext: () => PresetEntryEditingContex
     context.slotWriterOpen.value = true
   }
 
+  function openSlotWriterForVariable(event?: Event): void {
+    const context = getContext()
+    const panel = (event?.currentTarget as HTMLElement | undefined)?.closest(
+      '.stitch-variable-writer',
+    )
+    const textarea = panel?.querySelector<HTMLTextAreaElement>('textarea')
+    if (textarea) {
+      context.variableValueSelection.value = {
+        start: textarea.selectionStart ?? textarea.value.length,
+        end: textarea.selectionEnd ?? textarea.value.length,
+      }
+    }
+    context.slotId.value = ''
+    context.slotName.value = ''
+    context.slotWriterError.value = ''
+    context.slotWriterOpen.value = true
+  }
+
   function insertPromptSlot(event?: Event): void {
     const context = getContext()
     const panel = (event?.currentTarget as HTMLElement | undefined)?.closest('.stitch-slot-writer')
@@ -170,6 +189,25 @@ export function usePresetEntryEditing(getContext: () => PresetEntryEditingContex
       context.slotWriterOpen.value = false
       context.slotWriterError.value = ''
       context.slotId.value = ''
+      if (context.variableWriterOpen.value) {
+        const value = context.variableValue.value
+        const start = Math.min(context.variableValueSelection.value.start, value.length)
+        const end = Math.min(
+          Math.max(context.variableValueSelection.value.end, start),
+          value.length,
+        )
+        context.variableValue.value = `${value.slice(0, start)}${macro}${value.slice(end)}`
+        const cursor = start + macro.length
+        context.variableValueSelection.value = { start: cursor, end: cursor }
+        void nextTick(() => {
+          const textarea = document.querySelector<HTMLTextAreaElement>(
+            '.stitch-variable-writer textarea',
+          )
+          textarea?.focus({ preventScroll: true })
+          textarea?.setSelectionRange(cursor, cursor)
+        })
+        return
+      }
       insertVariable(macro)
     } catch (error) {
       context.slotWriterError.value = error instanceof Error ? error.message : '占位名无效'
@@ -358,6 +396,7 @@ export function usePresetEntryEditing(getContext: () => PresetEntryEditingContex
     insertVariable,
     openVariableWriter,
     openSlotWriter,
+    openSlotWriterForVariable,
     insertPromptSlot,
     insertVariableWrite,
     insertUnreadWrittenVariable,

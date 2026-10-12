@@ -20,6 +20,16 @@ const worldBrowser = useTemplateRef<{ closeDetail: () => boolean }>('worldBrowse
 function handleClosePage() {
   if (!worldBrowser.value?.closeDetail()) controller.closePage()
 }
+function selectGreetingPageInput(event: FocusEvent) {
+  ;(event.currentTarget as HTMLInputElement).select()
+}
+function jumpToGreetingPage(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  const requested = /^\d+$/u.test(input.value) ? Number(input.value) : Number.NaN
+  if (Number.isSafeInteger(requested) && requested >= 1)
+    scrollToGreeting(Math.min(greetings.value.length, requested) - 1, false)
+  input.value = String(activeGreetingIndex.value + 1).padStart(2, '0')
+}
 const showContentWorkbench = ref(false)
 watch(showContentWorkbench, (open) => emit('workbench-open', open), { immediate: true })
 const contentWorkbench = useTemplateRef<{ prepareSave: () => Promise<boolean> }>('contentWorkbench')
@@ -275,7 +285,19 @@ const {
         <div v-if="activePage === 'greetings'" class="character-greetings-page">
           <div class="character-greetings-page__toolbar">
             <span>
-              {{ String(activeGreetingIndex + 1).padStart(2, '0') }} /
+              <input
+                class="inline-page-jump"
+                style="width: 2ch"
+                :value="String(activeGreetingIndex + 1).padStart(2, '0')"
+                type="text"
+                inputmode="numeric"
+                :maxlength="String(greetings.length).length"
+                aria-label="跳转到开场白"
+                @focus="selectGreetingPageInput"
+                @change="jumpToGreetingPage"
+                @keydown.enter.prevent="jumpToGreetingPage"
+              />
+              /
               {{ String(greetings.length).padStart(2, '0') }}
             </span>
             <small
@@ -388,6 +410,7 @@ const {
           v-else-if="activePage === 'worldBook'"
           ref="worldBrowser"
           :entries="embeddedBookEntries"
+          page-input-label="跳转到内嵌世界书条目页"
         />
 
         <div v-else-if="activePage === 'regex'" class="character-asset-page">

@@ -309,18 +309,14 @@ function toggle(id: string): void {
   align-items: center;
   min-height: 3.25rem;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.75rem;
-  background: transparent;
-  color: inherit;
   text-align: left;
   font-size: 0.75rem;
   line-height: 1.45;
 }
 
 .resource-picker__list > button[aria-selected='true'] {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .resource-picker__list span:last-child {

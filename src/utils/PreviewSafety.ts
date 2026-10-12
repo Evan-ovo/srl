@@ -11,6 +11,9 @@ export interface StaticMarkupPreview {
 
 export interface PreviewCssOptions {
   allowExternalResources?: boolean
+  allowLocalResources?: boolean
+  /** Trusted host styles can include complete packaged assets; author source uses the default budget. */
+  preserveLength?: boolean
 }
 
 export function stripCodeFence(value: string): string {
@@ -21,8 +24,7 @@ export function stripCodeFence(value: string): string {
 }
 
 export function sanitizeCssForPreview(value: string, options: PreviewCssOptions = {}): string {
-  const safeSource = value
-    .slice(0, MAX_PREVIEW_SOURCE_LENGTH)
+  const safeSource = (options.preserveLength ? value : value.slice(0, MAX_PREVIEW_SOURCE_LENGTH))
     .replace(/expression\s*\([^)]*\)/gi, 'none')
     .replace(/(?:behavior|-moz-binding)\s*:[^;}]*/gi, '/* 已阻止危险 CSS */')
     .replace(/<\/style/gi, '<\\/style')
@@ -31,7 +33,13 @@ export function sanitizeCssForPreview(value: string, options: PreviewCssOptions 
 
   return safeSource
     .replace(/@import\s+(?:url\s*\([^)]*\)|[^;])*;?/gi, '/* 已阻止外部 @import */')
-    .replace(/url\s*\([^)]*\)/gi, 'none')
+    .replace(/url\s*\((?:"[^"]*"|'[^']*'|[^)])*\)/gi, (reference) => {
+      const url = reference.replace(/^url\s*\(\s*['"]?|['"]?\s*\)$/giu, '').trim()
+      return options.allowLocalResources &&
+        /^(?:data:(?:image|font)\/|blob:|srl-ui-asset:)/iu.test(url)
+        ? reference
+        : 'none'
+    })
 }
 
 export function extractPreviewCss(value: string, options: PreviewCssOptions = {}): string {

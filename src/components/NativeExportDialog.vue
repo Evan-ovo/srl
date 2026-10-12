@@ -112,17 +112,17 @@ function save(): void {
   align-items: flex-start;
   min-height: 68px;
   padding: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--control-radius, var(--glass-radius-control));
   cursor: pointer;
 }
 .native-export-sheet__destinations label.is-selected {
-  border-color: var(--color-primary);
-  background: var(--glass-soft);
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .native-export-sheet__destinations input {
   margin-top: 4px;
-  accent-color: var(--color-primary);
+  accent-color: var(--color-accent);
 }
 .native-export-sheet__destinations span {
   display: grid;
@@ -131,7 +131,7 @@ function save(): void {
 }
 .native-export-sheet__destinations small,
 .native-export-sheet__remember {
-  color: var(--color-text-muted);
+  color: var(--color-ink-soft);
 }
 .native-export-sheet__remember {
   display: flex;

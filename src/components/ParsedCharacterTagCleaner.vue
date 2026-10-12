@@ -311,10 +311,6 @@ onMounted(() => {
 .parsed-tag-cleaner__resource button {
   min-height: 44px;
   padding: 0 0.8rem;
-  border: 1px solid rgba(32, 42, 38, 0.25);
-  border-radius: 0.6rem;
-  color: inherit;
-  background: transparent;
 }
 
 .parsed-tag-cleaner__list {
@@ -329,7 +325,7 @@ onMounted(() => {
   display: grid;
   gap: 0.55rem;
   padding: 0.65rem 0.75rem;
-  border: 1px solid rgba(32, 42, 38, 0.18);
+  border: 1px solid var(--color-line);
   border-radius: 0.75rem;
 }
 
@@ -345,7 +341,7 @@ onMounted(() => {
   gap: 0.35rem;
   min-height: 40px;
   padding: 0.2rem 0.6rem;
-  border: 1px solid rgba(32, 42, 38, 0.18);
+  border: 1px solid var(--color-line);
   border-radius: 999px;
   cursor: pointer;
 }

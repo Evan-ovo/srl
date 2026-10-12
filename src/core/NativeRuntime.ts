@@ -57,6 +57,7 @@ export type NativeDeepLink =
   | { kind: 'import' }
   | { kind: 'sharedImport'; token: string }
   | { kind: 'inbox' }
+  | { kind: 'assistant' }
   | { kind: 'discordSource'; workerUrl: string; token: string }
 
 const NativeShortcut = registerPlugin<NativeShortcutApi>('NativeShortcut')

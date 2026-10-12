@@ -554,7 +554,10 @@ describe('ExternalAppHost', () => {
     }
   })
 
-  it('renders an isolated workspace shell around an enabled app', async () => {
+  it.each([
+    { splashColor: undefined, splash: 'var(--color-accent)' },
+    { splashColor: '#123456', splash: '#123456' },
+  ])('renders an isolated workspace shell with splash $splash', async ({ splashColor, splash }) => {
     const featureHubEscape = vi.fn()
     window.addEventListener('keydown', featureHubEscape)
     getExternalApp.mockResolvedValue({
@@ -567,6 +570,7 @@ describe('ExternalAppHost', () => {
         schemaVersion: 1,
         id: 'com.srl.example.counter',
         name: '离线计数器',
+        splashColor,
         version: '1.0.0',
         entry: 'index.html',
       },
@@ -579,7 +583,7 @@ describe('ExternalAppHost', () => {
     expect(wrapper.get('.external-app-host__runtime').text()).toContain('本机 .srlapp · v1.0.0')
     expect(wrapper.get('.external-app-host__frame').attributes('sandbox')).toBe('allow-scripts')
     expect(wrapper.get('.external-app-host__workspace').attributes('style')).toContain(
-      '--external-app-splash: #237f87',
+      `--external-app-splash: ${splash}`,
     )
 
     await wrapper.get('.external-app-host__fullscreen-toggle').trigger('click')

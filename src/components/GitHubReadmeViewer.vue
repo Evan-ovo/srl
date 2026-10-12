@@ -238,7 +238,7 @@ onMounted(async () => {
   place-items: center;
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) max(1rem, var(--safe-bottom))
     max(1rem, var(--safe-left));
-  background: rgb(18 30 34 / 32%);
+  background: var(--overlay-background);
   backdrop-filter: blur(3px);
 }
 
@@ -247,10 +247,10 @@ onMounted(async () => {
   max-height: calc(var(--app-viewport-height, 100vh) - 2rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 1px solid var(--color-line);
-  border-radius: 0.75rem;
-  background: var(--color-surface);
-  box-shadow: 0 1.125rem 3.75rem rgb(25 51 60 / 18%);
+  border: 1px solid var(--dialog-border, var(--glass-border));
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
+  background: var(--dialog-background);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 .github-readme-viewer__header {
@@ -291,9 +291,9 @@ onMounted(async () => {
   height: 2rem;
   flex: none;
   border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--color-ink-soft);
+  border-radius: var(--button-radius, 50%);
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-ink-soft));
   font-size: 1.25rem;
 }
 
@@ -321,17 +321,17 @@ onMounted(async () => {
   min-height: 1.875rem;
   padding: 0 0.5625rem;
   border: 0;
-  border-radius: 0.25rem;
-  background: transparent;
-  color: var(--color-ink-soft);
+  border-radius: var(--button-radius, 0.25rem);
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-ink-soft));
   font-size: 0.6875rem;
   font-weight: 750;
   text-decoration: none;
 }
 
 .github-readme-viewer__toolbar button.is-active {
-  background: var(--color-accent-soft);
-  color: var(--color-ink);
+  background: var(--selection-background, var(--color-accent-soft));
+  color: var(--selection-color, var(--color-ink));
 }
 
 .github-readme-viewer__toolbar button:disabled {
@@ -501,7 +501,7 @@ onMounted(async () => {
 
   .github-readme-viewer {
     max-height: var(--app-viewport-height, 100vh);
-    border-radius: 0;
+    border-radius: var(--dialog-radius, var(--glass-radius-panel));
   }
 
   .github-readme-viewer__toolbar {

@@ -1,14 +1,8 @@
-.feature-app__icon--folders {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.28), transparent 45%),
-    color-mix(in srgb, var(--color-accent) 58%, #9b7548);
-}
-
 .feature-app__icon--folders i {
   width: 3.7rem;
   height: 2.65rem;
   border-radius: 0.35rem;
-  background: rgba(255, 255, 255, 0.2);
+  background: color-mix(in srgb, var(--feature-icon-color) 20%, transparent);
 }
 
 .feature-app__icon--folders i::before {
@@ -18,7 +12,7 @@
   width: 1.45rem;
   height: 0.55rem;
   border-radius: 0.28rem 0.28rem 0 0;
-  background: inherit;
+  background: color-mix(in srgb, var(--feature-icon-color) 20%, transparent);
   content: '';
 }
 
@@ -32,7 +26,7 @@
 
 .feature-app__icon--folders i:last-child {
   transform: translateY(0.55rem);
-  background: rgba(255, 255, 255, 0.3);
+  background: color-mix(in srgb, var(--feature-icon-color) 30%, transparent);
 }
 
 body.folder-desktop-open {
@@ -49,9 +43,10 @@ body.folder-desktop-open {
   grid-template-rows: auto minmax(0, 1fr);
   padding: var(--safe-top) 0 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 88% 8%, var(--color-accent-soft), transparent 24rem),
-    linear-gradient(165deg, var(--color-canvas), var(--color-surface-muted));
+  background: var(
+    --page-background,
+    linear-gradient(165deg, var(--color-canvas), var(--color-surface))
+  );
 }
 
 .feature-hub[data-feature-page='folders'] > .folder-library {
@@ -114,10 +109,6 @@ body.folder-desktop-open {
   gap: 0.45rem;
   min-height: var(--size-touch);
   padding: 0.7rem 1rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 999px;
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
   font-weight: 700;
   cursor: pointer;
 }
@@ -132,33 +123,16 @@ body.folder-desktop-open {
   gap: 0.55rem;
 }
 
-.folder-library__organize {
-  display: none;
-  min-height: var(--size-touch);
-  padding: 0.7rem 1rem;
-  border: 0;
-  border-radius: 999px;
-  color: #fff;
-  background: var(--color-accent);
-  font-weight: 700;
-  cursor: pointer;
-}
-
+.folder-library__organize,
 .folder-library__edit {
   min-height: var(--size-touch);
   padding: 0.7rem 1rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 999px;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
   font-weight: 700;
   cursor: pointer;
 }
 
-.folder-library__edit[aria-pressed='true'] {
-  border-color: var(--color-accent);
-  color: #fff;
-  background: var(--color-accent);
+.folder-library__organize {
+  display: none;
 }
 
 .folder-library__shortcuts {
@@ -174,10 +148,6 @@ body.folder-desktop-open {
   gap: 0.65rem;
   min-height: var(--size-touch);
   padding: 0.45rem 0.8rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.85rem;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
   cursor: pointer;
 }
 
@@ -207,14 +177,14 @@ body.folder-desktop-open {
   padding: clamp(0.85rem, 2vw, 1.35rem);
   border: 1px solid var(--color-line);
   border-radius: 1.4rem;
-  background: var(--color-surface-muted);
+  background: var(--color-surface);
   background:
     linear-gradient(
       135deg,
       color-mix(in srgb, var(--color-accent) 5%, transparent),
       transparent 55%
     ),
-    var(--color-surface-muted);
+    var(--color-surface);
   touch-action: pan-y;
   user-select: none;
 }
@@ -236,7 +206,7 @@ body.folder-desktop-open {
 }
 
 .visual-folder {
-  --folder-accent: #817767;
+  --folder-accent: var(--color-ink-soft);
   position: relative;
   min-width: 0;
   padding: 0.55rem;
@@ -290,11 +260,11 @@ body.folder-desktop-open {
   min-width: var(--size-touch);
   min-height: var(--size-touch);
   padding: 0.35rem 0.6rem;
-  border: 1px solid rgba(255, 255, 255, 0.65);
+  border: 1px solid var(--viewer-control-border);
   border-radius: 999px;
-  color: #fff;
-  background: rgba(20, 28, 25, 0.82);
-  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.25);
+  color: var(--viewer-color);
+  background: var(--viewer-control-background);
+  box-shadow: var(--viewer-control-shadow);
   font-size: 0.7rem;
   font-weight: 700;
   cursor: pointer;
@@ -312,10 +282,10 @@ body.folder-desktop-open {
 .folder-library__pagination > button {
   min-width: var(--size-touch);
   min-height: var(--size-touch);
-  border: 1px solid var(--color-line);
-  border-radius: 999px;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line));
+  border-radius: var(--button-radius, 999px);
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
   cursor: pointer;
 }
 
@@ -339,7 +309,7 @@ body.folder-desktop-open {
   height: var(--size-touch);
   padding: 0;
   border: 0;
-  background: transparent;
+  background: var(--button-background, transparent);
   cursor: pointer;
 }
 
@@ -374,13 +344,10 @@ body.folder-desktop-open {
   width: min(100%, 31rem);
   margin: 0 auto;
   padding: 0.55rem;
-  border: 1px solid rgba(255, 255, 255, 0.48);
-  border-radius: 1.45rem;
-  background: var(--color-surface-muted);
-  background: color-mix(in srgb, var(--color-surface-raised) 78%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--color-line) 65%, transparent),
-    0 0.8rem 2rem var(--color-shadow);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-panel);
+  background: var(--glass-panel);
+  box-shadow: var(--glass-shadow);
 }
 
 .folder-library--cabinet .folder-tray {
@@ -388,9 +355,8 @@ body.folder-desktop-open {
 }
 
 .folder-library__dock button,
-.folder-library__dock .folder-library__organize,
-.folder-library__dock .folder-library__edit,
-.folder-library__dock .folder-library__manage {
+.folder-library__dock
+  :is(.folder-library__organize, .folder-library__edit, .folder-library__manage) {
   position: relative;
   display: grid;
   grid-template-rows: 2.75rem auto;
@@ -406,6 +372,7 @@ body.folder-desktop-open {
   color: var(--color-ink);
   background: transparent;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .folder-library__dock button > span {
@@ -413,10 +380,10 @@ body.folder-desktop-open {
   place-items: center;
   width: 2.75rem;
   height: 2.75rem;
-  border-radius: 0.9rem;
-  color: #fff;
-  background: var(--color-accent);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+  border-radius: var(--button-radius, var(--glass-radius-control));
+  color: var(--button-primary-color, var(--color-on-accent));
+  background: var(--button-primary-background, var(--color-accent));
+  box-shadow: var(--button-shadow, var(--control-shadow));
   font-size: 1.2rem;
   font-weight: 700;
 }
@@ -431,25 +398,9 @@ body.folder-desktop-open {
   stroke-width: 1.55;
 }
 
-.folder-library__dock button:nth-child(1) > span {
-  background: #7b7164;
-}
-
-.folder-library__dock button:nth-child(2) > span {
-  background: #39705e;
-}
-
-.folder-library__dock button:nth-child(3) > span {
-  background: #8a6a47;
-}
-
-.folder-library__dock button:nth-child(4) > span {
-  background: #5f6f7b;
-}
-
 .folder-library__dock button.is-active > span {
-  color: var(--color-accent);
-  background: #fff;
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 
 .folder-library__dock button small {
@@ -473,8 +424,8 @@ body.folder-desktop-open {
   padding: 0 0.3rem;
   border: 2px solid var(--color-surface-raised);
   border-radius: 999px;
-  color: #fff;
-  background: #a3493f;
+  color: var(--color-on-danger);
+  background: var(--color-danger);
   font-size: 0.58rem;
 }
 
@@ -501,8 +452,9 @@ body.folder-desktop-open {
   margin: 0 auto;
   border-radius: 22%;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
-    0 0.45rem 1rem color-mix(in srgb, var(--folder-accent) 28%, transparent);
+    inset 0 0 0 1px var(--glass-border),
+    0 0.45rem 1rem
+      color-mix(in srgb, var(--folder-cover-background, var(--folder-accent)) 28%, transparent);
 }
 
 .folder-library__pager .visual-folder__identity {
@@ -545,11 +497,11 @@ body.folder-desktop-open {
   height: 1.65rem;
   margin: auto;
   padding: 0.35rem;
-  border: 2px solid rgba(255, 255, 255, 0.8);
+  border: 1px solid var(--viewer-control-border);
   border-radius: 999px;
-  color: #fff;
-  background: rgba(31, 39, 36, 0.9);
-  box-shadow: 0 0.2rem 0.55rem rgba(0, 0, 0, 0.24);
+  color: var(--viewer-color);
+  background: var(--viewer-control-background);
+  box-shadow: var(--viewer-control-shadow);
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -585,8 +537,8 @@ body.folder-desktop-open {
   justify-items: center;
   padding: 0;
   border: 0;
-  color: var(--color-ink);
-  background: transparent;
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, transparent);
   cursor: pointer;
 }
 
@@ -637,11 +589,16 @@ body.folder-desktop-open {
   place-items: center;
   overflow: hidden;
   border-radius: 22%;
-  color: #fff;
+  color: var(--color-on-accent);
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.26), transparent 48%), var(--color-accent);
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--feature-icon-color) 26%, transparent),
+      transparent 48%
+    ),
+    var(--color-accent);
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px color-mix(in srgb, var(--feature-icon-color) 22%, transparent),
     0 0.45rem 1rem color-mix(in srgb, var(--color-accent) 24%, transparent);
 }
 
@@ -697,7 +654,7 @@ body.folder-desktop-open {
 
 .folder-library__pager .visual-folder--editing .visual-folder__cover {
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--folder-accent) 72%, #fff),
+    0 0 0 2px color-mix(in srgb, var(--folder-accent) 72%, var(--color-surface-raised)),
     0 0.5rem 1.2rem color-mix(in srgb, var(--folder-accent) 34%, transparent);
 }
 
@@ -753,7 +710,7 @@ body.folder-desktop-open {
   width: 43%;
   height: 1.25rem;
   border-radius: 0.7rem 0.7rem 0 0;
-  background: var(--folder-accent);
+  background: var(--folder-cover-background, var(--folder-accent));
   opacity: 0.92;
 }
 
@@ -763,8 +720,9 @@ body.folder-desktop-open {
   aspect-ratio: 4 / 3;
   margin-top: 0.65rem;
   border-radius: 0.9rem 0.9rem 0.65rem 0.65rem;
-  background: var(--folder-accent);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  background: var(--folder-cover-background, var(--folder-accent));
+  color: var(--folder-cover-color, #fff);
+  box-shadow: inset 0 0 0 1px var(--glass-border);
   overflow: hidden;
 }
 
@@ -772,7 +730,11 @@ body.folder-desktop-open {
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), transparent 45%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, currentColor 13%, transparent),
+    transparent 45%
+  );
   content: '';
   pointer-events: none;
 }
@@ -793,7 +755,7 @@ body.folder-desktop-open {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 2px;
-  background: var(--folder-accent);
+  background: var(--folder-cover-background, var(--folder-accent));
 }
 
 .visual-folder__mosaic img {
@@ -819,13 +781,13 @@ body.folder-desktop-open {
   inset: 0;
   display: grid;
   place-items: center;
-  color: rgba(255, 255, 255, 0.88);
+  color: var(--folder-cover-color, #fff);
   text-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.15);
 }
 
 .visual-folder__empty-art svg {
   width: 58%;
-  fill: rgba(255, 255, 255, 0.1);
+  fill: color-mix(in srgb, currentColor 10%, transparent);
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -838,10 +800,14 @@ body.folder-desktop-open {
   width: 1.7em;
   aspect-ratio: 1;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.42);
+  border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
   border-radius: 50%;
-  background: color-mix(in srgb, var(--folder-accent) 72%, transparent);
-  box-shadow: 0 0.35rem 1rem rgba(0, 0, 0, 0.14);
+  background: color-mix(
+    in srgb,
+    var(--folder-cover-background, var(--folder-accent)) 72%,
+    transparent
+  );
+  box-shadow: var(--glass-shadow);
   font: 650 clamp(0.82rem, 2.7vw, 1.25rem)/1 var(--font-display);
   transform: translate(72%, 60%);
 }
@@ -852,7 +818,7 @@ body.folder-desktop-open {
   bottom: -55%;
   width: 75%;
   aspect-ratio: 1;
-  border: 1px solid rgba(255, 255, 255, 0.23);
+  border: 1px solid color-mix(in srgb, currentColor 23%, transparent);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -916,9 +882,9 @@ body.folder-desktop-open {
 
 .visual-folder__actions .visual-folder__add-selected {
   margin-left: auto;
-  color: #fff;
-  border-radius: 999px;
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  border-radius: var(--button-radius, var(--glass-radius-control));
+  background: var(--button-primary-background, var(--color-accent));
   padding-inline: 0.7rem;
   font-weight: 700;
 }
@@ -934,7 +900,7 @@ body.folder-desktop-open {
 }
 
 .visual-folder--unfiled {
-  --folder-accent: #817767;
+  --folder-accent: var(--color-ink-soft);
   background: color-mix(in srgb, var(--color-surface-raised) 85%, var(--color-canvas));
 }
 
@@ -990,10 +956,6 @@ body.folder-desktop-open {
 .folder-tray > header button {
   min-height: var(--size-touch);
   padding: 0.55rem 0.8rem;
-  border: 1px solid var(--color-line);
-  border-radius: 999px;
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
   cursor: pointer;
 }
 
@@ -1003,9 +965,6 @@ body.folder-desktop-open {
   gap: 0.5rem;
   min-height: var(--size-touch);
   padding: 0 0.8rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.8rem;
-  background: var(--color-surface-raised);
 }
 
 .folder-tray__search span {
@@ -1042,19 +1001,9 @@ body.folder-desktop-open {
   gap: 0.65rem;
   min-height: 4rem;
   padding: 0.5rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.85rem;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
   text-align: left;
   scroll-snap-align: start;
   cursor: grab;
-}
-
-.folder-tray__resource--selected {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-  box-shadow: inset 0 0 0 1px var(--color-accent);
 }
 
 .folder-tray__thumb {
@@ -1063,8 +1012,8 @@ body.folder-desktop-open {
   width: 2.8rem;
   aspect-ratio: 1;
   border-radius: 0.65rem;
-  color: #fff;
-  background: var(--color-accent);
+  color: var(--folder-cover-color, var(--color-on-accent));
+  background: var(--folder-cover-background, var(--color-accent));
   overflow: hidden;
 }
 
@@ -1121,9 +1070,6 @@ body.folder-desktop-open {
 
 .folder-detail__more {
   min-height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
   font-weight: 700;
   cursor: pointer;
 }
@@ -1137,9 +1083,6 @@ body.folder-desktop-open {
   gap: 0.55rem;
   min-height: var(--size-touch);
   padding: 0 0.9rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.9rem;
-  background: var(--color-surface-raised);
 }
 
 .folder-type-filter {
@@ -1160,18 +1103,8 @@ body.folder-desktop-open {
   flex: 0 0 auto;
   min-height: var(--size-touch);
   padding: 0.55rem 0.8rem;
-  border: 1px solid var(--color-line);
-  border-radius: 999px;
-  color: var(--color-ink-soft);
-  background: var(--color-surface-raised);
   font-weight: 700;
   cursor: pointer;
-}
-
-.folder-type-filter button.is-active {
-  border-color: var(--color-accent);
-  color: #fff;
-  background: var(--color-accent);
 }
 
 .folder-type-filter button small {
@@ -1220,10 +1153,6 @@ body.folder-desktop-open {
   min-width: 0;
   min-height: 4.4rem;
   padding: 0.55rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.9rem;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
   text-align: left;
   cursor: pointer;
 }
@@ -1234,8 +1163,8 @@ body.folder-desktop-open {
   width: 3.25rem;
   aspect-ratio: 1;
   border-radius: 0.7rem;
-  color: #fff;
-  background: var(--folder-accent);
+  color: var(--folder-cover-color, var(--color-on-accent));
+  background: var(--folder-cover-background, var(--folder-accent));
   overflow: hidden;
 }
 
@@ -1292,7 +1221,6 @@ body.folder-desktop-open {
 .folder-detail__more {
   justify-self: center;
   padding: 0.65rem 1rem;
-  border-radius: 999px;
 }
 
 body.folder-organizer-open {
@@ -1306,7 +1234,7 @@ body.folder-organizer-open {
   display: grid;
   align-items: end;
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) 0 max(1rem, var(--safe-left));
-  background: rgba(23, 21, 18, 0.72);
+  background: var(--overlay-background);
 }
 
 .folder-organizer__sheet {
@@ -1318,12 +1246,10 @@ body.folder-organizer-open {
   margin: 0 auto;
   padding: 1rem;
   padding-bottom: max(1rem, var(--safe-bottom));
-  border: 1px solid var(--color-line-strong);
-  border-radius: 1.35rem 1.35rem 0 0;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
-  box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.35);
   overflow: hidden;
+  border-radius: var(--dialog-radius, var(--glass-radius-panel))
+    var(--dialog-radius, var(--glass-radius-panel)) 0 0;
+  color: var(--color-ink);
 }
 
 .folder-organizer__sheet > header {
@@ -1333,8 +1259,7 @@ body.folder-organizer-open {
   gap: 0.75rem;
 }
 
-.folder-organizer__sheet > .folder-type-filter,
-.folder-organizer__sheet > .folder-tray__search,
+.folder-organizer__sheet > :is(.folder-type-filter, .folder-tray__search),
 .folder-organizer__selection {
   flex: 0 0 auto;
 }
@@ -1362,10 +1287,6 @@ body.folder-organizer-open {
 .folder-organizer__close {
   width: var(--size-touch);
   height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  border-radius: 50%;
-  color: var(--color-ink);
-  background: var(--color-surface);
   font-size: 1.35rem;
   cursor: pointer;
 }
@@ -1407,9 +1328,6 @@ body.folder-organizer-open {
 .folder-organizer__selection button {
   min-width: var(--size-touch);
   min-height: var(--size-touch);
-  border: 0;
-  color: var(--color-accent);
-  background: transparent;
   font-weight: 700;
   cursor: pointer;
 }
@@ -1435,19 +1353,9 @@ body.folder-organizer-open {
   min-width: 0;
   min-height: 4rem;
   padding: 0.5rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.85rem;
-  color: var(--color-ink);
-  background: var(--color-surface);
   text-align: left;
   touch-action: pan-y;
   cursor: pointer;
-}
-
-.folder-organizer__resource--selected {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-  box-shadow: inset 0 0 0 1px var(--color-accent);
 }
 
 .folder-organizer__resource > span:nth-child(2) {
@@ -1487,16 +1395,11 @@ body.folder-organizer-open {
 .folder-organizer__cabinet-action > button,
 .folder-organizer__folder-action > button {
   min-height: var(--size-touch);
-  border: 0;
-  border-radius: 0.85rem;
-  color: #fff;
-  background: var(--color-accent);
   font-weight: 800;
   cursor: pointer;
 }
 
-.folder-organizer__cabinet-action > button:disabled,
-.folder-organizer__folder-action > button:disabled {
+:is(.folder-organizer__cabinet-action, .folder-organizer__folder-action) > button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
@@ -1514,11 +1417,11 @@ body.folder-organizer-open {
   max-width: min(13rem, 70vw);
   min-height: var(--size-touch);
   padding: 0.55rem 0.8rem;
-  border: 1px solid rgba(255, 255, 255, 0.42);
+  border: 1px solid var(--viewer-control-border);
   border-radius: 999px;
-  color: #fff;
+  color: var(--viewer-color);
   background: var(--color-accent);
-  box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.3);
+  box-shadow: var(--viewer-control-shadow);
   font-size: 0.75rem;
   font-weight: 700;
   pointer-events: none;
@@ -1540,11 +1443,11 @@ body.folder-organizer-open {
   z-index: 1205;
   max-width: min(13rem, calc(100vw - 2rem));
   padding: 0.65rem 0.8rem;
-  border: 1px solid rgba(255, 255, 255, 0.62);
+  border: 1px solid var(--notice-border, var(--dialog-border, var(--glass-border)));
   border-radius: 0.9rem;
-  color: #fff;
-  background: rgba(22, 31, 27, 0.92);
-  box-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.32);
+  color: var(--color-ink);
+  background: var(--notice-background, var(--dialog-background));
+  box-shadow: var(--notice-shadow, var(--dialog-shadow, var(--glass-shadow)));
   font-size: 0.78rem;
   font-weight: 700;
   pointer-events: none;
@@ -1556,7 +1459,7 @@ body.folder-organizer-open {
 .folder-order-drag span {
   display: block;
   margin-bottom: 0.15rem;
-  color: #b9d6ca;
+  color: var(--color-ink-soft);
   font: 700 0.58rem/1 var(--font-label);
   letter-spacing: 0.12em;
 }
@@ -1568,7 +1471,7 @@ body.folder-organizer-open {
   display: grid;
   place-items: end center;
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) 0 max(1rem, var(--safe-left));
-  background: rgba(18, 23, 21, 0.62);
+  background: var(--overlay-background);
 }
 
 .folder-rename__sheet {
@@ -1576,11 +1479,9 @@ body.folder-organizer-open {
   max-height: 100%;
   overflow-y: auto;
   padding: 1.2rem 1.2rem max(1.2rem, var(--safe-bottom));
-  border: 1px solid var(--color-line-strong);
-  border-radius: 1.2rem 1.2rem 0 0;
+  border-radius: var(--dialog-radius, var(--glass-radius-panel))
+    var(--dialog-radius, var(--glass-radius-panel)) 0 0;
   color: var(--color-ink);
-  background: var(--color-surface-raised);
-  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.34);
 }
 
 .folder-rename__sheet > p {
@@ -1615,10 +1516,6 @@ body.folder-organizer-open {
   width: 100%;
   min-height: var(--size-touch);
   padding: 0.7rem 0.85rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.75rem;
-  color: var(--color-ink);
-  background: var(--color-surface);
   font-size: 1rem;
 }
 
@@ -1642,10 +1539,6 @@ body.folder-organizer-open {
   min-height: var(--size-touch);
   place-items: center;
   padding: 0.55rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.75rem;
-  color: var(--color-ink);
-  background: var(--color-surface);
   font-size: 0.75rem;
   font-weight: 700;
   text-align: center;
@@ -1669,18 +1562,8 @@ body.folder-organizer-open {
 
 .folder-rename__sheet footer button {
   min-height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.75rem;
-  color: var(--color-ink);
-  background: var(--color-surface);
   font-weight: 700;
   cursor: pointer;
-}
-
-.folder-rename__sheet footer button[type='submit'] {
-  border-color: var(--color-accent);
-  color: #fff;
-  background: var(--color-accent);
 }
 
 @media (hover: hover) {
@@ -1739,6 +1622,10 @@ body.folder-organizer-open {
 
   .folder-library__pager .visual-folder__cover {
     width: min(100%, var(--cabinet-icon-size, 5.75rem));
+    box-shadow:
+      inset 0 0 0 1px var(--glass-border),
+      0 0.45rem 1rem
+        color-mix(in srgb, var(--folder-cover-background, var(--folder-accent)) 28%, transparent);
   }
 
   .cabinet-resource__icon {
@@ -1823,6 +1710,7 @@ body.folder-organizer-open {
   .visual-folder {
     padding: 0.3rem;
     border-radius: 0.9rem;
+    --folder-accent: var(--color-ink-soft);
   }
 
   .visual-folder__tab {
@@ -1834,10 +1722,16 @@ body.folder-organizer-open {
     aspect-ratio: 1;
     margin-top: 0.45rem;
     border-radius: 22%;
+    box-shadow:
+      inset 0 0 0 1px var(--glass-border),
+      0 0.45rem 1rem
+        color-mix(in srgb, var(--folder-cover-background, var(--folder-accent)) 28%, transparent);
   }
 
   .visual-folder__empty-art b {
     font-size: clamp(0.68rem, 3vw, 0.9rem);
+    border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+    box-shadow: var(--glass-shadow);
   }
 
   .visual-folder__identity {
@@ -1858,6 +1752,10 @@ body.folder-organizer-open {
     top: 0.45rem;
     right: 0.45rem;
     padding-inline: 0.45rem;
+    border: 1px solid var(--viewer-control-border);
+    color: var(--viewer-color);
+    background: var(--viewer-control-background);
+    box-shadow: var(--viewer-control-shadow);
   }
 
   .visual-folder__identity strong {
@@ -1929,22 +1827,20 @@ body.folder-organizer-open {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     width: 100%;
     padding: 0.45rem;
-    border-radius: 1.25rem;
   }
 
   .folder-library__dock button,
-  .folder-library__dock .folder-library__organize,
-  .folder-library__dock .folder-library__edit,
-  .folder-library__dock .folder-library__manage {
+  .folder-library__dock
+    :is(.folder-library__organize, .folder-library__edit, .folder-library__manage) {
     min-height: 4rem;
     padding: 0.1rem;
     font-size: inherit;
+    box-shadow: none;
   }
 
   .folder-library__dock button > span {
     width: 2.5rem;
     height: 2.5rem;
-    border-radius: 0.8rem;
   }
 
   .folder-detail__grid {
@@ -1983,7 +1879,6 @@ body.folder-organizer-open {
     border-right: 0;
     border-bottom: 0;
     border-left: 0;
-    border-radius: 1.25rem 1.25rem 0 0;
   }
 
   .folder-organizer__sheet > header h2 {

@@ -193,9 +193,6 @@
 .tavern-bridge-install__copyline button {
   min-height: 44px;
   padding: 0 0.85rem;
-  border: 1px solid var(--color-line-strong);
-  background: transparent;
-  color: inherit;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -229,7 +226,7 @@
 
 .tavern-bridge-install__copy-error {
   margin: 0.5rem 0 0;
-  color: #a4362b;
+  color: var(--color-ink);
   font-size: 0.82rem;
 }
 

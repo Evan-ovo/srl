@@ -209,15 +209,18 @@ for (const build of readdirSync(retainedRoot, { withFileTypes: true })) {
     const retainedCompatibility = json(`official-apps/api-${retainedApi}/catalog.json`)
     assert.equal(retainedCompatibility.schemaVersion, 1)
     assert.equal(retainedCompatibility.hostApiVersion, retainedApi)
-    assert.ok(
-      retainedCompatibility.apps[id]?.some(
-        (candidate) =>
-          candidate.url === download.url &&
-          candidate.sha256 === download.sha256 &&
-          candidate.hostApiVersion === retainedApi,
-      ),
-      `${build.name}/${id}: original API compatibility catalog is missing the retained package`,
-    )
+    // Retired APPs keep their immutable archive, but leave active API catalogs.
+    if (Object.hasOwn(catalog.apps, id))
+      assert.ok(
+        retainedCompatibility.apps[id]?.some(
+          (candidate) =>
+            candidate.url === download.url &&
+            candidate.sha256 === download.sha256 &&
+            candidate.hostApiVersion === retainedApi,
+        ),
+        `${build.name}/${id}: original API compatibility catalog is missing the retained package`,
+      )
+    else assert.equal(retainedCompatibility.apps[id], undefined)
     assert.equal(Object.keys(archive).length, manifest.files.length + 1)
     for (const file of manifest.files) {
       const packed = archive[file.path.slice(1)]

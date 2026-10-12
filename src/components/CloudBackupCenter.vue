@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import '../FeatureStyles.css'
+import '../styles/CloudBackup.css'
 import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { SRL_BACK_REQUEST_EVENT, type SrlBackRequestDetail } from '../composables/UseBackStack'
 import FeatureAppHeader from './FeatureAppHeader.vue'

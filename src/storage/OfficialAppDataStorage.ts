@@ -27,7 +27,6 @@ const keys: Partial<Record<OfficialAppId, string[]>> = {
     'srl.frontendWorkshop.imageGeneration.templates.v1',
   ],
   userPersona: ['srl.userPersona.templates'],
-  resourceBundle: ['srl.resourceBundles.templates', 'srl.chatLoadouts'],
 }
 
 export async function clearOfficialAppData(

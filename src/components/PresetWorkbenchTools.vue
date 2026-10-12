@@ -162,7 +162,7 @@ onUnmounted(() => document.removeEventListener('pointerdown', dismissOutside, tr
   gap: 0.25rem;
 }
 .stitch-tools .stitch__header-action {
-  color: var(--color-accent);
+  color: var(--button-color, var(--color-accent));
 }
 .stitch-tools.is-compact .feature-header-action {
   min-width: 32px;
@@ -188,10 +188,6 @@ onUnmounted(() => document.removeEventListener('pointerdown', dismissOutside, tr
   box-sizing: border-box;
   width: 176px;
   padding: 4px;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
-  background: var(--color-canvas);
-  box-shadow: 0 8px 24px var(--color-shadow);
 }
 .stitch-tools .stitch-tools__action {
   display: flex;
@@ -200,18 +196,17 @@ onUnmounted(() => document.removeEventListener('pointerdown', dismissOutside, tr
   justify-content: flex-start;
   text-align: left;
   padding: 6px 10px;
-  border-color: transparent;
-  border-radius: 4px;
   font-size: var(--text-caption);
   line-height: 1.3;
   font-family: var(--font-body);
   font-weight: var(--weight-ui);
-  color: var(--color-ink);
-  background: transparent;
-  box-shadow: none;
 }
 .stitch-tools__action:not(:disabled):hover,
 .stitch-tools__action:focus-visible {
-  background: var(--color-accent-soft);
+  background: color-mix(
+    in srgb,
+    var(--button-background, var(--color-surface-raised)) 87%,
+    var(--color-accent) 13%
+  );
 }
 </style>

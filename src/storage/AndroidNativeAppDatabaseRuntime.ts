@@ -317,9 +317,15 @@ export interface RetainedIndexedDbCopy {
 }
 
 async function openRetainedIndexedDb(name: string): Promise<Dexie> {
+  const retained = await openRetainedIndexedDbIfPresent(name)
+  if (!retained) throw new Error('未找到保留的 IndexedDB 副本')
+  return retained
+}
+
+export async function openRetainedIndexedDbIfPresent(name: string): Promise<Dexie | undefined> {
   // A separate plain connection never switches the live application's native backend.
   // Keep the existing schema/connection; deleting the database would block live connections.
-  if (!(await Dexie.exists(name))) throw new Error('未找到保留的 IndexedDB 副本')
+  if (!(await Dexie.exists(name))) return undefined
   const retained = new Dexie(name)
   await retained.open()
   return retained

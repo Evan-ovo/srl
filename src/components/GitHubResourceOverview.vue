@@ -87,10 +87,6 @@ async function inspect(): Promise<void> {
   justify-self: start;
   min-height: 2.25rem;
   padding: 0 0.75rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.25rem;
-  color: var(--color-ink);
-  background: var(--color-surface);
   font-size: 0.75rem;
   font-weight: 650;
   cursor: pointer;
@@ -141,7 +137,7 @@ async function inspect(): Promise<void> {
   line-height: 1.55;
 }
 .github-resource-overview__card > button {
-  background: var(--color-accent-soft);
+  background: var(--button-background, var(--color-accent-soft));
   font-weight: 750;
 }
 .github-resource-overview__notice {

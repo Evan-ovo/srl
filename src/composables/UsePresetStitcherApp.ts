@@ -170,6 +170,7 @@ export function usePresetStitcherApp(
     insertVariable,
     openVariableWriter,
     openSlotWriter,
+    openSlotWriterForVariable,
     insertPromptSlot,
     insertVariableWrite,
     insertUnreadWrittenVariable,
@@ -186,6 +187,7 @@ export function usePresetStitcherApp(
     editorTextarea,
     variableName,
     variableValue,
+    variableValueSelection,
     variableWriterOpen,
     slotName,
     slotId,
@@ -319,6 +321,8 @@ export function usePresetStitcherApp(
   const mobileEditorOverlay = ref(false)
 
   const variableWriterOpen = ref(false)
+
+  const variableValueSelection = ref({ start: 0, end: 0 })
 
   const slotWriterOpen = ref(false)
 
@@ -894,6 +898,7 @@ export function usePresetStitcherApp(
     insertVariable,
     openVariableWriter,
     openSlotWriter,
+    openSlotWriterForVariable,
     slotName,
     slotId,
     slotWriterError,
@@ -976,6 +981,7 @@ export function usePresetStitcherApp(
     variableWriterOpen,
     variableName,
     variableValue,
+    variableValueSelection,
     insertVariableWrite,
     chooseFavoriteSource,
     sourcePresetPageItems,

@@ -24,6 +24,8 @@ import {
   compactAndroidNativeAppDatabase,
 } from './AndroidNativeDexieCore'
 import { IndexedDbResourceStorage } from './IndexedDbResourceStorage'
+import { IndexedDbProductAssistantStorage } from './IndexedDbProductAssistantStorage'
+import { newAssistantConversation } from '../services/ProductAssistantWorkspaceService'
 import { IndexedDbAssetStore } from './IndexedDbAssetStore'
 import { RecycleBinService } from '../services/RecycleBinService'
 import { RESOURCE_TYPE, type Resource, type ResourceSummary } from '../types/Resource'
@@ -337,6 +339,47 @@ async function routeResource(id: string): Promise<Resource> {
 }
 
 describe('AndroidNativeDexieCore', () => {
+  it('recovers the retained IndexedDB chat into the active native adapter and persists it after reopening', async () => {
+    const { database, native, stores, close } = await delayedDatabase()
+    const old = newAssistantConversation()
+    old.title = '迁移后旧包写入的聊天'
+    old.history = [{ id: 'old-turn', role: 'user', text: '仍在旧 IndexedDB' }]
+    const source = new Dexie(database.name)
+    await source.open()
+    await source
+      .table('settings')
+      .put({ id: 'assistant.chat:' + old.id, value: old, updatedAt: old.updatedAt })
+    const sourceBefore = await source.table('settings').toArray()
+    source.close()
+    activateAndroidNativeAppDatabase()
+    try {
+      const storage = new IndexedDbProductAssistantStorage(database)
+      const current = newAssistantConversation()
+      current.input = '新原生库中的输入'
+      await storage.save(current, true)
+      expect((await storage.list(0, 20)).total).toBe(1)
+      await expect(storage.recoverHistory({})).resolves.toMatchObject({ recovered: 1, repaired: 0 })
+      expect(await storage.active()).toBe(current.id)
+      const recovered = (await storage.list(0, 20)).items.find((row) => row.id !== current.id)!
+      expect((await storage.read(recovered.id))?.history).toEqual(old.history)
+      expect(stores.get('settings')!.has(JSON.stringify('assistant.chat:' + recovered.id))).toBe(
+        true,
+      )
+      database.close()
+      await database.open()
+      const reopened = new IndexedDbProductAssistantStorage(database)
+      expect((await reopened.read(recovered.id))?.history).toEqual(old.history)
+      await expect(reopened.recoverHistory({})).resolves.toMatchObject({ recovered: 0 })
+      await source.open()
+      expect(await source.table('settings').toArray()).toEqual(sourceBefore)
+      source.close()
+      expect(native.getRecord).toBeDefined()
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      source.close()
+      await close()
+    }
+  })
   it('paginates mirror scans with an unbounded upper key and supports an unbounded lower key', async () => {
     const name = `native-open-range-${crypto.randomUUID()}`
     const seed = new AppDatabase(name)

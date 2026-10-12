@@ -24,11 +24,30 @@ requireValue(
   Number.isInteger(buildInfo.androidVersionCode) && buildInfo.androidVersionCode > 0,
   'androidVersionCode 必须是正整数',
 )
-requireValue(/^v\d+$/u.test(buildInfo.workerDeployVersion), 'workerDeployVersion 必须为 v + 数字')
-requireValue(
-  buildInfo.buildId === `srl-${buildInfo.webVersion}-${buildInfo.workerDeployVersion}`,
-  'buildId 未包含当前 webVersion 与 workerDeployVersion',
-)
+// PUBLIC-ONLY: Public keeps its own stable artifact identity and never uses
+// the official worker release version format.
+if (buildInfo.buildId.startsWith('srl-public-')) {
+  const publicWorkerVersion = /^public-sync-release-\d+-(v\d+)$/u.exec(
+    buildInfo.workerDeployVersion,
+  )
+  const publicBuildVersion = /^srl-public-(\d+\.\d+\.\d+)-(v\d+)$/u.exec(buildInfo.buildId)
+  requireValue(Boolean(publicWorkerVersion), 'Public workerDeployVersion 格式无效')
+  requireValue(Boolean(publicBuildVersion), 'Public buildId 格式无效')
+  requireValue(
+    publicBuildVersion?.[1] === buildInfo.webVersion,
+    'Public buildId 未包含当前 webVersion',
+  )
+  requireValue(
+    publicBuildVersion?.[2] === publicWorkerVersion?.[1],
+    'Public buildId 与 workerDeployVersion 修订号不一致',
+  )
+} else {
+  requireValue(/^v\d+$/u.test(buildInfo.workerDeployVersion), 'workerDeployVersion 必须为 v + 数字')
+  requireValue(
+    buildInfo.buildId === `srl-${buildInfo.webVersion}-${buildInfo.workerDeployVersion}`,
+    'buildId 未包含当前 webVersion 与 workerDeployVersion',
+  )
+}
 for (const field of ['databaseVersion', 'bridgeProtocolVersion', 'nativeApiVersion']) {
   requireValue(Number.isInteger(buildInfo[field]) && buildInfo[field] > 0, `${field} 必须是正整数`)
 }

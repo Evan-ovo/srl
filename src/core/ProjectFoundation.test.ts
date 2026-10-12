@@ -63,18 +63,18 @@ describe('project foundation', () => {
 
   it('reports strong/weak/ui references before deletion', () => {
     const index = new ReferenceIndex()
-    index.replaceOwner('loadout', 'l1', [
+    index.replaceOwner('workshop-project', 'l1', [
       {
-        ownerType: 'loadout',
+        ownerType: 'workshop-project',
         ownerId: 'l1',
         targetType: 'resource',
         targetId: 'r1',
-        label: '配了么套装',
+        label: '工作台资源引用',
         strength: 'weak',
       },
     ])
     expect(index.impacts('resource', 'r1')).toMatchObject([{ ownerId: 'l1', strength: 'weak' }])
-    index.removeOwner('loadout', 'l1')
+    index.removeOwner('workshop-project', 'l1')
     expect(index.impacts('resource', 'r1')).toEqual([])
   })
 })

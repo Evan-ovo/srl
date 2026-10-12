@@ -220,7 +220,7 @@ try {
         'session',
       )
       await tap(page.getByRole('button', { name: '关闭设置', exact: true }))
-      await tap(page.getByRole('button', { name: '多选整理', exact: true }))
+      await tap(page.getByRole('button', { name: '多选', exact: true }))
       await tap(page.getByRole('button', { name: 'AI 识别标签', exact: true }))
       const tagging = page.locator('.ai-tagging__api-config')
       await tagging.getByLabel('API 配置', { exact: true }).selectOption('temporary')

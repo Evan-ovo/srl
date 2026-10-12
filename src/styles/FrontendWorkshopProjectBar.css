@@ -22,9 +22,7 @@
   min-height: 2.5rem;
   padding: 0.25rem 0.2rem;
   border: 0;
-  background: transparent;
   font: 600 0.9rem var(--font-ui);
-  color: inherit;
   text-overflow: ellipsis;
 }
 svg {
@@ -57,19 +55,15 @@ svg {
 button {
   cursor: pointer;
   font: var(--weight-ui) var(--text-caption)/1.2 var(--font-ui);
-  color: inherit;
 }
 .project-device button {
   min-width: 3.2rem;
   min-height: var(--control-visual);
   padding: 0.15rem 0.35rem;
-  border: 0;
-  background: transparent;
-  color: var(--color-ink-soft);
 }
 .project-device .is-active {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .viewport-tools {
   display: flex;

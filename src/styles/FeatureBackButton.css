@@ -8,11 +8,11 @@
   min-height: var(--size-touch);
   flex: 0 0 var(--size-touch);
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  color: var(--color-accent);
-  background: transparent;
   place-items: center;
+  border: 0;
+  color: var(--button-color, var(--color-ink));
+  background: transparent;
+  box-shadow: none;
   font: inherit;
   line-height: 1;
   cursor: pointer;

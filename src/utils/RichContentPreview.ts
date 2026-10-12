@@ -73,6 +73,9 @@ export interface PreviewRuntimeScript {
   name: string
   content: string
   data?: Record<string, unknown>
+  buttons?: string[]
+  buttonDefinitions?: Array<{ name: string; visible: boolean }>
+  info?: string
 }
 
 export type SillyTavernMessageAvatarMode = 'visible' | 'hidden'
@@ -237,22 +240,10 @@ function restoreTrustedGreetingNavigation(source: string): string {
 
 function buildLocalThirdParty(libs: PreviewVendorLibs | undefined, isolated = false): string {
   const scripts: string[] = isolated ? [buildOuterVendorLibs(libs)] : []
-  if (libs?.fontAwesomeCss) scripts.push(buildPreviewFontStylesheet(libs.fontAwesomeCss))
-  if (libs?.jqueryUiCss) scripts.push(`<style>${libs.jqueryUiCss}</style>`)
-  if (libs?.toastrCss) scripts.push(`<style>${libs.toastrCss}</style>`)
-  if (libs?.jquery && !isolated)
-    scripts.push(`<script>${libs.jquery.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.jqueryUi)
-    scripts.push(`<script>${libs.jqueryUi.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.jqueryUiTouchPunch)
-    scripts.push(`<script>${libs.jqueryUiTouchPunch.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.vue) scripts.push(`<script>${libs.vue.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.vueRouter)
-    scripts.push(`<script>${libs.vueRouter.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.toastr)
-    scripts.push(`<script>${libs.toastr.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.tailwind)
-    scripts.push(`<script>${libs.tailwind.replace(/<\/script/gi, '<\\/script')}</script>`)
+  for (const key of SHARED_FRONTEND_VENDORS) {
+    if (isolated && key === 'jquery') continue
+    scripts.push(buildVendorSourceMarkup(key, libs?.[key]))
+  }
   if (!isolated)
     scripts.push(
       '<script>window._=window.parent._;window.YAML=window.parent.YAML;window.showdown=window.parent.showdown;window.z=window.parent.z;</script>',
@@ -269,12 +260,16 @@ function buildCompatibilityFrontendDependencies(
   return buildLocalThirdParty(libs, isolated)
 }
 
-function buildOuterVendorLibs(libs: PreviewVendorLibs | undefined): string {
+function buildOuterVendorLibs(libs: PreviewVendorLibs | undefined, sharedVendors = false): string {
   const scripts: string[] = []
   if (libs?.lodash)
     scripts.push(`<script>${libs.lodash.replace(/<\/script/gi, '<\\/script')}</script>`)
   if (libs?.jquery)
-    scripts.push(`<script>${libs.jquery.replace(/<\/script/gi, '<\\/script')}</script>`)
+    scripts.push(
+      sharedVendors
+        ? '<script>document.write(window.__SRL_PREVIEW_VENDOR_DOCUMENTS__.jquery)</script>'
+        : `<script>${libs.jquery.replace(/<\/script/gi, '<\\/script')}</script>`,
+    )
   if (libs?.showdown)
     scripts.push(`<script>${libs.showdown.replace(/<\/script/gi, '<\\/script')}</script>`)
   if (libs?.vendorGlobals)
@@ -286,14 +281,61 @@ function buildScriptIframeVendorLibs(
   libs: PreviewVendorLibs | undefined,
   _allowRemoteResources: boolean,
 ): string {
-  const scripts: string[] = []
-  if (libs?.toastrCss) scripts.push(`<style>${libs.toastrCss}</style>`)
-  if (libs?.vue) scripts.push(`<script>${libs.vue.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.vueRouter)
-    scripts.push(`<script>${libs.vueRouter.replace(/<\/script/gi, '<\\/script')}</script>`)
-  if (libs?.toastr)
-    scripts.push(`<script>${libs.toastr.replace(/<\/script/gi, '<\\/script')}</script>`)
-  return scripts.join('')
+  return SHARED_SCRIPT_VENDORS.map((key) => buildVendorSourceMarkup(key, libs?.[key])).join('')
+}
+
+const SHARED_FRONTEND_VENDORS = [
+  'fontAwesomeCss',
+  'jqueryUiCss',
+  'toastrCss',
+  'jquery',
+  'jqueryUi',
+  'jqueryUiTouchPunch',
+  'vue',
+  'vueRouter',
+  'toastr',
+  'tailwind',
+] as const
+const SHARED_SCRIPT_VENDORS = ['toastrCss', 'vue', 'vueRouter', 'toastr'] as const
+
+function buildVendorSourceMarkup(
+  key: (typeof SHARED_FRONTEND_VENDORS)[number],
+  source: string | undefined,
+): string {
+  if (!source) return ''
+  if (key === 'fontAwesomeCss') return buildPreviewFontStylesheet(source)
+  return key.endsWith('Css')
+    ? `<style>${source}</style>`
+    : `<script>${source.replace(/<\/script/gi, '<\\/script')}</script>`
+}
+
+/** Static dependency markup is shared; each child still executes its own library instances. */
+function buildSharedVendorDocuments(
+  libs: PreviewVendorLibs | undefined,
+  includeFrontends: boolean,
+): string {
+  const keys = includeFrontends
+    ? SHARED_FRONTEND_VENDORS
+    : (['jquery', ...SHARED_SCRIPT_VENDORS] as const)
+  const sources = Object.fromEntries(
+    keys.flatMap((key) => {
+      const source = libs?.[key]
+      if (!source) return []
+      const markup = buildVendorSourceMarkup(key, source)
+      return [[key, markup]]
+    }),
+  )
+  const documents = JSON.stringify(sources)
+    .replace(/</gu, '\\u003c')
+    .replace(/\u2028/gu, '\\u2028')
+    .replace(/\u2029/gu, '\\u2029')
+  return `<script>Object.defineProperty(window,'__SRL_PREVIEW_VENDOR_DOCUMENTS__',{value:Object.freeze(${documents})});</script>`
+}
+
+function buildSharedChildVendors(kind: 'frontend' | 'script'): string {
+  // srcdoc parses this in its head, before author code, preserving parser-blocking dependency order.
+  const keys = kind === 'frontend' ? SHARED_FRONTEND_VENDORS : SHARED_SCRIPT_VENDORS
+  return `<script>(()=>{const sources=window.parent.__SRL_PREVIEW_VENDOR_DOCUMENTS__;if(!sources)throw Error('Shared preview dependencies are unavailable');document.write(${JSON.stringify(keys)}.map(key=>sources[key]||'').join(''))})();</script>${kind === 'frontend' ? '<script>window._=window.parent._;window.YAML=window.parent.YAML;window.showdown=window.parent.showdown;window.z=window.parent.z;</script>' : ''}`
 }
 
 function buildCompatibilityLogRuntime(): string {
@@ -326,6 +368,7 @@ const createStorage=()=>{const values=new Map();return{get length(){return value
 let storage;${inheritFromParent ? 'try{storage=window.parent?.__SRL_EPHEMERAL_STORAGE__}catch{}' : ''}if(!storage)storage=createStorage();
 Object.defineProperty(window,'__SRL_EPHEMERAL_STORAGE__',{configurable:false,enumerable:false,value:storage});
 Object.defineProperty(window,'localStorage',{configurable:true,enumerable:true,value:storage});
+${inheritFromParent ? "try{const factory=window.parent?.__SRL_EPHEMERAL_INDEXEDDB__;if(factory){Object.defineProperty(window,'indexedDB',{configurable:true,value:factory});Object.defineProperty(window,'IDBKeyRange',{configurable:true,value:window.parent?.__SRL_EPHEMERAL_IDB_KEY_RANGE__})}}catch{}" : ''}
 })();</script>`
 }
 
@@ -365,6 +408,7 @@ export function buildCompatibilityFrontendDocument(
   avatarUrl: string,
   isolated = false,
   archivedMessage?: ArchivedMessageSnapshot,
+  sharedVendors = false,
 ): {
   document: string
   blockedScripts: boolean
@@ -379,7 +423,9 @@ export function buildCompatibilityFrontendDocument(
   )
   const hasDeclaredViewportMinimum = content.includes('var(--TH-viewport-height)')
   const thirdParty = policy.allowScripts
-    ? buildCompatibilityFrontendDependencies(libs, policy.allowRemoteResources, isolated)
+    ? sharedVendors && !isolated
+      ? buildSharedChildVendors('frontend')
+      : buildCompatibilityFrontendDependencies(libs, policy.allowRemoteResources, isolated)
     : ''
 
   return {
@@ -424,6 +470,7 @@ function mountCompatibilityFramesAndScripts(
   avatarUrl: string,
   messageId = 0,
   archivedAppearance?: ArchivedPanelAppearance,
+  sharedVendors = false,
 ): {
   html: string
   companionHtml: string
@@ -444,7 +491,15 @@ function mountCompatibilityFramesAndScripts(
     const pre = Array.from(wrapper.children).find((child) => child.tagName === 'PRE')
     const block = blocks[index]
     if (!pre || block === undefined) return
-    const child = buildCompatibilityFrontendDocument(block, policy, libs, avatarUrl)
+    const child = buildCompatibilityFrontendDocument(
+      block,
+      policy,
+      libs,
+      avatarUrl,
+      false,
+      undefined,
+      sharedVendors,
+    )
     blockedScripts ||= child.blockedScripts
     blockedExternalAssets ||= child.blockedExternalAssets
 
@@ -477,7 +532,7 @@ function mountCompatibilityFramesAndScripts(
       iframe.id = `TH-script--${script.name}--${id}`
       iframe.name = iframe.id
       iframe.setAttribute('tabindex', '-1')
-      iframe.srcdoc = buildCompatibilityScriptDocument(script, policy, libs)
+      iframe.srcdoc = buildCompatibilityScriptDocument(script, policy, libs, sharedVendors)
       scriptContainer.append(iframe)
     }
     companionHtml = scriptContainer.outerHTML
@@ -521,6 +576,7 @@ function buildCompatibilityScriptDocument(
   script: PreviewRuntimeScript,
   policy: PreviewPolicy,
   libs: PreviewVendorLibs | undefined,
+  sharedVendors = false,
 ): string {
   const content = normalizeRenderCompatibilityScript(script.content)
   return `<!DOCTYPE html>
@@ -529,8 +585,8 @@ function buildCompatibilityScriptDocument(
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${buildChildPolicy(policy)}">
 ${policy.allowScripts ? buildEphemeralStorageRuntime(true) : ''}
-${buildScriptIframeVendorLibs(libs, policy.allowRemoteResources)}
 <script>window.$=window.parent.$;window.jQuery=window.parent.jQuery;window._=window.parent._;window.YAML=window.parent.YAML;window.showdown=window.parent.showdown;window.z=window.parent.z;</script>
+${sharedVendors ? buildSharedChildVendors('script') : buildScriptIframeVendorLibs(libs, policy.allowRemoteResources)}
 ${buildRenderCompatibilityChildAdapter(script)}
 ${buildCompatibilityLogRuntime()}
 </head>
@@ -752,6 +808,7 @@ function buildMessageDocument(
   companionHtml: string,
   archivedMessage?: ArchivedMessageSnapshot,
   archivedReaderCss = '',
+  sharedVendorDocuments = '',
 ): string {
   const contentColors =
     renderShell === 'content'
@@ -801,7 +858,8 @@ ${renderShell === 'content' ? `:root{color-scheme:${contentTheme}}` : ''}
 ${archivedMessage ? `#chat>.mes{display:block;padding:0}#chat>.mes>.mes_block{padding:0;overflow:visible}#chat>.mes>.mes_block>.mes_text{padding:0;font-size:var(--reader-font,18px);line-height:var(--reader-leading,1.85)}` : ''}
 ${archivedReaderCss.replace(/<\/style/gi, '<\\/style')}
 </style>
-${helperRuntimeEnabled ? buildOuterVendorLibs(libs) : ''}
+${sharedVendorDocuments}
+${helperRuntimeEnabled ? buildOuterVendorLibs(libs, Boolean(sharedVendorDocuments)) : ''}
 ${helperRuntimeEnabled ? buildRenderCompatibilityHostRuntime(helperContext, expectedIframeCount, archivedMessage) : ''}
 ${archivedMessage ? `<script>window.addEventListener('message',event=>{if(event.source!==parent||event.data?.type!=='srl:reader-appearance')return;const {font,leading}=event.data;if(Number.isFinite(font)&&font>=14&&font<=30)document.documentElement.style.setProperty('--reader-font',font+'px');if(Number.isFinite(leading)&&leading>=1.5&&leading<=2.5)document.documentElement.style.setProperty('--reader-leading',leading)});</script>` : ''}
 ${helperRuntimeEnabled ? buildFrameHostRuntime() : ''}
@@ -917,6 +975,7 @@ export function buildRichContentPreview(
     Math.max(0, Math.trunc(options.greetingIndex ?? 0)),
   )
   const avatarUrl = sanitizeAvatarUrl(options.charAvatarUrl)
+  const sharedVendors = Boolean(options.archivedMessage) && activeRuntimeScripts.length > 0
   const mounted = mountCompatibilityFramesAndScripts(
     formatted.html,
     formatted.frontendBlocks,
@@ -926,6 +985,7 @@ export function buildRichContentPreview(
     avatarUrl,
     options.archivedMessage?.message_id,
     options.archivedMessage ? options.archivedPanelAppearance || {} : undefined,
+    sharedVendors,
   )
   const hasRichContent =
     formatted.frontendBlockCount > 0 ||
@@ -976,6 +1036,9 @@ export function buildRichContentPreview(
       mounted.companionHtml,
       options.archivedMessage,
       options.archivedReaderCss,
+      sharedVendors
+        ? buildSharedVendorDocuments(options.vendorLibs, formatted.frontendBlockCount > 0)
+        : '',
     ),
     hasRichContent,
     blockedScripts:

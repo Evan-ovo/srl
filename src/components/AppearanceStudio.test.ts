@@ -84,6 +84,8 @@ describe('AppearanceStudio cabinet layout', () => {
     expect(actions).toHaveLength(2)
     expect(actions[0]!.props('scope')).toBeUndefined()
     expect(actions[1]!.props('scope')?.value).toBe('library')
+    expect(wrapper.get('.appearance-panel--code > header h2').text()).toBe('自定义 CSS')
+    expect(wrapper.find('.appearance-code-header-actions').exists()).toBe(false)
     expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('.user {}')
     const placeholder = wrapper.findAll('textarea')[1]!.attributes('placeholder')
     expect(placeholder).toBe('在此填写本界面的自定义 CSS')
@@ -507,6 +509,22 @@ describe('AppearanceStudio AI CSS owner', () => {
     expect(value.ok).toBe(false)
     expect(value.image).toBeUndefined()
     expect(value.text).toContain('未挂载')
+    wrapper.unmount()
+  })
+  it('imports CSS above 200000 characters with the final rule intact in storage and application', async () => {
+    const { wrapper, storage, preset } = await setup()
+    const css = `/*${'x'.repeat(250_000)}*/\n:root { --large-css-tail: preserved; }`
+    const input = wrapper.get('[data-appearance-preset-import]')
+    Object.defineProperty(input.element, 'files', {
+      value: [{ name: 'complete.css', size: css.length, text: async () => css }],
+    })
+    await input.trigger('change')
+    await flushPromises()
+    expect(storage.getCustomUiPresets()[0]).toEqual(preset)
+    const imported = storage.getCustomUiPresets()[1]!
+    expect(imported.globalCss).toBe(css)
+    expect(storage.getActiveCustomUiPresetId()).toBe(imported.id)
+    expect(wrapper.emitted('save-css')?.at(-1)?.[0]).toBe(css)
     wrapper.unmount()
   })
 })

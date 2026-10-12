@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { tavernHttpFetch } from '../services/TavernHttpTransport'
+import { acquireRelayWorkerTarget } from '../services/RelayWorkerSettingsService'
 import { browserStorageService, exportService, resourceService } from '../core/AppContainer'
 import type { TavernSendContent } from '../types/BrowserPreferences'
 import { confirmAction } from '../composables/UseConfirmDialog'
@@ -13,8 +14,6 @@ import {
   type ParcelFile,
 } from '../services/BridgeParcelCodec.mjs'
 import { bridgeKindOfResource } from '../utils/TavernBridgeDiff'
-// SRL-PUBLIC-SYNC: PUBLIC-ONLY id=parcel-public-endpoint-import
-import { publicWorkerEndpoint } from '../services/PublicWorkerSettingsService'
 import type { ResourceSummary } from '../types/Resource'
 
 const props = withDefaults(
@@ -50,9 +49,7 @@ const visible = computed(() =>
   ),
 )
 // SRL-PUBLIC-SYNC: BEGIN WORKER-URL id=tavern-parcel-relay
-function workerBase(): string {
-  return publicWorkerEndpoint('/').origin
-}
+let outgoingBase = ''
 // SRL-PUBLIC-SYNC: END WORKER-URL id=tavern-parcel-relay
 async function run(action: () => Promise<void>) {
   if (busy.value) return
@@ -74,97 +71,107 @@ async function send() {
   const options = { syncCharacterTags: browserStorageService.getModifiedResourceSyncTags() }
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=parcel-send-worker-setup
   await run(async () => {
-    // SRL-PUBLIC-SYNC: PUBLIC-ONLY id=parcel-send-worker-base
-    const base = workerBase()
-    if (outgoing.value) throw new Error('请先复制当前口令，或删除当前暂存后再发送')
-    if (selected.value.length > 100) throw new Error('每次最多暂存 100 项，请分批发送')
-    const payload: ParcelFile[] = []
-    const chatTargets: string[] = []
-    let bytes = 0
-    for (const id of selected.value) {
-      if (operation?.signal.aborted) throw new Error('已取消暂存')
-      const resource = await resourceService.get(id)
-      const kind = resource && bridgeKindOfResource(resource)
-      if (!resource || !kind) throw new Error('所选资源已不存在或不支持暂存')
-      const chatPlan =
-        kind === 'chat'
-          ? await prepareChatReturn(resource, resourceService, undefined, includeChatRegex.value)
-          : undefined
-      if (chatPlan) chatTargets.push(`${resource.name} → ${chatPlan.targetLabel}`)
-      const file = await exportService.createTavernTransferFile(
-        resource,
-        content,
-        resourceService,
-        undefined,
-        options,
-      )
-      bytes += file.size
-      if (bytes > 16 * 1024 * 1024) throw new Error('所选内容超过 16 MiB，请分批暂存或使用实时互传')
-      payload.push({
-        file,
-        kind,
-        displayName: resource.name,
-        targetName: chatPlan
-          ? chatPlan.avatar
-          : typeof resource.metadata.extractedFromCharacterName === 'string'
-            ? resource.metadata.extractedFromCharacterName
-            : typeof resource.metadata.extractedFromPresetName === 'string'
-              ? resource.metadata.extractedFromPresetName
-              : typeof resource.metadata.sourceName === 'string'
-                ? resource.metadata.sourceName
-                : undefined,
-      })
-      if (chatPlan?.regexFile) {
-        bytes += chatPlan.regexFile.size
-        if (bytes > 16 * 1024 * 1024) throw new Error('聊天与配套正则超过 16 MiB，请使用实时互传')
+    const worker = acquireRelayWorkerTarget()
+    const base = worker.target.origin
+    try {
+      if (outgoing.value) throw new Error('请先复制当前口令，或删除当前暂存后再发送')
+      if (selected.value.length > 100) throw new Error('每次最多暂存 100 项，请分批发送')
+      const payload: ParcelFile[] = []
+      const chatTargets: string[] = []
+      let bytes = 0
+      for (const id of selected.value) {
+        if (operation?.signal.aborted) throw new Error('已取消暂存')
+        const resource = await resourceService.get(id)
+        const kind = resource && bridgeKindOfResource(resource)
+        if (!resource || !kind) throw new Error('所选资源已不存在或不支持暂存')
+        const chatPlan =
+          kind === 'chat'
+            ? await prepareChatReturn(resource, resourceService, undefined, includeChatRegex.value)
+            : undefined
+        if (chatPlan) chatTargets.push(`${resource.name} → ${chatPlan.targetLabel}`)
+        const file = await exportService.createTavernTransferFile(
+          resource,
+          content,
+          resourceService,
+          undefined,
+          options,
+        )
+        bytes += file.size
+        if (bytes > 16 * 1024 * 1024)
+          throw new Error('所选内容超过 16 MiB，请分批暂存或使用实时互传')
         payload.push({
-          file: chatPlan.regexFile,
-          kind: 'regexCharacter',
-          targetName: chatPlan.avatar,
-          displayName: '聊天配套正则（停用）',
+          file,
+          kind,
+          displayName: resource.name,
+          targetName: chatPlan
+            ? chatPlan.avatar
+            : typeof resource.metadata.extractedFromCharacterName === 'string'
+              ? resource.metadata.extractedFromCharacterName
+              : typeof resource.metadata.extractedFromPresetName === 'string'
+                ? resource.metadata.extractedFromPresetName
+                : typeof resource.metadata.sourceName === 'string'
+                  ? resource.metadata.sourceName
+                  : undefined,
         })
+        if (chatPlan?.regexFile) {
+          bytes += chatPlan.regexFile.size
+          if (bytes > 16 * 1024 * 1024) throw new Error('聊天与配套正则超过 16 MiB，请使用实时互传')
+          payload.push({
+            file: chatPlan.regexFile,
+            kind: 'regexCharacter',
+            targetName: chatPlan.avatar,
+            displayName: '聊天配套正则（停用）',
+          })
+        }
       }
+      if (
+        chatTargets.length &&
+        !(await confirmAction({
+          title: '确认聊天暂存范围',
+          message:
+            chatTargets.join('\n') +
+            '\n\n领取时请再次核对酒馆角色。聊天将保留为新记录。' +
+            (includeChatRegex.value
+              ? '配套正则会添加到目标角色并保持停用。'
+              : '只导入聊天记录，酒馆原有正则保持不变。'),
+          confirmLabel: '确认并生成口令',
+        }))
+      )
+        return
+      const result = await createParcel(
+        base,
+        payload,
+        (message) => {
+          progress.value = message
+        },
+        { signal: operation?.signal, fetcher: tavernHttpFetch },
+      )
+      outgoing.value = result.ticket
+      outgoingBase = base
+    } finally {
+      worker.release()
     }
-    if (
-      chatTargets.length &&
-      !(await confirmAction({
-        title: '确认聊天暂存范围',
-        message:
-          chatTargets.join('\n') +
-          '\n\n领取时请再次核对酒馆角色。聊天将保留为新记录。' +
-          (includeChatRegex.value
-            ? '配套正则会添加到目标角色并保持停用。'
-            : '只导入聊天记录，酒馆原有正则保持不变。'),
-        confirmLabel: '确认并生成口令',
-      }))
-    )
-      return
-    const result = await createParcel(
-      base,
-      payload,
-      (message) => {
-        progress.value = message
-      },
-      { signal: operation?.signal, fetcher: tavernHttpFetch },
-    )
-    outgoing.value = result.ticket
   })
   // SRL-PUBLIC-SYNC: END REPLACE id=parcel-send-worker-setup
 }
 async function receive() {
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=parcel-receive-worker-setup
   await run(async () => {
-    // SRL-PUBLIC-SYNC: PUBLIC-ONLY id=parcel-receive-worker-base
-    const base = workerBase()
-    files.value = []
-    files.value = await readParcel(
-      base,
-      incoming.value,
-      (message) => {
-        progress.value = message
-      },
-      { signal: operation?.signal, fetcher: tavernHttpFetch },
-    )
+    const worker = acquireRelayWorkerTarget()
+    try {
+      const base = worker.target.origin
+      files.value = []
+      files.value = await readParcel(
+        base,
+        incoming.value,
+        (message) => {
+          progress.value = message
+        },
+        { signal: operation?.signal, fetcher: tavernHttpFetch },
+      )
+    } finally {
+      worker.release()
+    }
   })
   // SRL-PUBLIC-SYNC: END REPLACE id=parcel-receive-worker-setup
 }
@@ -181,8 +188,7 @@ async function copy() {
 async function remove() {
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=parcel-remove-worker-setup
   await run(async () => {
-    // SRL-PUBLIC-SYNC: PUBLIC-ONLY id=parcel-remove-worker-base
-    await removeParcel(workerBase(), outgoing.value, {
+    await removeParcel(outgoingBase, outgoing.value, {
       signal: operation?.signal,
       fetcher: tavernHttpFetch,
     })
@@ -219,8 +225,8 @@ async function importReceived() {
     <div class="tavern-parcel__body">
       <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=parcel-worker-settings-hint -->
       <p class="tavern-parcel__hint">
-        实时互传仍可正常使用。加密暂存需要先在“设置 → 自部署 Worker”填写 Worker
-        地址。暂存完成后再切换应用，30 分钟内凭口令领取；每次最多 16 MiB。
+        实时互传仍可正常使用。暂存完成后再切换应用，30 分钟内凭口令领取；每次最多 16
+        MiB。两端需使用相同中继，可在设置中配置自建 Worker。
       </p>
       <!-- SRL-PUBLIC-SYNC: END REPLACE id=parcel-worker-settings-hint -->
       <div class="tavern-parcel__modes" aria-label="暂存方向">
@@ -389,13 +395,11 @@ p {
 }
 .tavern-parcel__modes button {
   flex: 1;
-  border-color: transparent;
-  background: transparent;
 }
 .tavern-parcel__modes button[aria-pressed='true'] {
-  background: var(--color-surface);
-  color: var(--color-accent);
-  border-color: var(--color-line);
+  background: var(--selection-background, var(--color-accent-soft));
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
   font-weight: 700;
 }
 fieldset {
@@ -419,10 +423,6 @@ textarea {
   width: 100%;
   min-width: 0;
   padding: 0.65rem 0.75rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
-  background: var(--color-surface);
-  color: inherit;
   font: inherit;
   font-size: 16px;
   resize: vertical;
@@ -430,10 +430,6 @@ textarea {
 button {
   min-height: 44px;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
-  color: inherit;
-  background: var(--color-surface);
   font: inherit;
   font-size: var(--text-body);
   cursor: pointer;
@@ -443,9 +439,9 @@ button:disabled {
   cursor: default;
 }
 button.tavern-parcel__primary {
-  background: var(--color-accent);
-  color: var(--color-on-accent, white);
-  border-color: transparent;
+  background: var(--button-primary-background, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
+  border-color: var(--button-primary-border, var(--color-accent));
   font-weight: 650;
 }
 .tavern-parcel__resources {

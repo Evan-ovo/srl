@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import './Styles.css'
+import { discordSetupSession } from './services/NativeDiscordSetupBrowser'
 import './styles/DuplicateCleaner.css'
+import { useCustomUiViews } from './composables/UseCustomUiViews'
 import ProductAssistantGuidance from './components/ProductAssistantGuidance.vue'
 import { startAssistantGuidance } from './core/ProductAssistantGuidance'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -20,6 +22,11 @@ const loadAiTaggingPanel = () => import('./components/AiTaggingPanel.vue')
 const AiTaggingPanel = createAsyncPanel('AI 标签实验台', loadAiTaggingPanel, { modal: true })
 const ExportPanel = createAsyncPanel('导出', () => import('./components/ExportPanel.vue'))
 const FeatureHub = createAsyncPanel('功能桌面', () => import('./components/FeatureHub.vue'))
+const customUiViews = useCustomUiViews()
+const UiCustomizationHost = createAsyncPanel(
+  '自定义界面',
+  () => import('./components/UiCustomizationHost.vue'),
+)
 const ProductAssistantPet = createAsyncPanel(
   '蒜惹菈',
   () => import('./components/ProductAssistantPet.vue'),
@@ -87,6 +94,7 @@ import ResourceInspector from './components/ResourceInspector.vue'
 import ResourceListRow from './components/ResourceListRow.vue'
 import { useApp } from './composables/UseApp'
 import { nativeFileSize } from './core/NativeFileSource'
+import { shouldShowSharedImportRouteChoices } from './utils/ShareTargetIntake'
 const controller = useApp()
 watch(controller.isBatchMode, (active) => {
   // 进入多选时提前加载下一步界面；失败仍由打开面板时的原错误边界展示。
@@ -414,6 +422,20 @@ function returnToImportMenu(): void {
   else importChooserStep.value = 'home'
 }
 
+function selectPageInput(event: FocusEvent): void {
+  const input = event.currentTarget as HTMLInputElement
+  input.select()
+}
+
+function jumpToLibraryPage(event: Event): void {
+  const input = event.currentTarget as HTMLInputElement
+  const requestedPage = /^\d+$/u.test(input.value) ? Number(input.value) : Number.NaN
+  if (Number.isSafeInteger(requestedPage)) {
+    currentPage.value = Math.min(totalPages.value, Math.max(1, requestedPage))
+  }
+  input.value = String(currentPage.value)
+}
+
 const isBatchBarVisible = computed(
   () =>
     isBatchMode.value &&
@@ -707,31 +729,33 @@ const isBatchBarVisible = computed(
                     继续上次导入
                   </button>
                 </div>
-                <p>收到 {{ pendingSharedFileBatch.files.length }} 个分享文件，请选择导入用途：</p>
-                <ul>
-                  <li
-                    v-for="file in pendingSharedFileBatch.files"
-                    :key="`${file.name}-${file.size}`"
-                  >
-                    {{ file.name }} · {{ formatBytes(nativeFileSize(file)) }}
-                  </li>
-                </ul>
-                <button type="button" @click="chooseSharedImportRoute('libraryBackup')">
-                  <strong>导入资源库备份</strong>
-                  <small>SRL 导出的完整或选择性备份 ZIP；进入资源库恢复预检</small>
-                </button>
-                <button type="button" @click="chooseSharedImportRoute('tavernBackup')">
-                  <strong>导入酒馆备份</strong>
-                  <small>SillyTavern 完整备份 ZIP；仅提取支持的资源文件</small>
-                </button>
-                <button type="button" @click="chooseSharedImportRoute('resource')">
-                  <strong>导入资源</strong>
-                  <small>角色卡、世界书、正则、预设等资源文件或酒馆资源 ZIP</small>
-                </button>
-                <button type="button" @click="chooseSharedImportRoute('thirdPartyApp')">
-                  <strong>导入第三方 APP</strong>
-                  <small>HTML、ZIP 或 .srlapp；先预览并检查权限，再由你确认安装</small>
-                </button>
+                <template v-if="shouldShowSharedImportRouteChoices(pendingSharedFileBatch)">
+                  <p>收到 {{ pendingSharedFileBatch.files.length }} 个分享文件，请选择导入用途：</p>
+                  <ul>
+                    <li
+                      v-for="file in pendingSharedFileBatch.files"
+                      :key="`${file.name}-${file.size}`"
+                    >
+                      {{ file.name }} · {{ formatBytes(nativeFileSize(file)) }}
+                    </li>
+                  </ul>
+                  <button type="button" @click="chooseSharedImportRoute('libraryBackup')">
+                    <strong>导入资源库备份</strong>
+                    <small>SRL 导出的完整或选择性备份 ZIP；进入资源库恢复预检</small>
+                  </button>
+                  <button type="button" @click="chooseSharedImportRoute('tavernBackup')">
+                    <strong>导入酒馆备份</strong>
+                    <small>SillyTavern 完整备份 ZIP；仅提取支持的资源文件</small>
+                  </button>
+                  <button type="button" @click="chooseSharedImportRoute('resource')">
+                    <strong>导入资源</strong>
+                    <small>角色卡、世界书、正则、预设等资源文件或酒馆资源 ZIP</small>
+                  </button>
+                  <button type="button" @click="chooseSharedImportRoute('thirdPartyApp')">
+                    <strong>导入第三方 APP</strong>
+                    <small>HTML、ZIP 或 .srlapp；先预览并检查权限，再由你确认安装</small>
+                  </button>
+                </template>
               </template>
             </template>
           </section>
@@ -1082,7 +1106,22 @@ const isBatchBarVisible = computed(
         >
           上一页
         </button>
-        <span>第 {{ currentPage }} / {{ totalPages }} 页</span>
+        <span>
+          第
+          <input
+            class="inline-page-jump"
+            :style="{ width: `${String(currentPage).length}ch` }"
+            :value="currentPage"
+            type="text"
+            inputmode="numeric"
+            :maxlength="String(totalPages).length"
+            aria-label="跳转到资源页"
+            @focus="selectPageInput"
+            @change="jumpToLibraryPage"
+            @keydown.enter.prevent="jumpToLibraryPage"
+          />
+          / {{ totalPages }} 页
+        </span>
         <label>
           每页
           <select v-model="pageSize" aria-label="每页资源数量">
@@ -1171,7 +1210,7 @@ const isBatchBarVisible = computed(
 
     <ProductAssistantGuidance />
     <ProductAssistantPet
-      v-if="assistantPreferences.desktopPet"
+      v-if="assistantPreferences.desktopPet || discordSetupSession.active"
       :assistant-busy="assistantBusy"
       :hidden="fullAssistantVisible"
       :theme="theme"
@@ -1241,6 +1280,7 @@ const isBatchBarVisible = computed(
       :suppress-focused="isOverlayOpen"
       :hidden-notice-ids="['resource-plaza']"
       :hidden-task-names="[
+        '蒜惹菈配置 Discord Bridge',
         ...(isRestorePanelOpen && isRestoring ? ['备份预检', '恢复备份'] : []),
         ...(isExportPanelOpen && isExporting ? ['导出备份'] : []),
       ]"
@@ -1573,5 +1613,9 @@ const isBatchBarVisible = computed(
         />
       </div>
     </div>
+    <UiCustomizationHost
+      v-if="Object.values(customUiViews).some((view) => view?.enabled)"
+      :views="customUiViews"
+    />
   </div>
 </template>

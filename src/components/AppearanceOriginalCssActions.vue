@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import '../styles/AppearanceOriginalCssActions.css'
 import { onUnmounted, ref } from 'vue'
 import type { AppearanceScope } from '../core/AppearanceScopes'
 import { readOriginalCss } from '../services/AppearanceOriginalCssService'
@@ -78,8 +79,22 @@ async function transfer(action: 'copy' | 'export'): Promise<void> {
       role="group"
       :aria-label="`${scope?.title ?? '全局'}原始 CSS`"
     >
-      <button type="button" :disabled="busy" @click="transfer('copy')">复制原始 CSS</button>
-      <button type="button" :disabled="busy" @click="transfer('export')">导出原始 CSS</button>
+      <button
+        type="button"
+        :disabled="busy"
+        class="appearance-action-hit"
+        @click="transfer('copy')"
+      >
+        <span class="appearance-action-face">复制原始 CSS</span>
+      </button>
+      <button
+        type="button"
+        :disabled="busy"
+        class="appearance-action-hit"
+        @click="transfer('export')"
+      >
+        <span class="appearance-action-face">导出原始 CSS</span>
+      </button>
     </div>
     <p
       v-if="status"

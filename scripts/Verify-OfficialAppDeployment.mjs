@@ -106,6 +106,56 @@ for (const [id, candidates] of Object.entries(compatibleCatalog.apps)) {
   }
 }
 
+const retainedBuilds = new Set(
+  [...packages.values()].flatMap(({ candidates }) =>
+    candidates.map((candidate) => candidate.shellVersion),
+  ),
+)
+for (const shellVersion of retainedBuilds) {
+  if (shellVersion === inventory.shellVersion) continue
+  const retained = await json(`/official-apps/${shellVersion}/catalog.json`)
+  if (retained.schemaVersion !== 1 || retained.shellVersion !== shellVersion)
+    throw new Error(`${shellVersion}: retained shell catalog is invalid`)
+  for (const [id, download] of Object.entries(retained.apps ?? {})) {
+    // Retirement removes active candidates without rewriting released archives.
+    if (!ids.includes(id)) {
+      const archiveBytes = await bytes(download.url)
+      if (
+        archiveBytes.length !== download.downloadBytes ||
+        digest(archiveBytes) !== download.sha256
+      )
+        throw new Error(`${shellVersion}/${id}: retired archive integrity mismatch`)
+      const archive = unzipSync(archiveBytes)
+      const manifest = JSON.parse(Buffer.from(archive['manifest.json']).toString('utf8'))
+      if (
+        manifest.schemaVersion !== 1 ||
+        manifest.id !== id ||
+        manifest.shellVersion !== shellVersion ||
+        manifest.entry !== download.entry ||
+        !Array.isArray(manifest.files) ||
+        Object.keys(archive).length !== manifest.files.length + 1
+      )
+        throw new Error(`${shellVersion}/${id}: retired archive manifest mismatch`)
+      for (const file of manifest.files) {
+        const content = archive[file.path?.replace(/^\//u, '')]
+        if (!content || content.length !== file.size || digest(content) !== file.sha256)
+          throw new Error(`${shellVersion}/${id}: retired archive file integrity mismatch`)
+      }
+      continue
+    }
+    const known = packages.get(download.url)
+    if (
+      known?.id !== id ||
+      !known.candidates.some(
+        (candidate) =>
+          candidate.sha256 === download.sha256 &&
+          candidate.downloadBytes === download.downloadBytes,
+      )
+    )
+      throw new Error(`${shellVersion}/${id}: retained catalog does not match verified candidates`)
+  }
+}
+
 let packageCount = 0
 for (const [url, { id, candidates }] of packages) {
   const archiveBytes = await bytes(url)

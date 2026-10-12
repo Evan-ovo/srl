@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const appShellCss = readFileSync(new URL('./AppShell.css', import.meta.url), 'utf8')
+const foundationCss = readFileSync(new URL('./Foundation.css', import.meta.url), 'utf8')
 
 function readRule(selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -14,7 +15,8 @@ describe('AppShell 导入方式弹层', () => {
   it('在不支持混合色或毛玻璃的移动 WebView 中仍有明确的实体遮罩', () => {
     const overlayRule = readRule('.import-choice-overlay')
 
-    expect(overlayRule).toContain('background-color: rgba(17, 24, 21, 0.68)')
+    expect(overlayRule).toContain('background: var(--overlay-background)')
+    expect(foundationCss).toMatch(/--overlay-background:\s*rgba\([^)]*,\s*0\.[1-9]\d*\)/)
     expect(overlayRule).not.toContain('color-mix(')
     expect(overlayRule).not.toContain('backdrop-filter')
   })
@@ -22,7 +24,9 @@ describe('AppShell 导入方式弹层', () => {
   it('弹层面板使用已定义的不透明主题表面令牌', () => {
     const sheetRule = readRule('.import-choice-sheet')
 
-    expect(sheetRule).toContain('background: var(--color-surface-raised)')
+    expect(sheetRule).toContain('background: var(--dialog-background)')
+    expect(foundationCss).toContain('--dialog-background:')
+    expect(foundationCss).toMatch(/--color-surface-raised:\s*#[\da-f]{6};/i)
     expect(sheetRule).not.toContain('var(--color-paper)')
   })
 

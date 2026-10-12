@@ -69,17 +69,13 @@ onBeforeUnmount(() => window.removeEventListener('srl:cloud-inbox-state', state)
   appearance: none;
   min-height: 44px;
   padding: 8px 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-accent-soft);
-  color: var(--color-ink);
   font: inherit;
   font-size: 13px;
   font-weight: 550;
   cursor: pointer;
 }
 .native-inbox-mode p {
-  color: var(--color-text-muted);
+  color: var(--color-ink-soft);
   margin: 8px 0 0;
   font-size: 13px;
 }

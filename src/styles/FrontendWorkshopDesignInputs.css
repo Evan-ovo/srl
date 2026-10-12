@@ -78,14 +78,14 @@
   min-height: var(--control-visual);
   padding: 0 0.55rem;
   border: 0;
-  background: var(--color-surface);
+  background: var(--button-background, var(--color-surface));
   font-size: var(--text-caption);
   white-space: normal;
   overflow-wrap: anywhere;
 }
 .frontend-workshop__field-editor > header button.is-active {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
   box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 .frontend-workshop__field-editor > label {
@@ -216,8 +216,8 @@
   width: 100%;
   min-height: var(--size-touch);
   margin-top: 0.875rem;
-  color: white !important;
-  background: var(--color-accent) !important;
+  color: var(--button-primary-color, var(--color-on-accent)) !important;
+  background: var(--button-primary-background, var(--color-accent)) !important;
   font-weight: var(--weight-title);
 }
 .frontend-workshop__error {
@@ -347,8 +347,8 @@
   flex: 1 1 8rem;
 }
 .frontend-workshop__api-actions button:last-child {
-  color: white;
-  background: var(--color-accent);
+  color: var(--button-primary-color, var(--color-on-accent));
+  background: var(--button-primary-background, var(--color-accent));
 }
 .frontend-workshop__api-body > p {
   margin: 0.5rem 0 0;

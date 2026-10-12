@@ -14,6 +14,15 @@
   pointer-events: none;
 }
 
+.activity-center__trigger,
+.activity-center__panel,
+.activity-center__focused-progress {
+  border: 1px solid var(--notice-border, var(--dialog-border, var(--glass-border)));
+  border-radius: var(--notice-radius, var(--dialog-radius, var(--glass-radius-panel)));
+  background: var(--notice-background, var(--dialog-background));
+  box-shadow: var(--notice-shadow, var(--dialog-shadow, var(--glass-shadow)));
+}
+
 .activity-center__trigger {
   pointer-events: auto;
   display: grid;
@@ -23,10 +32,6 @@
   width: 100%;
   min-height: 2.75rem;
   padding: 0.55rem 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
-  border-radius: 0.85rem;
-  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
-  box-shadow: 0 0.8rem 2rem var(--color-shadow);
   color: inherit;
   text-align: left;
   backdrop-filter: blur(18px);
@@ -78,10 +83,6 @@
   max-height: min(84dvh, 672px);
   overflow: auto;
   padding: 0.8rem;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
-  border-radius: 1rem;
-  background: var(--color-surface);
-  box-shadow: 0 1.2rem 3rem var(--color-shadow);
   transform: translate(-50%, -50%);
 }
 
@@ -93,10 +94,6 @@
   width: min(24rem, calc(100vw - 2rem));
   padding: 0.85rem 1rem 0.75rem;
   transform: translate(-50%, -50%);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-line));
-  border-radius: 1rem;
-  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
-  box-shadow: 0 1rem 3rem var(--color-shadow);
   color: inherit;
   pointer-events: none;
   backdrop-filter: blur(18px);
@@ -225,12 +222,7 @@
 .activity-center__panel button {
   max-width: 100%;
   white-space: normal;
-  min-height: 2.25rem;
   padding: 0.35rem 0.65rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.65rem;
-  background: transparent;
-  color: inherit;
 }
 
 .activity-center__group + .activity-center__group {

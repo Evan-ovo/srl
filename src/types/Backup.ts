@@ -5,7 +5,7 @@ import type {
   CommunitySourceAttachmentArchiveEntry,
   CommunitySourceBackupData,
 } from './CommunitySource'
-import type { CustomCssPreset, LayoutMode, PreviewPolicy } from '../services/BrowserStorageService'
+import type { PreviewPolicy, PortableAppearanceSettings } from '../services/BrowserStorageService'
 import type { CharacterDrawState } from '../services/CharacterDrawService'
 import type { GitHubBackupConfig, WebDavBackupConfig } from './CloudBackup'
 import type { MainApiConfig, MainApiProfilesState } from '../services/MainApiService'
@@ -51,13 +51,7 @@ export interface ArchivePortableData {
   /** Explicit opt-in readable companion; encrypted originals remain in the resource archive. */
   plaintextSecretCopies?: PlainSecretCopy[]
   version: 1
-  appearance?: {
-    theme: 'light' | 'dark'
-    layoutMode: LayoutMode
-    customCss: string
-    presets: CustomCssPreset[]
-    activePresetId: string
-  }
+  appearance?: PortableAppearanceSettings
   cloudBackup?: {
     activeProvider?: 'github' | 'webdav'
     github?: GitHubBackupConfig

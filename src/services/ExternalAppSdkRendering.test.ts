@@ -2,6 +2,8 @@
 import { Blob } from 'node:buffer'
 import { describe, expect, it, vi } from 'vitest'
 import { ExternalAppSdkService } from './ExternalAppSdkService'
+import { ChatReaderService } from './ChatReaderService'
+import * as readerRendering from './ChatReaderRendering'
 import type { Resource } from '../types/Resource'
 import { toResourceSummary } from '../types/Resource'
 import type { ResourceReadSource } from '../types/ResourceReadSource'
@@ -58,6 +60,141 @@ const rule = {
 }
 
 describe('reader SDK rendering path', () => {
+  it('still rejects genuinely oversized saved variables without truncating their originals or raising the budget', async () => {
+    const card = resource('card', 'characterCard', '', {
+      card: {
+        name: '角色',
+        scripts: [{ type: 'script', id: 'phone', name: '手机', content: 'console.log("phone")' }],
+      },
+    })
+    const raw = JSON.stringify({
+      name: '角色',
+      is_user: false,
+      mes: '正文',
+      variables: [{ large: 'x'.repeat(3 * 1024 * 1024) }],
+    })
+    const chat = resource('chat', 'chat', raw)
+    chat.relatedResourceIds = ['card']
+    const { sdk } = sdkWith([chat, card])
+    const catalog = await sdk.readChat('reader', { id: 'chat', scriptListOnly: true })
+    await expect(
+      sdk.readChat('reader', {
+        id: 'chat',
+        interactive: true,
+        scripts: true,
+        scriptOverrides: { [catalog.scriptRules[0]!.key]: true },
+      }),
+    ).rejects.toThrow('渲染内容过大')
+    expect(await chat.originalBlob.text()).toBe(raw)
+  })
+  it('prepares display rules once for a page and reuses them across floors while keeping depth-specific results', async () => {
+    const card = resource('card', 'characterCard', '', {
+      card: { name: '角色', extensions: { regex_scripts: [rule] } },
+    })
+    const raw = [0, 1, 2]
+      .map((index) => JSON.stringify({ name: '角色', is_user: false, mes: 'STATUS ' + index }))
+      .join('\n')
+    const chat = resource('chat', 'chat', raw, {
+      messageCount: 3,
+      visibleMessageCount: 3,
+      format: 'jsonl',
+    })
+    chat.relatedResourceIds = ['card']
+    const { sdk } = sdkWith([chat, card])
+    const prepare = vi.spyOn(readerRendering, 'chatRegexRules')
+    const inputs = vi.spyOn(readerRendering, 'chatRenderInput')
+    try {
+      const result = await sdk.readChat('reader', { id: 'chat', limit: 3 })
+      expect(prepare).toHaveBeenCalledTimes(1)
+      expect(inputs).toHaveBeenCalledTimes(3)
+      const prepared = inputs.mock.calls[0]![3]
+      expect(prepared).toBeDefined()
+      expect(inputs.mock.calls.every((call) => call[3] === prepared)).toBe(true)
+      expect(result.messages.map((entry) => entry.depth)).toEqual([2, 1, 0])
+      expect(result.messages.every((entry) => entry.html.includes('正确状态栏'))).toBe(true)
+      expect(await chat.originalBlob.text()).toBe(raw)
+    } finally {
+      prepare.mockRestore()
+      inputs.mockRestore()
+    }
+  })
+  it('lists scripts without reading or formatting chat floors, then still honors manual-source changes', async () => {
+    const card = resource('card', 'characterCard', '', {
+      card: {
+        name: '角色',
+        scripts: [{ type: 'script', id: 'role', name: '手机', content: 'console.log("role")' }],
+      },
+    })
+    const chat = resource('chat', 'chat', 'not needed for this metadata request', {
+      messageCount: 1000,
+    })
+    chat.relatedResourceIds = ['card']
+    const { sdk, externalApps } = sdkWith([chat, card])
+    const read = vi
+      .spyOn(ChatReaderService.prototype, 'readResource')
+      .mockRejectedValue(new Error('floor must not be read'))
+    const format = vi.spyOn(readerRendering, 'formatChatResult')
+    try {
+      const catalog = await sdk.readChat('reader', {
+        id: 'chat',
+        scriptList: true,
+        scriptListOnly: true,
+        remote: true,
+        interactive: true,
+      })
+      expect(catalog.scriptRules).toHaveLength(1)
+      expect(catalog.messages).toEqual([])
+      expect(catalog.total).toBe(1000)
+      expect(read).not.toHaveBeenCalled()
+      expect(format).not.toHaveBeenCalled()
+      expect(
+        externalApps.hasPermission.mock.calls.flatMap((call: unknown[]) => call[1]),
+      ).not.toContain('network.https')
+      await expect(
+        sdk.readChat('reader', { id: 'chat', scriptListOnly: true, scriptSources: ['missing'] }),
+      ).rejects.toThrow('所选脚本来源已不存在')
+    } finally {
+      read.mockRestore()
+      format.mockRestore()
+    }
+  })
+  it.each([1, 4, 8])(
+    'keeps %s small status panels and one role script within the response budget',
+    async (count) => {
+      const code = 'initializeGlobal("Phone", { ready: true });'
+      const card = resource('card', 'characterCard', '', {
+        card: {
+          name: '角色',
+          scripts: [{ type: 'script', id: 'phone', name: '手机', content: code }],
+        },
+      })
+      const panel = '```html\n<body><p>状态</p></body>\n```'
+      const chat = resource(
+        'chat',
+        'chat',
+        JSON.stringify({
+          name: '角色',
+          is_user: false,
+          mes: Array(count).fill(panel).join('\n\n'),
+        }),
+      )
+      chat.relatedResourceIds = ['card']
+      const { sdk } = sdkWith([chat, card])
+      const catalog = await sdk.readChat('reader', { id: 'chat', scriptList: true })
+      const full = await sdk.readChat('reader', {
+        id: 'chat',
+        interactive: true,
+        scripts: true,
+        scriptOverrides: { [catalog.scriptRules[0]!.key]: true },
+      })
+      const bytes = new TextEncoder().encode(JSON.stringify(full.messages[0])).length
+      expect(bytes).toBeLessThanOrEqual(8 * 1024 * 1024)
+      const template = document.createElement('template')
+      template.innerHTML = full.messages[0]!.interactiveDocument!
+      expect(template.content.querySelectorAll('.TH-render > iframe')).toHaveLength(count)
+      expect(full.messages[0]!.scriptCount).toBe(1)
+    },
+  )
   it.each(['legacy', 'chara_card_v2', 'chara_card_v3'])(
     'lists scripts from %s character card data',
     async (spec) => {
@@ -90,6 +227,11 @@ describe('reader SDK rendering path', () => {
       const catalog = await sdk.readChat('reader', { id: 'chat', scriptList: true })
       expect(catalog.scriptRules).toHaveLength(1)
       expect(catalog.scriptRules[0]).toMatchObject({ name: '手机', enabled: false })
+      // A separately saved full card must not bypass the chat's carry exclusion.
+      chat.metadata.chatCharacter = { carryReadingScripts: false }
+      const excluded = await sdk.readChat('reader', { id: 'chat', scriptList: true })
+      expect(excluded.scriptRules).toEqual([])
+      expect(card.metadata.card).toEqual(spec === 'legacy' ? data : { spec, data })
     },
   )
   it('keeps scripts opt-in and runs one shared floor host across panels and selected replies', async () => {
@@ -246,6 +388,31 @@ describe('reader SDK rendering path', () => {
     await expect(
       sdk.readChat('reader', { id: 'chat', interactive: true, scripts: true }),
     ).rejects.toThrow('信任兼容')
+  })
+  it('keeps the selected character identity when a script runs on an archived user floor', async () => {
+    const chat = resource(
+      'chat',
+      'chat',
+      JSON.stringify({ name: '实际用户', mes: '用户发言', is_user: true }),
+    )
+    const script = resource('phone', 'script', 'console.log(getCurrentCharacterName())')
+    const card = resource('card', 'characterCard', '', { card: { data: { name: '实际角色' } } })
+    chat.relatedResourceIds = ['card']
+    const { sdk } = sdkWith([chat, card, script])
+    const catalog = await sdk.readChat('reader', {
+      id: 'chat',
+      scriptList: true,
+      scriptSources: ['phone'],
+    })
+    const result = await sdk.readChat('reader', {
+      id: 'chat',
+      scripts: true,
+      interactive: true,
+      scriptSources: ['phone'],
+      scriptOverrides: { [catalog.scriptRules[0]!.key]: true },
+    })
+    expect(result.messages[0]?.interactiveDocument).toContain('"charName":"实际角色"')
+    expect(result.messages[0]?.interactiveDocument).toContain('"name":"实际用户"')
   })
   it('reuses raw floors while rebuilding each selected reply snapshot and checking current permissions', async () => {
     const frontend =
@@ -845,8 +1012,8 @@ describe('reader SDK rendering path', () => {
   })
 })
 
-describe('attached reading script resource', () => {
-  it('skips attached file reads on ordinary reading and lists it default off without manual source selection', async () => {
+describe('retired automatic reading script references', () => {
+  it('ignores old automatic references and still supports the same resource when manually selected', async () => {
     const chat = resource(
       'chat',
       'chat',
@@ -877,16 +1044,25 @@ describe('attached reading script resource', () => {
     expect(off.messages[0]?.scriptCount).toBe(0)
     expect(resources.get.mock.calls.map(([id]) => id)).not.toContain('attached')
     const catalog = await sdk.readChat('reader', { id: 'chat', scriptList: true })
-    expect(catalog.scriptRules).toHaveLength(1)
-    expect(catalog.scriptRules[0]).toMatchObject({ sourceId: 'attached', enabled: false })
-    expect(catalog.scriptRules[0]).not.toHaveProperty('content')
+    expect(catalog.scriptRules).toEqual([])
+    expect(resources.get.mock.calls.map(([id]) => id)).not.toContain('attached')
+    const selected = await sdk.readChat('reader', {
+      id: 'chat',
+      scriptList: true,
+      scriptSources: ['attached'],
+    })
+    expect(selected.scriptRules).toHaveLength(1)
+    expect(selected.scriptRules[0]).toMatchObject({ sourceId: 'attached', enabled: false })
+    expect(selected.scriptRules[0]).not.toHaveProperty('content')
     const full = await sdk.readChat('reader', {
       id: 'chat',
       interactive: true,
       scripts: true,
-      scriptOverrides: { [catalog.scriptRules[0]!.key]: true },
+      scriptSources: ['attached'],
+      scriptOverrides: { [selected.scriptRules[0]!.key]: true },
     })
     expect(full.messages[0]?.scriptCount).toBe(1)
+    expect(chat.metadata.chatReadingScriptId).toBe('attached')
   })
   it('keeps the script manager and ordinary prose available when an attached resource is missing', async () => {
     const chat = resource(
@@ -906,9 +1082,13 @@ describe('attached reading script resource', () => {
     const { sdk } = sdkWith([chat])
     const catalog = await sdk.readChat('reader', { id: 'chat', scriptList: true })
     expect(catalog.scriptRules).toEqual([])
-    expect(catalog.scriptErrors.join(' ')).toContain('随附')
+    expect(catalog.scriptErrors).toEqual([])
     expect(
       (await sdk.readChat('reader', { id: 'chat', interactive: true })).messages[0]?.scriptCount,
     ).toBe(0)
+    await expect(
+      sdk.readChat('reader', { id: 'chat', scriptList: true, scriptSources: ['missing'] }),
+    ).rejects.toThrow('所选脚本来源已不存在')
+    expect(chat.metadata.chatReadingScriptId).toBe('missing')
   })
 })

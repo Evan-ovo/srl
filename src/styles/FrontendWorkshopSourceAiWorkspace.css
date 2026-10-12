@@ -1,5 +1,5 @@
 .source-ai-workspace {
-  --ai-border: color-mix(in srgb, var(--color-accent, #56a9bd) 38%, transparent);
+  --ai-border: color-mix(in srgb, var(--color-accent) 38%, transparent);
   position: fixed;
   inset: 0;
   z-index: 1150;
@@ -9,14 +9,14 @@
   height: var(--app-viewport-height);
   min-width: 0;
   overflow: hidden;
-  color: var(--color-ink, #163846);
+  color: var(--color-ink);
   background:
     radial-gradient(
       circle at 18% 4%,
-      color-mix(in srgb, var(--color-accent, #56a9bd) 13%, transparent),
+      color-mix(in srgb, var(--color-accent) 13%, transparent),
       transparent 34%
     ),
-    var(--color-canvas, #eaf5f7);
+    var(--color-canvas);
   padding-top: max(6px, var(--safe-top));
 }
 
@@ -29,8 +29,8 @@
   padding: 4px max(8px, var(--safe-right)) 4px max(8px, var(--safe-left));
   border: 1px solid var(--ai-border);
   border-radius: 22px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 82%, transparent);
-  box-shadow: 0 8px 24px rgb(26 73 88 / 9%);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  box-shadow: var(--glass-shadow);
   backdrop-filter: blur(18px);
 }
 
@@ -41,16 +41,11 @@
 .source-ai-workspace__mode {
   min-width: 0;
   min-height: 40px;
-  border: 1px solid var(--ai-border);
-  border-radius: 10px;
-  color: inherit;
-  background: var(--color-surface, #fff);
 }
 .source-ai-workspace.is-planning .source-ai-workspace__split {
   grid-template-rows: minmax(0, 1fr);
 }
-.source-ai-workspace.is-planning .source-ai-workspace__preview,
-.source-ai-workspace.is-planning .source-ai-workspace__divider {
+.source-ai-workspace.is-planning :is(.source-ai-workspace__preview, .source-ai-workspace__divider) {
   display: none;
 }
 .source-ai-workspace__plan-note {
@@ -78,9 +73,6 @@
 .source-ai-workspace__icon-button {
   width: 40px;
   height: 40px;
-  border: 0;
-  background: transparent;
-  color: inherit;
 }
 .source-ai-workspace__icon-button svg {
   width: 20px;
@@ -98,10 +90,7 @@
   max-height: calc(var(--app-viewport-height) - 90px - var(--safe-top));
   overflow-y: auto;
   padding: 12px;
-  border: 1px solid var(--ai-border);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 88%, transparent);
-  box-shadow: 0 12px 34px rgb(26 73 88 / 18%);
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
   backdrop-filter: blur(20px);
 }
 .source-ai-workspace__settings label {
@@ -152,8 +141,8 @@
   margin: 0 8px;
   border: 1px solid var(--ai-border);
   border-radius: 22px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 82%, transparent);
-  box-shadow: 0 8px 24px rgb(26 73 88 / 8%);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  box-shadow: var(--glass-shadow);
 }
 .source-ai-workspace__preview-header {
   display: flex;
@@ -164,15 +153,15 @@
   padding: 7px 12px 4px 16px;
 }
 .source-ai-workspace__preview-header strong span {
-  color: var(--color-accent, #56a9bd);
+  color: var(--color-accent);
 }
 .source-ai-workspace__preview-header strong small {
   display: inline-flex;
   margin-left: 6px;
   padding: 2px 7px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent, #56a9bd) 13%, transparent);
-  color: var(--color-ink-soft, #58747d);
+  background: color-mix(in srgb, var(--color-accent) 13%, transparent);
+  color: var(--color-ink-soft);
   font-size: var(--text-caption, 0.75rem);
   font-weight: 600;
   vertical-align: 2px;
@@ -184,10 +173,6 @@
   width: 34px;
   height: 34px;
   padding: 0;
-  border: 1px solid var(--ai-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 70%, transparent);
-  color: inherit;
 }
 .source-ai-workspace__preview-header button::before {
   position: absolute;
@@ -195,7 +180,7 @@
   content: '';
 }
 .source-ai-workspace__preview-header button.is-active {
-  background: color-mix(in srgb, var(--color-accent, #56a9bd) 18%, transparent);
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .source-ai-workspace__preview-header svg {
   width: 20px;
@@ -233,9 +218,7 @@
   overflow: hidden;
 }
 .source-ai-workspace__preview-stage[data-sizing-mode='viewport']
-  .source-ai-workspace__preview-content,
-.source-ai-workspace__preview-stage[data-sizing-mode='viewport']
-  .source-ai-workspace__preview-after {
+  :is(.source-ai-workspace__preview-content, .source-ai-workspace__preview-after) {
   height: 100%;
 }
 .source-ai-workspace__preview-after.is-comparing {
@@ -261,7 +244,7 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--color-accent, #56a9bd);
+  color: var(--color-accent);
   touch-action: none;
   cursor: grab;
   transform: translateX(-50%);
@@ -274,7 +257,7 @@
   left: 50%;
   width: 2px;
   background: currentcolor;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-surface, #fff) 78%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-surface) 78%, transparent);
   transform: translateX(-50%);
 }
 .source-ai-workspace__compare-divider span {
@@ -287,19 +270,19 @@
   margin: auto;
   border: 1px solid color-mix(in srgb, currentcolor 48%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 88%, transparent);
-  box-shadow: 0 4px 14px rgb(26 73 88 / 16%);
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  box-shadow: var(--glass-shadow);
   font-size: 0.62rem;
   letter-spacing: -1px;
   writing-mode: vertical-rl;
 }
 .source-ai-workspace__compare-divider.is-dragging span {
-  background: color-mix(in srgb, var(--color-accent, #56a9bd) 24%, var(--color-surface, #fff));
+  background: color-mix(in srgb, var(--color-accent) 24%, var(--color-surface));
 }
 .source-ai-workspace__preview-error {
   margin: auto;
   padding: 16px;
-  color: var(--color-danger, #b84d5e);
+  color: var(--color-danger);
   text-align: center;
 }
 .source-ai-workspace__divider {
@@ -319,14 +302,14 @@
   width: 44px;
   height: 4px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent, #56a9bd) 58%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 58%, transparent);
 }
 .source-ai-workspace__divider::before,
 .source-ai-workspace__divider::after {
   content: '•••';
   position: absolute;
   top: 1px;
-  color: color-mix(in srgb, var(--color-ink-soft, #58747d) 58%, transparent);
+  color: color-mix(in srgb, var(--color-ink-soft) 58%, transparent);
   font-size: 0.75rem;
   letter-spacing: 2px;
 }
@@ -346,13 +329,13 @@
   border: 1px solid var(--ai-border);
   border-bottom: 0;
   border-radius: 22px 22px 0 0;
-  background: color-mix(in srgb, var(--color-surface, #fff) 66%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 66%, transparent);
 }
 .source-ai-workspace__empty {
   max-width: 420px;
   margin: 24px auto;
   text-align: center;
-  color: var(--color-ink-soft, #58747d);
+  color: var(--color-ink-soft);
 }
 .source-ai-message {
   position: relative;
@@ -368,11 +351,11 @@
   margin-left: auto;
   padding: 10px 13px;
   border-radius: 18px 18px 5px 18px;
-  background: color-mix(in srgb, var(--color-accent, #56a9bd) 22%, var(--color-surface, #fff));
+  background: color-mix(in srgb, var(--color-accent) 22%, var(--color-surface));
 }
 .source-ai-message.is-user small {
   margin-top: 3px;
-  color: var(--color-ink-soft, #58747d);
+  color: var(--color-ink-soft);
   font-size: 0.68rem;
 }
 .source-ai-message__images {
@@ -410,7 +393,7 @@
   height: 30px;
   border: 1px solid var(--ai-border);
   border-radius: 50%;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
 }
 .source-ai-message__avatar svg {
   width: 19px;
@@ -429,7 +412,7 @@
   padding: 0;
   border: 1px solid var(--ai-border);
   border-radius: 50%;
-  background: var(--color-surface, #fff);
+  background: var(--color-surface);
   color: inherit;
 }
 .source-ai-message__thought svg {
@@ -443,7 +426,7 @@
   padding: 10px 12px;
   border: 1px solid var(--ai-border);
   border-radius: 7px 18px 18px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 82%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
 }
 .source-ai-message__toolbar,
 .source-ai-message__actions {
@@ -461,10 +444,6 @@
 .source-ai-message__details button {
   min-height: 30px;
   padding: 4px 7px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
   font-size: 0.78rem;
 }
 .source-ai-message__toolbar > button {
@@ -474,7 +453,6 @@
 }
 .source-ai-message__toolbar > button + button {
   border-left: 1px solid var(--ai-border);
-  border-radius: 0 8px 8px 0;
 }
 .source-ai-message__toolbar svg {
   width: 16px;
@@ -490,7 +468,7 @@
   text-align: left;
 }
 .source-ai-message__consent small {
-  color: var(--color-ink-soft, #58747d);
+  color: var(--color-ink-soft);
   font-size: 0.66rem;
   font-weight: 500;
 }
@@ -533,7 +511,7 @@
   margin: 0;
 }
 .source-ai-message__details dt {
-  color: var(--color-ink-soft, #58747d);
+  color: var(--color-ink-soft);
 }
 .source-ai-message__details dd {
   min-width: 0;
@@ -552,7 +530,7 @@
   border: 1px solid var(--ai-border);
   border-top: 0;
   border-radius: 0 0 22px 22px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 72%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
   backdrop-filter: blur(18px);
 }
 .source-ai-workspace__composer-row {
@@ -595,10 +573,7 @@
   min-width: 20px;
   min-height: 20px;
   padding: 0;
-  border: 1px solid var(--ai-border);
-  border-radius: 50%;
-  background: var(--color-surface, #fff);
-  color: var(--color-ink, #163846);
+  border-radius: var(--button-radius, 50%);
   font-size: 1rem;
   line-height: 1;
 }
@@ -608,10 +583,6 @@
   max-height: 110px;
   resize: vertical;
   padding: 11px 12px;
-  border: 1px solid var(--ai-border);
-  border-radius: 16px;
-  background: var(--color-surface, #fff);
-  color: inherit;
   font: inherit;
 }
 .source-ai-workspace__composer button {
@@ -619,20 +590,16 @@
   place-items: center;
   min-width: 44px;
   min-height: 44px;
-  border: 0;
-  border-radius: 14px;
-  background: var(--color-accent, #56a9bd);
-  color: var(--color-on-accent, #fff);
 }
 .source-ai-workspace__composer .source-ai-workspace__add-image {
   min-width: 44px;
-  background: color-mix(in srgb, var(--color-surface, #fff) 82%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
   border: 1px solid var(--ai-border);
-  color: var(--color-accent, #56a9bd);
+  color: var(--color-accent);
 }
 .source-ai-workspace__composer .source-ai-workspace__send {
-  background: var(--color-accent, #56a9bd);
-  color: var(--color-on-accent, #fff);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
 }
 .source-ai-workspace__composer button:disabled {
   opacity: 0.42;
@@ -659,7 +626,7 @@
   font-size: 0.78rem;
 }
 .source-ai-workspace__error {
-  color: var(--color-danger, #b34f5f);
+  color: var(--color-danger);
 }
 
 @media (min-width: 780px) {

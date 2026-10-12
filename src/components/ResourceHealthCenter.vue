@@ -150,7 +150,7 @@ const storageSlices = computed<StorageUsageSlice[]>(() => {
             id: 'browser',
             label: '浏览器本机存储',
             bytes: browserStorage.value.usage,
-            color: '#407e79',
+            color: 'var(--usage-color-originals, var(--color-accent))',
           },
         ]
       : []
@@ -160,30 +160,54 @@ const storageSlices = computed<StorageUsageSlice[]>(() => {
       id: 'originals',
       label: '资源原件与恢复目录',
       bytes: info.libraryBytes ?? info.objectBytes,
-      color: '#407e79',
+      color: 'var(--usage-color-originals, var(--color-accent))',
     },
     {
       id: 'database',
       label: '文字、设置与查询记录',
       bytes: info.internalBreakdown?.databaseBytes ?? info.nativeDatabase?.fileBytes ?? 0,
-      color: '#b1794a',
+      color: 'var(--usage-color-database, var(--color-warning))',
     },
     {
       id: 'assets',
       label: '图片等素材文件',
       bytes: groups?.['srl-app-data'] ?? 0,
-      color: '#7a719e',
+      color:
+        'var(--usage-color-assets, color-mix(in srgb, var(--color-accent) 60%, var(--color-danger)))',
     },
-    { id: 'apps', label: '内置 APP 程序', bytes: groups?.['official-apps'] ?? 0, color: '#b15966' },
+    {
+      id: 'apps',
+      label: '内置 APP 程序',
+      bytes: groups?.['official-apps'] ?? 0,
+      color: 'var(--usage-color-apps, var(--color-danger))',
+    },
     {
       id: 'intake',
       label: '接收暂存文件',
       bytes: groups?.['srl-shared-intake'] ?? 0,
-      color: '#759052',
+      color: 'var(--usage-color-intake, var(--color-success))',
     },
-    { id: 'webview', label: '网页容器', bytes: info.webViewBytes ?? 0, color: '#557fa6' },
-    { id: 'cache', label: '临时缓存', bytes: info.cacheBytes ?? 0, color: '#b8943e' },
-    { id: 'models', label: '旧翻译模型', bytes: retiredModel.value?.bytes ?? 0, color: '#956b82' },
+    {
+      id: 'webview',
+      label: '网页容器',
+      bytes: info.webViewBytes ?? 0,
+      color:
+        'var(--usage-color-webview, color-mix(in srgb, var(--color-accent) 70%, var(--color-surface-raised)))',
+    },
+    {
+      id: 'cache',
+      label: '临时缓存',
+      bytes: info.cacheBytes ?? 0,
+      color:
+        'var(--usage-color-cache, color-mix(in srgb, var(--color-warning) 70%, var(--color-surface-raised)))',
+    },
+    {
+      id: 'models',
+      label: '旧翻译模型',
+      bytes: retiredModel.value?.bytes ?? 0,
+      color:
+        'var(--usage-color-models, color-mix(in srgb, var(--color-danger) 65%, var(--color-accent)))',
+    },
   ]
   const known = values.reduce((sum, item) => sum + item.bytes, 0)
   return [
@@ -192,7 +216,7 @@ const storageSlices = computed<StorageUsageSlice[]>(() => {
       id: 'other',
       label: '其他应用数据',
       bytes: Math.max(0, (info.totalBytes ?? known) - known),
-      color: '#7f8a88',
+      color: 'var(--usage-color-other, var(--color-ink-soft))',
     },
   ].filter((item) => item.bytes > 0)
 })
@@ -1311,12 +1335,12 @@ async function exportDiagnostics(): Promise<void> {
 
 .resource-health__issues article {
   padding: 0.6rem;
-  border-left: 0.2rem solid #c78a34;
-  background: rgb(255 255 255 / 42%);
+  border-left: 0.2rem solid var(--color-warning);
+  background: var(--color-warning-soft);
 }
 
 .resource-health__issues article.is-error {
-  border-left-color: #a63731;
+  border-left-color: var(--color-danger);
 }
 
 .resource-health__issues p {

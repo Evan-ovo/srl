@@ -7,6 +7,25 @@ import type { OfficialAppPackageStorage } from '../storage/OfficialAppPackageSto
 import type { InstalledOfficialApp, OfficialAppId, OfficialAppPackage } from '../types/OfficialApp'
 
 describe('official APP package lifecycle', () => {
+  it('excludes retired installed APPs without deleting their records or files', async () => {
+    const { service } = await fixture()
+    await service.install('draw')
+    const retiredId = 'removedApp' as OfficialAppId
+    const retired = { ...records.get('draw')!, id: retiredId }
+    records.set(retiredId, retired)
+    const deleteFile = vi.spyOn(storage, 'deleteFile')
+    storage.get = vi.fn(async (id) => records.get(id))
+
+    expect((await service.list()).map((app) => app.id)).toEqual(['draw'])
+    expect(service.installedSnapshot.map((app) => app.id)).toEqual(['draw'])
+    expect(await service.getReadyPackage(retiredId)).toBeUndefined()
+    await expect(service.install(retiredId)).rejects.toThrow('APP 标识无效')
+    expect(records.get(retiredId)).toEqual(retired)
+    expect(deleteFile).not.toHaveBeenCalled()
+    expect(clearData).not.toHaveBeenCalled()
+    expect(clearStyles).not.toHaveBeenCalled()
+  })
+
   it('retains the installed directory across entries and publishes real installation changes', async () => {
     const { service } = await fixture()
     const list = vi.spyOn(storage, 'list')

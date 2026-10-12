@@ -32,19 +32,19 @@
 .external-app-host__fullscreen-toggle {
   min-height: var(--size-touch);
   padding: 0.45rem 0.75rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.8rem;
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, 0.8rem);
+  color: var(--button-color, var(--color-accent));
+  background: var(--button-background, var(--color-surface-raised));
   font: inherit;
   font-size: 0.75rem;
   cursor: pointer;
 }
 
 .external-app-host__fullscreen-toggle[aria-pressed='true'] {
-  color: var(--color-surface-raised);
-  border-color: var(--color-accent);
-  background: var(--color-accent);
+  color: var(--selection-color, var(--color-on-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent));
 }
 
 .external-app-host__feedback {
@@ -91,10 +91,10 @@
   min-height: var(--size-touch);
   margin-top: 0.5rem;
   padding: 0.4rem 0.65rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.75rem;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, 0.75rem);
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
   font: inherit;
   font-size: 0.75rem;
   cursor: pointer;
@@ -165,7 +165,7 @@
   min-height: 0;
   height: 100%;
   border: 0;
-  background: #f7fbfb;
+  background: var(--color-surface-raised);
 }
 
 .external-app-host__loading {
@@ -173,7 +173,7 @@
   inset: auto 0 0;
   margin: 0;
   padding: 0.6rem 0.8rem;
-  color: #fff;
+  color: var(--color-on-brand);
   background: var(--external-app-splash, var(--color-accent));
   font-size: 0.78rem;
   text-align: center;
@@ -197,7 +197,7 @@
   min-height: var(--app-viewport-height);
   border: 0;
   border-radius: 0;
-  background: #f7fbfb;
+  background: var(--color-surface-raised);
   box-shadow: none;
 }
 
@@ -309,10 +309,10 @@
   height: 2.25rem;
   place-items: center;
   padding: 0;
-  border: 1px solid color-mix(in srgb, #fff 42%, transparent);
+  border: 1px solid var(--button-border, var(--glass-border));
   border-radius: 999px;
-  color: #fff;
-  background: rgb(0 0 0 / 52%);
+  color: var(--button-color, var(--color-on-brand));
+  background: var(--button-background, var(--viewer-control-background));
   backdrop-filter: blur(10px);
   cursor: pointer;
 }
@@ -363,7 +363,7 @@
   display: grid;
   place-items: end center;
   padding: 1rem;
-  background: color-mix(in srgb, var(--color-ink) 48%, transparent);
+  background: var(--overlay-background);
 }
 
 dialog.external-app-permission {
@@ -380,11 +380,11 @@ dialog.external-app-permission {
   width: min(42rem, 100%);
   gap: 0.85rem;
   padding: 1rem;
-  border: 1px solid var(--glass-border);
-  border-radius: 1.25rem;
+  border: 1px solid var(--dialog-border, var(--glass-border));
+  border-radius: var(--dialog-radius, 1.25rem);
   color: var(--color-ink);
-  background: var(--color-surface-raised);
-  box-shadow: var(--glass-shadow);
+  background: var(--dialog-background, var(--color-surface-raised));
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 .external-app-permission__panel header,
@@ -431,7 +431,7 @@ dialog.external-app-permission {
   border-radius: 0.8rem;
   color: var(--color-ink);
   background: var(--color-canvas);
-  font: 0.75rem/1.5 var(--font-mono, monospace);
+  font: 0.75rem/1.5 var(--font-code, monospace);
   white-space: pre-wrap;
 }
 
@@ -442,10 +442,10 @@ dialog.external-app-permission {
 .external-app-permission__panel button {
   min-height: var(--size-touch);
   padding: 0.55rem 0.75rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.8rem;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, 0.8rem);
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
   font: inherit;
   font-size: 0.78rem;
   cursor: pointer;
@@ -458,9 +458,9 @@ dialog.external-app-permission {
 }
 
 .external-app-permission__always {
-  color: var(--color-surface-raised) !important;
-  border-color: var(--color-accent) !important;
-  background: var(--color-accent) !important;
+  color: var(--button-primary-color, var(--color-on-accent)) !important;
+  border-color: var(--button-primary-border, var(--color-accent)) !important;
+  background: var(--button-primary-background, var(--color-accent)) !important;
 }
 
 .external-app-resource-picker__panel {
@@ -470,11 +470,11 @@ dialog.external-app-permission {
   gap: 0.8rem;
   overflow: hidden;
   padding: 1rem;
-  border: 1px solid var(--glass-border);
-  border-radius: 1.25rem;
+  border: 1px solid var(--dialog-border, var(--glass-border));
+  border-radius: var(--dialog-radius, 1.25rem);
   color: var(--color-ink);
-  background: var(--color-surface-raised);
-  box-shadow: var(--glass-shadow);
+  background: var(--dialog-background, var(--color-surface-raised));
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
 .external-app-resource-picker__panel header {
@@ -508,10 +508,10 @@ dialog.external-app-permission {
 .external-app-resource-picker__panel footer button {
   min-width: var(--size-touch);
   min-height: var(--size-touch);
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.8rem;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line-strong));
+  border-radius: var(--button-radius, 0.8rem);
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
   font: inherit;
   cursor: pointer;
 }
@@ -526,10 +526,10 @@ dialog.external-app-permission {
   min-height: var(--size-touch);
   box-sizing: border-box;
   padding-inline: 0.8rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.8rem;
+  border: 1px solid var(--control-border, var(--color-line-strong));
+  border-radius: var(--control-radius, 0.8rem);
   color: var(--color-ink);
-  background: var(--color-canvas);
+  background: var(--control-background, var(--color-canvas));
   font: inherit;
 }
 
@@ -545,11 +545,11 @@ dialog.external-app-permission {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 0.15rem 0.65rem;
   padding: 0.7rem 0.75rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.8rem;
+  border: 1px solid var(--button-border, var(--color-line));
+  border-radius: var(--button-radius, 0.8rem);
   text-align: left;
-  color: var(--color-ink);
-  background: var(--color-canvas);
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-canvas));
   font: inherit;
   cursor: pointer;
 }
@@ -606,6 +606,7 @@ dialog.external-app-permission {
   .external-app-permission {
     padding: var(--safe-top) max(var(--mobile-gutter), var(--safe-right)) 0
       max(var(--mobile-gutter), var(--safe-left));
+    background: var(--overlay-background);
   }
 
   .external-app-resource-picker__panel,
@@ -622,6 +623,10 @@ dialog.external-app-permission {
 
   .external-app-resource-picker__panel {
     max-height: min(82dvh, 44rem, 100%);
+    border: 1px solid var(--dialog-border, var(--glass-border));
+    border-radius: var(--dialog-radius, 1.25rem);
+    background: var(--dialog-background, var(--color-surface-raised));
+    box-shadow: var(--dialog-shadow, var(--glass-shadow));
   }
 }
 

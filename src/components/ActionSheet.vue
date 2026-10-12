@@ -17,8 +17,10 @@ const props = withDefaults(
     title: string
     description?: string
     actions: readonly ActionSheetAction[]
+    aboveTutorial?: boolean
+    centered?: boolean
   }>(),
-  { description: undefined },
+  { description: undefined, aboveTutorial: false, centered: false },
 )
 
 const emit = defineEmits<{
@@ -108,7 +110,16 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition name="action-sheet">
-      <div v-if="open" class="action-sheet" role="presentation" @click.self="close">
+      <div
+        v-if="open"
+        class="action-sheet"
+        :class="{
+          'action-sheet--tutorial-help': aboveTutorial,
+          'action-sheet--centered': centered,
+        }"
+        role="presentation"
+        @click.self="close"
+      >
         <section
           ref="panel"
           class="action-sheet__panel"
@@ -158,8 +169,19 @@ onBeforeUnmount(() => {
   display: grid;
   align-items: end;
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) 0 max(1rem, var(--safe-left));
-  background: rgb(10 15 25 / 48%);
+  background: var(--overlay-background);
   backdrop-filter: blur(4px);
+}
+.action-sheet--tutorial-help {
+  z-index: 1240;
+}
+.action-sheet--centered {
+  align-items: center;
+  padding-bottom: max(1rem, var(--safe-bottom));
+}
+.action-sheet--centered .action-sheet__panel {
+  padding-bottom: 0;
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
 }
 
 .action-sheet__panel {
@@ -167,11 +189,9 @@ onBeforeUnmount(() => {
   max-height: min(78dvh, 42rem);
   margin: 0 auto;
   overflow: auto;
-  border: 1px solid var(--color-line-strong);
   padding-bottom: var(--safe-bottom);
-  border-radius: 1.25rem 1.25rem 0 0;
-  background: var(--color-surface, #fff);
-  box-shadow: 0 1.2rem 3rem rgb(5 10 20 / 24%);
+  border-radius: var(--dialog-radius, var(--glass-radius-panel))
+    var(--dialog-radius, var(--glass-radius-panel)) 0 0;
 }
 
 .action-sheet header {
@@ -196,7 +216,7 @@ onBeforeUnmount(() => {
   min-width: 2.75rem;
   min-height: 2.75rem;
   border: 0;
-  background: transparent;
+  background: var(--button-background, transparent);
   font-size: 1.5rem;
 }
 
@@ -210,10 +230,6 @@ onBeforeUnmount(() => {
   display: grid;
   min-height: 3.25rem;
   padding: 0.7rem 0.85rem;
-  border: 1px solid var(--color-line);
-  border-radius: 0.85rem;
-  background: transparent;
-  color: inherit;
   text-align: left;
 }
 
@@ -230,12 +246,13 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
 }
 .action-sheet__actions > .action-sheet__action--selected {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft, var(--color-surface-raised));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft, var(--color-surface-raised)));
+  color: var(--selection-color, var(--color-ink));
 }
 
-.action-sheet__action--danger {
-  color: var(--color-danger, #b42318) !important;
+.action-sheet__actions > .action-sheet__action--danger {
+  color: var(--color-danger);
 }
 
 .action-sheet-enter-active,
@@ -263,7 +280,7 @@ onBeforeUnmount(() => {
 
   .action-sheet__panel {
     padding-bottom: 0;
-    border-radius: 1.25rem;
+    border-radius: var(--dialog-radius, var(--glass-radius-panel));
   }
 }
 </style>

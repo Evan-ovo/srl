@@ -89,50 +89,6 @@ export function useTavernBridgeCenter(
   const tavernItems = ref<TavernResourceItem[]>([])
 
   const selectedTavernIds = ref(new Set<string>())
-  const selectedChatScriptIds = ref(new Set<string>())
-  const chatScriptItems = ref<TavernResourceItem[]>([])
-  const chatScriptSearch = ref('')
-  const chatScriptLimit = ref(50)
-  const matchingChatScripts = computed(() =>
-    chatScriptItems.value.filter((item) =>
-      item.name.toLocaleLowerCase().includes(chatScriptSearch.value.toLocaleLowerCase()),
-    ),
-  )
-  const visibleChatScripts = computed(() =>
-    matchingChatScripts.value.slice(0, chatScriptLimit.value),
-  )
-  watch(
-    () => state.value.tavernOrigin,
-    () => {
-      selectedChatScriptIds.value = new Set()
-      chatScriptItems.value = []
-      chatScriptSearch.value = ''
-    },
-  )
-  async function loadChatScriptSources(): Promise<void> {
-    if (busy.value) return
-    const origin = state.value.tavernOrigin
-    busy.value = true
-    error.value = ''
-    try {
-      const items = await tavernBridgeService.listResources()
-      if (disposed || state.value.tavernOrigin !== origin) return
-      chatScriptItems.value = items.filter(
-        (item) => item.kind === 'scriptGlobal' || item.kind === 'scriptPreset',
-      )
-      selectedChatScriptIds.value = new Set(
-        [...selectedChatScriptIds.value].filter((id) =>
-          chatScriptItems.value.some((item) => item.id === id),
-        ),
-      )
-      chatScriptLimit.value = 50
-    } catch (reason) {
-      error.value = reason instanceof Error ? reason.message : '无法读取可附带脚本'
-    } finally {
-      busy.value = false
-    }
-  }
-
   const selectedLocalIds = ref(new Set<string>())
 
   const tavernReceiveFilter = ref<TavernReceiveFilter>(props.initialKind ?? 'all')
@@ -824,13 +780,6 @@ export function useTavernBridgeCenter(
     tavernPageCount,
     selectAllTavern,
     selectedTavernIds,
-    selectedChatScriptIds,
-    chatScriptItems,
-    chatScriptSearch,
-    matchingChatScripts,
-    visibleChatScripts,
-    chatScriptLimit,
-    loadChatScriptSources,
     showOnlySelectedTavern,
     toggleSelection,
     tavernResourceLabel,
@@ -895,7 +844,6 @@ export function useTavernBridgeCenter(
       localDirectEnabled,
       deviceCode,
       selectedTavernIds,
-      selectedChatScriptIds,
       includeChatScripts,
       tavernReceiveFilter,
       tavernReceiveFilters,

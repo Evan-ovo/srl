@@ -58,7 +58,10 @@ describe('shared world book browser', () => {
     Element.prototype.scrollIntoView = vi.fn()
     await wrapper.get('input').setValue('共同')
     await wrapper.findAll('.lore-pagination button')[1]!.trigger('click')
-    expect(wrapper.get('.lore-pagination span').text()).toBe('2 / 3')
+    expect(
+      (wrapper.get('input[aria-label="跳转到世界书条目页"]').element as HTMLInputElement).value,
+    ).toBe('2')
+    expect(wrapper.get('.lore-pagination span').text()).toBe('/ 3')
     await wrapper.findAll('.lore-row')[2]!.trigger('click')
     expect(wrapper.get('.lore-detail h4').text()).toBe('条目12')
     expect(wrapper.get('pre').text()).toBe('<script>unsafe()</script>')
@@ -66,7 +69,10 @@ describe('shared world book browser', () => {
     await wrapper.get('button[aria-label="返回条目列表"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('input').element.value).toBe('共同')
-    expect(wrapper.get('.lore-pagination span').text()).toBe('2 / 3')
+    expect(
+      (wrapper.get('input[aria-label="跳转到世界书条目页"]').element as HTMLInputElement).value,
+    ).toBe('2')
+    expect(wrapper.get('.lore-pagination span').text()).toBe('/ 3')
     expect(document.activeElement?.getAttribute('data-entry-key')).toBe('12:12')
     await wrapper.setProps({ entries })
     expect(wrapper.get('input').element.value).toBe('')
@@ -87,6 +93,23 @@ describe('shared world book browser', () => {
     await wrapper.get('input').setValue('条目9999')
     expect(wrapper.findAll('.lore-row')).toHaveLength(1)
     expect(wrapper.get('.lore-row').text()).toContain('条目9999')
+    wrapper.unmount()
+  })
+  it('jumps to the requested page using a compact input in the existing page position', async () => {
+    const many = readWorldBookEntries(
+      Array.from({ length: 23 }, (_, index) => ({
+        uid: index,
+        comment: `条目${index + 1}`,
+        position: 0,
+      })),
+    )
+    const wrapper = mount(WorldBookBrowser, { props: { entries: many } })
+    const pageInput = wrapper.get('input[aria-label="跳转到世界书条目页"]')
+    expect(pageInput.element.getAttribute('style')).toContain('width: 1ch')
+    await pageInput.setValue('3')
+    expect((pageInput.element as HTMLInputElement).value).toBe('3')
+    expect(wrapper.get('.lore-pagination span').text()).toBe('/ 3')
+    expect(wrapper.get('.lore-row strong').text()).toBe('条目21')
     wrapper.unmount()
   })
   it('uses the shared browser in both actual resource detail entries', async () => {

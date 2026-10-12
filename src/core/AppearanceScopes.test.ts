@@ -22,6 +22,24 @@ const preset: CustomCssPreset = {
   updatedAt: '',
 }
 describe('registry-owned appearance scopes', () => {
+  it('round trips and compiles full global and APP CSS beyond 200000 characters', () => {
+    const globalCss = `/*${'g'.repeat(250_000)}*/\n:root { --global-tail: complete; }`
+    const localCss = `/*${'s'.repeat(210_000)}*/\n:scope { --local-tail: complete; }`
+    const restored = parseAppearancePreset(
+      JSON.parse(
+        JSON.stringify({
+          format: 'srl-appearance-preset',
+          version: 1,
+          preset: { ...preset, globalCss, scopedCss: { appearance: localCss } },
+        }),
+      ),
+    )
+    expect(restored.globalCss).toBe(globalCss)
+    expect(restored.scopedCss.appearance).toBe(localCss)
+    const compiled = compileAppearancePreset(restored)
+    expect(compiled).toContain(globalCss)
+    expect(compiled).toContain(localCss)
+  })
   it('covers every visible registry entry, keeping aliases and adding future IDs without an editor list', () => {
     expect(
       appearanceScopes()

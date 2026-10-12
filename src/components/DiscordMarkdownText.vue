@@ -25,24 +25,26 @@ const blocks = computed(() => parseDiscordMarkdown(props.content))
         <span v-if="block.kind === 'list-item'" class="discord-markdown__marker">
           {{ /^\d/u.test(block.marker ?? '') ? block.marker : '•' }}
         </span>
-        <template v-for="(token, tokenIndex) in block.tokens" :key="tokenIndex">
-          <a
-            v-if="token.href"
-            :class="[
-              { 'is-discord-message': token.discordMessage },
-              ...token.marks.map((mark) => `is-${mark}`),
-            ]"
-            :href="token.href"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {{ token.text }}<template v-if="token.discordMessage"> ↗</template>
-          </a>
-          <code v-else-if="token.marks.includes('code')" class="discord-markdown__inline-code">
-            {{ token.text }}
-          </code>
-          <span v-else :class="token.marks.map((mark) => `is-${mark}`)">{{ token.text }}</span>
-        </template>
+        <span class="discord-markdown__content">
+          <template v-for="(token, tokenIndex) in block.tokens" :key="tokenIndex">
+            <a
+              v-if="token.href"
+              :class="[
+                { 'is-discord-message': token.discordMessage },
+                ...token.marks.map((mark) => `is-${mark}`),
+              ]"
+              :href="token.href"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {{ token.text }}<template v-if="token.discordMessage"> ↗</template>
+            </a>
+            <code v-else-if="token.marks.includes('code')" class="discord-markdown__inline-code">
+              {{ token.text }}
+            </code>
+            <span v-else :class="token.marks.map((mark) => `is-${mark}`)">{{ token.text }}</span>
+          </template>
+        </span>
       </div>
     </template>
   </div>
@@ -95,8 +97,12 @@ const blocks = computed(() => parseDiscordMarkdown(props.content))
   align-items: start;
 }
 
+.discord-markdown__content {
+  min-width: 0;
+}
+
 .discord-markdown__marker {
-  color: var(--text-muted, #71878e);
+  color: var(--color-ink-soft, #71878e);
   font-variant-numeric: tabular-nums;
 }
 
@@ -107,14 +113,14 @@ const blocks = computed(() => parseDiscordMarkdown(props.content))
   margin: 0.35em 0;
   padding: 0.7em 0.8em;
   overflow-x: auto;
-  border: 1px solid var(--line-soft, #d7e3e5);
+  border: 1px solid var(--color-line, #d7e3e5);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-muted, #edf3f4) 82%, transparent);
+  background: color-mix(in srgb, var(--glass-panel-muted) 82%, transparent);
   white-space: pre;
 }
 
 .discord-markdown__code-block small {
-  color: var(--text-muted, #71878e);
+  color: var(--color-ink-soft, #71878e);
   font-family: inherit;
 }
 
@@ -126,11 +132,11 @@ const blocks = computed(() => parseDiscordMarkdown(props.content))
 .discord-markdown__inline-code {
   padding: 0.08em 0.28em;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--surface-muted, #edf3f4) 88%, transparent);
+  background: color-mix(in srgb, var(--glass-panel-muted) 88%, transparent);
 }
 
 .discord-markdown a {
-  color: var(--accent-strong, #397888);
+  color: var(--color-accent, #397888);
   font-weight: 760;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, currentColor 28%, transparent);
@@ -138,7 +144,7 @@ const blocks = computed(() => parseDiscordMarkdown(props.content))
 }
 
 .discord-markdown a.is-discord-message {
-  color: #5262c7;
+  color: var(--color-accent);
 }
 
 .is-bold {

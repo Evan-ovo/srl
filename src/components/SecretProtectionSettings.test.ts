@@ -44,6 +44,19 @@ beforeEach(() => {
 function button(w: ReturnType<typeof mount>, label: string) {
   return w.findAll('button').find((b) => b.text() === label)!
 }
+it('opens the existing password form immediately for task unlock and emits readiness only after success', async () => {
+  const w = mount(SecretProtectionSettings, { props: { unlockOnly: true } })
+  await flushPromises()
+  expect(w.findAll('input')).toHaveLength(2)
+  expect(w.emitted('ready')).toBeUndefined()
+  await w.findAll('input')[0]!.setValue('shared-password')
+  await w.findAll('input')[1]!.setValue('shared-password')
+  await w.find('form').trigger('submit')
+  await flushPromises()
+  expect(state.setPassword).toHaveBeenCalledWith('shared-password')
+  expect(w.emitted('ready')).toHaveLength(1)
+  expect(w.findAll('input')).toHaveLength(0)
+})
 it('sets the shared password only after matching confirmation and clears the form on success', async () => {
   const w = mount(SecretProtectionSettings)
   await flushPromises()

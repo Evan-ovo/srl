@@ -15,6 +15,29 @@
 .assistant-pet--walk {
   animation: assistant-pet-stroll 16s ease-in-out;
 }
+/* Tutorial drawers occupy 1200/1220; assistance remains above them, help sheets at 1240. */
+.assistant-pet--assistance {
+  z-index: 1230;
+}
+.assistant-pet-bubble.assistant-pet-bubble--assistance {
+  z-index: 1231;
+}
+.assistant-pet-help-question {
+  cursor: default;
+}
+.assistant-pet-help-question > div {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.assistant-pet-help-question button {
+  flex: 1;
+  min-height: 44px;
+  border: 0;
+  background: var(--button-background, transparent);
+  color: var(--button-color, var(--color-accent));
+  font-size: 14px;
+}
 .assistant-pet--travelling {
   transition:
     left var(--pet-travel-duration) linear,
@@ -30,9 +53,7 @@
   border-radius: 18px;
   background: var(--color-surface-raised);
   color: var(--color-ink);
-  box-shadow:
-    0 5px 18px rgb(24 68 76 / 12%),
-    inset 0 1px 0 rgb(255 255 255 / 12%);
+  box-shadow: var(--notice-shadow, var(--glass-shadow));
   font-size: 13px;
   font-weight: 500;
   line-height: 1.45;
@@ -139,11 +160,11 @@
   max-height: none;
   margin: 0;
   padding: 0 12px 8px;
-  border: 1px solid var(--color-line);
-  border-radius: 20px;
-  background: var(--color-surface);
+  border: 1px solid var(--dialog-border, var(--color-line));
+  border-radius: var(--dialog-radius, 20px);
+  background: var(--dialog-background, var(--color-surface));
   color: var(--color-ink);
-  box-shadow: 0 12px 40px rgb(0 0 0 / 18%);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
   overflow: hidden;
 }
 .assistant-pet-dialog:not([open]) {

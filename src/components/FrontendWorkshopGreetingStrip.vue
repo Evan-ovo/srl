@@ -147,14 +147,10 @@ button {
   flex-shrink: 0;
   min-height: 32px;
   padding: 4px 10px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
 }
 button[aria-pressed='true'] {
-  color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .fw-greeting-strip__fold {
   padding: 0 8px 4px 76px;
@@ -163,7 +159,7 @@ summary {
   padding: 5px 0;
   cursor: pointer;
   font-size: 12px;
-  color: var(--color-ink-soft);
+  color: var(--button-color, var(--color-ink-soft));
 }
 .fw-greeting-strip__editor {
   display: grid;
@@ -177,10 +173,6 @@ textarea {
   min-height: 72px;
   box-sizing: border-box;
   resize: vertical;
-  background: var(--color-surface-raised);
-  color: var(--color-ink);
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
 }
 .fw-greeting-strip__editor > div {
   display: flex;

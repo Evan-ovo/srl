@@ -6,7 +6,6 @@ export const OFFICIAL_APP_IDS = [
   'imageGeneration',
   'imageAlbum',
   'userPersona',
-  'resourceBundle',
   'tavernBridge',
   'assistant',
 ] as const
@@ -102,7 +101,6 @@ export const OFFICIAL_APP_DATA_DESCRIPTION: Record<OfficialAppId, string> = {
   imageGeneration: '生图草稿、模板、接口设置及本机保存的生图密钥；已保存的相册图片保留',
   imageAlbum: '全部本地相册记录及原图；云端图片和资源库中的副本保留',
   userPersona: '人设模板；资源库中的人设文件保留',
-  resourceBundle: '已保存的配套套装；资源库中的各项原始资源保留',
   tavernBridge: '当前互传会话随页面关闭结束；已归档的资源和酒馆原件保留',
   assistant:
     '本机助手对话、记忆、偏好、独立 APP 项目与任务模板；共用 API 配置和助手 CSS 单独选择是否清理',

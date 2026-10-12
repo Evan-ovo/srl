@@ -101,9 +101,5 @@ function reload() {
 .official-app-install button {
   min-height: 44px;
   padding: 0.5rem 1rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: var(--radius-control);
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
 }
 </style>

@@ -1,4 +1,9 @@
 {
   "defaultMaxLines": 2000,
-  "exceptions": {}
+  "exceptions": {
+    "src/services/DiscordSetupService.ts": {
+      "maxLines": 2897,
+      "reason": "Public inherited this existing shared Discord setup flow at 2897 lines; keep the current file size bounded until a focused split is warranted."
+    }
+  }
 }

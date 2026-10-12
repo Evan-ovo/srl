@@ -7,10 +7,7 @@
   min-width: 0;
   min-height: 0;
   color: var(--color-ink);
-  background:
-    radial-gradient(circle at 0 0, rgba(102, 207, 213, 0.16), transparent 23rem),
-    radial-gradient(circle at 100% 10%, rgba(123, 160, 228, 0.12), transparent 25rem),
-    var(--color-canvas);
+  background: var(--dialog-background, var(--color-canvas));
   overflow: hidden;
 }
 
@@ -36,9 +33,6 @@
   min-width: 0;
   min-height: 2.25rem;
   padding: 0.35rem 0.25rem;
-  border: 0;
-  color: var(--color-ink-soft);
-  background: transparent;
   font-size: var(--text-body);
   font-weight: 650;
 }
@@ -61,7 +55,7 @@
 }
 
 .frontend-workshop-source-components__scopes button.is-active {
-  color: var(--color-accent);
+  color: var(--selection-color, var(--color-accent));
 }
 
 .frontend-workshop-source-components__scopes button.is-active::after {
@@ -203,9 +197,6 @@
 .frontend-workshop-source-components__list footer button {
   min-height: var(--control-visual-secondary);
   padding: 0.25rem 0.55rem;
-  border: 0;
-  color: var(--color-accent);
-  background: transparent;
   font-size: var(--text-caption);
 }
 
@@ -306,10 +297,6 @@
 .frontend-workshop-source-components__detail-actions button {
   min-height: var(--control-visual-secondary);
   padding-inline: 0.8rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-accent);
-  background: var(--glass-panel);
 }
 
 .frontend-workshop-source-components__ai-create,
@@ -348,10 +335,6 @@
   width: 100%;
   min-width: 0;
   padding: 0.6rem 0.65rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-ink);
-  background: var(--glass-panel-strong);
   font: inherit;
   resize: vertical;
 }
@@ -370,8 +353,6 @@
 .frontend-workshop-source-components__ai-edit > footer button {
   min-height: var(--control-visual-secondary);
   padding-inline: 0.85rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
 }
 
 .frontend-workshop-source-components__runtime-metadata {
@@ -411,16 +392,11 @@
 .frontend-workshop-source-components__runtime-metadata input,
 .frontend-workshop-source-components__runtime-metadata textarea {
   min-height: var(--size-touch);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-ink);
-  background: var(--glass-panel);
   font: inherit;
 }
 
 .frontend-workshop-source-components__runtime-metadata button {
   padding-inline: 0.65rem;
-  color: var(--color-accent);
 }
 
 .frontend-workshop-source-components__dependency-list {
@@ -447,7 +423,6 @@
   width: 100%;
   min-width: 0;
   padding: 0.45rem 0.55rem;
-  background: var(--glass-panel-strong);
 }
 
 .frontend-workshop-source-components__dependency-list label,
@@ -527,11 +502,7 @@
 .frontend-workshop-source-components__policy textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
   padding: 0.58rem 0.65rem;
-  color: var(--color-ink);
-  background: var(--glass-panel);
   font: inherit;
 }
 
@@ -560,11 +531,7 @@
 
 .frontend-workshop-source-components__policy > footer button {
   min-height: var(--control-visual-secondary);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
   padding-inline: 0.8rem;
-  color: var(--color-accent);
-  background: var(--glass-panel);
 }
 
 .frontend-workshop-source-components__public-share {
@@ -615,10 +582,6 @@
   min-width: 0;
   min-height: var(--size-touch);
   padding: 0.45rem 0.6rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-ink);
-  background: var(--glass-panel-strong);
   font:
     0.76rem/1.35 ui-monospace,
     SFMono-Regular,
@@ -636,10 +599,6 @@
 .frontend-workshop-source-components__public-share > footer button {
   min-height: var(--control-visual-secondary);
   padding: 0.3rem 0.7rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-accent);
-  background: var(--glass-panel);
 }
 
 .frontend-workshop-source-components__public-share > footer button.is-danger {
@@ -657,10 +616,6 @@
   flex: 0 0 auto;
   min-height: var(--control-visual-secondary);
   padding-inline: 0.65rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-accent);
-  background: var(--glass-panel);
 }
 
 .frontend-workshop-source-components__assets {
@@ -698,10 +653,6 @@
 .frontend-workshop-source-components__asset-editor button {
   min-height: var(--control-visual-secondary);
   padding: 0.3rem 0.65rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-accent);
-  background: var(--glass-panel);
 }
 
 .frontend-workshop-source-components__asset-editor {
@@ -728,10 +679,6 @@
   min-width: 0;
   min-height: var(--size-touch);
   padding: 0.45rem 0.6rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  color: var(--color-ink);
-  background: var(--glass-panel-strong);
   font:
     0.78rem/1.35 ui-monospace,
     SFMono-Regular,
@@ -784,7 +731,7 @@
   align-items: end;
   padding: 1rem max(0.7rem, var(--safe-right)) max(0.7rem, var(--safe-bottom))
     max(0.7rem, var(--safe-left));
-  background: rgba(5, 18, 24, 0.45);
+  background: var(--overlay-background);
 }
 
 .frontend-workshop-source-components__sheet {
@@ -793,10 +740,7 @@
   margin-inline: auto;
   padding: 0.35rem;
   overflow: hidden;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-panel);
-  background: var(--glass-panel-strong);
-  box-shadow: var(--glass-shadow);
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
 }
 
 .frontend-workshop-source-components__sheet header {
@@ -809,9 +753,6 @@
 .frontend-workshop-source-components__sheet header button {
   width: var(--size-touch);
   height: var(--size-touch);
-  border: 0;
-  color: var(--color-ink-soft);
-  background: transparent;
   font-size: 1.4rem;
 }
 
@@ -821,10 +762,7 @@
   justify-content: space-between;
   min-height: 3.4rem;
   padding: 0.55rem 0.65rem;
-  border: 0;
   border-top: 1px solid var(--glass-border);
-  color: var(--color-ink);
-  background: transparent;
   text-align: left;
 }
 

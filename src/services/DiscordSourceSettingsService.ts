@@ -134,6 +134,7 @@ function connectionIdentityChanged(
 ): boolean {
   return (
     previous.applicationId !== next.applicationId ||
+    previous.publicKey !== next.publicKey ||
     previous.workerBaseUrl !== next.workerBaseUrl ||
     previous.botToken !== next.botToken
   )
@@ -177,15 +178,72 @@ export async function saveDiscordSourceConnectionSettings(
   return withSettingsWrite(() => persistDiscordSourceConnectionSettings(value, credentialStore))
 }
 
+/** The setup owner supplies consent and a verified encrypted resource before replacing a target. */
+export async function replaceDiscordSourceConnectionSettings(
+  value: DiscordSourceConnectionSettings,
+  preserve: (previous: DiscordSourceConnectionSettings) => Promise<boolean>,
+  signal?: AbortSignal,
+  credentialStore: LocalCredentialRepository = localCredentialStore,
+  databaseChanged = false,
+): Promise<DiscordSourceConnectionSettings | undefined> {
+  return withSettingsWrite(async () => {
+    await initializeStoredCredentials(credentialStore)
+    const previous = loadDiscordSourceConnectionSettings()
+    const next = normalizeSettings(value)
+    signal?.throwIfAborted()
+    const configured = Boolean(
+      previous.applicationId || previous.publicKey || previous.botToken || previous.workerBaseUrl,
+    )
+    if (configured && (databaseChanged || connectionIdentityChanged(previous, next))) {
+      if (!(await preserve({ ...previous }))) return undefined
+      signal?.throwIfAborted()
+      const current = loadDiscordSourceConnectionSettings()
+      if (
+        connectionIdentityChanged(previous, current) ||
+        current.credentialPersistence !== previous.credentialPersistence ||
+        current.inboxLibraryId !== previous.inboxLibraryId ||
+        current.inboxSecret !== previous.inboxSecret
+      )
+        throw new Error('原连接在确认期间已变化，未切换；请重新核对')
+    }
+    try {
+      return await persistDiscordSourceConnectionSettings(
+        next,
+        credentialStore,
+        true,
+        databaseChanged,
+      )
+    } catch (error) {
+      // Credentials and ordinary settings cannot share a transaction. Restore the old target.
+      try {
+        if (previous.credentialPersistence !== 'session' && previous.botToken)
+          await credentialStore.save(CREDENTIAL_IDENTIFIER, previous.botToken)
+        else await credentialStore.clear(CREDENTIAL_IDENTIFIER)
+        if (previous.credentialPersistence !== 'session' && previous.inboxSecret)
+          await credentialStore.save(INBOX_CREDENTIAL_IDENTIFIER, previous.inboxSecret)
+        else await credentialStore.clear(INBOX_CREDENTIAL_IDENTIFIER)
+        currentSettings = previous
+        writeSanitizedSettings(previous)
+      } catch {
+        throw new Error('连接写入和回滚未能全部完成；旧配置密钥资源已保留，请恢复后再继续')
+      }
+      throw error
+    }
+  })
+}
+
 async function persistDiscordSourceConnectionSettings(
   value: DiscordSourceConnectionSettings,
   credentialStore: LocalCredentialRepository,
+  preservedSwitch = false,
+  databaseChanged = false,
 ): Promise<DiscordSourceConnectionSettings> {
   const previous = currentSettings ?? readStoredSettings()
   const sameInboxOwner =
+    !databaseChanged &&
     previous.applicationId === readString(value.applicationId, 64) &&
     previous.workerBaseUrl === normalizeDiscordWorkerBaseUrl(value.workerBaseUrl)
-  if (previous.inboxLibraryId && !sameInboxOwner) {
+  if (previous.inboxLibraryId && !sameInboxOwner && !preservedSwitch) {
     throw new Error(
       '请先领取待收帖子及资源任务并断开云端收件配对，再更改 Worker 地址或 Application ID。',
     )
@@ -198,7 +256,7 @@ async function persistDiscordSourceConnectionSettings(
     inboxPairCode: sameInboxOwner ? previous.inboxPairCode : undefined,
     inboxPairExpiresAt: sameInboxOwner ? previous.inboxPairExpiresAt : undefined,
   })
-  const changedIdentity = connectionIdentityChanged(previous, normalized)
+  const changedIdentity = databaseChanged || connectionIdentityChanged(previous, normalized)
   if (!changedIdentity) {
     normalized.workerVerifiedAt ??= previous.workerVerifiedAt
     normalized.commandCheckedAt ??= previous.commandCheckedAt

@@ -7,6 +7,7 @@ import { LOCAL_TAVERN_RELAY_BASE } from './TavernHttpRelayPort'
 import { tavernEnvelope } from './TavernBridgeProtocol'
 import { createChatArchive, readChatArchive } from './TavernChatArchiveCodec.mjs'
 import { hashBlob } from './HashService'
+import { checkRelayWorker, saveRelayWorkerBaseUrl } from './RelayWorkerSettingsService'
 
 interface BridgeServiceTestAccess {
   handlePortMessage(message: unknown): Promise<void>
@@ -522,6 +523,28 @@ describe('TavernBridgeService', () => {
         href: 'https://srl.example.test/',
       },
     })
+    const savedSettings = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => savedSettings.get(key) ?? null,
+      setItem: (key: string, value: string) => savedSettings.set(key, value),
+      removeItem: (key: string) => savedSettings.delete(key),
+    })
+    saveRelayWorkerBaseUrl('https://worker.example')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (url) =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              service: String(url).endsWith('/api/bridge/health')
+                ? 'srl-bridge-cloudflare'
+                : 'srl-koofr-worker',
+            }),
+          ),
+      ),
+    )
+    await checkRelayWorker('https://worker.example')
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(

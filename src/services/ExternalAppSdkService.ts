@@ -5,6 +5,7 @@ import {
 } from './ChatReaderCharacter'
 import { isRecord } from '../utils/UnknownValue'
 import { ChatReaderService } from './ChatReaderService'
+import type { chatReaderScripts } from './ChatReaderRendering'
 import { OPAQUE_PREVIEW_DOCUMENT_URL } from '../utils/OpaquePreviewDocument'
 import type { ResourceService } from './ResourceService'
 import type { ExternalAppResourceUpdate } from './ResourceService'
@@ -318,18 +319,45 @@ export class ExternalAppSdkService {
     return toSnapshot(resource, true)
   }
 
+  private async readChatScripts(
+    card: Record<string, unknown>,
+    metadata: Record<string, unknown>,
+    input: Record<string, unknown>,
+  ) {
+    const ids = Array.isArray(input.scriptSources) ? [...new Set(input.scriptSources)] : []
+    if (ids.length > 8) throw new Error('最多选择 8 份脚本来源')
+    const sources = []
+    for (const sourceId of ids) {
+      const resource = await this.resources.getReadSource(normalizeResourceId(sourceId))
+      if (!resource) throw new Error('所选脚本来源已不存在，请在脚本选择中移除')
+      sources.push(resource)
+    }
+    const { chatReaderScripts } = await import('./ChatReaderRendering')
+    return chatReaderScripts(
+      isRecord(metadata.chatCharacter) && metadata.chatCharacter.carryReadingScripts === false
+        ? {}
+        : card,
+      sources,
+      isRecord(input.scriptOverrides) ? input.scriptOverrides : {},
+    )
+  }
+
   async readChat(appId: string, payload: unknown) {
-    await this.requirePermission(appId, EXTERNAL_APP_PERMISSION.RESOURCES_LIBRARY_READ)
-    await this.requirePermission(appId, EXTERNAL_APP_PERMISSION.RESOURCES_CONTENT_READ)
+    await this.requirePermission(appId, [
+      EXTERNAL_APP_PERMISSION.RESOURCES_LIBRARY_READ,
+      EXTERNAL_APP_PERMISSION.RESOURCES_CONTENT_READ,
+    ])
     const input = (payload ?? {}) as Record<string, unknown>
+    const scriptListOnly = input.scriptListOnly === true
     const textOnly = input.textOnly === true
     if (
+      !scriptListOnly &&
       !textOnly &&
       input.interactive === true &&
       (await this.externalApps.getSummary(appId))?.runtimeMode !== 'trustedCompatible'
     )
       throw new Error('交互状态栏需要信任兼容模式')
-    if (!textOnly && input.remote === true) {
+    if (!scriptListOnly && !textOnly && input.remote === true) {
       await this.requirePermission(appId, EXTERNAL_APP_PERMISSION.NETWORK_HTTPS)
       if ((await this.externalApps.getSummary(appId))?.runtimeMode !== 'trustedCompatible')
         throw new Error('远程资源需要信任兼容模式')
@@ -339,13 +367,31 @@ export class ExternalAppSdkService {
     const offset = normalizedInteger(input.offset, 0, 10_000_000)
     const limit = normalizedInteger(input.limit, 20, 50)
     const chat = await reader.getReadChat(id)
+    const character = await resolveChatCharacter(chat, this.resources)
+    const card = character.card
+    const names = Array.isArray(chat.metadata.chatUserNames) ? chat.metadata.chatUserNames : []
+    if (scriptListOnly) {
+      const scripts = await this.readChatScripts(card, chat.metadata, input)
+      return {
+        messages: [],
+        nextOffset: null,
+        total: Number(chat.metadata.messageCount) || 0,
+        contentHash: chat.contentHash,
+        regexRules: [],
+        regexSources: {},
+        scriptRules: scripts.rules,
+        scriptErrors: [] as string[],
+        replyDiff: undefined,
+        presetName: undefined,
+        previewDocumentUrl: OPAQUE_PREVIEW_DOCUMENT_URL,
+        userNames: names,
+        characterId: character.id,
+      }
+    }
     const page = await reader.readResource(chat, offset, limit, {
       hideUser: input.hideUser === true,
       backward: input.backward === true,
     })
-    const character = await resolveChatCharacter(chat, this.resources)
-    const card = character.card
-    const names = Array.isArray(chat.metadata.chatUserNames) ? chat.metadata.chatUserNames : []
     const userName =
       typeof input.userName === 'string' && input.userName.trim()
         ? input.userName.trim().slice(0, 160)
@@ -357,9 +403,9 @@ export class ExternalAppSdkService {
       transformChatInputs,
       formatChatResult,
       chatRegexProfileRules,
+      chatRegexRules,
       archivedChatSnapshot,
       interactiveChatFrontend,
-      chatReaderScripts,
       interactiveChatWithScripts,
       chatReaderCss,
       selectChatReply,
@@ -425,49 +471,27 @@ export class ExternalAppSdkService {
         }
       }
     }
+    const preparedRules = chatRegexRules(card, renderOptions)
     const regexRules = await chatRegexProfileRules(
       card,
       renderOptions,
       isRecord(input.profileRuleOverrides) ? input.profileRuleOverrides : {},
+      preparedRules,
     )
     renderOptions.ruleOverrides = Object.fromEntries(
       regexRules.map((rule) => [rule.key, rule.enabled]),
     )
+    const preparedDisplayRules = preparedRules.map((item, index) => {
+      const enabled = regexRules[index]!.enabled
+      return { ...item, enabled, rule: { ...item.rule, enabled, disabled: !enabled } }
+    })
     const replyOverrides = isRecord(input.replyOverrides) ? input.replyOverrides : {}
     let scriptRules: Awaited<ReturnType<typeof chatReaderScripts>>['rules'] = []
     let activeScripts: Awaited<ReturnType<typeof chatReaderScripts>>['active'] = []
     const scriptErrors: string[] = []
     if (input.scriptList === true || (!textOnly && input.scripts === true)) {
       try {
-        const ids = Array.isArray(input.scriptSources) ? [...new Set(input.scriptSources)] : []
-        if (ids.length > 8) throw new Error('最多选择 8 份脚本来源')
-        const attachedId =
-          typeof chat.metadata.chatReadingScriptId === 'string'
-            ? chat.metadata.chatReadingScriptId
-            : undefined
-        if (attachedId && !ids.includes(attachedId)) ids.unshift(attachedId)
-        const sources = []
-        for (const sourceId of ids) {
-          const resource = await this.resources.getReadSource(normalizeResourceId(sourceId))
-          if (
-            sourceId === attachedId &&
-            (!resource ||
-              resource.type !== RESOURCE_TYPE.SCRIPT ||
-              resource.metadata.variant === 'stscript')
-          ) {
-            scriptErrors.push(
-              '聊天随附脚本已丢失或变更，请恢复配套资源或重新互传；其它脚本仍可选择',
-            )
-            continue
-          }
-          if (!resource) throw new Error('所选脚本来源已不存在，请在脚本选择中移除')
-          sources.push(resource)
-        }
-        const scripts = await chatReaderScripts(
-          card,
-          sources,
-          isRecord(input.scriptOverrides) ? input.scriptOverrides : {},
-        )
+        const scripts = await this.readChatScripts(card, chat.metadata, input)
         scriptRules = scripts.rules
         if (!textOnly && input.scripts === true) activeScripts = scripts.active
       } catch (error) {
@@ -482,7 +506,9 @@ export class ExternalAppSdkService {
     const selectedMessages = page.messages.map((entry) =>
       selectChatReply(entry, replyOverrides[String(entry.index)]),
     )
-    const inputs = selectedMessages.map((entry) => chatRenderInput(entry, card, renderOptions))
+    const inputs = selectedMessages.map((entry) =>
+      chatRenderInput(entry, card, renderOptions, preparedDisplayRules),
+    )
     const results = await transformChatInputs(inputs)
     const panelTheme =
       input.panelAppearance === 'reader'
@@ -527,6 +553,23 @@ export class ExternalAppSdkService {
                 ? '#d0d3c6'
                 : '#26382f'),
           panelTheme,
+          {
+            card,
+            userName,
+            regexes: {
+              global: renderOptions.extraRules,
+              preset: renderOptions.presetRules,
+              character:
+                renderOptions.characterRules ??
+                (isRecord(card.data) &&
+                isRecord(card.data.extensions) &&
+                Array.isArray(card.data.extensions.regex_scripts)
+                  ? card.data.extensions.regex_scripts
+                  : isRecord(card.extensions) && Array.isArray(card.extensions.regex_scripts)
+                    ? card.extensions.regex_scripts
+                    : []),
+            },
+          },
         )
       else if (!textOnly && input.interactive === true)
         for (const frontend of rendered.formatted.frontendBlocks)
@@ -584,6 +627,7 @@ export class ExternalAppSdkService {
                 selectChatReply(entry, replyOverrides[String(entry.index)]),
                 card,
                 renderOptions,
+                preparedDisplayRules,
               ),
             ),
           ),
@@ -598,7 +642,7 @@ export class ExternalAppSdkService {
         selectChatReply(page.messages[0]!, value),
       )
       const projections = await transformChatInputs(
-        variants.map((entry) => chatRenderInput(entry, card, renderOptions)),
+        variants.map((entry) => chatRenderInput(entry, card, renderOptions, preparedDisplayRules)),
       )
       const text = projections.map((result) => {
         const rendered = formatChatResult(result.contents[0] || '', false)
@@ -789,7 +833,10 @@ export class ExternalAppSdkService {
     return { resource: current, changes }
   }
 
-  private async requirePermission(appId: string, permission: ExternalAppPermission): Promise<void> {
+  private async requirePermission(
+    appId: string,
+    permission: ExternalAppPermission | ExternalAppPermission[],
+  ): Promise<void> {
     if (!(await this.externalApps.hasPermission(appId, permission)))
       throw new Error('该 APP 未获得此资源库权限')
   }

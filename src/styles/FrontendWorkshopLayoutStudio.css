@@ -14,10 +14,10 @@
   color: var(--color-ink);
   background-color: var(--color-surface);
   background-image:
-    linear-gradient(color-mix(in srgb, var(--color-grid) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--color-line) 55%, transparent) 1px, transparent 1px),
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--color-grid) 55%, transparent) 1px,
+      color-mix(in srgb, var(--color-line) 55%, transparent) 1px,
       transparent 1px
     );
   background-size: 24px 24px;
@@ -37,13 +37,13 @@
 .layout-studio button {
   min-height: var(--control-visual-secondary);
   padding: 0 0.7rem;
-  border: 1px solid var(--color-line-strong);
+  border: 1px solid var(--button-border, var(--color-line-strong));
   font-family: var(--font-ui);
   font-size: var(--text-caption);
 }
 .layout-studio button:not(.button--primary) {
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  color: var(--button-primary-color, var(--color-ink));
+  background: var(--button-primary-background, var(--color-surface-raised));
 }
 .layout-studio > header > button {
   width: var(--size-touch);
@@ -111,11 +111,10 @@
   padding-inline: 0.55rem;
   white-space: nowrap;
 }
-.layout-studio__toolbar button.is-active,
-.layout-studio__selection-actions button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+:is(.layout-studio__toolbar, .layout-studio__selection-actions) button.is-active {
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
   box-shadow: inset 0 -2px 0 var(--color-accent);
 }
 .layout-studio__canvas-scroll {
@@ -136,13 +135,13 @@
   margin: 0.35rem 0.35rem -1.8rem auto;
   padding: 0.3rem 0.5rem;
   pointer-events: none;
-  color: white;
-  border: 1px solid rgb(255 255 255 / 48%);
+  color: var(--notice-color, var(--color-ink));
+  border: 1px solid var(--notice-border, var(--glass-border));
   border-radius: var(--radius-control);
-  background: rgb(25 63 51 / 88%);
+  background: var(--notice-background, var(--glass-panel-strong));
   font-size: var(--text-caption);
   line-height: 1.3;
-  box-shadow: 0 0.25rem 0.7rem rgb(0 0 0 / 16%);
+  box-shadow: var(--notice-shadow, var(--glass-shadow));
 }
 .layout-studio__canvas {
   position: relative;
@@ -153,14 +152,14 @@
   border: 1px solid var(--color-line-strong);
   background-color: var(--color-surface);
   background-image:
-    linear-gradient(color-mix(in srgb, var(--color-grid) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(color-mix(in srgb, var(--color-line) 45%, transparent) 1px, transparent 1px),
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--color-grid) 45%, transparent) 1px,
+      color-mix(in srgb, var(--color-line) 45%, transparent) 1px,
       transparent 1px
     );
   background-size: 18px 18px;
-  box-shadow: 0 0.8rem 2rem rgb(0 0 0 / 10%);
+  box-shadow: var(--glass-shadow);
   touch-action: pan-x pan-y;
 }
 .layout-studio__guide {
@@ -168,8 +167,8 @@
   z-index: 100;
   display: block;
   pointer-events: none;
-  background: #d8583c;
-  box-shadow: 0 0 0 1px rgb(255 255 255 / 65%);
+  background: var(--color-danger);
+  box-shadow: 0 0 0 1px var(--color-surface-raised);
 }
 .layout-studio__guide.is-vertical {
   top: 0;
@@ -195,7 +194,7 @@
     color-mix(in srgb, var(--color-surface-raised) 92%, transparent),
     color-mix(in srgb, var(--color-surface-raised) 92%, transparent)
   );
-  box-shadow: 0 0.35rem 0.8rem rgb(0 0 0 / 8%);
+  box-shadow: var(--glass-shadow);
   user-select: none;
   touch-action: none;
 }
@@ -247,8 +246,8 @@
   bottom: 0.35rem;
   left: 0.35rem;
   padding: 0.2rem 0.35rem;
-  color: white;
-  background: rgb(0 0 0 / 62%);
+  color: var(--viewer-control-color, var(--viewer-color));
+  background: var(--viewer-control-background);
   font-size: 0.52rem;
 }
 .layout-studio__resize {
@@ -321,9 +320,9 @@
   white-space: nowrap;
 }
 .layout-studio__objects button.is-active {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  color: var(--selection-color, var(--color-accent));
+  border-color: var(--selection-border, var(--color-accent));
+  background: var(--selection-background, var(--color-accent-soft));
   box-shadow: inset 2px 0 0 var(--color-accent);
 }
 .layout-studio__objects button.is-active small,
@@ -382,10 +381,10 @@
   max-width: 100%;
   min-height: var(--size-touch);
   padding: 0 0.55rem;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-control);
+  border: 1px solid var(--control-border, var(--color-line));
+  border-radius: var(--control-radius, var(--radius-control));
   color: var(--color-ink);
-  background: var(--color-surface-raised);
+  background: var(--control-background, var(--color-surface-raised));
   font-size: 1rem;
 }
 @media (max-width: 48rem) {
@@ -417,9 +416,14 @@
   .layout-studio__canvas {
     width: 100%;
     min-width: 17rem;
+    box-shadow: var(--glass-shadow);
   }
   .layout-studio__canvas-scroll-hint {
     display: block;
+    color: var(--notice-color, var(--color-ink));
+    border: 1px solid var(--notice-border, var(--glass-border));
+    background: var(--notice-background, var(--glass-panel-strong));
+    box-shadow: var(--notice-shadow, var(--glass-shadow));
   }
   .layout-studio__workspace > p {
     display: -webkit-box;

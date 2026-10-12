@@ -97,11 +97,18 @@ const {
   variableName,
   variableValue,
   insertVariableWrite,
+  openSlotWriterForVariable,
   chooseFavoriteSource,
   sourcePresetPageItems,
   chooseSource,
   sourcePresetPageCount,
 } = controller
+function jumpToTargetPage(event: Event): void {
+  const input = event.currentTarget as HTMLInputElement
+  const requestedPage = Number.parseInt(input.value, 10)
+  if (Number.isFinite(requestedPage)) setPage('target', requestedPage)
+  input.value = String(targetPage.value)
+}
 const {
   sourceShare,
   resizingColumns,
@@ -546,7 +553,16 @@ function jumpToReviewChangedPage(): void {
               @click="setPage('target', targetPage - 1)"
             >
               ←</button
-            ><span>{{ targetPage }} / {{ targetPageCount }}</span
+            ><label class="stitch-pagination__jump"
+              ><input
+                :value="targetPage"
+                type="text"
+                inputmode="numeric"
+                :maxlength="String(targetPageCount).length"
+                aria-label="跳转到主预设条目页"
+                @change="jumpToTargetPage"
+                @keydown.enter.prevent="jumpToTargetPage"
+              /><span>/ {{ targetPageCount }} 页</span></label
             ><button
               class="button button--quiet"
               type="button"
@@ -838,6 +854,13 @@ function jumpToReviewChangedPage(): void {
           </header>
           <label><span>变量名</span><input v-model="variableName" type="text" autofocus /></label>
           <label><span>变量值</span><textarea v-model="variableValue" rows="4"></textarea></label>
+          <button
+            class="button button--quiet stitch-variable-writer__slot-button"
+            type="button"
+            @click="openSlotWriterForVariable($event)"
+          >
+            插入填写占位
+          </button>
           <div class="stitch-variable-writer__actions">
             <button class="button button--quiet" type="button" @click="variableWriterOpen = false">
               取消

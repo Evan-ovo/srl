@@ -6,6 +6,22 @@ import { useLibraryNavigation } from './UseLibraryNavigation'
 import { readAppResumeState } from '../core/AppResumeState'
 
 describe('UseLibraryNavigation notification routes', () => {
+  it('opens the existing assistant for a native browser request', async () => {
+    const isFeatureHubOpen = ref(false)
+    const navigation = useLibraryNavigation(() => ({ isFeatureHubOpen }) as never)
+    const shortcut = vi.fn()
+    window.addEventListener('srl:native-shortcut', shortcut)
+    try {
+      await navigation.handleNativeDeepLink(
+        new CustomEvent('srl:native-deep-link', { detail: { kind: 'assistant' } }),
+      )
+      expect(isFeatureHubOpen.value).toBe(true)
+      expect(readAppResumeState()).toMatchObject({ feature: 'featureHub', subpage: 'assistant' })
+      expect((shortcut.mock.calls[0]![0] as CustomEvent).detail).toBe('assistant')
+    } finally {
+      window.removeEventListener('srl:native-shortcut', shortcut)
+    }
+  })
   it.each(['library', 'favorites', 'import', 'link-import', 'settings'])(
     'opens the assistant destination %s through the existing library owner',
     (id) => {

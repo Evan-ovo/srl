@@ -74,8 +74,8 @@
 
 .feature-header-action {
   --feature-header-action-visual-height: 34px;
-  --feature-header-action-background: transparent;
-  --feature-header-action-border: transparent;
+  --feature-header-action-background: var(--button-background, transparent);
+  --feature-header-action-border: var(--button-border, transparent);
   position: relative;
   display: inline-flex;
   box-sizing: border-box;
@@ -85,8 +85,9 @@
   justify-content: center;
   padding: 0 10px;
   border: 0;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   background: transparent;
+  box-shadow: none;
   font: inherit;
   font-size: 0.8125rem;
   font-weight: 600;
@@ -103,21 +104,21 @@
   inset-block: calc((44px - var(--feature-header-action-visual-height)) / 2);
   inset-inline: 0;
   border: 1px solid var(--feature-header-action-border);
-  border-radius: 10px;
+  border-radius: var(--button-radius, 10px);
   background: var(--feature-header-action-background);
   content: '';
   pointer-events: none;
 }
 
 .feature-header-action--primary {
-  --feature-header-action-background: var(--color-accent);
-  --feature-header-action-border: var(--color-accent);
-  color: var(--color-on-accent, #fff);
+  --feature-header-action-background: var(--button-primary-background, var(--color-accent));
+  --feature-header-action-border: var(--button-primary-border, var(--color-accent));
+  color: var(--button-primary-color, var(--color-on-accent));
 }
 
 .feature-header-action--ghost {
-  --feature-header-action-background: var(--color-surface, transparent);
-  --feature-header-action-border: var(--color-line);
+  --feature-header-action-background: var(--button-background, var(--color-surface));
+  --feature-header-action-border: var(--button-border, var(--color-line));
 }
 
 .feature-header-action--icon {

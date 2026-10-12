@@ -129,20 +129,12 @@ onUnmounted(() => window.removeEventListener('pointerdown', handleOutside))
   min-width: 0;
   min-height: var(--size-touch);
   padding: 0 0.625rem;
-  border: 1px solid var(--color-line);
-  border-radius: 3px;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
   font: inherit;
   font-size: 0.68rem;
 }
 .inline-model-picker button {
   min-height: var(--size-touch);
   padding: 0 0.65rem;
-  border: 1px solid var(--color-accent);
-  border-radius: 3px;
-  color: var(--color-accent);
-  background: var(--color-surface-raised);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -150,9 +142,9 @@ onUnmounted(() => window.removeEventListener('pointerdown', handleOutside))
   cursor: wait;
   opacity: 0.55;
 }
-.inline-model-picker__toggle {
-  border-color: var(--color-line) !important;
-  color: var(--color-ink-soft) !important;
+.inline-model-picker .inline-model-picker__toggle {
+  border-color: var(--button-border, var(--color-line));
+  color: var(--button-color, var(--color-ink-soft));
 }
 .inline-model-picker__menu {
   position: absolute;
@@ -161,10 +153,10 @@ onUnmounted(() => window.removeEventListener('pointerdown', handleOutside))
   right: 0;
   left: 0;
   padding: 0.55rem;
-  border: 1px solid var(--color-line-strong, var(--color-line));
-  border-radius: 4px;
-  background: var(--color-surface-raised);
-  box-shadow: 0 0.75rem 2rem color-mix(in srgb, var(--color-ink) 18%, transparent);
+  border: 1px solid var(--dialog-border, var(--glass-border));
+  border-radius: var(--dialog-radius, var(--glass-radius-panel));
+  background: var(--dialog-background);
+  box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 .inline-model-picker__menu label {
   display: grid;
@@ -189,14 +181,14 @@ onUnmounted(() => window.removeEventListener('pointerdown', handleOutside))
   min-height: 2.7rem;
   padding: 0.45rem 0.6rem;
   border-width: 0 0 1px;
-  border-color: var(--color-line);
-  border-radius: 0;
-  color: var(--color-ink);
+  border-color: var(--button-border, var(--color-line));
+  border-radius: var(--button-radius, 0);
+  color: var(--button-color, var(--color-ink));
   text-align: left;
 }
 .inline-model-picker__menu > div button.is-selected {
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  color: var(--selection-color, var(--color-ink));
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .inline-model-picker__menu strong,
 .inline-model-picker__menu small {
@@ -218,9 +210,9 @@ onUnmounted(() => window.removeEventListener('pointerdown', handleOutside))
   .inline-model-picker__field {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-  .inline-model-picker__toggle {
-    grid-column: 1 / -1;
-    min-height: 2.25rem !important;
+  .inline-model-picker .inline-model-picker__toggle {
+    grid-column: var(--button-border, var(--color-line));
+    min-height: var(--button-border, var(--color-line));
   }
 }
 </style>

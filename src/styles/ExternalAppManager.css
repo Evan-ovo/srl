@@ -40,10 +40,6 @@
 .external-app-manager__panel button {
   min-height: var(--size-touch, 44px);
   padding: 0.6rem 0.8rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 8px;
-  background: var(--color-surface-raised);
-  color: var(--color-ink);
   font: inherit;
   font-size: 0.875rem;
   cursor: pointer;
@@ -70,6 +66,7 @@
   border-bottom: 1px solid var(--color-line);
   border-radius: 0;
   background: transparent;
+  box-shadow: none;
 }
 .external-app-card--disabled .external-app-card__copy {
   color: var(--color-ink-soft);
@@ -169,7 +166,7 @@
   justify-items: center;
   padding: max(0.75rem, var(--safe-top, 0px)) max(0.75rem, var(--safe-right, 0px))
     max(0.75rem, var(--safe-bottom, 0px)) max(0.75rem, var(--safe-left, 0px));
-  background: rgb(13 40 45 / 48%);
+  background: var(--overlay-background);
 }
 .external-app-manager__panel {
   display: grid;
@@ -178,12 +175,7 @@
   max-height: 100%;
   min-width: 0;
   box-sizing: border-box;
-  border: 0;
-  border-radius: 1rem;
   overflow: hidden;
-  background: var(--color-surface-raised);
-  color: var(--color-ink);
-  box-shadow: var(--glass-shadow);
   font: 0.875rem/1.5 var(--font-body, sans-serif);
 }
 .external-app-manager__panel:focus {
@@ -208,7 +200,7 @@
 .external-app-manager__panel-footer {
   padding: 0.75rem 0.875rem;
   border-top: 1px solid var(--color-line);
-  background: var(--color-surface-raised);
+  background: transparent;
 }
 .external-app-manager__panel-footer p {
   margin: 0 0 0.5rem;
@@ -277,10 +269,6 @@
   width: 100%;
   min-height: 44px;
   padding: 0.5rem 0.65rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.65rem;
-  background: var(--color-canvas);
-  color: var(--color-ink);
   font: inherit;
   font-size: 1rem;
 }
@@ -407,11 +395,6 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: 0.65rem;
 }
-.external-app-manager__panel .external-app-manager__confirm {
-  color: var(--color-surface-raised);
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
 .external-app-manager__launch-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -433,10 +416,12 @@
   min-height: 52px;
   padding: 0.75rem 0;
   align-items: center;
-  background: transparent;
+  background: var(--button-background, transparent);
   border-bottom: 1px solid var(--color-line);
-  border-radius: 0;
+  border-radius: var(--button-radius, 0);
   font-weight: 500;
+  box-shadow: var(--button-shadow, none);
+  color: var(--button-color, var(--color-ink));
 }
 .external-app-manager__menu small {
   display: block;
@@ -471,10 +456,10 @@
 }
 .external-app-manager__action-sheet .external-app-manager__launch-actions > button:last-child {
   border: 0;
-  background: transparent;
+  background: var(--button-background, transparent);
+  box-shadow: var(--button-shadow, none);
 }
-.external-app-manager__panel .external-app-manager__danger,
-.external-app-manager .external-app-manager__danger {
+:is(.external-app-manager__panel, .external-app-manager) .external-app-manager__danger {
   color: var(--color-danger);
 }
 .external-app-manager__icon-picker {
@@ -491,7 +476,7 @@
 .external-app-manager__panel .external-app-manager__source textarea {
   min-height: 16rem;
   resize: vertical;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-code, monospace);
   font-size: 0.875rem;
 }
 .external-app-manager__permission-editor ul {
@@ -503,5 +488,6 @@
   .external-app-manager__overlay {
     align-items: center;
     padding: 1.5rem;
+    background: var(--overlay-background);
   }
 }

@@ -4,6 +4,8 @@ import { CloudBackupService } from '../services/CloudBackupService'
 import { MainApiService } from '../services/MainApiService'
 import { ProductAssistantWorkspaceService } from '../services/ProductAssistantWorkspaceService'
 import { IndexedDbProductAssistantStorage } from '../storage/IndexedDbProductAssistantStorage'
+import { IndexedDbDiscordSetupStorage } from '../storage/IndexedDbDiscordSetupStorage'
+import { DiscordSetupService } from '../services/DiscordSetupService'
 import { IndexedDbExternalAppStorage } from '../storage/IndexedDbExternalAppStorage'
 import { ExternalAppService } from '../services/ExternalAppService'
 import { ExternalAppSdkService } from '../services/ExternalAppSdkService'
@@ -52,6 +54,9 @@ const externalAppStorage = new IndexedDbExternalAppStorage(database)
 export const externalAppService = new ExternalAppService(externalAppStorage)
 export const externalAppSdkService = new ExternalAppSdkService(externalAppService, resourceService)
 export const mainApiService = new MainApiService()
+export const discordSetupService = new DiscordSetupService(
+  new IndexedDbDiscordSetupStorage(database),
+)
 const productAssistantStorage = new IndexedDbProductAssistantStorage(database)
 export const productAssistantWorkspaceService = new ProductAssistantWorkspaceService(
   productAssistantStorage,

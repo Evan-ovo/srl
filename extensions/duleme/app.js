@@ -499,17 +499,20 @@
           '*',
         )
   }
-  function masked(text) {
-    if (!prefs.mask) return text
+  function readingMaskPattern() {
     const words = [...(pageData?.userNames || []), state.userName, ...prefs.words.split(/[,，\n]/)]
       .map((word) => String(word || '').trim())
       .filter(Boolean)
       .sort((a, b) => b.length - a.length)
     const escaped = [...new Set(words)].map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    const pattern = new RegExp(
+    return new RegExp(
       escaped.concat('\\{\\{\\s*[uU][sS][eE][rR]\\s*\\}\\}', '<USER>').join('|'),
       'g',
     )
+  }
+  function masked(text, pattern) {
+    if (!prefs.mask) return text
+    pattern ||= readingMaskPattern()
     return text.replace(pattern, (word) =>
       prefs.maskMode === 'cover'
         ? '▇'.repeat(Math.min(12, Math.max(2, [...word].length)))
@@ -518,14 +521,69 @@
   }
   function maskNodes(root) {
     if (!prefs.mask) return
+    const pattern = readingMaskPattern()
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
     const nodes = []
     while (walker.nextNode()) nodes.push(walker.currentNode)
     for (const node of nodes) {
-      if (!node.parentElement.closest('style,script')) node.textContent = masked(node.textContent)
+      if (!node.parentElement.closest('style,script'))
+        node.textContent = masked(node.textContent, pattern)
     }
   }
   const panelFrames = new Set()
+  const scriptControls = new Map()
+  function updateScriptControlVisibility() {
+    $('#readerScripts').hidden = !(state?.scripts === true && prefs.renderMode === 'full')
+  }
+  function scriptActionsPanel() {
+    const floor = currentPosition().floor
+    const sources = [...scriptControls].filter(
+      ([frame]) => frame.isConnected && Number(frame.dataset.scriptFloor) === floor,
+    )
+    sheet('脚本快捷操作', '<div id="scriptQuickActions"></div>')
+    const content = $('#scriptQuickActions')
+    content.innerHTML = `<p class="hint">第 ${floor + 1} 楼 · 只处理本楼已保存内容。关闭小手机请使用它的显隐按钮；停止运行会释放本次脚本。</p>${
+      sources
+        .flatMap(([_frame, scripts], frameIndex) =>
+          scripts.map(
+            (script) =>
+              `<div class="field-label">${esc(script.name)}</div><div class="button-row">${script.buttons
+                .filter((button) => button.visible)
+                .map(
+                  (button) =>
+                    `<button class="secondary" data-script-frame="${frameIndex}" data-script-id="${esc(script.id)}" data-script-action="${esc(button.name)}">${esc(button.name)}</button>`,
+                )
+                .join('')}</div>`,
+          ),
+        )
+        .join('') || '<p class="hint">脚本尚未提供快捷按钮；仍可停止运行，返回正文。</p>'
+    }<button class="secondary" id="stopReadingScripts">停止脚本，返回正文</button>`
+    content.querySelectorAll('[data-script-action]').forEach((button) => {
+      button.onclick = () => {
+        const frame = sources[Number(button.dataset.scriptFrame)]?.[0]
+        if (!frame?.isConnected || !panelFrames.has(frame)) return
+        $('#sheet').close()
+        frame.contentWindow?.postMessage(
+          {
+            protocol: 'srl-render-compat-v1',
+            type: 'SRL_SCRIPT_BUTTON_CLICK',
+            scriptId: button.dataset.scriptId,
+            name: button.dataset.scriptAction,
+          },
+          '*',
+        )
+      }
+    })
+    $('#stopReadingScripts').onclick = () =>
+      run(async () => {
+        const pos = currentPosition()
+        state.scripts = false
+        await saveState()
+        $('#sheet').close()
+        await read(pageData.messages[0]?.index || 0, pos)
+      })
+  }
+  $('#readerScripts').onclick = () => scriptActionsPanel()
   const lazyPanels = new Map()
   const floorDocuments = new Map()
   let panelEpoch = 0
@@ -605,6 +663,7 @@
         { once: true },
       )
       item.frame = frame
+      if (item.whole) frame.dataset.scriptFloor = String(item.entry.index)
       panelFrames.add(frame)
       // Keep the already readable projection until the child reports real layout.
       panel.append(frame)
@@ -635,6 +694,8 @@
     floorDocuments.clear()
     const frames = [...panelFrames]
     panelFrames.clear()
+    scriptControls.clear()
+    updateScriptControlVisibility()
     pagePosition = null
     for (const frame of frames) frame.remove()
   }
@@ -744,11 +805,51 @@
     }
     for (const frame of section.querySelectorAll('iframe')) {
       panelFrames.delete(frame)
+      scriptControls.delete(frame)
       frame.remove()
     }
     floorDocuments.delete(floor)
   }
   window.addEventListener('message', (event) => {
+    if (
+      event.data?.protocol === 'srl-render-compat-v1' &&
+      event.data.type === 'SRL_SCRIPT_BUTTONS'
+    ) {
+      const frame = [...panelFrames].find(
+        (item) =>
+          item.isConnected &&
+          item.contentWindow === event.source &&
+          item.dataset.wholeFloor === 'true',
+      )
+      if (
+        !frame ||
+        Number(frame.dataset.scriptFloor) !== event.data.floor ||
+        !Array.isArray(event.data.scripts)
+      )
+        return
+      const scripts = event.data.scripts.slice(0, 64).flatMap((script) =>
+        typeof script?.id === 'string' &&
+        typeof script.name === 'string' &&
+        Array.isArray(script.buttons)
+          ? [
+              {
+                id: script.id,
+                name: script.name,
+                buttons: script.buttons
+                  .slice(0, 64)
+                  .filter(
+                    (button) =>
+                      typeof button?.name === 'string' && typeof button.visible === 'boolean',
+                  ),
+              },
+            ]
+          : [],
+      )
+      scriptControls.set(frame, scripts)
+      updateScriptControlVisibility()
+      if ($('#scriptQuickActions') && $('#sheet').open) scriptActionsPanel()
+      return
+    }
     if (event.data?.type !== 'SRL_PREVIEW_HEIGHT') return
     const frame = [...panelFrames.keys()].find((item) => item.contentWindow === event.source)
     const height = Number(event.data.height)
@@ -1134,30 +1235,33 @@
     if (prefs.mode === 'continuous') return Math.max(0, floor - 2)
     return prefs.progressMode === 'chapters' ? floor : Math.floor(floor / 3) * 3
   }
-  async function read(offset = 0, pos = null, backward = false) {
+  function pageReadRequest(id, offset, backward = false) {
+    return {
+      ...readOptions(),
+      id,
+      offset,
+      limit:
+        prefs.mode === 'continuous'
+          ? 5
+          : prefs.mode === 'scroll'
+            ? 1
+            : prefs.progressMode === 'chapters'
+              ? 1
+              : 3,
+      hideUser: prefs.hideUser,
+      backward,
+      interactive: false,
+      prefetch: true,
+    }
+  }
+  async function read(offset = 0, pos = null, backward = false, loadedResult = null) {
     const version = ++readVersion
     const initialFonts = starting ? syncReaderFonts() : Promise.resolve()
     if (!starting) run(syncReaderFonts)
     const activeId = chat.id
     $('#readerSubtitle').textContent = '正在读取…'
     const [result] = await Promise.all([
-      api.resources.readChat({
-        ...readOptions(),
-        id: activeId,
-        offset,
-        limit:
-          prefs.mode === 'continuous'
-            ? 5
-            : prefs.mode === 'scroll'
-              ? 1
-              : prefs.progressMode === 'chapters'
-                ? 1
-                : 3,
-        hideUser: prefs.hideUser,
-        backward,
-        interactive: false,
-        prefetch: true,
-      }),
+      loadedResult || api.resources.readChat(pageReadRequest(activeId, offset, backward)),
       initialFonts,
     ])
     if (chat?.id !== activeId || version !== readVersion) return
@@ -1706,17 +1810,20 @@
     )
     $('#backToRegex').onclick = regexPanel
   }
-  async function loadScriptSettings(container) {
+  async function loadScriptSettings(container, loadedResult) {
     const activeId = chat?.id
     let result
     try {
-      result = await api.resources.readChat({
-        ...readOptions(),
-        scripts: false,
-        scriptList: true,
-        offset: pageData?.messages[0]?.index || 0,
-        limit: 1,
-      })
+      result =
+        loadedResult ||
+        (await api.resources.readChat({
+          ...readOptions(),
+          scripts: false,
+          scriptList: true,
+          scriptListOnly: true,
+          offset: pageData?.messages[0]?.index || 0,
+          limit: 1,
+        }))
     } catch (error) {
       if (container.isConnected && chat?.id === activeId)
         container.querySelector('.script-settings-content').innerHTML =
@@ -1794,12 +1901,16 @@
       })
     $('#disableScripts').onclick = () =>
       run(async () => {
+        const wasRunning = state.scripts === true && prefs.renderMode === 'full'
         const pos = currentPosition()
         state.scripts = false
         state.scriptOverrides = {}
         await saveState()
-        await read(pageData.messages[0]?.index || 0, pos)
-        await loadScriptSettings(container)
+        if (wasRunning) await read(pageData.messages[0]?.index || 0, pos)
+        await loadScriptSettings(container, {
+          ...result,
+          scriptRules: result.scriptRules.map((rule) => ({ ...rule, enabled: false })),
+        })
       })
   }
   async function scriptSourcePanel(offset = 0) {
@@ -1815,16 +1926,17 @@
     )
     $('#backToScripts').onclick = () => run(showScriptSettings)
   }
-  async function showScriptSettings() {
+  async function showScriptSettings(loadedResult) {
     sheet(
       '脚本管理',
       '<div id="scriptSettings"><div class="script-settings-content"><p class="hint">正在读取脚本…</p></div></div>',
       () => panel('display'),
     )
-    await loadScriptSettings($('#scriptSettings'))
+    await loadScriptSettings($('#scriptSettings'), loadedResult)
   }
   async function changeScriptSource(id, remove = false) {
     const activeId = chat.id
+    const wasRunning = state.scripts === true && prefs.renderMode === 'full'
     const sources = remove
       ? (state.scriptSources || []).filter((item) => item !== id)
       : [...new Set([...(state.scriptSources || []), id])]
@@ -1835,6 +1947,7 @@
         scripts: false,
         scriptList: true,
         scriptSources: sources,
+        scriptListOnly: true,
         offset: pageData.messages[0]?.index || 0,
         limit: 1,
       })
@@ -1851,8 +1964,8 @@
       )
     else state.scripts = false
     await saveState()
-    await read(pageData.messages[0]?.index || 0, pos)
-    await showScriptSettings()
+    if (wasRunning) await read(pageData.messages[0]?.index || 0, pos)
+    await showScriptSettings(result)
   }
   async function replaceRegexSource(scope, id) {
     const activeChatId = chat.id
@@ -1864,19 +1977,17 @@
     )
     const offset = pageData?.messages[0]?.index || 0
     // Validate before saving: a missing/wrong resource must not strand this chat.
-    await api.resources.readChat({
-      ...readOptions(),
+    const result = await api.resources.readChat({
+      ...pageReadRequest(activeChatId, offset),
       regexSources: next,
       ruleOverrides: roleAppearance?.enabled ? {} : overrides,
-      offset,
-      limit: 1,
     })
     if (chat?.id !== activeChatId || !$('#sheet').open) return
     state.regexSources = next
     state.ruleOverrides = overrides
     await saveState()
     const pos = currentPosition()
-    await read(offset, pos)
+    await read(offset, pos, false, result)
     regexPanel()
     notify(id ? '正则来源已替换，仅对这份聊天生效' : '已恢复聊天随附正则')
   }

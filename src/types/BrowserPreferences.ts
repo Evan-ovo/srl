@@ -30,17 +30,6 @@ export interface PresetStitchTemplate {
   updatedAt: number
 }
 
-export interface ChatLoadout {
-  id: string
-  name: string
-  primaryResourceId: string
-  resourceIds: string[]
-  createdAt: number
-  updatedAt: number
-}
-
-export type ResourceBundleTemplate = ChatLoadout
-
 export interface StorageHealth {
   supported: boolean
   persisted: boolean
@@ -65,6 +54,7 @@ export interface PreviewPolicy {
 export type CustomCssScope =
   | `app:${string}`
   | 'library'
+  | 'shell'
   | 'details'
   | 'features'
   | 'draw'
@@ -82,6 +72,7 @@ export interface CustomCssPreset {
   name: string
   globalCss: string
   scopedCss: Partial<Record<CustomCssScope, string>>
+  views?: import('./UiCustomization').CustomUiViews
   createdAt: string
   updatedAt: string
 }
@@ -93,6 +84,7 @@ export interface PortableAppearanceSettings {
   customCss: string
   presets: CustomCssPreset[]
   activePresetId: string
+  views?: import('./UiCustomization').CustomUiViews
 }
 
 export type TavernSendContent = 'original' | 'modified'
@@ -128,9 +120,6 @@ export interface PortableGeneralPreferences {
   stitchTemplates?: PresetStitchTemplate[]
   stitchMainSide?: 'left' | 'right'
   frontendWorkshopRecentColors?: string[]
-  chatLoadouts?: ChatLoadout[]
-  /** @deprecated 旧版导出字段，导入时迁移为 chatLoadouts。 */
-  resourceBundles?: ResourceBundleTemplate[]
 }
 
 export interface CabinetLayoutEntry {

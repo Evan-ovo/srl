@@ -15,8 +15,26 @@ import {
 } from '../services/ProductAssistantContext'
 import ProductAssistantSettings from './ProductAssistantSettings.vue'
 import ProductAssistant from './ProductAssistant.vue'
+import * as nativeDiscordBrowser from '../services/NativeDiscordSetupBrowser'
 import { assistantPetCue } from '../core/ProductAssistantPetState'
 import type { AssistantPreferences } from '../services/ProductAssistantWorkspaceService'
+const discordSetup = vi.hoisted(() => ({
+  assistantConversationId: vi.fn(),
+  continueInTaskConversation: vi.fn(),
+  peekAssistantDraft: vi.fn(),
+  peekAssistantRequest: vi.fn(),
+  takeAssistantDraft: vi.fn(),
+  takeAssistantRequest: vi.fn(),
+  execute: vi.fn(),
+  suspendForModelConsent: vi.fn(),
+  restoreAfterModelConsent: vi.fn(),
+  progressCursor: vi.fn(() => 0),
+  continueAfterProgress: vi.fn(),
+  agentRunId: vi.fn(),
+  settleAssistantTurn: vi.fn(),
+  pauseAgent: vi.fn(async () => {}),
+  returnToBrowser: vi.fn(async () => {}),
+}))
 const {
   confirm,
   choose,
@@ -76,6 +94,7 @@ const {
       save: vi.fn(),
       list: vi.fn(),
       switch: vi.fn(),
+      continueDiscordSetupConversation: vi.fn(),
       flush: vi.fn(),
       templates: vi.fn(),
       templateText: (value: { name: string; steps: string[] }) =>
@@ -106,6 +125,7 @@ vi.mock('../composables/UseConfirmDialog', () => ({
   useConfirmDialogState: () => ({ activeDialog: { value: undefined } }),
 }))
 vi.mock('../core/AppContainer', () => ({
+  discordSetupService: discordSetup,
   productAssistantWorkspaceService: workspace,
   externalAppService: appOwner,
   mainApiService: {
@@ -148,6 +168,331 @@ async function send(w: ReturnType<typeof render>, text = '卡片改浅紫') {
   await flushPromises()
 }
 describe('ProductAssistant chat', () => {
+  it('loads the task conversation into the existing compact chat without generating or continuing work', async () => {
+    const value = {
+      id: 'setup-chat',
+      title: 'Discord Bridge 网页协助',
+      history: [],
+      input: '',
+      images: [],
+      updatedAt: 1,
+    }
+    workspace.continueDiscordSetupConversation.mockResolvedValueOnce(value)
+    discordSetup.assistantConversationId.mockResolvedValue('setup-chat')
+    vi.spyOn(nativeDiscordBrowser, 'hasDiscordSetupBrowser').mockReturnValue(true)
+    nativeDiscordBrowser.discordSetupSession.active = true
+    nativeDiscordBrowser.discordSetupSession.webStepActive = true
+    nativeDiscordBrowser.discordSetupSession.assistantConversationId = 'setup-chat'
+    nativeDiscordBrowser.discordSetupSession.browserVisible = false
+    const reply = vi.spyOn(ProductAssistantService.prototype, 'reply')
+    const wrapper = mount(ProductAssistant, {
+      props: { getContext: () => context, execute: vi.fn(), compact: true },
+    })
+    try {
+      await flushPromises()
+      expect(workspace.continueDiscordSetupConversation).toHaveBeenCalledWith('setup-chat')
+      expect(wrapper.find('.assistant-return-browser').exists()).toBe(true)
+      expect(reply).not.toHaveBeenCalled()
+      expect(discordSetup.continueInTaskConversation).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      nativeDiscordBrowser.discordSetupSession.active = false
+      nativeDiscordBrowser.discordSetupSession.webStepActive = false
+      nativeDiscordBrowser.discordSetupSession.assistantConversationId = ''
+      discordSetup.assistantConversationId.mockReset()
+    }
+  })
+  it('provides an explicit return to the retained configuration browser without sending an AI request', async () => {
+    workspace.initialize.mockResolvedValueOnce({
+      id: 'task-chat',
+      title: 'Discord Bridge 网页协助',
+      history: [],
+      input: '',
+      images: [],
+      updatedAt: 1,
+    })
+    vi.spyOn(nativeDiscordBrowser, 'hasDiscordSetupBrowser').mockReturnValue(true)
+    nativeDiscordBrowser.discordSetupSession.active = true
+    nativeDiscordBrowser.discordSetupSession.webStepActive = true
+    nativeDiscordBrowser.discordSetupSession.assistantConversationId = 'task-chat'
+    nativeDiscordBrowser.discordSetupSession.browserVisible = false
+    discordSetup.returnToBrowser.mockClear()
+    const reply = vi.spyOn(ProductAssistantService.prototype, 'reply')
+    const wrapper = render()
+    try {
+      await flushPromises()
+      await wrapper.get('.feature-app-header__back').trigger('click')
+      expect(wrapper.emitted('back')).toHaveLength(1)
+      expect(discordSetup.returnToBrowser).not.toHaveBeenCalled()
+      await wrapper.get('.assistant-return-browser').trigger('click')
+      expect(discordSetup.returnToBrowser).toHaveBeenCalledOnce()
+      expect(reply).not.toHaveBeenCalled()
+      await wrapper.setProps({ compact: true })
+      await wrapper.get('[aria-label="关闭快捷对话"]').trigger('click')
+      expect(wrapper.emitted('back')).toHaveLength(2)
+      expect(discordSetup.returnToBrowser).toHaveBeenCalledOnce()
+      nativeDiscordBrowser.discordSetupSession.webStepActive = false
+      nativeDiscordBrowser.discordSetupSession.assistantConversationId = ''
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.assistant-return-browser').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      nativeDiscordBrowser.discordSetupSession.active = false
+      nativeDiscordBrowser.discordSetupSession.webStepActive = false
+    }
+  })
+  it('keeps the browser return action out of an unrelated ordinary conversation', async () => {
+    vi.spyOn(nativeDiscordBrowser, 'hasDiscordSetupBrowser').mockReturnValue(true)
+    nativeDiscordBrowser.discordSetupSession.active = true
+    nativeDiscordBrowser.discordSetupSession.webStepActive = true
+    nativeDiscordBrowser.discordSetupSession.browserVisible = false
+    nativeDiscordBrowser.discordSetupSession.assistantConversationId = 'another-task-chat'
+    const wrapper = render()
+    try {
+      await flushPromises()
+      expect(wrapper.find('.assistant-return-browser').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      nativeDiscordBrowser.discordSetupSession.active = false
+      nativeDiscordBrowser.discordSetupSession.webStepActive = false
+      nativeDiscordBrowser.discordSetupSession.assistantConversationId = ''
+    }
+  })
+  it('does not let an idle ordinary chat cancel the active task conversation on a page notification', async () => {
+    const taskChat = {
+      id: 'active-task-chat',
+      title: 'Discord Bridge 网页协助',
+      updatedAt: Date.now(),
+      history: [],
+      input: '',
+      images: [],
+    }
+    workspace.initialize.mockResolvedValueOnce(taskChat)
+    discordSetup.assistantConversationId.mockResolvedValue(taskChat.id)
+    discordSetup.agentRunId.mockReturnValue('active-run')
+    nativeDiscordBrowser.discordSetupSession.agentRunning = true
+    let finish!: (result: AssistantRunResult) => void
+    let pendingSignal!: AbortSignal
+    const reply = vi
+      .spyOn(ProductAssistantService.prototype, 'reply')
+      .mockImplementation((_request, _config, signal) => {
+        pendingSignal = signal
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      })
+    const full = render()
+    let idle: ReturnType<typeof render> | undefined
+    try {
+      await flushPromises()
+      discordSetup.peekAssistantRequest.mockReturnValueOnce('检查部署结果并继续')
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(reply).toHaveBeenCalledOnce()
+      expect(workspace.conversationActivityOwner(taskChat.id)).toBeTruthy()
+
+      workspace.initialize.mockResolvedValueOnce({ ...taskChat, id: 'ordinary-chat' })
+      idle = render()
+      await flushPromises()
+      discordSetup.settleAssistantTurn.mockClear()
+      discordSetup.settleAssistantTurn.mockImplementationOnce(async () => {
+        window.dispatchEvent(new Event('srl:discord-setup-stop'))
+      })
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(discordSetup.settleAssistantTurn).not.toHaveBeenCalled()
+      expect(pendingSignal.aborted).toBe(false)
+      expect(reply).toHaveBeenCalledOnce()
+    } finally {
+      finish?.({ text: '等待网站完成部署', images: [] })
+      await flushPromises()
+      idle?.unmount()
+      full.unmount()
+      reply.mockRestore()
+      discordSetup.assistantConversationId.mockReset()
+      discordSetup.agentRunId.mockReset()
+      discordSetup.settleAssistantTurn.mockReset()
+      nativeDiscordBrowser.discordSetupSession.agentRunning = false
+    }
+  })
+  it('stops and reports a failed idle browser check without requesting AI', async () => {
+    const reply = vi.spyOn(ProductAssistantService.prototype, 'reply')
+    const w = render()
+    try {
+      await flushPromises()
+      discordSetup.agentRunId.mockReturnValue('active-run')
+      discordSetup.pauseAgent.mockClear()
+      discordSetup.settleAssistantTurn.mockRejectedValueOnce(new Error('Browser closed'))
+      nativeDiscordBrowser.discordSetupSession.agentRunning = true
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(discordSetup.pauseAgent).toHaveBeenCalledExactlyOnceWith('active-run')
+      expect(w.text()).toContain('网页状态检查失败')
+      expect(reply).not.toHaveBeenCalled()
+    } finally {
+      w.unmount()
+      reply.mockRestore()
+      discordSetup.agentRunId.mockReset()
+      nativeDiscordBrowser.discordSetupSession.agentRunning = false
+    }
+  })
+  it('settles an idle browser notification without requesting AI when no task prompt is queued', async () => {
+    const reply = vi.spyOn(ProductAssistantService.prototype, 'reply')
+    const w = render()
+    try {
+      await flushPromises()
+      discordSetup.agentRunId.mockReturnValue('active-run')
+      discordSetup.settleAssistantTurn.mockClear()
+      nativeDiscordBrowser.discordSetupSession.agentRunning = true
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(discordSetup.settleAssistantTurn).toHaveBeenCalledExactlyOnceWith('active-run')
+      expect(reply).not.toHaveBeenCalled()
+    } finally {
+      w.unmount()
+      reply.mockRestore()
+      discordSetup.agentRunId.mockReset()
+      nativeDiscordBrowser.discordSetupSession.agentRunning = false
+    }
+  })
+  it('hands a task started from ordinary chat off before further webpage operations', async () => {
+    const browser = vi.spyOn(nativeDiscordBrowser, 'hasDiscordSetupBrowser').mockReturnValue(true)
+    discordSetup.execute.mockImplementationOnce(async () => {
+      discordSetup.assistantConversationId.mockResolvedValue('new-agent-chat')
+      return { ok: true, mode: 'agent', step: 'discord-app' }
+    })
+    discordSetup.continueInTaskConversation.mockReturnValue(true)
+    const reply = vi
+      .spyOn(ProductAssistantService.prototype, 'reply')
+      .mockImplementationOnce(async (request, _config, signal, host) => {
+        const start = await host!.execute(
+          { action: 'discord-setup', args: { operation: 'start', task: 'configure' } },
+          request,
+          signal,
+        )
+        const inspect = await host!.execute(
+          { action: 'discord-setup', args: { operation: 'inspect' } },
+          request,
+          signal,
+        )
+        expect(start.data).toMatchObject({ taskConversationRequired: true })
+        expect(inspect.data).toMatchObject({ taskConversationRequired: true })
+        return { text: '已转到独立网页协助对话', images: [] }
+      })
+    const w = render()
+    try {
+      await send(w, '开始网页配置')
+      expect(discordSetup.execute).toHaveBeenCalledOnce()
+      expect(discordSetup.execute.mock.calls[0]?.[0].operation).toBe('start')
+    } finally {
+      w.unmount()
+      reply.mockRestore()
+      browser.mockRestore()
+      discordSetup.assistantConversationId.mockReset()
+      discordSetup.execute.mockReset()
+      discordSetup.continueInTaskConversation.mockReset()
+    }
+  })
+  it('moves a webpage agent to its independent conversation without sending ordinary chat or its draft', async () => {
+    const reply = vi
+      .spyOn(ProductAssistantService.prototype, 'reply')
+      .mockResolvedValue({ text: '正在处理网页任务', images: [] })
+    const w = render()
+    try {
+      await flushPromises()
+      await w.get('[aria-label="发送消息"]').setValue('普通聊天未发送的内容')
+      discordSetup.assistantConversationId.mockResolvedValue('isolated-web-task')
+      workspace.continueDiscordSetupConversation.mockResolvedValue({
+        id: 'isolated-web-task',
+        customTitle: 'Discord Bridge 网页协助',
+        title: 'Discord Bridge 网页协助',
+        updatedAt: Date.now(),
+        history: [],
+        input: '',
+        images: [],
+      })
+      discordSetup.peekAssistantRequest.mockReturnValueOnce('请继续网页配置任务')
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(
+        workspace.save.mock.calls.some(([chat]) => chat.input === '普通聊天未发送的内容'),
+      ).toBe(true)
+      expect(workspace.continueDiscordSetupConversation).toHaveBeenCalledOnce()
+      expect(
+        workspace.save.mock.calls.some(
+          ([chat]) =>
+            chat.id === 'isolated-web-task' && chat.customTitle === 'Discord Bridge 网页协助',
+        ),
+      ).toBe(true)
+      expect(reply.mock.calls[0]?.[0].history.map((turn) => turn.text)).toEqual([
+        '请继续网页配置任务',
+      ])
+      expect(w.get('[aria-label="发送消息"]').element).toHaveProperty('value', '')
+      window.dispatchEvent(new Event('srl:discord-setup-fullscreen'))
+      await flushPromises()
+      expect(workspace.continueDiscordSetupConversation).toHaveBeenCalledOnce()
+    } finally {
+      w.unmount()
+      reply.mockRestore()
+      discordSetup.assistantConversationId.mockReset()
+    }
+  })
+  it('receives the webpage fullscreen draft in the same chat without replacing its draft or requesting AI', async () => {
+    const reply = vi.spyOn(ProductAssistantService.prototype, 'reply')
+    const w = render()
+    try {
+      await flushPromises()
+      await w.get('[aria-label="发送消息"]').setValue('原有草稿')
+      discordSetup.peekAssistantDraft.mockReturnValueOnce('小窗未发送的问题')
+      window.dispatchEvent(new Event('srl:discord-setup-fullscreen'))
+      await flushPromises()
+      expect(w.get('[aria-label="发送消息"]').element).toHaveProperty(
+        'value',
+        '原有草稿\n\n小窗未发送的问题',
+      )
+      expect(reply).not.toHaveBeenCalled()
+      expect(w.findAll('.chat-message--user')).toHaveLength(0)
+    } finally {
+      w.unmount()
+      reply.mockRestore()
+    }
+  })
+  it.each([
+    { toolBudgetExhausted: false },
+    { toolBudgetExhausted: true },
+    { toolBudgetExhausted: false, warning: '网络请求失败' },
+  ])('continues a successful native request without replacing its draft: %j', async (result) => {
+    const reply = vi
+      .spyOn(ProductAssistantService.prototype, 'reply')
+      .mockResolvedValue({ text: '请填写三个值。', images: [], ...result })
+    const w = render()
+    try {
+      await flushPromises()
+      await w.get('[aria-label="发送消息"]').setValue('未发送的草稿')
+      discordSetup.suspendForModelConsent.mockResolvedValueOnce(true)
+      discordSetup.peekAssistantRequest.mockReturnValueOnce('请继续当前 Discord 配置步骤')
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(reply).toHaveBeenCalledOnce()
+      expect(discordSetup.restoreAfterModelConsent).toHaveBeenCalledWith(true)
+      if (result.warning) expect(discordSetup.continueAfterProgress).not.toHaveBeenCalled()
+      else expect(discordSetup.continueAfterProgress).toHaveBeenCalledWith(undefined, 0)
+      expect(discordSetup.settleAssistantTurn).toHaveBeenCalledWith(
+        undefined,
+        false,
+        result.toolBudgetExhausted === true,
+      )
+      expect(reply.mock.calls[0]![0].history.at(-1)?.text).toBe('请继续当前 Discord 配置步骤')
+      expect(w.findAll('.chat-message--user')).toHaveLength(0)
+      expect(w.get('[aria-label="发送消息"]').element).toHaveProperty('value', '未发送的草稿')
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(reply).toHaveBeenCalledOnce()
+    } finally {
+      w.unmount()
+      reply.mockRestore()
+    }
+  })
   it('keeps the full chat and shortcut window on the same conversation while a reply is pending', async () => {
     const chat = {
       id: 'shared-assistant-chat',
@@ -180,6 +525,12 @@ describe('ProductAssistant chat', () => {
       )
       expect(quick.get('[aria-label="发送消息"]').element).toHaveProperty('disabled', true)
       expect(quick.find('[aria-label="另一个对话窗口正在等待回复"]').exists()).toBe(true)
+      discordSetup.agentRunId.mockReturnValue('active-run')
+      discordSetup.settleAssistantTurn.mockClear()
+      nativeDiscordBrowser.discordSetupSession.agentRunning = true
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(discordSetup.settleAssistantTurn).not.toHaveBeenCalled()
       expect(quick.get('[aria-label="展开完整对话"]').element).toHaveProperty('disabled', false)
       await quick.get('[aria-label="展开完整对话"]').trigger('click')
       await flushPromises()
@@ -193,6 +544,8 @@ describe('ProductAssistant chat', () => {
       full.unmount()
       quick.unmount()
       reply.mockRestore()
+      discordSetup.agentRunId.mockReset()
+      nativeDiscordBrowser.discordSetupSession.agentRunning = false
     }
   })
   it('discards prompt edits on returning to settings while preserving other settings drafts', async () => {
@@ -840,9 +1193,11 @@ describe('ProductAssistant chat', () => {
       expect(confirm.mock.lastCall![0].title).toContain('预计输入约')
       expect(reply).toHaveBeenCalledTimes(1)
       confirm.mockResolvedValueOnce(false)
+      discordSetup.suspendForModelConsent.mockResolvedValueOnce(true)
       await w.get('[aria-label="生成回复"]').trigger('click')
       await flushPromises()
       expect(confirm).toHaveBeenCalledTimes(2)
+      expect(discordSetup.restoreAfterModelConsent).toHaveBeenCalledWith(false)
       expect(reply).toHaveBeenCalledTimes(1)
       expect(w.findAll('.chat-message--user')).toHaveLength(1)
       expect(w.findAll('.chat-message--assistant')).toHaveLength(1)
@@ -1050,6 +1405,31 @@ describe('ProductAssistant chat', () => {
     else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).showModal
     if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, 'close', originalClose)
     else delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>).close
+  })
+  it('opens history settings from the header SVG and closes that dialog before leaving history', async () => {
+    const w = render()
+    try {
+      await flushPromises()
+      await w.get('[aria-label="聊天设置"]').trigger('click')
+      await w
+        .findAll('button')
+        .find((button) => button.text() === '历史对话›')!
+        .trigger('click')
+      await flushPromises()
+      const gear = w.get('[aria-label="历史设置"]')
+      expect(gear.find('svg').exists()).toBe(true)
+      await gear.trigger('click')
+      await flushPromises()
+      expect(w.findComponent(ProductAssistantSettings).vm.historyRecoveryOpen).toBe(true)
+      const detail = { handled: false }
+      window.dispatchEvent(new CustomEvent('srl:back-request', { detail }))
+      await flushPromises()
+      expect(detail.handled).toBe(true)
+      expect(w.findComponent(ProductAssistantSettings).vm.historyRecoveryOpen).toBe(false)
+      expect(w.find('[aria-label="历史设置"]').exists()).toBe(true)
+    } finally {
+      w.unmount()
+    }
   })
   it('updates centered system messages in place, keeps them local to each turn and clears them with a new chat', async () => {
     let report!: NonNullable<AssistantToolHost['onToolCall']>

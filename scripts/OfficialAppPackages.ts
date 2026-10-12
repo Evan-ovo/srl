@@ -47,7 +47,7 @@ export function reuseReleasedOfficialAppPackage(
   return bytes
 }
 
-const entries = {
+export const entries = {
   chatReader: 'ChatReaderApp.vue',
   draw: 'DrawApp.vue',
   stitch: 'PresetStitcherApp.vue',
@@ -55,7 +55,6 @@ const entries = {
   imageGeneration: 'ImageGenerationApp.vue',
   imageAlbum: 'GeneratedImageAlbumApp.vue',
   userPersona: 'UserPersonaApp.vue',
-  resourceBundle: 'ResourceBundleApp.vue',
   tavernBridge: 'TavernBridgeCenter.vue',
   assistant: 'ProductAssistant.vue',
 }

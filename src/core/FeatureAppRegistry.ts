@@ -12,7 +12,6 @@ export type BuiltInFeatureAppId =
   | 'imageGeneration'
   | 'imageAlbum'
   | 'userPersona'
-  | 'resourceBundle'
   | 'extensions'
 
 export type BuiltInFeatureAppPage = BuiltInFeatureAppId
@@ -47,7 +46,6 @@ export interface FeatureAppDescriptorContext {
   folderCount: number
   presetCount: number
   userPersonaCount: number
-  resourceBundleCount: number
   enabledExternalAppCount: number
 }
 
@@ -192,16 +190,6 @@ export const FEATURE_APP_REGISTRY: readonly FeatureAppDescriptor[] = [
     sortOrder: 80,
     visible: true,
     badge: (context) => `${context.userPersonaCount} 份人设文件`,
-  },
-  {
-    id: 'resourceBundle',
-    page: 'resourceBundle',
-    name: '配了么',
-    description: '角色卡与配套资源装配',
-    icon: 'bundle',
-    sortOrder: 90,
-    visible: true,
-    badge: (context) => `${context.resourceBundleCount} 个已存套装`,
   },
   {
     id: 'extensions',

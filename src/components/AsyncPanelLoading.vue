@@ -33,7 +33,7 @@ defineProps<{ label: string }>()
   flex: 0 0 auto;
   place-items: center;
   border-radius: 50%;
-  color: white;
+  color: var(--color-on-accent);
   background: var(--color-accent);
   font: 800 0.66rem var(--font-label);
   letter-spacing: 0.08em;

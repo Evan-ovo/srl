@@ -37,6 +37,7 @@ watch(
     if (
       guide?.destination === 'inbox' &&
       [
+        'inbox-connection',
         'discord-oneclick-tutorial',
         'discord-github-tutorial',
         'discord-manual-deploy-tutorial',
@@ -48,6 +49,9 @@ watch(
   { immediate: true },
 )
 const { activeDialog } = useConfirmDialogState()
+function openSetupSettings() {
+  settingsOpen.value = true
+}
 const backStack = useBackStack([
   {
     id: 'inbox-secondary-page',
@@ -76,11 +80,13 @@ function closeSettingsOnBack(event: Event): void {
   event.stopImmediatePropagation()
 }
 onMounted(() => {
+  window.addEventListener('srl:discord-setup-settings', openSetupSettings)
   window.addEventListener('keydown', closeSettingsOnEscape, true)
   window.addEventListener(SRL_BACK_REQUEST_EVENT, closeSettingsOnBack, true)
   window.addEventListener('srl:community-sources-changed', refreshOrganizationCounts)
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('srl:discord-setup-settings', openSetupSettings)
   window.removeEventListener('keydown', closeSettingsOnEscape, true)
   window.removeEventListener(SRL_BACK_REQUEST_EVENT, closeSettingsOnBack, true)
   window.removeEventListener('srl:community-sources-changed', refreshOrganizationCounts)
@@ -223,7 +229,7 @@ const ConnectionSettings = createAsyncPanel(
   margin: 16px auto 0;
   padding: 0 16px;
   border: 1px solid var(--color-line);
-  border-radius: 12px;
+  border-radius: var(--glass-radius-panel);
   background: var(--color-surface-raised);
 }
 
@@ -255,10 +261,6 @@ const ConnectionSettings = createAsyncPanel(
   gap: 12px;
   min-height: 50px;
   padding: 9px 14px;
-  border: 1px solid var(--color-line);
-  border-radius: 12px;
-  background: var(--color-surface);
-  color: var(--color-ink);
   text-align: left;
   font: inherit;
   cursor: pointer;
