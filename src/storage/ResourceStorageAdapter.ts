@@ -53,6 +53,8 @@ export interface ResourceStorageAdapter {
     changes: ResourceMetadataPatch,
     expectedPersonalDocument?: string,
   ): Promise<ResourceSummary>
+  /** Commit distinct metadata patches together without rewriting original files. */
+  updateMetadataMany?(patches: Array<{ id: string; changes: ResourceMetadataPatch }>): Promise<void>
   /**
    * Android 已经由原生库按哈希落盘后，释放 IndexedDB 中同一原件的重复 Blob。
    * 这是可选能力：非原生存储和测试替身无需实现。

@@ -3,7 +3,7 @@
   "apiVersion": "srl-app-api@1",
   "id": "com.srl.duleme",
   "name": "读了么",
-  "version": "0.1.22",
+  "version": "0.1.28",
   "entry": "index.html",
   "author": "SRL",
   "description": "按角色整理资源库聊天记录，沉浸阅读、备注、收藏与美化。资源库内置聊天记录阅读器。",

@@ -821,7 +821,25 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
         const light = (
           await Dexie.waitFor(this.createStoredListSummariesFromSummaries([encoded]))
         )[0]!
-        if (!(await this.database.resources.update(id, encoded))) throw new Error('资源已经不存在')
+        if (isAndroidNativeAppDatabaseActive()) {
+          // Dexie.update() enumerates a primary-key range and hydrates the old
+          // record before modify(). The keyed mutation keeps stored attachments
+          // inside the same reserved transaction and still updates Dexie's indexes.
+          const request = {
+            trans: Dexie.currentTransaction!.idbtrans,
+            type: 'put' as const,
+            keys: [id],
+            values: [encoded],
+            upsert: false,
+            updates: { keys: [id], changeSpecs: [encoded] },
+            resourceMetadataOnly: true,
+          }
+          const result = await this.database.resources.core.mutate(request)
+          if (result.numFailures) throw result.failures[0]
+          if (!result.results?.length) throw new Error('资源已经不存在')
+        } else if (!(await this.database.resources.update(id, encoded))) {
+          throw new Error('资源已经不存在')
+        }
         await this.database.resourceSummaries.put(light)
         await this.database.resourceListSummaries.put(light)
         return summary
@@ -856,6 +874,25 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
       ? new Set([id])
       : undefined
     await this.putStoredResources([encoded], replaceStableBinaryIds)
+  }
+
+  async updateMetadataMany(
+    patches: Array<{ id: string; changes: ResourceMetadataPatch }>,
+  ): Promise<void> {
+    if (!patches.length) return
+    await this.database.transaction(
+      'rw',
+      [
+        this.database.resources,
+        this.database.resourceSummaries,
+        this.database.resourceListSummaries,
+        this.database.assets,
+        this.database.assetFiles,
+      ],
+      async () => {
+        for (const { id, changes } of patches) await this.updateMetadata(id, changes)
+      },
+    )
   }
 
   async updateMany(ids: string[], changes: Partial<Resource>): Promise<void> {
@@ -937,7 +974,11 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     const uniqueIds = Array.from(new Set(ids))
     if (!uniqueIds.length) return
     const versionsTable = this.database.resourceVersions
-    const versionCount = await versionsTable.where('versionGroupId').anyOf(uniqueIds).count()
+    // Dexie's anyOf().count() uses a value cursor; the native facade would load
+    // every selected history attachment just to count it. Keys need no file reads.
+    const versionCount = (
+      await versionsTable.where('versionGroupId').anyOf(uniqueIds).primaryKeys()
+    ).length
     const total = uniqueIds.length + versionCount
     const batchSize = 64
     let completed = 0

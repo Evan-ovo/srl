@@ -14,12 +14,14 @@ import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-@CapacitorPlugin(name = "NativeDiscordSetupBrowser")
-public class NativeDiscordSetupBrowserPlugin extends Plugin {
-    private DiscordSetupBrowserWindow browser;
+@CapacitorPlugin(name = "NativeAssistantBrowser")
+public class NativeAssistantBrowserPlugin extends Plugin {
+    private AssistantBrowserWindow browser;
     private String executor;
     private String petFrame;
     private final Map<String, String> labels = new HashMap<>();
+    private final Map<String, String> referenceKinds = new HashMap<>();
+    private final Set<String> sensitiveTargets = new java.util.HashSet<>();
     private JSObject snapshot;
     private String inspectedUrl;
     private int inspectedDocument = -1;
@@ -30,45 +32,48 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
     private boolean statusChecking;
     private String installationMarker, installationUrl;
     private int installationDocument = -1;
-    private static final Set<String> OPERATIONS = new java.util.HashSet<>(java.util.Arrays.asList("click", "select", "fill", "focus", "scroll", "template", "validate", "guide", "collect-worker", "collect-config", "fill-endpoint", "open-install", "verify-step"));
+    private static final Set<String> OPERATIONS = new java.util.HashSet<>(java.util.Arrays.asList("click", "select", "fill", "focus", "scroll", "press", "template", "validate", "guide", "collect-worker", "collect-config", "fill-endpoint", "open-install", "verify-step"));
     @PluginMethod public void open(PluginCall call) {
+        boolean general = "general".equals(call.getString("purpose", "discord-setup"));
         String url = call.getString("url");
-        if (url != null && !DiscordSetupBrowserPolicy.allowed(url)) { call.reject("配置浏览器支持 GitHub、Cloudflare、Discord 和 workers.dev HTTPS 配置页面"); return; }
-        String step = call.getString("step", "");
+        if (url != null && !(general ? AssistantBrowserPolicy.browseAllowed(url) : AssistantBrowserPolicy.allowed(url))) { call.reject(general ? "只支持公开 HTTPS 网页，拒绝私网、本地地址和非标准端口" : "配置浏览器支持 GitHub、Cloudflare、Discord 和 workers.dev HTTPS 配置页面"); return; }
+        if (general && url == null && browser == null) { call.reject("首次网页任务需要明确的 HTTPS 地址"); return; }
+        String step = general ? "browser-general" : call.getString("step", "");
         JSArray steps = call.getArray("steps", new JSArray());
         boolean knownStep = false;
         for (int index = 0; index < steps.length(); index++) if (step.equals(steps.optJSONObject(index).optString("id"))) knownStep = true;
-        if (!knownStep) { call.reject("配置步骤无效"); return; }
+        if (!general && !knownStep) { call.reject("配置步骤无效"); return; }
         getActivity().runOnUiThread(() -> {
-            if (browser == null) browser = new DiscordSetupBrowserWindow(getActivity(), event -> {
+            if (browser == null) browser = new AssistantBrowserWindow(getActivity(), getBridge().getWebView(), event -> {
                 if ("installation-ready".equals(event.optString("action"))) { installationReady(event.optString("marker")); return; }
                 if ("page-ready".equals(event.optString("action"))) watchInstallation();
                 if ("agent-pause".equals(event.optString("action")) && !browser.active()) cancelInstallationWatch();
                 if ("status-ready".equals(event.optString("action"))) { statusReady(event.optString("marker")); return; }
                 if ("agent-pause".equals(event.optString("action")) && pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; cancelStatus(); waiting.resolve(metadata().put("paused", true)); }
                 if ("page-ready".equals(event.optString("action")) && pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; cancelStatus(); waiting.resolve(metadata()); return; }
-                notifyListeners("setupAction", event);
+                notifyListeners(browser != null && browser.generalMode ? "browserAction" : "setupAction", event);
             });
+            browser.generalMode = general;
             browser.mode = call.getString("mode", "agent");
             if (browser.conversation(call.getString("conversationId", ""))) cancelInstallationWatch();
             browser.installation(call.getString("expectedApplicationId", ""), step);
             browser.agentRun(call.getString("agentRunId", ""));
             String site = call.getString("site", "");
-            String root = "github".equals(site) ? "https://github.com/" : "discord".equals(site) ? "https://discord.com/developers/applications" : "https://dash.cloudflare.com/";
+            String root = general ? url : "github".equals(site) ? "https://github.com/" : "discord".equals(site) ? "https://discord.com/developers/applications" : "https://dash.cloudflare.com/";
             String current = browser.web == null ? null : browser.web.getUrl();
-            String target = DiscordSetupBrowserPolicy.openingUrl(url, current, call.getBoolean("resumeCurrent", false), step.equals(browser.step), root);
-            browser.open(target, step, call.getString("title", "Discord 配置"), call.getString("hint", ""), steps, call.getString("template", ""), call.getBoolean("chooseStep", false), call.getBoolean("darkTheme", false));
+            String target = general && call.getBoolean("resumeCurrent", false) && AssistantBrowserPolicy.browseAllowed(current) ? null : general ? url : AssistantBrowserPolicy.openingUrl(url, current, call.getBoolean("resumeCurrent", false), step.equals(browser.step), root);
+            browser.open(target, step, call.getString("title", general ? "网页任务" : "Discord 配置"), call.getString("hint", ""), steps, call.getString("template", ""), general ? false : call.getBoolean("chooseStep", false), call.getBoolean("darkTheme", false), general);
             browser.petFrame(petFrame);
             if (call.getBoolean("showControls", false)) browser.controls();
             watchInstallation();
-            labels.clear(); snapshot = null; inspectedUrl = null; call.resolve();
+            labels.clear(); referenceKinds.clear(); sensitiveTargets.clear(); snapshot = null; inspectedUrl = null; inspectedDocument = -1; call.resolve();
         });
     }
     @PluginMethod public void inspect(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             if (!ready(call)) return;
             JSObject metadata = metadata();
-            if (browser.paused && !secretReadback() || browser.loading || DiscordSetupBrowserPolicy.userOnly(browser.step, browser.web.getUrl())) { metadata.put("paused", true); call.resolve(metadata); return; }
+            if (browser.paused && !secretReadback() || browser.loading || pageUserOnly()) { metadata.put("paused", true); call.resolve(metadata); return; }
             if (call.getBoolean("metadataOnly", false)) {
                 if (snapshot != null && inspectedDocument == browser.documentId && browser.web.getUrl().equals(inspectedUrl)) {
                     metadata.put("controls", snapshot.optJSONArray("controls")); metadata.put("forkOfTarget", snapshot.optBoolean("forkOfTarget", false));
@@ -83,12 +88,16 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
             }
             String query = call.getString("query", "").trim();
             if (query.length() > 80 || !safe(query).equals(query) || query.matches("(?s).*[\\x00-\\x1f].*")) { call.reject("搜索只接受简短标签或标题，不接受配置值"); return; }
-            JSObject options = new JSObject().put("startSequence", controlSequence).put("query", query).put("step", browser.step).put("secretStage", browser.secretStage); controlSequence += 100;
+            JSObject options = new JSObject().put("startSequence", controlSequence).put("query", query).put("step", browser.step).put("secretStage", browser.secretStage).put("general", browser.generalMode); controlSequence += 100;
             evaluate(call, "inspect", options, value -> {
-                labels.clear(); JSONArray controls = value.optJSONArray("controls");
+                labels.clear(); referenceKinds.clear(); sensitiveTargets.clear(); JSONArray controls = value.optJSONArray("controls");
                 if (controls != null) for (int index = 0; index < controls.length(); index++) {
                     JSONObject control = controls.optJSONObject(index);
-                    if (control != null) labels.put(control.optString("target"), control.optString("label"));
+                    if (control != null) { String id = control.optString("target"); labels.put(id, control.optString("label")); referenceKinds.put(id, control.optString("kind", "control")); if (control.optBoolean("sensitive", true)) sensitiveTargets.add(id); }
+                }
+                for (String key : new String[] { "regions", "links", "forms" }) {
+                    JSONArray refs = value.optJSONArray(key); String kind = "regions".equals(key) ? "region" : "links".equals(key) ? "link" : "form";
+                    if (refs != null) for (int index = 0; index < refs.length(); index++) { JSONObject ref = refs.optJSONObject(index); if (ref != null) { String id = ref.optString("target"); if (!id.isEmpty()) { labels.put(id, ref.optString("label")); referenceKinds.put(id, kind); } } }
                 }
                 if (value.optBoolean("waitingForUser", false)) browser.setPaused(true);
                 JSObject result = metadata(); result.put("controls", controls == null ? new JSArray() : controls);
@@ -96,13 +105,28 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
                 result.put("paused", value.optBoolean("waitingForUser", false));
                 result.put("forkOfTarget", value.optBoolean("forkOfTarget", false));
                 result.put("pageKind", value.optString("pageKind", "")); result.put("headings", value.optJSONArray("headings"));
+                for (String key : new String[] { "title", "text", "nextOffset", "regions", "links", "forms" }) if (value.has(key)) result.put(key, value.opt(key));
                 if (value.has("truncated")) result.put("truncated", value.optBoolean("truncated"));
                 if (value.has("searchMatched")) result.put("searchMatched", value.optBoolean("searchMatched"));
                 if (value.has("applicationList")) result.put("applicationList", value.optJSONObject("applicationList"));
                 if (value.has("secretSavedOnPage")) result.put("secretSavedOnPage", value.optBoolean("secretSavedOnPage"));
                 snapshot = value; inspectedUrl = browser.web.getUrl(); inspectedDocument = browser.documentId;
+                snapshot.put("tabId", browser.activeTabId()); result.put("tabId", browser.activeTabId());
                 call.resolve(result);
             });
+        });
+    }
+    @PluginMethod public void readPage(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!ready(call) || !browser.generalMode) { call.reject("通用网页阅读仅适用于普通网页任务"); return; }
+            Integer document = call.getInt("documentId"), tab = call.getInt("tabId");
+            if (document == null || tab == null || document != browser.documentId || tab != browser.activeTabId() || browser.paused || browser.loading || pageUserOnly()) { call.reject("标签页或网页状态已变化，请先继续任务并重新观察"); return; }
+            String query = call.getString("query", "").trim(), region = call.getString("region", "");
+            int offset = call.getInt("offset", 0), limit = call.getInt("limit", 2400);
+            if (offset < 0 || offset > 1_000_000 || limit < 200 || limit > 4000 || query.length() > 80) { call.reject("正文读取范围无效"); return; }
+            if (!region.isEmpty() && (!labels.containsKey(region) || inspectedDocument != document || !browser.web.getUrl().equals(inspectedUrl) || !regionMatches(region, "region"))) { call.reject("区域引用已失效，请重新观察页面"); return; }
+            JSObject payload = new JSObject().put("general", true).put("query", query).put("regionTarget", region).put("offset", offset).put("limit", limit);
+            evaluate(call, "read-page", payload, value -> call.resolve(value));
         });
     }
     @PluginMethod public void act(PluginCall call) {
@@ -114,22 +138,34 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
             if (("fill-endpoint".equals(operation) || "open-install".equals(operation)) && !"agent".equals(browser.mode)) { call.reject("仅代理模式自动填写交互地址或打开安装链接"); return; }
             Integer documentId = call.getInt("documentId");
             if ("navigate".equals(operation)) {
+                if (browser.generalMode) {
+                    Integer tabId = call.getInt("tabId");
+                    if (documentId == null || documentId != browser.documentId || tabId == null || tabId != browser.activeTabId()) { call.reject("标签页或网页代次已变化，请重新观察后再导航"); return; }
+                }
                 String destination = call.getString("url", "");
-                if (destination.length() > 2000 || !DiscordSetupBrowserPolicy.agentNavigationAllowed(browser.mode, browser.agentRunId, browser.paused && !secretInspection(), browser.loading, browser.failed, browser.step, browser.web.getUrl(), destination)) { call.reject("仅运行中的授权代理任务可导航配置网页；失败公开页可返回其他配置页，不自动重试或越过用户暂停"); return; }
+                boolean allowed = browser.generalMode
+                    ? AssistantBrowserPolicy.generalAgentNavigationAllowed(browser.agentRunId, browser.paused, browser.loading, browser.failed, browser.web.getUrl(), destination)
+                    : AssistantBrowserPolicy.agentNavigationAllowed(browser.mode, browser.agentRunId, browser.paused && !secretInspection(), browser.loading, browser.failed, browser.step, browser.web.getUrl(), destination);
+                if (destination.length() > 2000 || !allowed) { call.reject("仅当前运行任务可导航 HTTPS 公网页面；私网/本地地址、暂停或已变化的页面不能继续"); return; }
                 int beforeDocument = browser.documentId; String beforeUrl = browser.web.getUrl();
-                labels.clear(); snapshot = null;
+                labels.clear(); referenceKinds.clear(); sensitiveTargets.clear(); snapshot = null; inspectedDocument = -1;
                 browser.navigate(destination);
                 call.resolve(new JSObject().put("ok", true).put("dispatched", true).put("verified", false).put("documentId", browser.documentId).put("waitingForPage", browser.loading).put("pageChanged", beforeDocument != browser.documentId || !beforeUrl.equals(browser.web.getUrl())).put("waitingForUser", browser.paused && !browser.loading)); return;
             }
-            if (browser.paused && !secretInspection() || browser.loading || browser.failed || DiscordSetupBrowserPolicy.userOnly(browser.step, browser.web.getUrl())) { call.reject("请用户先完成当前操作，再允许本页协助"); return; }
+            if (browser.paused && !secretInspection() || browser.loading || browser.failed || pageUserOnly()) { call.reject("请用户先完成当前操作，再允许本页协助"); return; }
             if (documentId == null || documentId != browser.documentId) { call.reject("页面已变化，请重新读取"); return; }
+            Integer tabId = call.getInt("tabId");
+            if (browser.generalMode && (tabId == null || tabId != browser.activeTabId())) { call.reject("目标标签页已变化，请重新观察"); return; }
             String target = call.getString("target", "");
             if (!target.isEmpty() && "guide".equals(operation) && (!labels.containsKey(target) || inspectedDocument != browser.documentId || !browser.web.getUrl().equals(inspectedUrl))) { call.reject("指路目标已变化，请重新查看页面"); return; }
             if (!target.isEmpty() && ("fill-endpoint".equals(operation) || "open-install".equals(operation) || "verify-step".equals(operation) || "collect-worker".equals(operation)) && (!labels.containsKey(target) || inspectedDocument != browser.documentId || !browser.web.getUrl().equals(inspectedUrl))) { call.reject("字段已变化，请重新查看实际输入位置"); return; }
-            if (("click".equals(operation) || "select".equals(operation) || "fill".equals(operation) || "focus".equals(operation) || "scroll".equals(operation) && !target.isEmpty()) && (!labels.containsKey(target) || inspectedDocument != browser.documentId || !browser.web.getUrl().equals(inspectedUrl))) { call.reject("控件或页面已变化，请重新读取当前控件"); return; }
+            if (("click".equals(operation) || "select".equals(operation) || "fill".equals(operation) || "focus".equals(operation) || "press".equals(operation) || "scroll".equals(operation) && !target.isEmpty()) && (!labels.containsKey(target) || inspectedDocument != browser.documentId || !browser.web.getUrl().equals(inspectedUrl))) { call.reject("控件或页面已变化，请重新读取当前控件"); return; }
+            String key = call.getString("key", "");
+            if ("press".equals(operation) && (!browser.generalMode || !java.util.Arrays.asList("Tab", "Escape", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete").contains(key))) { call.reject("只支持通用网页任务中的常用按键"); return; }
+            if (browser.generalMode && "fill".equals(operation) && sensitiveTargets.contains(target)) { call.reject("登录凭据和秘密值只能由你自己填写"); return; }
             JSObject payload = new JSObject(); payload.put("target", target);
             payload.put("label", labels.getOrDefault(target, ""));
-            payload.put("value", call.getString("value", "")); payload.put("template", call.getString("template", ""));
+            payload.put("value", call.getString("value", "")); payload.put("template", call.getString("template", "")); payload.put("key", key).put("general", browser.generalMode);
             payload.put("direction", call.getString("direction", "down"));
             payload.put("expectedApplicationId", call.getString("expectedApplicationId", ""));
             payload.put("expectedPublicKey", call.getString("expectedPublicKey", ""));
@@ -162,9 +198,9 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
                 if (browser.paused && !secretInspection() || browser.documentId != documentId) { call.reject("页面或接手状态已变化，未执行"); return; }
                 evaluate(call, operation, payload, call::resolve);
             };
-            if (DiscordSetupBrowserPolicy.requiresConfirmation(operation, labels.getOrDefault(target, "")) && browser.agentRunId.isEmpty()) {
+            if (AssistantBrowserPolicy.requiresConfirmation(operation, labels.getOrDefault(target, "")) && (browser.generalMode || browser.agentRunId.isEmpty())) {
                 new AlertDialog.Builder(getActivity()).setTitle("确认网页修改")
-                    .setMessage(DiscordSetupBrowserPolicy.publicUrl(browser.web.getUrl()) + "\n" + ("template".equals(operation) ? "替换当前编辑内容为教程模板。未提交的编辑会被替换。" : "点击：" + labels.get(target) + "\n将修改当前账号的配置。"))
+                    .setMessage(AssistantBrowserPolicy.publicUrl(browser.web.getUrl()) + "\n" + ("template".equals(operation) ? "替换当前编辑内容为教程模板。未提交的编辑会被替换。" : "点击：" + labels.get(target) + "\n将修改当前账号的配置。"))
                     .setPositiveButton("执行这一步", (dialog, which) -> execute.run()).setNegativeButton("取消", (dialog, which) -> call.resolve(new JSObject().put("ok", false).put("cancelled", true))).setOnCancelListener(dialog -> call.resolve(new JSObject().put("ok", false).put("cancelled", true))).show();
             } else execute.run();
         });
@@ -172,7 +208,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
     private void actSecret(PluginCall call, String operation) {
         Integer documentId = call.getInt("documentId");
         String stage = browser.secretStage, url = browser.web.getUrl();
-        if (browser.loading || browser.failed || documentId == null || documentId != browser.documentId || browser.secretScope == null || !browser.secretScope.equals(DiscordSetupBrowserPolicy.secretScope(url)) || !DiscordSetupBrowserPolicy.secretOperationAllowed(operation, browser.mode, browser.step, url, stage)) { call.reject("仅在用户授权的同一 Worker 固定步骤准备或保存 Secret；页面或接手状态变化时停止"); return; }
+        if (browser.loading || browser.failed || documentId == null || documentId != browser.documentId || browser.secretScope == null || !browser.secretScope.equals(AssistantBrowserPolicy.secretScope(url)) || !AssistantBrowserPolicy.secretOperationAllowed(operation, browser.mode, browser.step, url, stage)) { call.reject("仅在用户授权的同一 Worker 固定步骤准备或保存 Secret；页面或接手状态变化时停止"); return; }
         JSObject payload = new JSObject().put("step", "cf-secret").put("secretStage", stage).put("secretMarker", browser.secretMarker);
         String target = call.getString("target", "");
         if (!target.isEmpty()) {
@@ -194,7 +230,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         };
         if ("submit-secret".equals(operation) && browser.agentRunId.isEmpty()) {
             new AlertDialog.Builder(getActivity()).setTitle("保存并部署 Secret？")
-                .setMessage(DiscordSetupBrowserPolicy.publicUrl(url) + "\n只提交你在本页手填的 DISCORD_BOT_TOKEN，并部署到本次 Worker。软件不读取值；点击不代表部署成功，之后仍需核对生产部署。")
+                .setMessage(AssistantBrowserPolicy.publicUrl(url) + "\n只提交你在本页手填的 DISCORD_BOT_TOKEN，并部署到本次 Worker。软件不读取值；点击不代表部署成功，之后仍需核对生产部署。")
                 .setPositiveButton("保存并部署", (dialog, which) -> execute.run())
                 .setNegativeButton("继续填写", (dialog, which) -> call.resolve(new JSObject().put("ok", false).put("cancelled", true)))
                 .setOnCancelListener(dialog -> call.resolve(new JSObject().put("ok", false).put("cancelled", true))).show();
@@ -205,36 +241,40 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
             if (!ready(call)) return;
             String step = call.getString("step", "");
             Integer documentId = call.getInt("documentId");
-            String checklist = DiscordSetupBrowserPolicy.successChecklist(step);
+            String checklist = AssistantBrowserPolicy.successChecklist(step);
             if (checklist == null || !step.equals(browser.step) || documentId == null || documentId != browser.documentId || browser.loading || browser.failed) { call.reject("页面未加载成功或步骤已变化，请重新核对"); return; }
             String url = browser.web.getUrl();
-            if (!DiscordSetupBrowserPolicy.successLocation(step, url)) { call.reject("请打开本次任务的 Worker 详情或 App 配置页；登录、授权页和总览页不能证明成功"); return; }
+            if (!AssistantBrowserPolicy.successLocation(step, url)) { call.reject("请打开本次任务的 Worker 详情或 App 配置页；登录、授权页和总览页不能证明成功"); return; }
             browser.setPaused(true);
             new AlertDialog.Builder(getActivity()).setTitle("核对本步成功条件")
-                .setMessage(DiscordSetupBrowserPolicy.publicUrl(url) + "\n\n" + checklist + "\n\n这些网页结果由你核对；软件不会把点击或安装链接当作成功。最终还会检查连接与命令。")
+                .setMessage(AssistantBrowserPolicy.publicUrl(url) + "\n\n" + checklist + "\n\n这些网页结果由你核对；软件不会把点击或安装链接当作成功。最终还会检查连接与命令。")
                 .setPositiveButton("以上均已确认", (dialog, which) -> call.resolve(new JSObject().put("confirmed", browser != null && browser.active() && documentId == browser.documentId && step.equals(browser.step) && url.equals(browser.web.getUrl()) && !browser.loading && !browser.failed)))
                 .setNegativeButton("还没完成", (dialog, which) -> call.resolve(new JSObject().put("confirmed", false)))
                 .setOnCancelListener(dialog -> call.resolve(new JSObject().put("confirmed", false))).show();
         });
     }
     private boolean secretInspection() {
-        return browser != null && DiscordSetupBrowserPolicy.secretPublicControlsAllowed(browser.mode, browser.agentRunId, browser.step, browser.web.getUrl(), browser.secretScope, browser.secretStage);
+        return browser != null && AssistantBrowserPolicy.secretPublicControlsAllowed(browser.mode, browser.agentRunId, browser.step, browser.web.getUrl(), browser.secretScope, browser.secretStage);
     }
     private boolean secretReadback() {
-        return browser != null && DiscordSetupBrowserPolicy.secretMetadataAllowed(browser.mode, browser.agentRunId, browser.step, browser.web.getUrl(), browser.secretScope, browser.secretStage);
+        return browser != null && AssistantBrowserPolicy.secretMetadataAllowed(browser.mode, browser.agentRunId, browser.step, browser.web.getUrl(), browser.secretScope, browser.secretStage);
     }
     private boolean ready(PluginCall call) {
         if (browser == null || !browser.active() || browser.web.getUrl() == null) { call.reject("配置浏览器未打开，请先打开当前步骤"); return false; }
-        if (!DiscordSetupBrowserPolicy.browseAllowed(browser.web.getUrl())) { call.reject("当前页面不是受支持的HTTPS网页"); return false; }
+        if (!(browser.generalMode ? AssistantBrowserPolicy.browseAllowed(browser.web.getUrl()) : AssistantBrowserPolicy.allowed(browser.web.getUrl()))) { call.reject("当前页面不是受支持的HTTPS网页"); return false; }
         return true;
     }
+    private boolean pageUserOnly() { return browser != null && (browser.generalMode ? AssistantBrowserPolicy.generalUserOnly(browser.web.getUrl()) : AssistantBrowserPolicy.userOnly(browser.step, browser.web.getUrl())); }
+    private boolean regionMatches(String target, String kind) { return kind.equals(referenceKinds.get(target)); }
     private JSObject metadata() {
-        JSObject value = new JSObject().put("documentId", browser.documentId).put("url", DiscordSetupBrowserPolicy.publicUrl(browser.web.getUrl())).put("loading", browser.loading).put("paused", browser.paused || DiscordSetupBrowserPolicy.userOnly(browser.step, browser.web.getUrl()));
+        String url = browser.generalMode ? AssistantBrowserPolicy.generalPublicUrl(browser.web.getUrl()) : AssistantBrowserPolicy.publicUrl(browser.web.getUrl());
+        String title = browser.web.getTitle() == null ? "" : browser.web.getTitle();
+        JSObject value = new JSObject().put("documentId", browser.documentId).put("tabId", browser.activeTabId()).put("url", url).put("title", safe(title)).put("loading", browser.loading).put("paused", browser.paused || pageUserOnly());
         value.put("chatOpen", browser.chatOpen);
         if ("discord-install".equals(browser.step)) value.put("installationCompleted", browser.installationCompleted && browser.installationApplicationId.matches("[0-9]{17,20}") && browser.installationApplicationId.equals(browser.installationStartedApp));
-        value.put("failed", browser.failed).put("pageAccess", DiscordSetupBrowserPolicy.pageAccess(browser.step, browser.web.getUrl()));
+        value.put("failed", browser.failed).put("pageAccess", browser.generalMode ? AssistantBrowserPolicy.generalPageAccess(browser.web.getUrl()) : AssistantBrowserPolicy.pageAccess(browser.step, browser.web.getUrl()));
         if (snapshot != null && inspectedDocument == browser.documentId && browser.web.getUrl().equals(inspectedUrl) && snapshot.has("pageAccess")) value.put("pageAccess", snapshot.optString("pageAccess"));
-        if ("cf-secret".equals(browser.step) && browser.secretScope != null && browser.secretScope.equals(DiscordSetupBrowserPolicy.secretScope(browser.web.getUrl())) && !browser.loading && !browser.secretStage.isEmpty()) value.put("secretStage", browser.secretStage);
+        if ("cf-secret".equals(browser.step) && browser.secretScope != null && browser.secretScope.equals(AssistantBrowserPolicy.secretScope(browser.web.getUrl())) && !browser.loading && !browser.secretStage.isEmpty()) value.put("secretStage", browser.secretStage);
         return value;
     }
     interface Result { void accept(JSObject value); }
@@ -246,7 +286,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         if (browser == null || !browser.active() || browser.loading || browser.failed) return;
         String url = browser.web.getUrl(), app = browser.installationApplicationId;
         boolean started = !app.isEmpty() && app.equals(browser.installationStartedApp);
-        if (!"discord-install".equals(browser.step) || !DiscordSetupBrowserPolicy.installationResultPage(url, app, started)) { cancelInstallationWatch(); return; }
+        if (!"discord-install".equals(browser.step) || !AssistantBrowserPolicy.installationResultPage(url, app, started)) { cancelInstallationWatch(); return; }
         if (installationDocument == browser.documentId && url.equals(installationUrl)) return;
         cancelInstallationWatch();
         installationDocument = browser.documentId; installationUrl = url;
@@ -271,7 +311,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
     }
     private void loadExecutor() throws Exception {
         if (executor != null) return;
-        try (java.io.InputStream stream = getContext().getAssets().open("discord-setup.js"); java.io.ByteArrayOutputStream content = new java.io.ByteArrayOutputStream()) {
+        try (java.io.InputStream stream = getContext().getAssets().open("assistant-browser.js"); java.io.ByteArrayOutputStream content = new java.io.ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192]; int count;
             while ((count = stream.read(buffer)) != -1) content.write(buffer, 0, count);
             executor = new String(content.toByteArray(), StandardCharsets.UTF_8);
@@ -282,17 +322,17 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
             if (!ready(call)) return;
             String app = call.getString("applicationId", ""), key = call.getString("publicKey", "");
             Integer requestedDocument = call.getInt("documentId");
-            if (!"agent".equals(browser.mode) || browser.loading || browser.failed || requestedDocument == null || requestedDocument != browser.documentId || !DiscordSetupBrowserPolicy.botSecretLocation(browser.web.getUrl(), app)) { call.reject("请先打开本次 App 的 Bot 页面并显示 Token"); return; }
+            if (!"agent".equals(browser.mode) || browser.loading || browser.failed || requestedDocument == null || requestedDocument != browser.documentId || !AssistantBrowserPolicy.botSecretLocation(browser.web.getUrl(), app)) { call.reject("请先打开本次 App 的 Bot 页面并显示 Token"); return; }
             int document = browser.documentId;
             try {
                 loadExecutor();
                 String script = "(" + executor.trim().replaceFirst(";\\s*$", "") + ")(\"capture-bot-secret\"," + new JSObject().put("expectedApplicationId", app) + ")";
                 browser.web.evaluateJavascript(script, raw -> {
-                    if (browser == null || !browser.active() || browser.documentId != document || !DiscordSetupBrowserPolicy.botSecretLocation(browser.web.getUrl(), app)) { call.reject("网页已变化，密钥结果已丢弃"); return; }
+                    if (browser == null || !browser.active() || browser.documentId != document || !AssistantBrowserPolicy.botSecretLocation(browser.web.getUrl(), app)) { call.reject("网页已变化，密钥结果已丢弃"); return; }
                     JSONObject receipt = null;
                     try {
                         receipt = new JSONObject(raw);
-                        if (!receipt.optBoolean("ok", false)) { call.reject(DiscordSetupBrowserPolicy.botSecretCaptureError(receipt.optString("reason", ""))); return; }
+                        if (!receipt.optBoolean("ok", false)) { call.reject(AssistantBrowserPolicy.botSecretCaptureError(receipt.optString("reason", ""))); return; }
                         Map<String, String> encrypted = DiscordSetupSecretTransfer.seal(receipt.optString("secret", ""), key);
                         JSObject result = new JSObject(); encrypted.forEach(result::put); call.resolve(result);
                     } catch (Exception ignored) { call.reject("本机密钥加密转填未完成，未发送给模型"); }
@@ -305,13 +345,14 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         getActivity().runOnUiThread(() -> {
             if (!ready(call)) return;
             Integer document = call.getInt("documentId");
-            if (!"agent".equals(browser.mode) || browser.agentRunId.isEmpty() || !"cf-secret".equals(browser.step) || !"input".equals(browser.secretStage) || browser.loading || browser.failed || document == null || document != browser.documentId || browser.secretScope == null || !browser.secretScope.equals(DiscordSetupBrowserPolicy.secretScope(browser.web.getUrl()))) { call.reject("请先准备本次 Worker 的 Secret 表单"); return; }
+            if (!"agent".equals(browser.mode) || browser.agentRunId.isEmpty() || !"cf-secret".equals(browser.step) || !"input".equals(browser.secretStage) || browser.loading || browser.failed || document == null || document != browser.documentId || browser.secretScope == null || !browser.secretScope.equals(AssistantBrowserPolicy.secretScope(browser.web.getUrl()))) { call.reject("请先准备本次 Worker 的 Secret 表单"); return; }
             JSObject payload = new JSObject().put("step", "cf-secret").put("secretStage", "input").put("secretMarker", browser.secretMarker).put("secret", call.getString("secret", ""));
             evaluate(call, "fill-stored-secret", payload, result -> call.resolve(new JSObject().put("ok", result.optBoolean("ok", false))));
         });
     }
     private void evaluate(PluginCall call, String operation, JSObject payload, Result done) {
         int documentId = browser.documentId; String url = browser.web.getUrl();
+        int tabId = browser.activeTabId();
         String runId = browser.agentRunId;
         String step = browser.step;
         boolean fixedSecret = "prepare-secret".equals(operation) || "submit-secret".equals(operation) || "fill-stored-secret".equals(operation);
@@ -327,16 +368,16 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
                 JSONObject receipt;
                 try {
                     receipt = new JSONObject(raw);
-                    if (receipt.has("waitingForUser")) receipt.put("waitingForUser", DiscordSetupBrowserPolicy.userHandoffRequired(operation, receipt.optBoolean("waitingForUser", false), runId));
+                    if (receipt.has("waitingForUser")) receipt.put("waitingForUser", AssistantBrowserPolicy.userHandoffRequired(operation, receipt.optBoolean("waitingForUser", false), runId));
                 }
                 catch (Exception error) { rejectEvaluation(call, "网页未返回可验证回执，操作是否生效尚未核验；先 inspect 现有结果，不重复提交，没有发送页面源码"); return; }
                 if (fixedSecret) {
                     if ("fill-stored-secret".equals(operation) && (runId.isEmpty() || !runId.equals(browser.agentRunId) || documentId != browser.documentId || !url.equals(browser.web.getUrl()))) { rejectEvaluation(call, "任务或输入页面已变化，未继续保存"); return; }
-                    if (!"cf-secret".equals(browser.step) || !payload.optString("secretStage").equals(browser.secretStage) || browser.secretScope == null || !browser.secretScope.equals(DiscordSetupBrowserPolicy.secretScope(browser.web.getUrl()))) { rejectEvaluation(call, "Secret 页面或接手状态变化，结果已丢弃"); return; }
-                } else if (documentId != browser.documentId || !url.equals(browser.web.getUrl()) || browser.paused && !secretInspection() && !("inspect".equals(operation) && secretReadback())) {
-                    JSObject dispatched = navigationReceipt(operation, receipt, documentId != browser.documentId || !url.equals(browser.web.getUrl()), !runId.isEmpty() && runId.equals(browser.agentRunId));
+                    if (!"cf-secret".equals(browser.step) || !payload.optString("secretStage").equals(browser.secretStage) || browser.secretScope == null || !browser.secretScope.equals(AssistantBrowserPolicy.secretScope(browser.web.getUrl()))) { rejectEvaluation(call, "Secret 页面或接手状态变化，结果已丢弃"); return; }
+                } else if (documentId != browser.documentId || tabId != browser.activeTabId() || !url.equals(browser.web.getUrl()) || browser.paused && !secretInspection() && !("inspect".equals(operation) && secretReadback())) {
+                    JSObject dispatched = navigationReceipt(operation, receipt, documentId != browser.documentId || tabId != browser.activeTabId() || !url.equals(browser.web.getUrl()), !runId.isEmpty() && runId.equals(browser.agentRunId));
                     if (dispatched != null) {
-                        dispatched.put("documentId", browser.documentId).put("waitingForPage", browser.loading).put("waitingForUser", dispatched.optBoolean("waitingForUser", false) || browser.paused && !browser.loading);
+                        dispatched.put("documentId", browser.documentId).put("tabId", browser.activeTabId()).put("waitingForPage", browser.loading).put("waitingForUser", dispatched.optBoolean("waitingForUser", false) || browser.paused && !browser.loading);
                         done.accept(dispatched); return;
                     }
                     rejectEvaluation(call, "页面或接手状态已变化，本次读取/核验不用于当前页；重新 inspect，不据此认定此前保存或部署失败"); return;
@@ -350,7 +391,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
                     JSObject result = sanitize(receipt, "collect-config".equals(operation) && payload.optBoolean("allowParameters", false));
                     if ("open-install".equals(operation) && result.optBoolean("ok", false)) {
                         String installUrl = receipt.optString("installUrl", "");
-                        if (!DiscordSetupBrowserPolicy.installLink(installUrl, payload.optString("expectedApplicationId"))) { rejectEvaluation(call, "安装链接不属于本次 App 或超出安装范围"); return; }
+                        if (!AssistantBrowserPolicy.installLink(installUrl, payload.optString("expectedApplicationId"))) { rejectEvaluation(call, "安装链接不属于本次 App 或超出安装范围"); return; }
                         browser.setPaused(true);
                         browser.installationStartedApp = payload.optString("expectedApplicationId");
                         browser.web.loadUrl(installUrl);
@@ -381,7 +422,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         if (pendingWait == call) { pendingWait = null; cancelStatus(); }
         call.reject(message);
     }
-    private static String safe(String value) { String clean = DiscordSetupBrowserPolicy.maskSecrets(value); return clean.substring(0, Math.min(140, clean.length())); }
+    private static String safe(String value) { String clean = AssistantBrowserPolicy.maskSecrets(value); return clean.substring(0, Math.min(140, clean.length())); }
     static JSObject navigationReceipt(String operation, JSONObject receipt, boolean pageChanged, boolean sameRun) {
         boolean applied = receipt.optBoolean("dispatched", false)
             || ("fill".equals(operation) || "fill-endpoint".equals(operation)) && receipt.optBoolean("filled", false)
@@ -394,7 +435,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         if (receipt.opt("waitingForUser") instanceof Boolean) result.put("waitingForUser", receipt.optBoolean("waitingForUser"));
         return result;
     }
-    private static String safeReply(String value) { String clean = DiscordSetupBrowserPolicy.maskSecrets(value); return clean.substring(0, Math.min(16000, clean.length())); }
+    private static String safeReply(String value) { String clean = AssistantBrowserPolicy.maskSecrets(value); return clean.substring(0, Math.min(16000, clean.length())); }
     static JSObject sanitize(JSONObject value, boolean allowParameters) {
         JSObject result = new JSObject().put("ok", value.optBoolean("ok", false));
         if (value.optString("pageAccess", "").matches("public|authentication|protected")) result.put("pageAccess", value.optString("pageAccess"));
@@ -411,6 +452,24 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         if ("discord-app-list".equals(pageKind) && applications != null && applications.optString("state").matches("available|empty|unknown") && applications.optInt("count", -1) >= 0) result.put("applicationList", new JSObject().put("state", applications.optString("state")).put("count", applications.optInt("count")));
         JSONArray headings = value.optJSONArray("headings");
         if (headings != null) { JSArray clean = new JSArray(); for (int index = 0; index < Math.min(12, headings.length()); index++) clean.put(safe(headings.optString(index))); result.put("headings", clean); }
+        if (value.has("title")) result.put("title", safe(value.optString("title")));
+        if (value.has("text")) result.put("text", safeReply(value.optString("text")));
+        if (value.has("nextOffset") && !value.isNull("nextOffset")) result.put("nextOffset", Math.max(0, value.optInt("nextOffset", 0)));
+        for (String key : new String[] { "regions", "links", "forms" }) {
+            JSONArray refs = value.optJSONArray(key); if (refs == null) continue; JSArray clean = new JSArray();
+            for (int index = 0; index < Math.min("links".equals(key) ? 50 : 30, refs.length()); index++) {
+                JSONObject ref = refs.optJSONObject(index); if (ref == null || !ref.optString("target").matches("[0-9]{1,10}")) continue;
+                JSObject item = new JSObject().put("target", ref.optString("target")).put("label", safe(ref.optString("label")));
+                if ("links".equals(key)) {
+                    String href = ref.optString("url", "");
+                    if (!AssistantBrowserPolicy.browseAllowed(href)) continue;
+                    item.put("url", AssistantBrowserPolicy.generalPublicUrl(href)).put("disabled", ref.optBoolean("disabled", false));
+                }
+                if ("forms".equals(key)) item.put("controls", Math.max(0, Math.min(100, ref.optInt("controls", 0)))).put("invalid", ref.optBoolean("invalid", false));
+                clean.put(item);
+            }
+            result.put(key, clean);
+        }
         String stage = value.optString("secretStage", "");
         if (stage.matches("prepare|input|submit|saved|submitted")) result.put("secretStage", stage);
         String preparedAction = value.optString("preparedAction", "");
@@ -461,10 +520,80 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         return result;
     }
     @PluginMethod public void close(PluginCall call) { getActivity().runOnUiThread(() -> { if (browser != null && call.getBoolean("keepRunning", false)) { browser.hideForChat(); call.resolve(); return; } cancelStatus(); cancelInstallationWatch(); if (browser != null) browser.close(); if (pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; waiting.resolve(metadata().put("paused", true)); } call.resolve(); }); }
+    @PluginMethod public void chatPresentation(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (browser == null || !browser.chatPresentation(call.getString("mode", ""), call.getString("conversationId", ""), call.getObject("bounds"))) { call.reject("当前网页任务不支持此显示方式"); return; }
+            call.resolve();
+        });
+    }
+    @PluginMethod public void back(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!ready(call)) return;
+            Integer expectedTab = call.getInt("tabId");
+            if (browser.generalMode && (expectedTab == null || expectedTab != browser.activeTabId())) { call.reject("标签页已变化，请重新读取"); return; }
+            boolean moved = browser.goBack(); labels.clear(); referenceKinds.clear(); sensitiveTargets.clear(); snapshot = null; inspectedDocument = -1;
+            call.resolve(metadata().put("moved", moved));
+        });
+    }
+    @PluginMethod public void listTabs(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (browser == null || !browser.active()) { call.resolve(new JSObject().put("tabs", new JSArray())); return; }
+            JSArray tabs = new JSArray(); JSONArray values = browser.tabSnapshot();
+            for (int i = 0; i < values.length(); i++) try { tabs.put(values.getJSONObject(i)); } catch (Exception ignored) {}
+            call.resolve(new JSObject().put("tabs", tabs));
+        });
+    }
+    @PluginMethod public void switchTab(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (browser == null || !browser.active() || !browser.generalMode) { call.reject("当前没有通用网页任务标签页"); return; }
+            Integer id = call.getInt("tabId"); if (id == null || id < 1 || !browser.switchTab(id)) { call.reject("标签页不存在或已关闭"); return; }
+            labels.clear(); referenceKinds.clear(); sensitiveTargets.clear(); snapshot = null; inspectedDocument = -1;
+            call.resolve(metadata());
+        });
+    }
+    @PluginMethod public void wait(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!ready(call) || !browser.generalMode) { call.reject("等待仅适用于通用网页任务"); return; }
+            Integer document = call.getInt("documentId"), tab = call.getInt("tabId"); int delay = call.getInt("milliseconds", 1000);
+            if (document == null || tab == null || document != browser.documentId || tab != browser.activeTabId() || delay < 0 || delay > 30000 || browser.paused) { call.reject("等待范围无效或页面任务已暂停"); return; }
+            String run = browser.agentRunId;
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                if (browser == null || !browser.active() || !run.equals(browser.agentRunId) || document != browser.documentId || tab != browser.activeTabId() || browser.paused) { call.reject("等待期间任务或页面已变化，旧操作已丢弃"); return; }
+                call.resolve(metadata());
+            }, delay);
+        });
+    }
+    @PluginMethod public void capture(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!ready(call) || !browser.generalMode) { call.reject("截图仅适用于通用网页任务"); return; }
+            Integer expectedDocument = call.getInt("documentId"), expectedTab = call.getInt("tabId");
+            if (expectedDocument == null || expectedTab == null || expectedDocument != browser.documentId || expectedTab != browser.activeTabId() || browser.loading || browser.failed || browser.paused || pageUserOnly()) { call.reject("当前页处于登录、私密、暂停或已变化状态，不能截图"); return; }
+            int document = browser.documentId, tab = browser.activeTabId(); String run = browser.agentRunId;
+            try {
+                loadExecutor();
+                String script = "(" + executor.trim().replaceFirst(";\\s*$", "") + ")(\"inspect\"," + new JSObject().put("general", true).put("startSequence", 0).put("query", "").toString() + ")";
+                browser.web.evaluateJavascript(script, raw -> {
+                    if (browser == null || !browser.active() || document != browser.documentId || tab != browser.activeTabId() || !run.equals(browser.agentRunId)) { call.reject("页面或任务已变化，截图未采用"); return; }
+                    try {
+                        JSONObject inspected = new JSONObject(raw);
+                        if (!"public".equals(inspected.optString("pageAccess"))) { call.reject("当前页包含登录或秘密字段，截图已阻止"); return; }
+                        android.graphics.Bitmap source = android.graphics.Bitmap.createBitmap(Math.max(1, browser.web.getWidth()), Math.max(1, browser.web.getHeight()), android.graphics.Bitmap.Config.ARGB_8888);
+                        android.graphics.Canvas canvas = new android.graphics.Canvas(source); browser.web.draw(canvas);
+                        int max = 1280; float scale = Math.min(1f, (float)max / Math.max(source.getWidth(), source.getHeight()));
+                        android.graphics.Bitmap output = scale < 1f ? android.graphics.Bitmap.createScaledBitmap(source, Math.max(1, Math.round(source.getWidth() * scale)), Math.max(1, Math.round(source.getHeight() * scale)), true) : source;
+                        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream(); output.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, bytes);
+                        if (output != source) output.recycle(); source.recycle();
+                        if (bytes.size() > 2_000_000) { call.reject("网页截图超过安全大小限制"); return; }
+                        call.resolve(new JSObject().put("dataUrl", "data:image/jpeg;base64," + android.util.Base64.encodeToString(bytes.toByteArray(), android.util.Base64.NO_WRAP)).put("documentId", document).put("tabId", tab));
+                    } catch (Exception error) { call.reject("无法读取目标网页截图"); }
+                });
+            } catch (Exception error) { call.reject("网页截图不可用"); }
+        });
+    }
     @PluginMethod public void waitReady(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             if (browser == null || !browser.active()) { call.reject("配置浏览器未打开"); return; }
-            if (!browser.loading || DiscordSetupBrowserPolicy.authentication(browser.web.getUrl())) { call.resolve(metadata()); return; }
+            if (!browser.loading || AssistantBrowserPolicy.authentication(browser.web.getUrl())) { call.resolve(metadata()); return; }
             if (pendingWait != null) { call.reject("已有网页加载等待，未重复等待"); return; }
             pendingWait = call;
         });
@@ -473,7 +602,7 @@ public class NativeDiscordSetupBrowserPlugin extends Plugin {
         getActivity().runOnUiThread(() -> {
             if (!ready(call)) return;
             String target = call.getString("target", ""); Integer documentId = call.getInt("documentId");
-            if (pendingWait != null || !DiscordSetupBrowserPolicy.statusWaitAllowed(browser.mode, browser.agentRunId, browser.paused, browser.loading, browser.failed, browser.step, browser.web.getUrl()) || documentId == null || documentId != browser.documentId || inspectedDocument != documentId || !browser.web.getUrl().equals(inspectedUrl) || !labels.containsKey(target)) { call.reject("请先观察当前运行中的实际状态；不启动重复等待"); return; }
+            if (pendingWait != null || !AssistantBrowserPolicy.statusWaitAllowed(browser.mode, browser.agentRunId, browser.paused, browser.loading, browser.failed, browser.step, browser.web.getUrl()) || documentId == null || documentId != browser.documentId || inspectedDocument != documentId || !browser.web.getUrl().equals(inspectedUrl) || !labels.containsKey(target)) { call.reject("请先观察当前运行中的实际状态；不启动重复等待"); return; }
             String marker = "srl-" + java.util.UUID.randomUUID();
             JSObject payload = new JSObject().put("step", browser.step).put("target", target).put("label", labels.get(target)).put("marker", marker);
             pendingWait = call; statusMarker = marker; statusPayload = payload;

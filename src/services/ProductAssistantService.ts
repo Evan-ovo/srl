@@ -45,7 +45,12 @@ import {
   type AssistantAppCommand,
   type AssistantAppSummary,
 } from './ProductAssistantAppSession'
-import type { MainApiService, MainApiConfig, MainApiToolCall } from './MainApiService'
+import type {
+  MainApiService,
+  MainApiConfig,
+  MainApiToolCall,
+  MainApiContentPart,
+} from './MainApiService'
 
 export interface AssistantImage {
   id: string
@@ -101,6 +106,7 @@ export interface AssistantContext {
   toolCallingEnabled?: boolean
   canRunPageScripts?: boolean
   canConfigureDiscordBrowser?: boolean
+  canUseBrowser?: boolean
   toolCallLimit?: number
   canSearchWeb?: boolean
   comparisonId?: string
@@ -159,6 +165,7 @@ export type AssistantReply =
   | { action: 'online'; operation: 'search-web' | 'read-webpage'; args: Record<string, string> }
   | { action: 'run-page-script'; code: string; answer: string }
   | { action: 'discord-setup'; args: Record<string, string> }
+  | { action: 'browser'; args: Record<string, string> }
   | { action: 'pet-expression'; expression: AssistantPetExpression; message: string }
   | { action: 'custom-tools'; operation: 'list' | 'run'; args: Record<string, string> }
   | { action: 'answer'; answer: string }
@@ -355,6 +362,11 @@ export class ProductAssistantService {
         if (!host.getContext().canConfigureDiscordBrowser)
           throw new Error('当前 APK 没有配置浏览器能力')
         const value = await execute({ action: 'discord-setup', args })
+        return { ok: value.ok !== false, text: value.text, ...value.data }
+      }
+      if (call.name === 'browser') {
+        if (!host.getContext().canUseBrowser) throw new Error('当前设备没有通用网页协助能力')
+        const value = await execute({ action: 'browser', args })
         return { ok: value.ok !== false, text: value.text, ...value.data }
       }
       if (call.name === 'select_mode') {
@@ -907,10 +919,18 @@ export class ProductAssistantService {
                   ? 'cancelled'
                   : 'failed',
           })
+          const imageDataUrl = typeof value.imageDataUrl === 'string' ? value.imageDataUrl : ''
+          if (imageDataUrl) delete value.imageDataUrl
+          const toolContent: string | MainApiContentPart[] = imageDataUrl
+            ? [
+                { type: 'text', text: JSON.stringify(value) },
+                { type: 'image', dataUrl: imageDataUrl },
+              ]
+            : JSON.stringify(value)
           messages.push({
             role: 'tool',
             toolCallId: call.id,
-            content: JSON.stringify(value),
+            content: toolContent,
             toolError: value.ok === false,
           })
         }

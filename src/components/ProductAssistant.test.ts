@@ -15,7 +15,7 @@ import {
 } from '../services/ProductAssistantContext'
 import ProductAssistantSettings from './ProductAssistantSettings.vue'
 import ProductAssistant from './ProductAssistant.vue'
-import * as nativeDiscordBrowser from '../services/NativeDiscordSetupBrowser'
+import * as nativeDiscordBrowser from '../services/AssistantBrowserRuntime'
 import { assistantPetCue } from '../core/ProductAssistantPetState'
 import type { AssistantPreferences } from '../services/ProductAssistantWorkspaceService'
 const discordSetup = vi.hoisted(() => ({
@@ -168,6 +168,64 @@ async function send(w: ReturnType<typeof render>, text = '卡片改浅紫') {
   await flushPromises()
 }
 describe('ProductAssistant chat', () => {
+  it('executes queued webpage work in the retained hidden task chat without opening it or aborting when expanded', async () => {
+    const value = {
+      id: 'background-task',
+      title: 'Discord Bridge 网页协助',
+      history: [],
+      input: '',
+      images: [],
+      updatedAt: 1,
+    }
+    workspace.initialize.mockResolvedValueOnce(value)
+    workspace.continueDiscordSetupConversation.mockResolvedValue(value)
+    discordSetup.assistantConversationId.mockResolvedValue(value.id)
+    discordSetup.agentRunId.mockReturnValue('background-run')
+    nativeDiscordBrowser.discordSetupSession.active = true
+    nativeDiscordBrowser.discordSetupSession.assistantConversationId = value.id
+    nativeDiscordBrowser.discordSetupSession.agentRunning = true
+    let finish!: (result: AssistantRunResult) => void
+    let pendingSignal!: AbortSignal
+    const reply = vi
+      .spyOn(ProductAssistantService.prototype, 'reply')
+      .mockImplementation((_request, _config, signal) => {
+        pendingSignal = signal
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      })
+    const wrapper = mount(ProductAssistant, {
+      props: {
+        getContext: () => context,
+        execute: vi.fn(),
+        compact: true,
+        visible: false,
+        backgroundTask: true,
+      },
+    })
+    try {
+      await flushPromises()
+      discordSetup.peekAssistantRequest.mockReturnValueOnce('检查当前部署结果')
+      window.dispatchEvent(new Event('srl:discord-setup-assist'))
+      await flushPromises()
+      expect(reply).toHaveBeenCalledOnce()
+      expect(pendingSignal.aborted).toBe(false)
+      await wrapper.setProps({ visible: true, compact: false })
+      expect(pendingSignal.aborted).toBe(false)
+      expect(reply).toHaveBeenCalledOnce()
+      await wrapper.setProps({ visible: false, compact: true })
+      expect(pendingSignal.aborted).toBe(false)
+    } finally {
+      finish?.({ text: '已核验部署', images: [] })
+      await flushPromises()
+      wrapper.unmount()
+      discordSetup.assistantConversationId.mockReset()
+      discordSetup.agentRunId.mockReset()
+      nativeDiscordBrowser.discordSetupSession.active = false
+      nativeDiscordBrowser.discordSetupSession.agentRunning = false
+      nativeDiscordBrowser.discordSetupSession.assistantConversationId = ''
+    }
+  })
   it('loads the task conversation into the existing compact chat without generating or continuing work', async () => {
     const value = {
       id: 'setup-chat',
@@ -191,7 +249,8 @@ describe('ProductAssistant chat', () => {
     try {
       await flushPromises()
       expect(workspace.continueDiscordSetupConversation).toHaveBeenCalledWith('setup-chat')
-      expect(wrapper.find('.assistant-return-browser').exists()).toBe(true)
+      expect(wrapper.find('.assistant-return-browser').exists()).toBe(false)
+      expect(wrapper.find('[aria-label="网页协助操作"]').exists()).toBe(true)
       expect(reply).not.toHaveBeenCalled()
       expect(discordSetup.continueInTaskConversation).not.toHaveBeenCalled()
     } finally {
@@ -202,7 +261,7 @@ describe('ProductAssistant chat', () => {
       discordSetup.assistantConversationId.mockReset()
     }
   })
-  it('provides an explicit return to the retained configuration browser without sending an AI request', async () => {
+  it('keeps one task-controls entry in the chat header without an extra return button or AI request', async () => {
     workspace.initialize.mockResolvedValueOnce({
       id: 'task-chat',
       title: 'Discord Bridge 网页协助',
@@ -224,17 +283,28 @@ describe('ProductAssistant chat', () => {
       await wrapper.get('.feature-app-header__back').trigger('click')
       expect(wrapper.emitted('back')).toHaveLength(1)
       expect(discordSetup.returnToBrowser).not.toHaveBeenCalled()
-      await wrapper.get('.assistant-return-browser').trigger('click')
-      expect(discordSetup.returnToBrowser).toHaveBeenCalledOnce()
+      expect(wrapper.find('.assistant-return-browser').exists()).toBe(false)
+      await wrapper.get('[aria-label="网页协助操作"]').trigger('click')
+      expect(discordSetup.returnToBrowser).toHaveBeenCalledExactlyOnceWith(true)
+      expect(reply).not.toHaveBeenCalled()
+      nativeDiscordBrowser.discordSetupSession.agentRunning = true
+      await wrapper.vm.$nextTick()
+      expect(wrapper.findAll('[aria-label="暂停网页协助"]')).toHaveLength(1)
+      expect(wrapper.find('[aria-label="生成回复"]').exists()).toBe(false)
+      discordSetup.pauseAgent.mockClear()
+      await wrapper.get('[aria-label="暂停网页协助"]').trigger('click')
+      expect(discordSetup.pauseAgent).toHaveBeenCalledOnce()
       expect(reply).not.toHaveBeenCalled()
       await wrapper.setProps({ compact: true })
       await wrapper.get('[aria-label="关闭快捷对话"]').trigger('click')
       expect(wrapper.emitted('back')).toHaveLength(2)
       expect(discordSetup.returnToBrowser).toHaveBeenCalledOnce()
       nativeDiscordBrowser.discordSetupSession.webStepActive = false
+      nativeDiscordBrowser.discordSetupSession.agentRunning = false
       nativeDiscordBrowser.discordSetupSession.assistantConversationId = ''
       await wrapper.vm.$nextTick()
       expect(wrapper.find('.assistant-return-browser').exists()).toBe(false)
+      expect(wrapper.find('[aria-label="网页协助操作"]').exists()).toBe(false)
     } finally {
       wrapper.unmount()
       nativeDiscordBrowser.discordSetupSession.active = false

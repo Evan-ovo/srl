@@ -1,4 +1,7 @@
-import type { ResourceStorageAdapter } from '../storage/ResourceStorageAdapter'
+import type {
+  ResourceMetadataPatch,
+  ResourceStorageAdapter,
+} from '../storage/ResourceStorageAdapter'
 import { galleryOwnerId, isResourceGalleryImage } from '../types/ResourceGallery'
 import { moveResourceGallery } from './ResourceGalleryService'
 import { RestoreDuplicateIndex } from '../utils/RestoreIdentity'
@@ -92,12 +95,18 @@ export async function updateDetails(
 
   const hadManualOverride = readResourceType(resource.metadata.manualTypeOverride)
 
-  const summaries = await storage.listSummaries()
-  const existingIds = new Set(summaries.map((item) => item.id))
   const previousRelatedIds = new Set(getRelatedResourceIds(resource))
-  const relatedResourceIds = Array.from(
-    new Set(details.relatedResourceIds.filter((id) => id !== resource.id && existingIds.has(id))),
-  )
+  const requestedIds = new Set(details.relatedResourceIds.filter((id) => id !== resource.id))
+  const affectedResources = []
+  // Binding edits need metadata for the selected neighbours, never the whole library
+  // or their original card files. Older adapters retain their targeted get() fallback.
+  for (const id of new Set([...previousRelatedIds, ...requestedIds])) {
+    if (id === resource.id) continue
+    const item = await (storage.getSummary ? storage.getSummary(id) : storage.get(id))
+    if (item) affectedResources.push(item)
+  }
+  const existingIds = new Set(affectedResources.map((item) => item.id))
+  const relatedResourceIds = [...requestedIds].filter((id) => existingIds.has(id))
   const nextRelatedIds = new Set(relatedResourceIds)
   const categoryIds = Array.from(new Set(details.categoryIds.filter(Boolean)))
   const now = Date.now()
@@ -138,49 +147,62 @@ export async function updateDetails(
     delete metadata.characterOverrides
     delete metadata.characterContentEdits
   }
-  const updatedSource = normalizeResource({
-    ...resource,
-    name,
-    description: details.description.trim(),
-    type: details.type,
-    categoryId: categoryIds[0] ?? null,
-    categoryIds,
-    relatedResourceIds,
-    sourceLinks: normalizeResourceLinks(sourceLinkDrafts),
-    tags: normalizeTags(details.tags),
-    metadata,
-    updatedAt: now,
-  })
-  const affectedIds = Array.from(new Set([...previousRelatedIds, ...nextRelatedIds])).filter(
-    (id) => id !== resource.id,
-  )
-  const affectedResources = (await Promise.all(affectedIds.map((id) => storage.get(id)))).flatMap(
-    (item) => (item ? [item] : []),
-  )
-  const changedResources = [
-    updatedSource,
-    ...affectedResources.map((item) => {
-      const itemRelatedIds = new Set(getRelatedResourceIds(item))
-      if (nextRelatedIds.has(item.id)) itemRelatedIds.add(resource.id)
-      else itemRelatedIds.delete(resource.id)
-      return normalizeResource({
-        ...item,
-        relatedResourceIds: Array.from(itemRelatedIds),
+  // updateMetadata merges metadata patches; explicit undefined removes fields that
+  // the complete replacement previously dropped (author note and card overrides).
+  for (const key of Object.keys(resource.metadata)) {
+    if (!(key in metadata)) metadata[key] = undefined
+  }
+  const patches: Array<{ id: string; changes: ResourceMetadataPatch }> = [
+    {
+      id: resource.id,
+      changes: {
+        name,
+        description: details.description.trim(),
+        type: details.type,
+        categoryId: categoryIds[0] ?? null,
+        categoryIds,
+        relatedResourceIds,
+        sourceLinks: normalizeResourceLinks(sourceLinkDrafts),
+        tags: normalizeTags(details.tags),
+        metadata,
+        updatedAt: now,
+      },
+    },
+  ]
+  for (const item of affectedResources) {
+    const itemRelatedIds = new Set(getRelatedResourceIds(item))
+    if (nextRelatedIds.has(item.id)) itemRelatedIds.add(resource.id)
+    else itemRelatedIds.delete(resource.id)
+    const manualIds = item.metadata.manuallyBoundResourceIds
+    const nextManualIds = Array.isArray(manualIds)
+      ? manualIds.filter((id) => typeof id === 'string' && itemRelatedIds.has(id))
+      : undefined
+    const nextIds = Array.from(itemRelatedIds)
+    const previousIds = getRelatedResourceIds(item)
+    if (
+      nextIds.length === previousIds.length &&
+      nextIds.every((id, index) => id === previousIds[index]) &&
+      (!nextManualIds || (Array.isArray(manualIds) && nextManualIds.length === manualIds.length))
+    )
+      continue
+    patches.push({
+      id: item.id,
+      changes: {
+        relatedResourceIds: nextIds,
         metadata: {
           ...item.metadata,
-          ...(Array.isArray(item.metadata.manuallyBoundResourceIds)
+          ...(nextManualIds
             ? {
-                manuallyBoundResourceIds: item.metadata.manuallyBoundResourceIds.filter(
-                  (id) => typeof id === 'string' && itemRelatedIds.has(id),
-                ),
+                manuallyBoundResourceIds: nextManualIds,
               }
             : {}),
         },
         updatedAt: now,
-      })
-    }),
-  ]
-  await storage.saveMany(changedResources)
+      },
+    })
+  }
+  if (storage.updateMetadataMany) await storage.updateMetadataMany(patches)
+  else for (const { id, changes } of patches) await storage.update(id, changes)
 }
 
 export async function restoreRelatedLinks(

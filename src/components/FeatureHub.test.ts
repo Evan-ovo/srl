@@ -143,7 +143,7 @@ const resources: ResourceSummary[] = [
   },
 ]
 
-function render() {
+function render(overrides: Record<string, unknown> = {}) {
   return mount(FeatureHub, {
     props: {
       resources,
@@ -154,6 +154,7 @@ function render() {
       customCss: '',
       folderBusy: false,
       cabinetResourceIds: [],
+      ...overrides,
     },
   })
 }
@@ -336,6 +337,40 @@ describe('FeatureHub', () => {
     expect(document.body.classList.contains('feature-app-scroll-lock')).toBe(false)
     await wrapper.get('.feature-app-header__back').trigger('click')
     expect(wrapper.attributes('data-feature-page')).toBe('home')
+  })
+  it('routes the assistant entry to the existing pet chat when shared chat mode is enabled', async () => {
+    const wrapper = render({ sharedAssistantChat: true })
+    try {
+      await flushPromises()
+      await wrapper.get('.feature-app--assistant').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.emitted('open-assistant-chat')).toHaveLength(1)
+      expect(wrapper.attributes('data-feature-page')).toBe('home')
+      expect(wrapper.find('[data-testid="assistant-page"]').exists()).toBe(false)
+      expect(wrapper.emitted('assistant-retained')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+  it('restores the assistant route through the shared pet chat instead of mounting another chat', async () => {
+    const previousResumeState = localStorage.getItem('srl.appResume.v1')
+    localStorage.setItem(
+      'srl.appResume.v1',
+      JSON.stringify({ feature: 'featureHub', subpage: 'assistant', savedAt: 1 }),
+    )
+    const wrapper = render({ sharedAssistantChat: true })
+    try {
+      await flushPromises()
+
+      expect(wrapper.emitted('open-assistant-chat')).toHaveLength(1)
+      expect(wrapper.attributes('data-feature-page')).toBe('home')
+      expect(wrapper.find('[data-testid="assistant-page"]').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+      if (previousResumeState === null) localStorage.removeItem('srl.appResume.v1')
+      else localStorage.setItem('srl.appResume.v1', previousResumeState)
+    }
   })
   it('retains the same assistant after back, library hiding and reopening, without intercepting hidden back events', async () => {
     const wrapper = render()

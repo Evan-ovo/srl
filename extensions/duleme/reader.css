@@ -537,6 +537,10 @@ svg {
   scrollbar-width: none;
   overscroll-behavior: contain;
   touch-action: pan-y;
+  overflow-anchor: none;
+}
+#readingFlow {
+  position: relative;
 }
 #readingViewport::-webkit-scrollbar {
   display: none;
@@ -891,6 +895,48 @@ textarea {
 }
 .button-row > * {
   flex: 1;
+}
+.script-quick-actions .hint {
+  margin: 0 0 14px;
+}
+.script-action-group + .script-action-group {
+  margin-top: 16px;
+}
+.script-action-group h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.script-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.script-action-button {
+  min-height: 44px;
+  max-width: 100%;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--soft);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.script-action-button:active {
+  background: var(--line);
+}
+.script-action-footer {
+  margin-top: 14px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.script-action-footer button {
+  min-height: 44px;
+  padding: 7px 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 .segmented {
   display: flex;

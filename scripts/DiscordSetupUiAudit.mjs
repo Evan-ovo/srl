@@ -1,4 +1,4 @@
-/* global document, window, getComputedStyle, innerWidth, HTMLTextAreaElement */
+/* global document, window, getComputedStyle, innerWidth, HTMLTextAreaElement, Event */
 import process from 'node:process'
 import console from 'node:console'
 import { Buffer } from 'node:buffer'
@@ -14,6 +14,7 @@ import { startAuditPreview } from './AuditPreviewServer.mjs'
 const root = process.cwd(),
   fixture = resolve(root, '.codex-tmp', process.env.SRL_AUDIT_RUN, 'setup-ui')
 const output = resolve(process.env.SRL_AUDIT_OUTPUT_DIR)
+const taskChatAudit = ['task-chat', 'return-browser'].includes(process.env.SRL_DISCORD_UI_SCOPE)
 const path = (p) => resolve(root, p).replaceAll('\\', '/')
 const permissionSource = await readFile(
   resolve(root, 'src/services/DiscordSetupService.ts'),
@@ -51,7 +52,7 @@ window.testUnlock=()=>confirmAction({title:'先设置密钥统一密码',centere
 import '${path('src/styles/Foundation.css')}';
 import '${path('src/styles/GlassRefinement.css')}';
 document.documentElement.dataset.theme=new URL(location.href).searchParams.get('theme')||'light';
-const guideOpen=ref(true);const returnView=new URL(location.href).searchParams.get('screen')==='return-browser';createApp({render:()=>returnView?h('section',{class:'product-assistant'},[h(Header,{title:'蒜惹菈',layout:'panel',backLabel:'返回功能桌面',onBack:()=>window.exited=true},{actions:()=>[h('button',{class:'assistant-return-browser',onClick:()=>window.returned=true},'返回网页配置'),h('button',{class:'feature-header-action','aria-label':'聊天设置'},'⋯')]}),h('div',{class:'chat-messages'},[h('article',{class:'chat-message chat-message--assistant'},[h('div',{class:'chat-message__content'},'Discord 授权已完成，返回网页继续配置。')])]),h('form',{class:'chat-composer'},[h('div',{class:'chat-configuration-actions'},[h('span','已暂停'),h('button',{type:'button'},'网页配置操作')]),h('div',{class:'chat-composer__row'},[h('textarea',{placeholder:'说说你想改什么…'})])])]):h('main',{style:'padding:12px'},[h(Confirm),h(Setup),h(Guide,{open:guideOpen.value,onClose:()=>guideOpen.value=false,deploymentMode:'github',applicationId:'',publicKey:'',botToken:'',installationUrl:'',developerAppUrl:'',developerBotUrl:''}),h(Pet,{theme:document.documentElement.dataset.theme,layoutMode:'grid',uiFontScale:'standard',customCss:'',navigate:async()=>{}})])}).mount('#app');
+const guideOpen=ref(true);createApp({render:()=>h('main',{style:'padding:12px'},[h(Confirm),h(Setup),h(Guide,{open:guideOpen.value,onClose:()=>guideOpen.value=false,deploymentMode:'github',applicationId:'',publicKey:'',botToken:'',installationUrl:'',developerAppUrl:'',developerBotUrl:''}),h(Pet,{theme:document.documentElement.dataset.theme,layoutMode:'grid',uiFontScale:'standard',customCss:'',navigate:async()=>{}})])}).mount('#app');
 const style=document.createElement('style');style.textContent='body{margin:0;color:var(--color-ink);background:linear-gradient(145deg,var(--color-accent-soft),var(--color-canvas));font-family:sans-serif}';document.head.append(style);
 `,
 )
@@ -62,17 +63,65 @@ const mocks = {
   UseProductAssistantPreferences: `import {ref} from 'vue';export const useProductAssistantPreferences=()=>ref({name:'蒜惹菈',petAssetMode:'svg',petWalkingAnimation:false})`,
   ProductAssistantScreenshot: `export const captureAssistantPage=async()=>{}`,
   ProductAssistantPetAssets: `export const loadAssistantPetAssets=async()=>undefined;export const releaseAssistantPetAssets=()=>{};export const downloadAssistantPetAssets=async()=>{}`,
-  NativeDiscordSetupBrowser: `import {reactive} from 'vue';export const hasDiscordSetupBrowser=()=>true;export const discordSetupSession=reactive({active:false,browserVisible:false});export const nativeDiscordSetupBrowser={pet:async({dataUrl})=>{window.petFrame=dataUrl}}`,
+  AssistantBrowserRuntime: `import {reactive} from 'vue';export const hasDiscordSetupBrowser=()=>true;export const discordSetupSession=reactive({active:false,browserVisible:false});export const nativeDiscordSetupBrowser={pet:async({dataUrl})=>{window.petFrame=dataUrl}}`,
+}
+if (taskChatAudit) {
+  delete mocks.AppearanceStudio
+  mocks.ProductAssistantPetAssets +=
+    ';export const clearAssistantPetAssets=async()=>{};export const hasDownloadedAssistantPetAssets=async()=>false'
+  mocks.OfficialAssistantGate = `export {default} from '${path('src/components/ProductAssistant.vue')}'`
+  mocks.AppContainer = `
+export * from '${path('src/core/AppContainer.ts')}?real';
+const chat={id:'task-chat-fixture',title:'Discord Bridge 网页协助',updatedAt:1,input:'',images:[],history:[{id:'u',role:'user',text:'请继续配置'},{id:'a',role:'assistant',text:'正在检查当前网页，已保存的配置不会重复填写。'}]};
+const preferences={name:'蒜惹菈',avatar:'data:image/png;base64,${(await readFile(resolve(root, 'public/icons/assistant-avatar.png'))).toString('base64')}',desktopPet:true,petAssetMode:'svg',petWalkingAnimation:false,mode:'agent'};
+const listeners=new Set();
+window.testTaskReply=()=>{chat.history=[...chat.history,{id:'next',role:'assistant',text:'已完成网页检查，接着处理配置。'}];for(const listener of listeners)listener({...chat})};
+export const productAssistantWorkspaceService={preferences:()=>preferences,onPreferencesChange:()=>()=>{},savePreferences:async()=>preferences,initialize:async()=>chat,continueDiscordSetupConversation:async()=>chat,save:async(value)=>{Object.assign(chat,value);return chat},flush:async()=>{},list:async()=>[chat],switch:async()=>chat,templates:()=>[],memories:()=>[],config:()=>({}),onConversationChange:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},onConversationActivityChange:()=>()=>{}};
+export const discordSetupService={assistantConversationId:async()=>chat.id,peekAssistantRequest:()=>undefined,peekAssistantDraft:()=>undefined,takeAssistantDraft:()=>undefined,agentRunId:()=>undefined,returnToBrowser:async()=>{window.returned=true;window.taskSession.browserVisible=true}};
+`
+  mocks.AssistantBrowserRuntime = `
+export * from '${path('src/services/AssistantBrowserRuntime.ts')}?real';
+import {reactive} from 'vue';
+export const hasDiscordSetupBrowser=()=>true;
+export const discordSetupSession=reactive({active:true,webStepActive:true,browserVisible:false,agentRunning:true,assistantConversationId:'task-chat-fixture'});
+export const assistantBrowserSession=discordSetupSession;window.taskSession=discordSetupSession;
+export const nativeDiscordSetupBrowser={pet:async()=>{},addListener:async()=>({remove:async()=>{}}),chatPresentation:async(options)=>{window.presentation=options}};
+export const nativeAssistantBrowser=nativeDiscordSetupBrowser;
+`
+  await writeFile(
+    resolve(fixture, 'main.js'),
+    `
+import {createApp,h} from 'vue';
+import Pet from '${path('src/components/ProductAssistantPet.vue')}';
+import '${path('src/styles/Foundation.css')}';
+import '${path('src/styles/GlassRefinement.css')}';
+import '${path('src/styles/ProductAssistant.css')}';
+import '${path('src/styles/AppearanceStudio.css')}';
+import '${path('src/styles/ProductAssistantPet.css')}';
+document.documentElement.dataset.theme=new URL(location.href).searchParams.get('theme')||'light';
+createApp({render:()=>h('main',{class:'app-shell'},'资源库背景')}).mount('#app');
+const petHost=document.createElement('div');document.body.append(petHost);
+createApp({render:()=>h(Pet,{theme:document.documentElement.dataset.theme,layoutMode:'grid',uiFontScale:'standard',customCss:'',navigate:async()=>{}})}).mount(petHost);
+const style=document.createElement('style');style.textContent='body{margin:0;font-family:sans-serif;color:var(--color-ink);background:var(--color-canvas)}';document.head.append(style);
+`,
+  )
 }
 await build({
   configFile: false,
   root: fixture,
   logLevel: 'error',
+  define: {
+    __SRL_PREINSTALL_OFFICIAL_APPS__: 'false',
+    __SRL_PREINSTALL_OFFICIAL_APP_IDS__: 'undefined',
+  },
   plugins: [
     {
       name: 'setup-fixture',
       enforce: 'pre',
       resolveId(source) {
+        if (taskChatAudit && source === 'virtual:srl-official-app-entries')
+          return '\0setup:virtual-apps'
+        if (taskChatAudit && source.startsWith('virtual:srl-')) return '\0setup:virtual-source'
         const name = source
           .split('/')
           .at(-1)
@@ -80,6 +129,9 @@ await build({
         if (Object.hasOwn(mocks, name)) return '\0setup:' + name
       },
       load(id) {
+        if (id === '\0setup:virtual-apps')
+          return 'export const entries={};export const runtimeEntry=undefined'
+        if (id === '\0setup:virtual-source') return 'export default {}'
         if (id.startsWith('\0setup:')) return mocks[id.slice(7)]
       },
     },
@@ -94,64 +146,96 @@ const preview = await startAuditPreview({
 })
 const browser = await launchAuditBrowser(auditEnvironment())
 let cases = 0
-if (process.env.SRL_DISCORD_UI_SCOPE === 'return-browser') {
+if (taskChatAudit) {
   try {
-    for (const [width, height] of [
-      [320, 800],
-      [375, 812],
-      [390, 844],
-      [430, 932],
-    ]) {
+    for (const width of [320, 390, 430])
       for (const theme of ['light', 'dark']) {
         const context = await browser.newContext({
-          viewport: { width, height },
+          viewport: { width, height: 844 },
           hasTouch: true,
           isMobile: true,
         })
         try {
-          const page = await context.newPage()
-          await page.goto(process.env.SRL_PREVIEW_URL + '?screen=return-browser&theme=' + theme)
-          const button = page.getByRole('button', { name: '返回网页配置', exact: true }).last()
-          await button.waitFor()
+          const page = await context.newPage(),
+            errors = []
+          page.on('pageerror', (error) => errors.push(error.message))
+          await page.goto(preview.url + '?theme=' + theme)
+          await page.locator('.assistant-pet-dialog').waitFor({ state: 'attached' })
+          await page.evaluate(() => window.dispatchEvent(new Event('srl:discord-setup-quick-chat')))
+          const chat = page.locator('.assistant-pet-dialog')
+          await chat.waitFor({ state: 'visible' })
+          await page
+            .getByText('正在检查当前网页，已保存的配置不会重复填写。', { exact: true })
+            .waitFor()
+          if (await page.evaluate(() => window.presentation?.mode !== 'compact'))
+            throw Error('Task chat did not open compact')
+          await page.getByRole('button', { name: '展开完整对话', exact: true }).tap()
+          await page.locator('.assistant-browser-preview').waitFor()
+          await page.waitForFunction(() => window.presentation?.mode === 'fullscreen')
+          if (await page.getByRole('button', { name: '返回网页配置', exact: true }).count())
+            throw Error('Duplicate webpage return button remains')
+          if ((await page.getByRole('button', { name: '网页协助操作', exact: true }).count()) !== 1)
+            throw Error('Task controls should have one entry')
+          if ((await page.getByRole('button', { name: '暂停网页协助', exact: true }).count()) !== 1)
+            throw Error('Task pause should have one entry')
+          if (await page.getByRole('button', { name: '生成回复', exact: true }).count())
+            throw Error('Agent chat retains duplicate manual generation')
+          if (await page.getByRole('button', { name: '蒜惹菈快捷对话', exact: true }).isVisible())
+            throw Error('Pet remains visible in full chat')
+          await page.evaluate(() => window.testTaskReply())
+          await page.getByText('已完成网页检查，接着处理配置。', { exact: true }).waitFor()
           const valid = await page.evaluate(() => {
-            const title = document.querySelector('.feature-app-header h1').getBoundingClientRect()
-            const button = document
-              .querySelector('.assistant-return-browser')
-              .getBoundingClientRect()
+            const r = document.querySelector('.assistant-browser-preview').getBoundingClientRect()
+            const composer = document.querySelector('.chat-composer').getBoundingClientRect()
             return (
+              r.width > 0 &&
+              r.right <= innerWidth &&
+              r.bottom <= composer.top &&
               document.documentElement.scrollWidth <= innerWidth &&
-              title.top < 80 &&
-              getComputedStyle(document.querySelector('.chat-composer')).backgroundColor ===
-                'rgba(0, 0, 0, 0)' &&
-              title.right <= button.left &&
-              button.right <= innerWidth
+              window.taskSession.agentRunning
             )
           })
-          if (!valid)
-            throw new Error('Return header overflows or overlaps at ' + width + '/' + theme)
-          await page.getByRole('button', { name: '返回功能桌面', exact: true }).tap()
+          if (!valid) {
+            console.log(
+              await page.evaluate(() => ({
+                preview: document
+                  .querySelector('.assistant-browser-preview')
+                  .getBoundingClientRect()
+                  .toJSON(),
+                composer: document.querySelector('.chat-composer').getBoundingClientRect().toJSON(),
+                width: innerWidth,
+                scrollWidth: document.documentElement.scrollWidth,
+                running: window.taskSession.agentRunning,
+              })),
+            )
+            await page.screenshot({ path: resolve(output, 'task-chat-failed.png') })
+            throw Error(
+              'Preview overflows, overlaps composer, or task stopped at ' + width + '/' + theme,
+            )
+          }
+          if (width === 390 && theme === 'light')
+            await page.screenshot({ path: resolve(output, 'task-chat-full.png') })
+          await page.getByRole('button', { name: '查看当前网页并返回网页协助', exact: true }).tap()
+          await chat.waitFor({ state: 'hidden' })
           if (
-            !(await page.evaluate(() => window.exited)) ||
-            (await page.evaluate(() => window.returned))
+            !(await page.evaluate(
+              () =>
+                window.returned &&
+                window.taskSession.agentRunning &&
+                !document.documentElement.dataset.assistantBrowserChat,
+            ))
           )
-            throw new Error('Back action loops into the browser')
-          await button.tap()
-          if (!(await page.evaluate(() => window.returned)))
-            throw new Error('Return action not dispatched')
-          if ((width === 320 && theme === 'light') || (width === 430 && theme === 'dark'))
-            await page.screenshot({
-              path: resolve(output, 'return-' + width + '-' + theme + '.png'),
-            })
+            throw Error('Preview return restarted or paused task')
+          if (errors.length) throw Error(errors.join('\n'))
           cases++
         } finally {
           await context.close()
         }
       }
-    }
     console.log(
-      'Return-to-browser header passed: ' +
+      'Task chat passed: ' +
         cases +
-        ' touch viewport/theme cases; native dialog/device not exercised.',
+        ' real touch layouts, actual shared chat components; native preview validated separately in emulator.',
     )
   } finally {
     await browser.close()
@@ -159,6 +243,7 @@ if (process.env.SRL_DISCORD_UI_SCOPE === 'return-browser') {
   }
   process.exit(0)
 }
+
 try {
   for (const [width, height] of [
     [320, 800],
@@ -381,7 +466,10 @@ try {
     )
     const page = await context.newPage()
     await page.goto('https://github.com/fixture/SRL-Discord-Bridge/edit/main/wrangler.jsonc')
-    const executor = await readFile(path('android/app/src/main/assets/discord-setup.js'), 'utf8')
+    const executor = await readFile(
+      path('android/app/src/main/assets/assistant-browser.js'),
+      'utf8',
+    )
     const module = await bundle({
       entryPoints: [path('src/services/DiscordBridgeDeployService.ts')],
       bundle: true,
@@ -440,7 +528,7 @@ try {
           'https://dash.cloudflare.com/fixture/workers/services/view/srl-discord-source-bridge/production/settings',
         )
         const executor = await readFile(
-          path('android/app/src/main/assets/discord-setup.js'),
+          path('android/app/src/main/assets/assistant-browser.js'),
           'utf8',
         )
         await secretPage.evaluate(

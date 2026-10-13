@@ -110,7 +110,7 @@
         "owner": "src/storage/OfficialAppDataStorage.ts",
         "reason": "助手对话、记忆、偏好、独立 APP 项目和任务模板由 OfficialAppDataStorage 清除；助手外观 CSS 单独选择是否清理。历史找回仅补缺失列表与旧库独立副本，停止/重做去重，不覆盖当前对话或清理旧库；已有回收站旧副本恢复档与外部ZIP不由该入口读取"
       },
-      "appearance": "undefined；网页观察覆盖已渲染公开控件（屏幕外先focus）；原生点击、新窗口opener回传及暂停由DiscordSetupBrowserWindowTest隔离模拟器覆盖，模型不收网页截图。"
+      "appearance": "未使用资源库界面截图；网页截图仅由通用 browser 工具按需从目标 WebView 采集，并在用户请求的模型工具回执中传递。网页执行复用 NativeAssistantBrowserPlugin / AssistantBrowserWindow；AssistantBrowserWindowTest 覆盖原生交互生命周期。上传/下载尚未连接 NativeFilePicker / NativeFileExport Owner。"
     },
     "folders": {
       "owner": "src/services/ExportService.ts",
@@ -207,7 +207,7 @@
         "src/components/TavernBridgeCenter.test.ts",
         "src/services/RelayWorkerSettingsService.test.ts",
         "src/components/RelayWorkerSettings.test.ts",
-        "cloudflare/WorkerBridge.test.js",
+        "cloudflare/Worker.test.js",
         "src/components/TavernParcelExchange.test.ts",
         "scripts/AuditEnvironment.test.mjs",
         "src/services/ExportService.download.test.ts",

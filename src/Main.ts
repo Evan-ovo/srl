@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 
+import { placeStartupAppearanceAfterApplicationStyles } from './core/StartupAppearance'
 import { installAndroidAppUpdateChecks } from './core/AndroidAppUpdate'
 // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=official-apk-update-bootstrap-import
 import { appDatabase } from './core/AppDatabaseInstance'
@@ -8,12 +9,6 @@ import { installGlobalErrorHandlers } from './core/FatalErrorNotice'
 import { installNativeRuntime } from './core/NativeRuntime'
 import { installPerformanceMonitor } from './core/PerformanceMonitor'
 import { installSystemInsetsService } from './core/SystemInsetsService'
-import {
-  beginStartupAttempt,
-  installSafeModeBanner,
-  installStartupRescuePrompt,
-  isSafeModeActive,
-} from './core/SafeStartup'
 import { disableServiceWorkerForNativeApp, installServiceWorker } from './core/ServiceWorkerUpdate'
 import {
   canUseAndroidNativeDexieCore,
@@ -35,6 +30,10 @@ import './styles/Foundation.css'
 import './styles/DesignSystemRefinement.css'
 import './styles/ProjectNoticeDialog.css'
 import './styles/IOSStandaloneSafeAreaSurface.css'
+
+// Bootstrap inserts saved CSS before dynamically importing Main. Move that same
+// style node after Main's CSS dependencies so user theme tokens take precedence.
+placeStartupAppearanceAfterApplicationStyles()
 
 let viewportFrame: number | undefined
 let androidNativeDatabaseMigrationWarning: string | undefined
@@ -61,14 +60,11 @@ async function prepareAndroidNativeDatabaseBeforeMount(): Promise<boolean> {
     if (!root || progress) return
     const shell = document.createElement('main')
     shell.setAttribute('aria-live', 'polite')
-    shell.style.cssText =
-      'min-height:100dvh;display:grid;place-content:center;padding:24px;text-align:center;background:#edf7f7;color:#173b40;font:16px system-ui,sans-serif'
+    shell.id = 'srl-native-preparation'
     const title = document.createElement('h1')
     title.textContent = '正在准备本机数据'
-    title.style.cssText = 'font-size:1.25rem;margin:0 0 12px'
     progress = document.createElement('p')
     progress.textContent = '正在保存并核验旧数据，原件会保留。'
-    progress.style.cssText = 'margin:0;max-width:30rem;line-height:1.6'
     shell.append(title, progress)
     root.replaceChildren(shell)
   }
@@ -102,8 +98,6 @@ async function prepareAndroidNativeDatabaseBeforeMount(): Promise<boolean> {
       const recover = document.createElement('button')
       recover.type = 'button'
       recover.textContent = '核验并恢复 IndexedDB 副本'
-      recover.style.cssText =
-        'margin:20px auto 0;padding:12px 18px;border:1px solid #8caeb0;border-radius:12px;background:#fff;color:#173b40;font:inherit'
       recover.addEventListener('click', async () => {
         recover.disabled = true
         recover.textContent = '正在逐项恢复并核验…'
@@ -306,9 +300,6 @@ function scheduleViewportState(): void {
 if (!(await prepareAndroidNativeDatabaseBeforeMount()))
   throw new Error('Android 原生数据库启动已停止')
 applyViewportState()
-const startupAttempt = beginStartupAttempt()
-if (isSafeModeActive()) installSafeModeBanner()
-else if (startupAttempt.rescueRequired) installStartupRescuePrompt()
 installNativeRuntime()
 installAndroidAppUpdateChecks()
 void disableServiceWorkerForNativeApp()
@@ -331,18 +322,14 @@ app.mount('#app')
 if (androidNativeDatabaseMigrationWarning) {
   const notice = document.createElement('aside')
   notice.setAttribute('role', 'alert')
-  notice.style.cssText =
-    'position:fixed;z-index:2147483000;top:calc(env(safe-area-inset-top,0px) + 8px);left:12px;right:12px;max-width:760px;margin:0 auto;padding:12px 14px;border:1px solid #d7a04b;border-radius:12px;background:#fff8e8;color:#513b1c;box-shadow:0 8px 24px #0002;font:14px/1.5 system-ui,sans-serif;pointer-events:none'
+  notice.className = 'srl-native-migration-notice'
   const title = document.createElement('strong')
   title.textContent = '本机资源库迁移未完成'
   const description = document.createElement('p')
-  description.style.cssText = 'margin:4px 0 0;overflow-wrap:anywhere'
   description.textContent = `当前仍使用原本机数据库；附件暂时无法自动导入。失败原因：${androidNativeDatabaseMigrationWarning}`
   const dismiss = document.createElement('button')
   dismiss.type = 'button'
   dismiss.textContent = '知道了'
-  dismiss.style.cssText =
-    'display:block;margin:8px 0 0 auto;padding:4px 10px;border:1px solid #bca77f;border-radius:8px;background:#fff;color:inherit;font:inherit;pointer-events:auto'
   dismiss.addEventListener('click', () => notice.remove())
   notice.append(title, description, dismiss)
   document.body.append(notice)

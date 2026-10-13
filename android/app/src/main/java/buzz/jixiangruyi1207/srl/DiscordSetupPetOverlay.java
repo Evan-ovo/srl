@@ -58,6 +58,7 @@ final class DiscordSetupPetOverlay {
         });
     }
     void say(String text) { bubble.setText(text.substring(0, Math.min(160, text.length()))); bubble.setVisibility(text.isEmpty() ? android.view.View.GONE : android.view.View.VISIBLE); pet.post(() -> place(pet.getX(), pet.getY())); }
+    void visible(boolean value) { pet.setVisibility(value ? android.view.View.VISIBLE : android.view.View.GONE); }
     void rest() {
         pet.post(() -> place(8, host.getHeight() - host.getPaddingBottom() - pet.getHeight() - Math.round(56 * host.getResources().getDisplayMetrics().density)));
     }

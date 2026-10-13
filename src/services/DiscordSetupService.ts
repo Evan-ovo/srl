@@ -20,7 +20,7 @@ import {
   type DiscordSetupBrowser,
   type DiscordBrowserEvent,
   type DiscordBrowserSnapshot,
-} from './NativeDiscordSetupBrowser'
+} from './AssistantBrowserRuntime'
 import {
   loadDiscordSourceConnectionSettings,
   replaceDiscordSourceConnectionSettings,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import './Styles.css'
-import { discordSetupSession } from './services/NativeDiscordSetupBrowser'
+import { discordSetupSession } from './services/AssistantBrowserRuntime'
 import './styles/DuplicateCleaner.css'
 import { useCustomUiViews } from './composables/UseCustomUiViews'
 import ProductAssistantGuidance from './components/ProductAssistantGuidance.vue'
@@ -40,6 +40,7 @@ const assistantPreferences = useProductAssistantPreferences()
 const fullAssistantVisible = ref(false)
 const assistantBusy = ref(false)
 const assistantDestination = ref<string>()
+const assistantPetChatRequest = ref(0)
 const NativeExportDialog = createAsyncPanel(
   '保存文件',
   () => import('./components/NativeExportDialog.vue'),
@@ -354,12 +355,14 @@ const assistantHubRetained = ref(false)
 const assistantFeatureHubProps = computed(() => ({
   navigateLibrary: navigateAssistantLibrary,
   assistantDestination: assistantDestination.value,
+  sharedAssistantChat: Boolean(assistantPreferences.value.desktopPet) || discordSetupSession.active,
 }))
 const assistantFeatureHubListeners = computed(() => ({
   'assistant-destination-consumed': () => (assistantDestination.value = undefined),
   'assistant-visibility': (value: boolean) => (fullAssistantVisible.value = value),
   'assistant-activity': (value: boolean) => (assistantBusy.value = value),
   'assistant-retained': () => (assistantHubRetained.value = true),
+  'open-assistant-chat': () => (assistantPetChatRequest.value += 1),
   'save-assistant-css': (value: string) => saveCustomUiCss(value, { assistant: true }),
 }))
 
@@ -1211,6 +1214,7 @@ const isBatchBarVisible = computed(
     <ProductAssistantGuidance />
     <ProductAssistantPet
       v-if="assistantPreferences.desktopPet || discordSetupSession.active"
+      :open-chat-request="assistantPetChatRequest"
       :assistant-busy="assistantBusy"
       :hidden="fullAssistantVisible"
       :theme="theme"

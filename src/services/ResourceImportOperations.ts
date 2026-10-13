@@ -698,18 +698,6 @@ export async function importFilesSerial(
         contentHash = await context.hash()
       }
       options.signal?.throwIfAborted()
-      const recognizedCharacterCard =
-        await operations.resourceService.findCharacterCardByContentHash(contentHash)
-      if (recognizedCharacterCard?.matchedBy === 'recognized-hash') {
-        results.push({
-          status: 'duplicate',
-          fileName: file.name,
-          message: `此前识别过「${recognizedCharacterCard.resource.name}」的此文件，已自动跳过重复导入`,
-          resource: recognizedCharacterCard.resource,
-          reclassified: false,
-        })
-        continue
-      }
       if (completedContentHashes.has(contentHash.toLowerCase())) {
         const committed =
           (await operations.storage.findByHash(contentHash)) ??
@@ -788,6 +776,23 @@ export async function importFilesSerial(
       const parsed =
         nativeParsed ?? (await context.parse((source) => operations.parserRegistry.parse(source)))
       options.signal?.throwIfAborted()
+      // A new persona is not a candidate for a remembered character-card file.
+      // Direct current/history hash checks above still protect every resource type.
+      // Wait for the cached parse before loading this character-only alias index.
+      if (parsed.type === RESOURCE_TYPE.CHARACTER_CARD) {
+        const recognizedCharacterCard =
+          await operations.resourceService.findCharacterCardByContentHash(contentHash)
+        if (recognizedCharacterCard?.matchedBy === 'recognized-hash') {
+          results.push({
+            status: 'duplicate',
+            fileName: file.name,
+            message: `此前识别过「${recognizedCharacterCard.resource.name}」的此文件，已自动跳过重复导入`,
+            resource: recognizedCharacterCard.resource,
+            reclassified: false,
+          })
+          continue
+        }
+      }
       await operations.ensureParsedFingerprints(parsed)
       await ensureVersionIndex()
       if (candidateIndex) {

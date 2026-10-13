@@ -149,6 +149,16 @@ it('embeds actions without a nested form and returns from editing to the same de
   expect(w.find('form').exists()).toBe(false)
   expect(w.emitted('close')).toBeUndefined()
 })
+it('puts an embedded personal-resource editor on its own layer while editing', async () => {
+  const w = mount(PersonalResourceEditor, {
+    props: { kind: 'secret', resource, embedded: true },
+    global: { stubs: { Teleport: true } },
+  })
+  await flushPromises()
+  expect(w.find('.personal-resource-editor-overlay').exists()).toBe(false)
+  await button(w, '编辑').trigger('click')
+  expect(w.find('.personal-resource-editor-overlay').exists()).toBe(true)
+})
 it('does not expose empty editing or allow overwrite after a read failure', async () => {
   mocks.read.mockRejectedValue(new Error('读取失败'))
   const w = mountEditor('pocketPhone')

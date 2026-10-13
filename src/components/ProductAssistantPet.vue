@@ -3,7 +3,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { createAsyncPanel } from '../core/AsyncPanel'
 import { getAssistantNavigationTargets } from '../core/FeatureAppRegistry'
 import { getAssistantVisibleScope } from '../core/ProductAssistantViewContext'
-import { productAssistantWorkspaceService as workspace } from '../core/AppContainer'
+import {
+  productAssistantWorkspaceService as workspace,
+  discordSetupService,
+} from '../core/AppContainer'
 import { useProductAssistantPreferences } from '../composables/UseProductAssistantPreferences'
 import { captureAssistantPage } from '../services/ProductAssistantScreenshot'
 import { confirmAction } from '../composables/UseConfirmDialog'
@@ -21,7 +24,7 @@ import {
   hasDiscordSetupBrowser,
   nativeDiscordSetupBrowser,
   discordSetupSession,
-} from '../services/NativeDiscordSetupBrowser'
+} from '../services/AssistantBrowserRuntime'
 import { renderAssistantPetFrame } from '../services/ProductAssistantPetFrame'
 import DiscordSetupHelp from './DiscordSetupHelp.vue'
 import type { FeatureHubProps } from '../composables/UseFeatureHub'
@@ -41,6 +44,7 @@ const props = defineProps<
     assistantBusy?: boolean
     navigate: (id: string, guide?: string) => Promise<void>
     hidden?: boolean
+    openChatRequest?: number
   }
 >()
 const emit = defineEmits<{
@@ -52,6 +56,7 @@ const preferences = useProductAssistantPreferences()
 const button = ref<HTMLButtonElement>()
 const bubble = ref<HTMLButtonElement>()
 const dialog = ref<HTMLDialogElement>()
+const browserPreview = ref<HTMLButtonElement>()
 const open = ref(false)
 const expanded = ref(false)
 const visited = ref(false)
@@ -67,7 +72,18 @@ const helpMenuOpen = ref(false)
 const helpAvailable = computed(
   () => hasDiscordSetupBrowser() && assistantHelpContext.value === 'discord-bridge',
 )
-const petVisible = computed(() => !props.hidden || discordSetupSession.active)
+const petVisible = computed(() => !props.hidden && !(open.value && expanded.value))
+const taskChat = computed(
+  () => discordSetupSession.active && Boolean(discordSetupSession.assistantConversationId),
+)
+watch(
+  taskChat,
+  (active) => {
+    if (active) visited.value = true
+    else delete document.documentElement.dataset.assistantBrowserChat
+  },
+  { immediate: true },
+)
 const assistanceLayer = computed(() => helpAvailable.value || discordSetupSession.active)
 const portal = shallowRef<HTMLElement | string>('body')
 const idleSteps = [
@@ -483,7 +499,20 @@ async function showChat() {
   open.value = true
   await nextTick()
   dialog.value?.show()
+  await syncBrowserPresentation()
 }
+function openSharedAssistantChat(request: number) {
+  if (!request) return
+  expanded.value = true
+  void showChat()
+}
+watch(
+  () => props.openChatRequest,
+  (request) => {
+    if (request) openSharedAssistantChat(request)
+  },
+  { immediate: true },
+)
 function openTaskChat() {
   if (!discordSetupSession.active || !discordSetupSession.assistantConversationId) return
   expanded.value = false
@@ -611,11 +640,79 @@ function close() {
   dialog.value?.close()
   open.value = false
 }
+async function returnToTaskBrowser() {
+  try {
+    await discordSetupService.returnToBrowser()
+    close()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '暂时无法返回网页'
+  }
+}
+async function syncBrowserPresentation() {
+  if (!taskChat.value || !open.value || !nativeDiscordSetupBrowser.chatPresentation) return
+  await nextTick()
+  if (!alive || !taskChat.value || !open.value || !dialog.value?.open) return
+  const fullscreen = expanded.value
+  const conversationId = discordSetupSession.assistantConversationId
+  const bounds = browserPreview.value?.getBoundingClientRect()
+  try {
+    await nativeDiscordSetupBrowser.chatPresentation({
+      mode: fullscreen ? 'fullscreen' : 'compact',
+      conversationId,
+      ...(fullscreen && bounds
+        ? {
+            bounds: {
+              left: bounds.left,
+              top: bounds.top,
+              width: bounds.width,
+              height: bounds.height,
+              viewportWidth: innerWidth,
+            },
+          }
+        : {}),
+    })
+    if (
+      alive &&
+      open.value &&
+      expanded.value === fullscreen &&
+      discordSetupSession.assistantConversationId === conversationId
+    )
+      document.documentElement.dataset.assistantBrowserChat = fullscreen ? 'fullscreen' : 'compact'
+  } catch {
+    // Older APKs keep their retained browser and the explicit return button.
+  }
+}
+watch(
+  [open, expanded],
+  async ([isOpen], [wasOpen]) => {
+    if (isOpen && wasOpen) await syncBrowserPresentation()
+    else {
+      delete document.documentElement.dataset.assistantBrowserChat
+      if (wasOpen && taskChat.value && !discordSetupSession.browserVisible)
+        await returnToTaskBrowser()
+    }
+  },
+  { flush: 'post' },
+)
+watch(
+  viewport,
+  () => {
+    if (open.value && expanded.value) void syncBrowserPresentation()
+  },
+  { flush: 'post' },
+)
 watch(
   () => discordSetupSession.browserVisible,
   (visible) => {
     if (visible) close()
   },
+)
+watch(
+  browserPreview,
+  () => {
+    if (open.value) void syncBrowserPresentation()
+  },
+  { flush: 'post' },
 )
 function assistantActivity(value: boolean) {
   busy.value = value
@@ -648,6 +745,7 @@ async function capture(signal: AbortSignal) {
   return captureAssistantPage(scope, signal, true)
 }
 onBeforeUnmount(() => {
+  delete document.documentElement.dataset.assistantBrowserChat
   alive = false
   assetLoadId++
   releaseAssistantPetAssets(petAssets.value)
@@ -774,6 +872,7 @@ onBeforeUnmount(() => {
         assistant-only
         :compact="!expanded"
         :active="open"
+        :background-task="taskChat"
         :navigation-targets="getAssistantNavigationTargets(true)"
         :navigate="navigateFromPet"
         :context-scope="contextScope"
@@ -782,7 +881,23 @@ onBeforeUnmount(() => {
         @expand="expand"
         @assistant-activity="assistantActivity"
         @save-assistant-css="emit('save-assistant-css', $event)"
-      />
+      >
+        <template #task-preview>
+          <button
+            v-if="expanded && taskChat && discordSetupSession.webStepActive"
+            ref="browserPreview"
+            class="assistant-browser-preview"
+            type="button"
+            aria-label="查看当前网页并返回网页协助"
+            @click="returnToTaskBrowser"
+          >
+            <span>当前网页</span
+            ><small>{{
+              discordSetupSession.agentRunning ? '助手继续操作中 · 点此返回' : '已暂停 · 点此返回'
+            }}</small>
+          </button>
+        </template>
+      </AppearanceStudio>
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
       <button
         v-if="!expanded"

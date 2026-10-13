@@ -45,6 +45,11 @@ it('carries each vendor source once for archived script floors while preserving 
     ),
   ]
   expect(children).toHaveLength(9)
+  expect(
+    [...body.querySelectorAll<HTMLIFrameElement>('.TH-render iframe')].every(
+      (frame) => frame.getAttribute('loading') === 'eager',
+    ),
+  ).toBe(true)
   for (const frame of children) {
     const child = frame.srcdoc
     expect(child).toContain('__SRL_PREVIEW_VENDOR_DOCUMENTS__')

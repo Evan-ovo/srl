@@ -1,3 +1,9 @@
+import {
+  PREVIEW_REMOTE_RESOURCES_KEY,
+  PREVIEW_SCRIPTS_KEY,
+  readStoredCustomUiCss,
+  writeStoredCustomUiCss,
+} from './BrowserAppearancePreferences'
 export { type BridgeTransferDraft, PROJECT_NOTICE_VERSION } from './BrowserDevicePreferences'
 import { normalizeUiViews } from '../core/UiCustomization'
 import {
@@ -142,16 +148,10 @@ const LEGACY_MOBILE_LANDSCAPE_FIT_MODE_KEY = 'srl.library.mobileLandscapeFitMode
 
 const DRAW_SHOW_NAMES_KEY = 'srl.draw.showNames'
 
-const PREVIEW_REMOTE_RESOURCES_KEY = 'srl.preview.allowRemoteResources'
-
-const PREVIEW_SCRIPTS_KEY = 'srl.preview.allowScripts'
-
 const PREVIEW_GREETING_PRELOAD_KEY = 'srl.preview.preloadGreetingResources'
 
 const PREVIEW_BEAUTIFICATION_PRELOAD_KEY = 'srl.preview.preloadBeautificationResources'
 const PREVIEW_DOWNLOAD_CONCURRENCY_KEY = 'srl.preview.increaseDownloadConcurrency'
-
-const CUSTOM_UI_CSS_KEY = 'srl.ui.customCss'
 
 const CUSTOM_UI_PRESETS_KEY = 'srl.ui.customCssPresets'
 
@@ -474,19 +474,10 @@ export class BrowserStorageService {
   }
 
   getCustomUiCss(): string {
-    try {
-      return localStorage.getItem(CUSTOM_UI_CSS_KEY) ?? ''
-    } catch {
-      return ''
-    }
+    return readStoredCustomUiCss()
   }
-
   setCustomUiCss(value: string): void {
-    try {
-      localStorage.setItem(CUSTOM_UI_CSS_KEY, value)
-    } catch {
-      // 自定义样式写入失败不影响当前会话应用。
-    }
+    writeStoredCustomUiCss(value)
   }
 
   getCustomUiPresets(): CustomCssPreset[] {

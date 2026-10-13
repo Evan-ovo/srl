@@ -42,13 +42,17 @@ export async function readOriginalCss(
       apps: scope ? await officialAppService.list() : [],
       // The host extension manager is lazy, but has no independently installed APP manifest.
       readExtraCss:
-        scope?.value === 'app:extensions'
-          ? async () => (await import('../styles/ExternalAppManager.css?inline')).default
-          : scope?.appId === 'chatReader'
-            ? async () =>
-                '/* 读了么列表与设置的原始样式；聊天正文请在阅读器的外观设置中调整。 */\n' +
-                (await import('../../extensions/duleme/reader.css?raw')).default
-            : undefined,
+        !scope || scope.value === 'shell'
+          ? async () =>
+              '/* 恢复提示内部的 Shadow DOM 原始样式。自定义时在全局 CSS 设置 --recovery-* / --button-* 变量；普通选择器不能穿透保护层。 */\n' +
+              (await import('../styles/RecoveryControls.css?inline')).default
+          : scope?.value === 'app:extensions'
+            ? async () => (await import('../styles/ExternalAppManager.css?inline')).default
+            : scope?.appId === 'chatReader'
+              ? async () =>
+                  '/* 读了么列表与设置的原始样式；聊天正文请在阅读器的外观设置中调整。 */\n' +
+                  (await import('../../extensions/duleme/reader.css?raw')).default
+              : undefined,
       readAsset: async (url, requestSignal) => {
         const response = await fetchOfficialAppAsset(url, { signal: requestSignal })
         if (!response.ok || !/^text\/css(?:;|$)/iu.test(response.headers.get('Content-Type') ?? ''))

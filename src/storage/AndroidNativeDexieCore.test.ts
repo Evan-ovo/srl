@@ -3,6 +3,9 @@ import 'fake-indexeddb/auto'
 import { IndexedDbArchiveStorage } from './IndexedDbArchiveStorage'
 import { IndexedDbCategoryStorage } from './IndexedDbCategoryStorage'
 import { ResourceParserRegistry } from '../parser/ResourceParser'
+import { JsonResourceParser } from '../parser/JsonResourceParser'
+import { UserPersonaService } from '../services/UserPersonaService'
+import type { UserPersonaDraft } from '../types/UserPersona'
 import { CategoryService } from '../services/CategoryService'
 import { RestoreService } from '../services/RestoreService'
 import { hashCloudBlob } from '../services/CloudArchiveCodec'
@@ -24,6 +27,7 @@ import {
   compactAndroidNativeAppDatabase,
 } from './AndroidNativeDexieCore'
 import { IndexedDbResourceStorage } from './IndexedDbResourceStorage'
+import { NativeMirroredResourceStorage } from './NativeMirroredResourceStorage'
 import { IndexedDbProductAssistantStorage } from './IndexedDbProductAssistantStorage'
 import { newAssistantConversation } from '../services/ProductAssistantWorkspaceService'
 import { IndexedDbAssetStore } from './IndexedDbAssetStore'
@@ -39,6 +43,7 @@ import {
 import { hashBlob } from '../services/HashService'
 import { ChatReaderService } from '../services/ChatReaderService'
 import { ResourceService } from '../services/ResourceService'
+import { updateDetails } from '../services/ResourceOrganizationOperations'
 import {
   getRetainedIndexedDbCopy,
   clearRetainedIndexedDbCopy,
@@ -337,6 +342,315 @@ async function routeResource(id: string): Promise<Resource> {
     updatedAt: 1,
   }
 }
+
+it.each([1000, 5000, 10000])(
+  'creates a persona in a %i-row native library without loading a character alias catalogue',
+  async (size) => {
+    const fixture = await delayedDatabase()
+    const { database, native, stores } = fixture
+    const storage = new IndexedDbResourceStorage(database)
+    const parser = new JsonResourceParser()
+    const parsed = vi.spyOn(parser, 'parse')
+    const service = new ResourceService(storage, new ResourceParserRegistry([parser]))
+    const personas = new UserPersonaService(service)
+    const card = { ...(await routeResource('card')), type: RESOURCE_TYPE.CHARACTER_CARD }
+    card.originalBlob = new Blob([new Uint8Array(1024 * 1024)])
+    card.fileSize = card.originalBlob.size
+    await storage.save(card)
+    for (let i = 1; i < size; i++) {
+      const value = { ...card, id: `unrelated-${i}`, originalBlob: undefined }
+      for (const store of ['resources', 'resourceSummaries', 'resourceListSummaries'])
+        stores.get(store)!.set(JSON.stringify(value.id), value)
+    }
+    const draft: UserPersonaDraft = {
+      avatarId: 'me.png',
+      name: 'New persona',
+      title: '',
+      description: 'My own description',
+      position: 0,
+      depth: 2,
+      role: 0,
+      lorebook: '',
+      connections: [],
+      characterBindings: {},
+      profile: {
+        version: 1,
+        sections: [{ id: 'base', name: '基础设定', text: 'My own description' }],
+        variants: {},
+      },
+    }
+    const scans = vi.spyOn(storage, 'listSummaries')
+    const history = vi.spyOn(storage, 'listVersionSummaries')
+    const keys = vi.spyOn(native, 'getRecordKeys')
+    const binaries = vi.spyOn(native, 'readBlob')
+    const cover = vi.spyOn(service, 'updateThumbnail')
+    activateAndroidNativeAppDatabase()
+    try {
+      const started = performance.now()
+      const result = await personas.create(draft, [card.id], null)
+      console.info(
+        `create ${size} persisted: ${Math.round(performance.now() - started)}ms; catalogues=${scans.mock.calls.length + history.mock.calls.length}; key pages=${keys.mock.calls.length}; binary reads=${binaries.mock.calls.length}`,
+      )
+      expect(scans).not.toHaveBeenCalled()
+      expect(history).not.toHaveBeenCalled()
+      expect(keys).not.toHaveBeenCalled()
+      expect(cover).not.toHaveBeenCalled()
+      expect(binaries.mock.calls.some(([, key]) => key === JSON.stringify(card.id))).toBe(false)
+      expect(result.relatedResourceIds).toEqual([card.id])
+      expect((await storage.getSummary(card.id))?.relatedResourceIds).toEqual([result.id])
+      // The app reloads the saved persona and asks which neighbours are avatar attachments.
+      const loaded = await personas.load(result.id)
+      expect(loaded.view.entries[0]?.description).toBe(draft.description)
+      const beforeAvatarReads = binaries.mock.calls.length
+      expect(await personas.loadAvatarResource(card.id)).toBeUndefined()
+      expect(binaries).toHaveBeenCalledTimes(beforeAvatarReads)
+      console.info(
+        `native create ${size}: ${Math.round(performance.now() - started)}ms; full catalogues=0; related original reads=0`,
+      )
+      const repeated = await personas.create(draft, [card.id], null)
+      expect(repeated.id).toBe(result.id)
+      expect(stores.get('resources')?.size).toBe(size + 1)
+      expect(parsed).toHaveBeenCalledTimes(1)
+      const second = await personas.create({ ...draft, name: 'Another persona' }, [card.id], null)
+      expect(second.id).not.toBe(result.id)
+      expect(parsed).toHaveBeenCalledTimes(2)
+      expect(scans).not.toHaveBeenCalled()
+      expect(history).not.toHaveBeenCalled()
+      expect(binaries.mock.calls.some(([, key]) => key === JSON.stringify(card.id))).toBe(false)
+      database.close()
+      await database.open()
+      expect((await personas.load(result.id)).view.entries[0]?.description).toBe(draft.description)
+      expect(await (await storage.get(card.id))!.originalBlob.arrayBuffer()).toEqual(
+        await card.originalBlob.arrayBuffer(),
+      )
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      await fixture.close()
+    }
+  },
+)
+
+it.each([1000, 5000, 10000])(
+  'binds and unbinds a persona in a %i-row native library without scanning or reading originals',
+  async (size) => {
+    const fixture = await delayedDatabase()
+    const { database, native, stores } = fixture
+    const storage = new IndexedDbResourceStorage(database)
+    const persona = { ...(await routeResource('persona')), type: RESOURCE_TYPE.USER_PERSONA }
+    const card = { ...(await routeResource('card')), type: RESOURCE_TYPE.CHARACTER_CARD }
+    card.originalBlob = new Blob([new Uint8Array(1024 * 1024)])
+    card.fileSize = card.originalBlob.size
+    await storage.saveMany([persona, card])
+    for (let i = 2; i < size; i++) {
+      const id = `unrelated-${i}`
+      stores
+        .get('resources')!
+        .set(JSON.stringify(id), { ...stores.get('resources')!.get('"card"')!, id })
+    }
+    const scans = vi.spyOn(native, 'getRecordKeys')
+    const reads = vi.spyOn(native, 'readBlob')
+    const writes = vi.spyOn(native, 'writeBlob')
+    const fullReads = vi.spyOn(storage, 'get')
+    const catalogue = vi.spyOn(storage, 'listSummaries')
+    const saves = vi.spyOn(storage, 'saveMany')
+    activateAndroidNativeAppDatabase()
+    try {
+      const details = {
+        name: persona.name,
+        description: '',
+        type: persona.type,
+        categoryIds: [],
+        relatedResourceIds: [card.id, 'missing'],
+        tags: persona.tags,
+      }
+      const started = performance.now()
+      await updateDetails(storage, persona, details)
+      expect(catalogue).not.toHaveBeenCalled()
+      expect(fullReads).not.toHaveBeenCalled()
+      expect(saves).not.toHaveBeenCalled()
+      expect(scans).not.toHaveBeenCalled()
+      expect(reads).not.toHaveBeenCalled()
+      expect(writes).not.toHaveBeenCalled()
+      const bound = (await storage.getSummary(persona.id))!
+      expect(bound.relatedResourceIds).toEqual([card.id])
+      expect(bound.metadata.manuallyBoundResourceIds).toEqual([card.id])
+      expect((await storage.getSummary(card.id))?.relatedResourceIds).toEqual([persona.id])
+      await updateDetails(storage, { ...persona, ...bound }, { ...details, relatedResourceIds: [] })
+      expect((await storage.getSummary(card.id))?.relatedResourceIds).toEqual([])
+      console.info(
+        `native persona ${size}: ${Math.round(performance.now() - started)}ms; scans=${scans.mock.calls.length}; binary reads=${reads.mock.calls.length}; writes=${writes.mock.calls.length}`,
+      )
+      database.close()
+      await database.open()
+      expect((await storage.getSummary(persona.id))?.relatedResourceIds).toEqual([])
+      expect(await (await storage.get(card.id))!.originalBlob.arrayBuffer()).toEqual(
+        await card.originalBlob.arrayBuffer(),
+      )
+      fixture.failNextNativeBatch()
+      await expect(updateDetails(storage, persona, details)).rejects.toThrow(
+        'forced native commit failure',
+      )
+      expect((await storage.getSummary(persona.id))?.name).toBe(persona.name)
+      expect((await storage.getSummary(persona.id))?.relatedResourceIds).toEqual([])
+      expect((await storage.getSummary(card.id))?.relatedResourceIds).toEqual([])
+      await database.transaction(
+        'rw',
+        [database.resources, database.resourceSummaries, database.resourceListSummaries],
+        async () => {
+          await storage.updateMetadata(card.id, { name: 'first edit' })
+          expect(await (await storage.get(card.id))!.originalBlob.arrayBuffer()).toEqual(
+            await card.originalBlob.arrayBuffer(),
+          )
+          await storage.updateMetadata(card.id, { name: 'second edit' })
+          expect((await storage.getSummary(card.id))?.name).toBe('second edit')
+        },
+      )
+      expect(await (await storage.get(card.id))!.originalBlob.arrayBuffer()).toEqual(
+        await card.originalBlob.arrayBuffer(),
+      )
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      await fixture.close()
+    }
+  },
+)
+
+it.each([false, true])(
+  'creates and reloads the real persona avatar while preserving unrelated card bytes (vault: %s)',
+  async (sealed) => {
+    const fixture = await delayedDatabase()
+    const vault = new VaultService(fixture.database)
+    const nativeBinary = vi
+      .spyOn(nativeAppDatabase, 'readBlob')
+      .mockImplementation(fixture.native.readBlob)
+    try {
+      await vault.initialize()
+      if (sealed) await vault.enable('synthetic-persona-test-password')
+      const storage = new IndexedDbResourceStorage(fixture.database, vault)
+      const service = new ResourceService(
+        storage,
+        new ResourceParserRegistry([new JsonResourceParser()]),
+      )
+      const personas = new UserPersonaService(service)
+      const card = { ...(await routeResource('bound-card')), type: RESOURCE_TYPE.CHARACTER_CARD }
+      const avatar = {
+        ...(await routeResource('avatar')),
+        metadata: { assetKind: 'userPersonaAvatar', avatarId: 'me.png' },
+        thumbnailBlob: new Blob(['avatar thumbnail'], { type: 'image/webp' }),
+      }
+      await storage.saveMany([card, avatar])
+      activateAndroidNativeAppDatabase()
+      const cardBytes = fixture.stores.get('resources')!.get(JSON.stringify(card.id))
+      const binary = vi.spyOn(fixture.native, 'readBlob')
+      const fullRead = vi.spyOn(service, 'get')
+      const draft: UserPersonaDraft = {
+        avatarId: 'me.png',
+        name: 'Avatar persona',
+        title: '',
+        description: 'Persisted persona',
+        position: 0,
+        depth: 2,
+        role: 0,
+        lorebook: '',
+        connections: [],
+        characterBindings: {},
+        profile: {
+          version: 1,
+          sections: [{ id: 'base', name: '基础设定', text: 'Persisted persona' }],
+          variants: {},
+        },
+      }
+      const created = await personas.create(draft, [card.id, avatar.id], avatar)
+      expect(await created.thumbnailBlob!.text()).toBe('avatar thumbnail')
+      expect(await personas.loadAvatarResource(card.id)).toBeUndefined()
+      // Old restores can miss the derived list row. Avatar existence comes from
+      // the original record's metadata, so a missing list entry must not hide it.
+      await fixture.database.resourceListSummaries.delete(avatar.id)
+      const loadedAvatar = await personas.loadAvatarResource(avatar.id)
+      expect(await loadedAvatar!.originalBlob.text()).toBe(await avatar.originalBlob.text())
+      expect(fullRead.mock.calls.some(([id]) => id === card.id)).toBe(false)
+      expect(
+        binary.mock.calls.some(
+          ([, key, field]) => key === JSON.stringify(card.id) && field.startsWith('$/original'),
+        ),
+      ).toBe(false)
+      expect(
+        fixture.stores.get('resources')!.get(JSON.stringify(card.id))?.originalBlob ??
+          fixture.stores.get('resources')!.get(JSON.stringify(card.id))?.original,
+      ).toEqual(cardBytes?.originalBlob ?? cardBytes?.original)
+      fixture.database.close()
+      await fixture.database.open()
+      expect((await personas.load(created.id)).view.entries[0]?.name).toBe(draft.name)
+      expect(await (await personas.loadAvatarResource(avatar.id))!.originalBlob.text()).toBe(
+        await avatar.originalBlob.text(),
+      )
+      expect(await (await storage.get(card.id))!.originalBlob.text()).toBe(
+        await card.originalBlob.text(),
+      )
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      nativeBinary.mockRestore()
+      await fixture.close()
+    }
+  },
+)
+
+it.each([1000, 5000, 10000])(
+  'deletes one native resource among %i unrelated histories with only scoped version reads',
+  async (size) => {
+    const fixture = await delayedDatabase()
+    const { database, native, stores } = fixture
+    const storage = new IndexedDbResourceStorage(database)
+    const selected = await routeResource('selected')
+    const other = await routeResource('other')
+    await storage.saveMany([selected, other])
+    await storage.saveVersion({ ...selected, id: 'selected-history', versionGroupId: selected.id })
+    const row = { ...other, originalBlob: undefined, versionGroupId: other.id }
+    await native.putRecordsWithState(
+      'resourceVersions',
+      Array.from({ length: size }, (_, index) => {
+        const value = { ...row, id: `other-history-${index}` }
+        return {
+          key: JSON.stringify(value.id),
+          value,
+          indexes: encodeAppDatabaseIndexes(value, database.resourceVersions.schema.indexes),
+        }
+      }),
+      'fixture:history',
+      'ready',
+    )
+    const mirror = new NativeMirroredResourceStorage(storage, new VaultService(database))
+    const allVersions = vi.spyOn(storage, 'listVersionListSummaries')
+    const keys = vi.spyOn(native, 'getRecordKeys')
+    const binaryReads = vi.spyOn(native, 'readBlob')
+    const reads = vi.spyOn(native, 'getRecord')
+    try {
+      const started = performance.now()
+      await mirror.deleteMany([selected.id])
+      expect(allVersions).not.toHaveBeenCalled()
+      expect(keys.mock.calls.some(([store]) => store === 'resourceVersions')).toBe(false)
+      expect(binaryReads).not.toHaveBeenCalled()
+      expect(
+        reads.mock.calls.filter(([store]) => store === 'resourceVersionSummaries'),
+      ).toHaveLength(1)
+      expect(stores.get('resourceVersions')?.size).toBe(size)
+      expect(await storage.get(selected.id)).toBeUndefined()
+      expect(await storage.getVersion('selected-history')).toBeUndefined()
+      expect(await (await storage.get(other.id))!.originalBlob.text()).toBe(
+        await other.originalBlob.text(),
+      )
+      console.info(
+        `native deletion ${size} histories: ${Math.round(performance.now() - started)}ms; history summary reads=1; unrelated original reads=0`,
+      )
+      database.close()
+      await database.open()
+      expect(await storage.get(selected.id)).toBeUndefined()
+      expect(stores.get('resourceVersions')?.size).toBe(size)
+    } finally {
+      await fixture.close()
+    }
+  },
+)
 
 describe('AndroidNativeDexieCore', () => {
   it('recovers the retained IndexedDB chat into the active native adapter and persists it after reopening', async () => {
@@ -2168,14 +2482,29 @@ describe('AndroidNativeDexieCore', () => {
   it('keeps vault encryption and metadata updates working across native bridge turns', async () => {
     const fixture = await delayedDatabase()
     const vault = new VaultService(fixture.database)
+    const binary = vi
+      .spyOn(nativeAppDatabase, 'readBlob')
+      .mockImplementation(fixture.native.readBlob)
     try {
       await vault.initialize()
       await vault.enable('synthetic-test-password')
       const storage = new IndexedDbResourceStorage(fixture.database, vault)
       const original = await routeResource('encrypted')
       await storage.save(original)
+      activateAndroidNativeAppDatabase()
+      const reads = vi.spyOn(fixture.native, 'readBlob')
+      const writes = vi.spyOn(fixture.native, 'writeBlob')
       await storage.updateMetadata(original.id, { name: 'encrypted metadata update' })
+      expect(reads.mock.calls.some(([, , path]) => path.startsWith('$/original'))).toBe(false)
+      expect(writes.mock.calls.some(([, , path]) => path.startsWith('$/original'))).toBe(false)
+      // Native summary validation remains scoped to this fixture's actual keys.
+      const sameKeys = vi
+        .spyOn(nativeAppDatabase, 'haveSameRecordKeys')
+        .mockImplementation(
+          async (a, b) => fixture.stores.get(a)!.size === fixture.stores.get(b)!.size,
+        )
       expect((await storage.listResourceListSummaries())[0]!.name).toBe('encrypted metadata update')
+      sameKeys.mockRestore()
       expect(await (await storage.get(original.id))!.originalBlob.text()).toBe(
         await original.originalBlob.text(),
       )
@@ -2183,6 +2512,8 @@ describe('AndroidNativeDexieCore', () => {
         JSON.stringify(fixture.stores.get('resources')!.get(JSON.stringify(original.id))),
       ).not.toContain('preserve-encrypted')
     } finally {
+      deactivateAndroidNativeAppDatabase()
+      binary.mockRestore()
       await fixture.close()
     }
   })

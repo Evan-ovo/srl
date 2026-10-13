@@ -170,6 +170,29 @@ export const PRODUCT_ASSISTANT_TOOLS: readonly MainApiTool[] = [
     ['operation'],
   ),
   tool(
+    'browser',
+    '通用网页协助：打开公开 HTTPS 网站后观察当前页面，再按实时标题、正文、区域、链接、表单和控件引用操作；不是教程步骤。支持导航、页面正文、表单操作、标签页、等待、目标网页截图和文件上传/下载。动作必须使用最新 inspect 的 tab_id、document_id 和 target；页面跳转、标签切换或控件失效后重新观察。登录、验证码、密码和秘密字段由用户填写；不得读取或回显秘密。遇意外先查当前页面错误和结果，复用已完成工作；不盲目重试或照旧计划推进。finish需query给出实际完成结果文字。本机上传由用户选文件；download选链接target或pending，保存/导入归原Owner。',
+    {
+      operation: field(
+        'open/navigate/inspect/read-page/click/fill/select/press/scroll/back/list-tabs/switch-tab/wait/screenshot/upload/download/pause/resume/finish/close',
+        24,
+      ),
+      url: field('open 或 navigate 时使用的公开 HTTPS 地址', 2000),
+      query: field('inspect/read-page关键词；finish必填：页面上的完成结果文字', 80),
+      target: field('最新 inspect 返回的元素或区域引用', 16),
+      value: field('fill/select 的普通非秘密值；不得填写密码、密钥或验证码', 4000),
+      key: field('press：Tab/Escape/Enter/方向键/Home/End/Backspace/Delete', 16),
+      direction: field('scroll：up/down', 4),
+      tab_id: field('当前标签页 ID；动作须与最新观察一致', 12),
+      document_id: field('当前文档代次；动作须与最新观察一致', 12),
+      offset: field('read-page 分页偏移', 8),
+      milliseconds: field('wait 等待毫秒数，最多 30000', 8),
+      region: field('read-page 的区域引用', 16),
+      destination: field('download：downloads保存文件 / import交原资源导入队列', 12),
+    },
+    ['operation'],
+  ),
+  tool(
     'set_pet_expression',
     '按对话情境切换桌宠表情，可配一句口语化短气泡。curious是“我吗？”，surprised惊讶、drool流口水、love喜欢、ponder发呆；不代表任务完成，只有实际成功后才能说做好了。表情短暂展示后回到自动状态。',
     {
@@ -362,6 +385,7 @@ export const PRODUCT_ASSISTANT_TOOLS: readonly MainApiTool[] = [
 ]
 export const TOOL_LABELS: Record<string, string> = {
   configure_discord_browser: '协助配置 Discord Bridge',
+  browser: '协助浏览网页',
   select_mode: '加载工作模式',
   search_conversation: '查找较早对话',
   read_conversation: '回看对话原文',
@@ -411,6 +435,7 @@ export function assistantToolsForMode(mode: AssistantMode = 'auto'): readonly Ma
     'read_webpage',
     'run_page_script',
     'configure_discord_browser',
+    'browser',
     'set_pet_expression',
     'get_feature_help',
     'get_navigation_targets',

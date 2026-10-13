@@ -22,7 +22,7 @@ vi.mock('../core/AppContainer', () => ({
     open: fixture.open,
   },
 }))
-vi.mock('../services/NativeDiscordSetupBrowser', () => ({
+vi.mock('../services/AssistantBrowserRuntime', () => ({
   hasDiscordSetupBrowser: () => fixture.available,
 }))
 beforeEach(() => {
@@ -86,7 +86,8 @@ describe('compact APK setup entry', () => {
     const wrapper = mount(DiscordSetupAssistant, { global: { stubs: { teleport: true } } })
     await flushPromises()
     expect(wrapper.find('select').exists()).toBe(false)
-    await wrapper.get('[aria-label="网页协助更多选项"]').trigger('click')
+    expect(wrapper.find('[aria-label="网页协助更多选项"]').exists()).toBe(false)
+    await wrapper.get('.discord-setup-assistant__continue').trigger('click')
     await flushPromises()
     await wrapper
       .findAll('button')

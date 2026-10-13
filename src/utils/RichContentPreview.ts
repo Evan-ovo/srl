@@ -329,7 +329,7 @@ function buildSharedVendorDocuments(
     .replace(/</gu, '\\u003c')
     .replace(/\u2028/gu, '\\u2028')
     .replace(/\u2029/gu, '\\u2029')
-  return `<script>Object.defineProperty(window,'__SRL_PREVIEW_VENDOR_DOCUMENTS__',{value:Object.freeze(${documents})});</script>`
+  return `<script id="srl-preview-vendor-data" type="application/json">${documents}</script><script>(()=>{let sources=Object.freeze(JSON.parse(document.getElementById('srl-preview-vendor-data').textContent));Object.defineProperty(window,'__SRL_PREVIEW_VENDOR_DOCUMENTS__',{get:()=>sources});Object.defineProperty(window,'__SRL_UPDATE_PREVIEW_VENDOR_DOCUMENTS__',{value:next=>{sources=Object.freeze({...sources,...next})}})})();</script>`
 }
 
 function buildSharedChildVendors(kind: 'frontend' | 'script'): string {
@@ -507,7 +507,9 @@ function mountCompatibilityFramesAndScripts(
     const iframe = document.createElement('iframe')
     iframe.id = `TH-message--${messageId}--${index}`
     iframe.name = iframe.id
-    iframe.loading = 'lazy'
+    // Archived script windows restore position after their frontend layouts settle.
+    // All bounded-window children must initialize before that first restore.
+    iframe.setAttribute('loading', sharedVendors ? 'eager' : 'lazy')
     iframe.className = 'w-full'
     iframe.setAttribute('frameborder', '0')
     if (policy.allowRemoteResources) iframe.setAttribute('allow', 'autoplay')
@@ -616,7 +618,7 @@ window.addEventListener('resize',broadcast);if(document.readyState==='loading')d
 function buildOuterHeightRuntime(): string {
   // Root offsetHeight includes collapsed body margins without the viewport floor of scrollHeight.
   return `<script>(()=>{'use strict';
-let queued=false;const report=()=>{queued=false;const height=Math.max(document.body?.scrollHeight||0,document.documentElement?.offsetHeight||0);if(height>0)parent.postMessage({type:'SRL_PREVIEW_HEIGHT',height},'*')};const queue=()=>{if(queued)return;queued=true;requestAnimationFrame(report)};
+let queued=false;const report=()=>{queued=false;if(window.__SRL_ARCHIVED_READER_LAYOUT__){window.__SRL_ARCHIVED_READER_LAYOUT__();return}const height=Math.max(document.body?.scrollHeight||0,document.documentElement?.offsetHeight||0);if(height>0)parent.postMessage({type:'SRL_PREVIEW_HEIGHT',height,floor:window.__SRL_ARCHIVED_READER_FLOOR__},'*')};const queue=()=>{if(queued)return;queued=true;requestAnimationFrame(report)};
 const mount=()=>{const body=document.body;if(!body)return;queue();new ResizeObserver(queue).observe(body)};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 window.addEventListener('message',event=>{if(event.data?.type==='SRL_FRAME_LAYOUT_READY')queue()});

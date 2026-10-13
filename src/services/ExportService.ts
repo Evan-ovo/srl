@@ -296,8 +296,20 @@ export async function createResourceArchiveSource(
   service: import('./ResourceService').ResourceService,
   selectedIds?: string[],
 ): Promise<ArchiveSource> {
-  const resources = await service.listResourceListSummaries()
   const selection = selectedIds ? new Set(selectedIds) : undefined
+  let resources = await service.listResourceListSummaries(
+    selection ? { ids: [...selection] } : undefined,
+  )
+  if (selection?.size) {
+    // Gallery ownership lives in metadata, so only OTHER summaries need a scan.
+    // Unselected character/chat bodies and metadata never enter a single-item archive plan.
+    const owners = new Set(resources.filter((r) => !isResourceGalleryImage(r)).map((r) => r.id))
+    const images = (
+      await service.listResourceListSummaries({ types: [RESOURCE_TYPE.OTHER] })
+    ).filter((r) => isResourceGalleryImage(r) && owners.has(galleryOwnerId(r)))
+    const byId = new Map([...resources, ...images].map((r) => [r.id, r]))
+    resources = [...byId.values()]
+  }
   if (selection) includeResourceGalleryIds(resources, selection, true)
   return {
     resources: selection ? resources.filter((resource) => selection.has(resource.id)) : resources,

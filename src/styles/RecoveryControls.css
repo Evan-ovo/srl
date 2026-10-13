@@ -1,0 +1,164 @@
+/* Shadow DOM preserves recovery controls; only these appearance variables are inherited. */
+:host {
+  font: 14px/1.5 var(--font-body, system-ui, sans-serif);
+  color: var(--recovery-color, var(--color-ink, #173832));
+}
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+.bar,
+.guard {
+  pointer-events: auto;
+  margin: 0 auto;
+  padding: 12px 14px;
+  border: 1px solid var(--recovery-border, var(--notice-border, var(--color-line-strong, #7eaaa1)));
+  border-radius: var(--recovery-radius, var(--notice-radius, 14px));
+  background: var(
+    --recovery-background,
+    var(--notice-background, var(--color-surface-raised, #f4fffc))
+  );
+  color: var(--recovery-color, var(--color-ink, #173832));
+  box-shadow: var(--recovery-shadow, var(--notice-shadow, 0 8px 28px #102d2833));
+}
+.bar {
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.guard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 680px;
+}
+strong,
+.copy span {
+  display: block;
+}
+p {
+  margin: 6px 0 10px;
+}
+p,
+.copy span {
+  color: var(--recovery-secondary-color, var(--color-ink-soft, #49645f));
+}
+.copy {
+  min-width: 0;
+  flex: 1;
+}
+.copy span {
+  font-size: 12px;
+}
+summary {
+  cursor: pointer;
+  min-height: 32px;
+  font-weight: 600;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.actions button,
+.ui-recovery-button {
+  pointer-events: auto;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--button-border, var(--color-line-strong, #6b9c93));
+  border-radius: var(--button-radius, 10px);
+  background: var(--button-background, var(--color-surface-raised, #fff));
+  color: var(--button-color, var(--color-ink, #173832));
+  box-shadow: var(--button-shadow, none);
+  font: 600 14px/1.4 var(--font-body, system-ui, sans-serif);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.bar .actions button {
+  flex: 1;
+}
+.actions .safe,
+.actions .keep {
+  border-color: var(--button-primary-border, var(--color-accent, #187f73));
+  background: var(--button-primary-background, var(--color-accent, #187f73));
+  color: var(--button-primary-color, var(--color-on-accent, #fff));
+}
+button:focus-visible {
+  outline: 2px solid var(--color-accent, #187f73);
+  outline-offset: 2px;
+}
+[hidden] {
+  display: none !important;
+}
+.guard.is-compact {
+  width: max-content;
+  max-width: 100%;
+  padding: 3px 3px 3px 12px;
+  flex-direction: row;
+  border-radius: var(--recovery-radius, 999px);
+}
+.guard.is-compact .copy {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.guard.is-compact .copy::before {
+  content: '✓';
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  background: var(--color-accent-soft, #d8eeec);
+  color: var(--color-accent, #187f73);
+  font: 600 11px system-ui;
+}
+.guard.is-compact .copy span,
+.guard.is-compact [data-keep] {
+  display: none;
+}
+.guard.is-compact .copy strong {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.guard.is-compact button {
+  min-width: 44px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--button-radius, 999px);
+  background: var(--button-background, var(--color-accent-soft, #d8eeec));
+  color: var(--button-color, var(--color-accent, #187f73));
+  font-size: 12px;
+}
+@media (max-width: 520px) {
+  .guard:not(.is-compact) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .guard:not(.is-compact) .actions button {
+    flex: 1;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .bar,
+  .guard {
+    background: var(
+      --recovery-background,
+      var(--notice-background, var(--color-surface-raised, #202d28))
+    );
+    color: var(--recovery-color, var(--color-ink, #e4eee8));
+  }
+  p,
+  .copy span {
+    color: var(--recovery-secondary-color, var(--color-ink-soft, #c2d0c6));
+  }
+  .actions button:not(.safe, .keep),
+  .ui-recovery-button {
+    background: var(--button-background, var(--color-surface-raised, #293d32));
+    color: var(--button-color, var(--color-ink, #e4eee8));
+  }
+}

@@ -60,6 +60,41 @@ const rule = {
 }
 
 describe('reader SDK rendering path', () => {
+  it('paginates selected real snapshots without running display regex or reading script sources', async () => {
+    const raw = [
+      { name: '用户', is_user: true, mes: 'USER' },
+      {
+        name: '角色',
+        is_user: false,
+        mes: '旧',
+        swipe_id: 0,
+        swipes: ['旧', '备选'],
+        variables: [{ v: 0 }, { v: 1 }],
+      },
+    ]
+      .map((x) => JSON.stringify(x))
+      .join('\n')
+    const { sdk, resources } = sdkWith([
+      resource('chat', 'chat', raw, {
+        messageCount: 2,
+        chatCharacter: { hash: 'a'.repeat(64), name: '角色', card: { name: '角色' } },
+      }),
+    ])
+    const result = await sdk.readChat('reader', {
+      id: 'chat',
+      snapshotsOnly: true,
+      limit: 50,
+      replyOverrides: { '1': 1 },
+      scripts: true,
+      scriptSources: ['missing'],
+    })
+    expect(result.messages.map((x) => x.snapshot)).toMatchObject([
+      { message_id: 0, message: 'USER' },
+      { message_id: 1, message: '备选', data: { v: 1 }, swipe_id: 1 },
+    ])
+    expect(result.previewCapabilities).toMatchObject({ archivedReaderHistory: true })
+    expect(resources.getReadSource.mock.calls.map(([id]) => id)).toEqual(['chat'])
+  })
   it('still rejects genuinely oversized saved variables without truncating their originals or raising the budget', async () => {
     const card = resource('card', 'characterCard', '', {
       card: {

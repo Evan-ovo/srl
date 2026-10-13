@@ -14,7 +14,7 @@ import {
   type DiscordBrowserSnapshot,
   type DiscordBrowserEvent,
   type DiscordSetupBrowser,
-} from './NativeDiscordSetupBrowser'
+} from './AssistantBrowserRuntime'
 import { getAssistantRequestTools } from './ProductAssistantService'
 const permissionConfirm = vi.hoisted(() =>
   vi.fn(async (_options: { title?: string }, _signal?: AbortSignal) => true),
@@ -75,6 +75,12 @@ function fixture(state?: DiscordSetupState) {
     pauseAgent: vi.fn(async () => {}),
     waitReady: vi.fn(async () => ({ ...page })),
     waitStatus: vi.fn(async () => ({ ...page })),
+    back: vi.fn(async () => ({ ...page })),
+    listTabs: vi.fn(async () => ({ tabs: [] })),
+    switchTab: vi.fn(async () => ({ ...page })),
+    capture: vi.fn(async ({ tabId, documentId }) => ({ dataUrl: '', tabId, documentId })),
+    wait: vi.fn(async () => ({ ...page })),
+    readPage: vi.fn(async () => ({ ...page })),
     cancelWait: vi.fn(async () => {}),
     inspect: vi.fn(async () => ({ ...page })),
     act: vi.fn(async () => ({ ok: true, formatOnly: true })),

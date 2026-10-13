@@ -197,7 +197,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       'src/services/DiscordSetupService.ts',
       'src/services/DiscordSetupWorkflow.ts',
       'src/services/DiscordSetupParameters.ts',
-      'src/services/NativeDiscordSetupBrowser.ts',
+      'src/services/AssistantBrowserRuntime.ts',
       'src/services/DiscordBridgeDeployService.ts',
       'src/storage/IndexedDbDiscordSetupStorage.ts',
       'src/components/DiscordInboxCenter.vue',
@@ -259,6 +259,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     entry: ['功能', '外观', '自定义 CSS'],
     steps: [
       '选择或新建预设，再选择要美化的界面区域。',
+      '启动加载页与本机数据准备页也可用全局 CSS 自定义：在 :root 设置 --boot-background、--boot-color、--boot-font、--boot-title-size，或用 #srl-boot、#srl-native-preparation 和 .srl-native-migration-notice 调整对应页面。已保存的全局 CSS 在主界面代码加载前注入，并在主界面样式加载后移到样式末尾，使用户变量覆盖默认值；未确认的试用样式先恢复上一版，安全模式保留预设但暂停应用。CSS试用、启动恢复、安全模式和Vue恢复提示位于受保护的 Shadow DOM，可通过 --recovery-background/color/secondary-color/border/radius/shadow 与公共按钮变量调整外观。原生 Android 控件、独立 iframe 作者内容及图片像素不受宿主 CSS 控制。',
       '官方APP更新提示中的逐项“去更新/跳过”与底部操作均使用普通/主按钮变量；助手图片查看关闭键也使用公共按钮变量。助手与互传设置开关由同一公共样式控制，关闭使用control变量、开启使用button-primary变量；中继未开启的连接入口仍保持次级状态，其外观可由普通button变量调整。',
       '顶部返回键默认无框，点击区仍保留44px；标题动作、前端工具栏工具及助手发送/生成按钮的外层点击区透明，颜色画在可见内层。助手聊天输入框由整行消费--control-background、--control-border、--control-radius和--control-shadow，不再给textarea重复套框；功能桌面分页箭头沿公共按钮变量，分页点保持原大小。',
       '接口手册随源码构建生成；APP目录沿正式注册表，CSS选择器、变量和使用位置沿实际样式，Vue方法、参数和快照字段沿Page.js、原桥接实现和类型注释生成。问号入口和APP列表只加载目录元数据，进入正文或导出时才加载完整手册；变量按章节首次使用解析，折叠内容展开才生成，重复查看复用未变化的结果。查看APP或导出CSS教程时按已安装APP的样式清单读取，更新后旧解析失效；不启动APP、不读用户自定义代码。Markdown标注宿主源码版本、接口指纹及所选APP的实际样式版本。新公开接口缺少用途注释由开发检查指出；动态运行内容、第三方作品和用户改写的Page.js不属于这份静态接口手册。',
@@ -283,7 +284,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '下载任务排队时增加并发可能有收益，带宽、服务器或大图解码受限时不保证更快，更不保证两倍速度；出现设备负担先关闭多线路下载。',
     ],
     implementation:
-      'AppearanceStudio 管理预设与草稿及助手样式执行；save_preset 原位保存当前选中预设，save_as_new_preset 仅用于明确另存为；ProductAssistantRequest 验证助手 CSS 并只构造本轮消息；全局 CSS 写入预设 globalCss，局部 CSS 由 AppearanceScopes 包装为 @scope；UseAppearanceSettings 注入样式，AppearanceSafety 管理保留与撤销。多线路下载设置由 App 正式入口传递当前状态和事件，确认后沿 UseAppearanceSettings 保存并调整原生队列，取消不保存。助手不读写宿主源码。',
+      'AppearanceStudio 管理预设与草稿及助手样式执行；save_preset 原位保存当前选中预设，save_as_new_preset 仅用于明确另存为；ProductAssistantRequest 验证助手 CSS 并只构造本轮消息；全局 CSS 写入预设 globalCss，局部 CSS 由 AppearanceScopes 包装为 @scope；Bootstrap/StartupAppearance 在 Main 加载前复用同一份已保存的全局 CSS，BrowserAppearancePreferences 只提供原存储键，AppearanceSafetyStorage 与 SafeStartup 沿原确认/回退状态处理启动恢复；UseAppearanceSettings 注入样式，AppearanceSafety 管理保留与撤销。多线路下载设置由 App 正式入口传递当前状态和事件，确认后沿 UseAppearanceSettings 保存并调整原生队列，取消不保存。助手不读写宿主源码。',
     owners: [
       'src/App.vue',
       'src/components/AppearanceStudio.vue',
@@ -305,7 +306,13 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       'src/composables/UseAppearanceSettings.ts',
       'src/components/LayoutSettingsPanel.vue',
       'src/services/NativePreviewAsset.ts',
-      'AppearanceSafety.ts',
+      'src/core/AppearanceSafety.ts',
+      'src/core/AppearanceSafetyStorage.ts',
+      'src/core/SafeStartup.ts',
+      'src/core/StartupAppearance.ts',
+      'src/services/BrowserAppearancePreferences.ts',
+      'src/Bootstrap.ts',
+      'src/Main.ts',
     ],
     scope: 'appearance',
     taskPrefixes: ['美化', '样式', 'CSS'],
@@ -792,7 +799,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '小手机展示附件信息不代表会执行附件中的源码。',
     ],
     implementation:
-      'PersonalResourceService 经 ResourceService 更新个人内容；SecretResourceService 保护私密字段，小手机只解析图标而不运行附件代码。',
+      'PersonalResourceService 经 ResourceService 更新个人内容；SecretResourceService 保护私密字段，小手机只解析图标而不运行附件代码。资源详情内的个人资源编辑器使用独立高层弹层，避免被详情弹层遮住。',
     owners: [
       'src/components/PersonalResourceEditor.vue',
       'src/services/PersonalResourceService.ts',

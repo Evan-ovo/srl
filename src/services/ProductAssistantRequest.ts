@@ -260,6 +260,7 @@ export function getAssistantRequestTools(request: AssistantContext) {
         (tool.name !== 'run_page_script' || request.canRunPageScripts === true) &&
         (tool.name !== 'configure_discord_browser' ||
           request.canConfigureDiscordBrowser === true) &&
+        (tool.name !== 'browser' || request.canUseBrowser === true) &&
         (tool.name !== 'set_pet_expression' || request.canControlPet) &&
         (!['search_web', 'read_webpage'].includes(tool.name) || request.canUseNetwork) &&
         (tool.name !== 'search_web' || request.canSearchWeb),

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import previewSampleCss from '../styles/AppearancePreview.css?inline'
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-vue-lifecycle-imports
 import { computed, onMounted, ref, watch } from 'vue'
 // SRL-PUBLIC-SYNC: END REPLACE id=appearance-vue-lifecycle-imports
@@ -69,6 +70,7 @@ const props = withDefaults(
     navigate?: (id: string, guide?: string) => Promise<void>
     compact?: boolean
     active?: boolean
+    backgroundTask?: boolean
     contextScope?: () => AppearanceScope | undefined
     captureReference?: (
       signal: AbortSignal,
@@ -536,6 +538,7 @@ async function executeAssistantReply(
   signal: AbortSignal,
 ): Promise<AssistantExecution> {
   if (signal.aborted) throw new DOMException('已停止', 'AbortError')
+  if (reply.action === 'browser') throw new Error('通用网页协助由主聊天执行器处理')
   if (reply.action === 'run-page-script') {
     if (!request.canRunPageScripts)
       throw new Error('页面脚本权限已关闭，请在小助手设置中开启后再运行。')
@@ -978,7 +981,7 @@ const previewDocument = computed(() => {
     ? "default-src 'none'; style-src 'unsafe-inline' https: http:; img-src data: https: http:; font-src data: https: http:; script-src 'none'"
     : "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; script-src 'none'"
   const featurePage = selectedScope.value?.appId ?? 'home'
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>:root{--color-paper:#f4f0e6;--color-ink:#17231f;--color-accent:#17604c;--color-line:#c9c9bf}*{box-sizing:border-box}body{margin:0;background:var(--color-paper);color:var(--color-ink);font:14px/1.5 system-ui}.app-shell{display:grid;grid-template-columns:8rem 1fr;min-height:100vh}.sidebar{padding:1rem;border-right:1px solid var(--color-line)}.sidebar span{display:block;padding:.55rem}.library{padding:1rem}.toolbar{display:flex;gap:.5rem;margin-bottom:1rem}.toolbar input{min-width:0;flex:1;padding:.7rem}.resource-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.75rem}.resource-card{min-height:8rem;padding:.8rem;border:1px solid var(--color-line);background:#fff}.resource-card i{display:block;height:4rem;margin:-.8rem -.8rem .7rem;background:linear-gradient(135deg,#bdcfca,#345f52)}@media(max-width:520px){.app-shell{grid-template-columns:1fr}.sidebar{display:none}.library{padding:.75rem}}${css}</style></head><body><div class="app-shell"><aside class="sidebar"><strong>SRL</strong><span>全部资源</span><span>角色卡</span><span>世界书</span></aside><main class="library resource-detail-sheet feature-hub layout-settings-page" data-feature-page="${featurePage}"><span hidden data-official-app-ready="${featurePage}"></span><div class="toolbar"><input value="搜索名称或文件名"><button>导入</button></div><section class="resource-grid"><article class="resource-card"><i></i><strong>示例角色</strong><small>角色卡 · 收藏</small></article><article class="resource-card"><i></i><strong>城市设定</strong><small>世界书 · 12 条</small></article><article class="resource-card"><strong>界面正则</strong><small>正则 · HTML / CSS</small></article></section></main></div></body></html>`
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${previewSampleCss}${css}</style></head><body><div class="app-shell"><aside class="sidebar"><strong>SRL</strong><span>全部资源</span><span>角色卡</span><span>世界书</span></aside><main class="library resource-detail-sheet feature-hub layout-settings-page" data-feature-page="${featurePage}"><span hidden data-official-app-ready="${featurePage}"></span><div class="toolbar"><input value="搜索名称或文件名"><button>导入</button></div><section class="resource-grid"><article class="resource-card"><i></i><strong>示例角色</strong><small>角色卡 · 收藏</small></article><article class="resource-card"><i></i><strong>城市设定</strong><small>世界书 · 12 条</small></article><article class="resource-card"><strong>界面正则</strong><small>正则 · HTML / CSS</small></article></section></main></div></body></html>`
 })
 </script>
 
@@ -1013,11 +1016,14 @@ const previewDocument = computed(() => {
       :navigate="navigate"
       :compact="compact"
       :visible="active && assistantOpen"
+      :background-task="backgroundTask"
       :capture-reference="captureCurrentReference"
       @expand="emit('expand')"
       @activity="emit('assistant-activity', $event)"
       @back="backFromAppearance"
-    />
+    >
+      <template #task-preview><slot name="task-preview" /></template>
+    </ProductAssistant>
     <div v-show="!assistantOpen" class="appearance-studio__grid">
       <section class="appearance-panel">
         <header>

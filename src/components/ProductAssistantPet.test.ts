@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { assistantPetCue, publishAssistantPetCue } from '../core/ProductAssistantPetState'
 import { assistantGuidanceAnchor, setAssistantHelpSurface } from '../core/ProductAssistantGuidance'
-import { discordSetupSession } from '../services/NativeDiscordSetupBrowser'
+import { discordSetupSession, nativeDiscordSetupBrowser } from '../services/AssistantBrowserRuntime'
 const { petWorkspace, confirmPetAssets, loadPetAssets, downloadPetAssets, releasePetAssets } =
   vi.hoisted(() => ({
     petWorkspace: {
@@ -16,16 +16,23 @@ const { petWorkspace, confirmPetAssets, loadPetAssets, downloadPetAssets, releas
     downloadPetAssets: vi.fn(),
     releasePetAssets: vi.fn(),
   }))
-vi.mock('../core/AppContainer', () => ({ productAssistantWorkspaceService: petWorkspace }))
+vi.mock('../core/AppContainer', () => ({
+  productAssistantWorkspaceService: petWorkspace,
+  discordSetupService: {
+    returnToBrowser: vi.fn(async () => {
+      discordSetupSession.browserVisible = true
+    }),
+  },
+}))
 vi.mock('./DiscordSetupHelp.vue', () => ({
   default: { props: ['open'], template: '<div v-if="open" class="help-wizard">配置选择</div>' },
 }))
-vi.mock('../services/NativeDiscordSetupBrowser', async () => {
+vi.mock('../services/AssistantBrowserRuntime', async () => {
   const { reactive } = await import('vue')
   return {
     hasDiscordSetupBrowser: () => true,
     discordSetupSession: reactive({ active: false, browserVisible: false }),
-    nativeDiscordSetupBrowser: { pet: vi.fn() },
+    nativeDiscordSetupBrowser: { pet: vi.fn(), chatPresentation: vi.fn(async () => {}) },
   }
 })
 vi.mock('../composables/UseConfirmDialog', () => ({ confirmAction: confirmPetAssets }))
@@ -42,7 +49,7 @@ vi.mock('./AppearanceStudio.vue', () => ({
     name: 'AppearanceStudioStub',
     props: ['navigate', 'compact'],
     emits: ['assistant-activity', 'expand', 'back'],
-    template: `<div :data-compact="compact"><button @click="navigate('inbox')">打开 Discord 配置</button><button @click="navigate('cloud', 'backup')">打开云备份并指路</button><button @click="$emit('expand')">切换全屏</button><button @click="$emit('back')">返回</button><button @click="$emit('assistant-activity', true)">开始生成</button><button @click="$emit('assistant-activity', false)">结束生成</button></div>`,
+    template: `<div :data-compact="compact"><button @click="navigate('inbox')">打开 Discord 配置</button><button @click="navigate('cloud', 'backup')">打开云备份并指路</button><button @click="$emit('expand')">切换全屏</button><button @click="$emit('back')">返回</button><button @click="$emit('assistant-activity', true)">开始生成</button><button @click="$emit('assistant-activity', false)">结束生成</button><slot name="task-preview" /></div>`,
   },
 }))
 import ProductAssistantPet from './ProductAssistantPet.vue'
@@ -62,6 +69,10 @@ const addMediaListener = vi.fn((_event: string, listener: () => void) => {
 const removeMediaListener = vi.fn()
 beforeEach(() => {
   discordSetupSession.active = false
+  discordSetupSession.assistantConversationId = ''
+  discordSetupSession.browserVisible = false
+  discordSetupSession.webStepActive = false
+  discordSetupSession.agentRunning = false
   preferences.value = {
     name: '蒜惹菈',
     desktopPet: true,
@@ -213,14 +224,54 @@ it('offers contextual help after three taps and opens the route chooser only on 
     setAssistantHelpSurface(owner)
   }
 })
-it('keeps the operation pet visible when the full assistant hides the normal pet', async () => {
+it('keeps the operation pet hidden in full chat instead of overriding its visibility', async () => {
   const pet = renderPet()
   await wrapper!.setProps({ hidden: true })
   expect(pet.style.display).toBe('none')
   discordSetupSession.active = true
   await flushPromises()
-  expect(pet.style.display).not.toBe('none')
+  expect(pet.style.display).toBe('none')
   expect(pet.classList.contains('assistant-pet--assistance')).toBe(true)
+})
+it('mounts the task chat in the background, expands the same instance with a webpage preview and returns without pausing', async () => {
+  discordSetupSession.active = true
+  discordSetupSession.assistantConversationId = 'task-preview'
+  discordSetupSession.webStepActive = true
+  discordSetupSession.agentRunning = true
+  const pet = renderPet()
+  await flushPromises()
+  const studio = wrapper!.findComponent({ name: 'AppearanceStudioStub' })
+  const instance = studio.vm
+  const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
+  expect(dialog.open).toBe(false)
+  expect(studio.attributes('background-task')).toBe('true')
+  window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+  await flushPromises()
+  expect(dialog.open).toBe(true)
+  expect(vi.mocked(nativeDiscordSetupBrowser.chatPresentation!)).toHaveBeenLastCalledWith({
+    mode: 'compact',
+    conversationId: 'task-preview',
+  })
+  expect(document.querySelector('.assistant-browser-preview')).toBeNull()
+  expect(pet.style.display).not.toBe('none')
+  await studio.vm.$emit('expand')
+  await flushPromises()
+  expect(studio.vm).toBe(instance)
+  expect(pet.style.display).toBe('none')
+  expect(vi.mocked(nativeDiscordSetupBrowser.chatPresentation!)).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      mode: 'fullscreen',
+      conversationId: 'task-preview',
+      bounds: expect.objectContaining({ viewportWidth: innerWidth }),
+    }),
+  )
+  expect(discordSetupSession.agentRunning).toBe(true)
+  document.querySelector<HTMLButtonElement>('.assistant-browser-preview')!.click()
+  await flushPromises()
+  expect(dialog.open).toBe(false)
+  expect(discordSetupSession.browserVisible).toBe(true)
+  expect(discordSetupSession.agentRunning).toBe(true)
+  expect(document.documentElement.dataset.assistantBrowserChat).toBeUndefined()
 })
 it('stops idle timers when reduced motion or page visibility changes, and wakes without timer duplication', async () => {
   vi.useFakeTimers()
@@ -293,6 +344,23 @@ it('expands and collapses the same chat window without opening a second assistan
   expect(dialog.hasAttribute('open')).toBe(true)
   expect(dialog.style.width).toBe('300px')
   expect(studio.attributes('data-compact')).toBe('true')
+})
+it('opens the existing assistant chat expanded when the feature hub requests the shared conversation', async () => {
+  renderPet()
+  try {
+    await wrapper!.setProps({ openChatRequest: 1 })
+    await flushPromises()
+
+    const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
+    expect(dialog.open).toBe(true)
+    expect(dialog.classList.contains('assistant-pet-dialog--expanded')).toBe(true)
+    expect(
+      wrapper!.findComponent({ name: 'AppearanceStudioStub' }).attributes('data-compact'),
+    ).toBe('false')
+  } finally {
+    wrapper!.unmount()
+    wrapper = undefined
+  }
 })
 it('keeps the active chat mounted after close and restores its activity on reopening', async () => {
   const pet = renderPet()

@@ -3,8 +3,8 @@ package buzz.jixiangruyi1207.srl;
 import java.net.URI;
 import java.util.Set;
 
-/** Browsing and agent authority are separate; external pages never receive host capabilities. */
-final class DiscordSetupBrowserPolicy {
+/** Shared public-web policy and Discord-specific task policy; external pages receive no host bridge. */
+final class AssistantBrowserPolicy {
     static String maskSecrets(String text) {
         return text.replaceAll("(?i)([?&](?:code|token|access_token|refresh_token|id_token|password|secret|client_secret|api_key)=)[^&#\\s]+", "$1[已遮蔽]")
             .replaceAll("[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{5,}\\.[A-Za-z0-9_-]{20,}|(?:sk-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]{20,}", "[已遮蔽]");
@@ -15,9 +15,31 @@ final class DiscordSetupBrowserPolicy {
             URI uri = URI.create(value);
             String host = uri.getHost();
             return "https".equals(uri.getScheme()) && host != null && host.contains(".")
-                && !host.matches("[0-9.]+") && !host.endsWith(".localhost") && !host.endsWith(".local")
+                && !host.matches("[0-9.]+") && !host.contains(":") && !host.startsWith("[")
+                && !host.matches("(?i).*(?:\\.localhost|\\.local|\\.internal|\\.intranet|\\.home|\\.home\\.arpa|\\.test|\\.invalid|\\.example)$")
                 && uri.getRawUserInfo() == null && (uri.getPort() == -1 || uri.getPort() == 443);
         } catch (RuntimeException error) { return false; }
+    }
+    static boolean generalNavigationAllowed(String current, String destination) {
+        return browseAllowed(current) && browseAllowed(destination);
+    }
+    static boolean generalAgentNavigationAllowed(String run, boolean paused, boolean loading, boolean failed, String current, String destination) {
+        return run != null && !run.isEmpty() && !loading && generalNavigationAllowed(current, destination)
+            && (failed ? !URI.create(current).equals(URI.create(destination)) : !paused);
+    }
+    static boolean generalUserOnly(String value) {
+        if (!browseAllowed(value) || authentication(value)) return true;
+        try {
+            URI uri = URI.create(value);
+            return uri.getPath().matches("(?i).*/(?:account/(?:security|credentials)|(?:api[-_]?keys?|tokens|credentials|secrets|billing|payment-methods?))(?:/.*)?");
+        } catch (RuntimeException error) { return true; }
+    }
+    static String generalPageAccess(String value) {
+        return !browseAllowed(value) ? "external" : authentication(value) ? "authentication" : generalUserOnly(value) ? "protected" : "public";
+    }
+    static String generalPublicUrl(String value) {
+        try { URI uri = URI.create(value); return new URI("https", null, uri.getHost(), -1, uri.getPath(), null, null).toString(); }
+        catch (Exception error) { return ""; }
     }
     static boolean allowed(String value) {
         try {

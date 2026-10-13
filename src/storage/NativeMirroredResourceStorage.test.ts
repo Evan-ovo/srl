@@ -225,6 +225,29 @@ describe('NativeMirroredResourceStorage', () => {
 })
 
 describe('historical backup descriptor updates', () => {
+  it('deletes only selected histories without reading the whole version catalogue', async () => {
+    const storage = delegate(vi.fn())
+    storage.listVersionListSummaries = vi.fn(async () => {
+      throw new Error('whole history scan')
+    })
+    storage.listVersionListSummariesForResources = vi.fn(async () => [
+      { ...resource(), id: 'selected-history', versionGroupId: 'resource-1' },
+    ])
+    const adapter = new NativeMirroredResourceStorage(storage, {
+      isEnabled: () => false,
+    } as VaultService)
+    await adapter.deleteMany(['resource-1'])
+    expect(storage.listVersionListSummariesForResources).toHaveBeenCalledWith(['resource-1'])
+    expect(storage.listVersionListSummaries).not.toHaveBeenCalled()
+    expect(storage.deleteMany).toHaveBeenCalledWith(['resource-1'], expect.any(Function))
+    expect(mirror.removeMany).toHaveBeenCalledWith(
+      [
+        { id: 'resource-1', scope: 'current' },
+        { id: 'selected-history', scope: 'versions' },
+      ],
+      expect.any(Function),
+    )
+  })
   it('does not re-read or re-mirror all history for a descriptor-only change', async () => {
     const storage = {
       updateVersion: vi.fn(async () => undefined),

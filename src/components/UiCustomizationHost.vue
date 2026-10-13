@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import recoveryCss from '../styles/RecoveryControls.css?inline'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { appearanceScopes } from '../core/AppearanceScopes'
 import { createProtectedHost } from '../core/AppearanceSafety'
@@ -143,8 +144,7 @@ function hideController() {
   if (!rescue) {
     const layer = createProtectedHost('srl-custom-ui-rescue')
     rescue = layer.host
-    layer.root.innerHTML =
-      '<style>button{pointer-events:auto;min-height:44px;padding:8px 12px;border:1px solid #59727c;border-radius:12px;background:#f2f9fa;color:#183842;font:14px system-ui;cursor:pointer}</style><button type="button">恢复原界面</button>'
+    layer.root.innerHTML = `<style>${recoveryCss}</style><button type="button" class="ui-recovery-button">恢复原界面</button>`
     layer.root.querySelector('button')!.addEventListener('click', disableCurrent)
   }
 }

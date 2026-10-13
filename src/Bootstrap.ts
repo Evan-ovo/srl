@@ -1,4 +1,17 @@
 import { reloadAfterLoadFailure } from './core/ServiceWorkerReload'
+import { applyStartupAppearance } from './core/StartupAppearance'
+import {
+  beginStartupAttempt,
+  isSafeModeActive,
+  installSafeModeBanner,
+  installStartupRescuePrompt,
+} from './core/SafeStartup'
+
+// Recovery is available even when Main or its dependency graph fails to load.
+const startupAttempt = beginStartupAttempt()
+if (isSafeModeActive()) installSafeModeBanner()
+else if (startupAttempt.rescueRequired) installStartupRescuePrompt()
+applyStartupAppearance()
 
 // 独立于 Vue 和业务依赖图：Main 的静态依赖失败也能在原启动页说明原因。
 // 启动内容由 Vue mount 自然替换，不叠加覆盖层、定时刷新或清理用户设置。

@@ -307,7 +307,7 @@ async function exportPlain() {
   <Teleport to="body" :disabled="inline">
     <div
       v-show="!settingsOpen"
-      :class="inline ? undefined : 'editor-overlay'"
+      :class="inline ? undefined : 'editor-overlay personal-resource-editor-overlay'"
       @click.self="!inline && requestClose()"
     >
       <section

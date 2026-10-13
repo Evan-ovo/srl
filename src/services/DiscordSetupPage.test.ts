@@ -3,7 +3,7 @@ import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
 import { DISCORD_BRIDGE_WRANGLER_TEMPLATE } from './DiscordBridgeDeployService'
 const source = readFileSync(
-  new URL('../../android/app/src/main/assets/discord-setup.js', import.meta.url),
+  new URL('../../android/app/src/main/assets/assistant-browser.js', import.meta.url),
   'utf8',
 )
 function page(

@@ -540,24 +540,24 @@
     const sources = [...scriptControls].filter(
       ([frame]) => frame.isConnected && Number(frame.dataset.scriptFloor) === floor,
     )
-    sheet('脚本快捷操作', '<div id="scriptQuickActions"></div>')
+    sheet('脚本快捷操作', '<div id="scriptQuickActions" class="script-quick-actions"></div>')
     const content = $('#scriptQuickActions')
-    content.innerHTML = `<p class="hint">第 ${floor + 1} 楼 · 只处理本楼已保存内容。关闭小手机请使用它的显隐按钮；停止运行会释放本次脚本。</p>${
+    content.innerHTML = `<p class="hint">第 ${floor + 1} 楼 · 显隐保留脚本，停止返回正文。</p>${
       sources
         .flatMap(([_frame, scripts], frameIndex) =>
           scripts.map(
             (script) =>
-              `<div class="field-label">${esc(script.name)}</div><div class="button-row">${script.buttons
+              `<section class="script-action-group"><h3>${esc(script.name)}</h3><div class="script-action-buttons">${script.buttons
                 .filter((button) => button.visible)
                 .map(
                   (button) =>
-                    `<button class="secondary" data-script-frame="${frameIndex}" data-script-id="${esc(script.id)}" data-script-action="${esc(button.name)}">${esc(button.name)}</button>`,
+                    `<button class="script-action-button" data-script-frame="${frameIndex}" data-script-id="${esc(script.id)}" data-script-action="${esc(button.name)}">${esc(button.name)}</button>`,
                 )
-                .join('')}</div>`,
+                .join('')}</div></section>`,
           ),
         )
         .join('') || '<p class="hint">脚本尚未提供快捷按钮；仍可停止运行，返回正文。</p>'
-    }<button class="secondary" id="stopReadingScripts">停止脚本，返回正文</button>`
+    }<div class="script-action-footer"><button id="stopReadingScripts">停止脚本，返回正文</button></div>`
     content.querySelectorAll('[data-script-action]').forEach((button) => {
       button.onclick = () => {
         const frame = sources[Number(button.dataset.scriptFrame)]?.[0]
@@ -586,6 +586,300 @@
   $('#readerScripts').onclick = () => scriptActionsPanel()
   const lazyPanels = new Map()
   const floorDocuments = new Map()
+  let scriptSession = null
+  let readerWindowLoading = null
+  let readerWindowUnsupported = false
+  const usesReaderWindow = () =>
+    !readerWindowUnsupported &&
+    prefs.mode !== 'page' &&
+    state?.scripts === true &&
+    prefs.renderMode === 'full' &&
+    (scriptSession?.native || pageData?.messages.some((entry) => entry.scriptCount))
+  function readerWindowKey() {
+    return JSON.stringify([panelEpoch, pageData.messages.map((entry) => entry.index)])
+  }
+  async function prepareReaderWindow(epoch) {
+    const entries = [...pageData.messages]
+    const results = await Promise.all(
+      entries.map(async (entry) => {
+        if (!floorDocuments.has(entry.index))
+          floorDocuments.set(
+            entry.index,
+            api.resources.readChat({
+              ...readOptions(),
+              offset: entry.index,
+              limit: 1,
+              interactive: true,
+              panelInk: window.getComputedStyle($('#readingFlow')).color,
+            }),
+          )
+        return floorDocuments.get(entry.index)
+      }),
+    )
+    if (epoch !== panelEpoch) return null
+    if (results[0]?.previewCapabilities?.archivedReaderWindow !== true) return { legacy: true }
+    const scriptKey = JSON.stringify(
+      results[0]?.scriptRules?.filter((rule) => rule.enabled).map((rule) => rule.key) || [],
+    )
+    if (scriptSession?.native && scriptSession.scriptKey !== scriptKey) {
+      const position = currentPosition()
+      pageData = { ...pageData, messages: results.flatMap((result) => result.messages) }
+      clearPanelFrames()
+      renderPage()
+      restore(position)
+      notify('脚本来源已变化，请重新确认选择')
+      return null
+    }
+    const selected =
+      results.find(
+        (result) => result.messages[0]?.interactiveDocument && result.messages[0]?.scriptCount,
+      ) || scriptSession?.baseResult
+    if (!selected) throw Error('当前阅读窗口缺少已开启的角色脚本')
+    const parsed = new window.DOMParser().parseFromString(
+      selected.messages[0].interactiveDocument,
+      'text/html',
+    )
+    const root = parsed.querySelector('#chat')
+    root.replaceChildren()
+    root.dataset.srlReaderWindow = 'true'
+    root.style.opacity = '0'
+    const snapshots = []
+    const vendors = {}
+    for (const [index, result] of results.entries()) {
+      if (result.contentHash !== pageData.contentHash) throw Error('聊天原件已变化，请重新打开阅读')
+      const message = result.messages[0]
+      if (!message?.snapshot) throw Error('阅读窗口缺少已保存的楼层快照')
+      snapshots.push(message.snapshot)
+      const section = shadow.querySelector(`[data-floor="${entries[index].index}"]`).cloneNode(true)
+      section.style.removeProperty('height')
+      if (!section.getAttribute('style')) section.removeAttribute('style')
+      const body = section.querySelector('.mes_text')
+      body.removeAttribute('data-chat-frontend')
+      body.removeAttribute('data-script-projection')
+      body.style.removeProperty('height')
+      if (!body.getAttribute('style')) body.removeAttribute('style')
+      if (message.interactiveDocument) {
+        const source = new window.DOMParser().parseFromString(
+          message.interactiveDocument,
+          'text/html',
+        )
+        const pool = source.getElementById('srl-preview-vendor-data')
+        if (pool) Object.assign(vendors, JSON.parse(pool.textContent))
+        body.replaceChildren(...source.querySelector('#chat .mes_text').childNodes)
+      }
+      maskNodes(section)
+      root.append(section)
+    }
+    let history
+    if (!scriptSession && results[0]?.previewCapabilities?.archivedReaderHistory === true) {
+      history = []
+      let offset = 0
+      while (offset !== null) {
+        if (epoch !== panelEpoch || state?.scripts !== true) return null
+        const batch = await api.resources.readChat({
+          ...readOptions(),
+          offset,
+          limit: 50,
+          hideUser: false,
+          interactive: false,
+          remote: false,
+          scripts: false,
+          snapshotsOnly: true,
+        })
+        if (epoch !== panelEpoch || state?.scripts !== true) return null
+        if (batch.contentHash !== pageData.contentHash)
+          throw Error('聊天原件已变化，请重新打开阅读')
+        for (const entry of batch.messages) {
+          if (!entry.snapshot || entry.snapshot.message_id !== history.length)
+            throw Error('完整聊天快照不连续，未启动脚本')
+          history.push(entry.snapshot)
+        }
+        if (
+          batch.nextOffset !== null &&
+          (!Number.isSafeInteger(batch.nextOffset) || batch.nextOffset <= offset)
+        )
+          throw Error('聊天快照分页未前进')
+        offset = batch.nextOffset
+      }
+      if (history.length !== pageData.total) throw Error('完整聊天快照数量不一致，未启动脚本')
+    }
+    const table = parsed.createElement('script')
+    table.id = 'srl-archived-reader-window'
+    table.type = 'application/json'
+    const position = scriptSession?.pendingPosition || currentPosition()
+    table.textContent = JSON.stringify({ snapshots, history, position, mode: prefs.mode }).replace(
+      /</g,
+      '\\u003c',
+    )
+    parsed.head.prepend(table)
+    const pool = parsed.getElementById('srl-preview-vendor-data')
+    if (pool) pool.textContent = JSON.stringify(vendors).replace(/</g, '\\u003c')
+    const style = parsed.createElement('style')
+    style.textContent =
+      bodyStyles +
+      '\n' +
+      readingBaseCss +
+      '\nhtml,body{height:100%;overflow:hidden}#chat[data-srl-reader-window]{height:100%;overflow:auto;overflow-anchor:auto;overscroll-behavior:contain}#chat .mes_text{font-size:var(--reader-font);line-height:var(--reader-leading)}'
+    parsed.head.append(style)
+    parsed.documentElement.style.setProperty('--reader-font', prefs.font + 'px')
+    parsed.documentElement.style.setProperty('--reader-leading', prefs.leading)
+    const appearance = window.getComputedStyle($('#readingFlow'))
+    for (const name of [
+      '--font',
+      '--leading',
+      '--ink',
+      '--muted',
+      '--line',
+      '--paper',
+      '--measure',
+    ])
+      parsed.documentElement.style.setProperty(name, appearance.getPropertyValue(name))
+    return {
+      selected,
+      document: '<!doctype html>' + parsed.documentElement.outerHTML,
+      html: root.outerHTML,
+      snapshots,
+      position,
+      vendors,
+      scriptKey,
+    }
+  }
+  async function syncReaderWindow() {
+    if (readerWindowLoading || scriptSession?.windowKey === readerWindowKey()) return
+    const epoch = panelEpoch,
+      key = readerWindowKey(),
+      token = {}
+    readerWindowLoading = token
+    try {
+      const prepared = await prepareReaderWindow(epoch)
+      if (!prepared || epoch !== panelEpoch) return
+      if (prepared.legacy) {
+        readerWindowUnsupported = true
+        syncScriptFloor()
+        return
+      }
+      if (!scriptSession) {
+        const frame = document.createElement('iframe')
+        frame.dataset.wholeFloor = 'true'
+        frame.dataset.readerWindow = 'true'
+        frame.title = '聊天脚本阅读'
+        frame.dataset.scriptFloor = String(prepared.position.floor)
+        frame.setAttribute('sandbox', 'allow-scripts allow-same-origin')
+        frame.src = prepared.selected.previewDocumentUrl
+        frame.style.cssText = 'position:absolute;display:block;border:0;z-index:1;'
+        frame.addEventListener(
+          'load',
+          () => {
+            if (scriptSession?.frame === frame)
+              frame.contentWindow.postMessage(
+                { type: 'srl:preview-document', html: prepared.document },
+                '*',
+              )
+          },
+          { once: true },
+        )
+        scriptSession = {
+          frame,
+          native: true,
+          position: prepared.position,
+          mode: prefs.mode,
+          settings: scriptSessionSettings(),
+          windowKey: key,
+          baseResult: prepared.selected,
+          scriptKey: prepared.scriptKey,
+        }
+        panelFrames.add(frame)
+        $('#reader').append(frame)
+      } else {
+        const update = {
+          protocol: 'srl-render-compat-v1',
+          type: 'SRL_ARCHIVED_READER_WINDOW',
+          html: prepared.html,
+          snapshots: prepared.snapshots,
+          position: prepared.position,
+          restore: !!scriptSession.pendingPosition,
+          mode: prefs.mode,
+          vendors: prepared.vendors,
+          topHeight: virtualTopHeight,
+          bottomHeight: virtualBottomHeight,
+        }
+        scriptSession.windowKey = key
+        if (scriptSession.ready) scriptSession.frame.contentWindow.postMessage(update, '*')
+        else scriptSession.pending = update
+      }
+      scriptSession.pendingPosition = null
+      positionScriptSession()
+    } finally {
+      if (readerWindowLoading === token) readerWindowLoading = null
+    }
+  }
+  let lastReaderScrollTop = 0
+  function setReaderScrollTop(value) {
+    const viewport = $('#readingViewport')
+    viewport.scrollTop = value
+    lastReaderScrollTop = viewport.scrollTop
+  }
+  function scriptSessionSettings() {
+    return JSON.stringify([
+      chat?.id,
+      state?.scriptSources,
+      state?.scriptOverrides,
+      prefs.remote,
+      prefs.css,
+      prefs.styleId,
+      prefs.mask,
+      prefs.words,
+      prefs.theme,
+      prefs.mode === 'page' ? 'page' : 'native',
+    ])
+  }
+  function positionScriptSession(panel) {
+    if (!scriptSession) return
+    if (scriptSession.native) {
+      const viewport = $('#readingViewport').getBoundingClientRect(),
+        reader = $('#reader').getBoundingClientRect()
+      const frame = scriptSession.frame
+      frame.style.top = viewport.top - reader.top + 'px'
+      frame.style.left = viewport.left - reader.left + 'px'
+      frame.style.width = Math.max(1, $('#readingViewport').clientWidth) + 'px'
+      frame.style.height = Math.max(1, $('#readingViewport').clientHeight) + 'px'
+      frame.hidden = false
+      frame.contentWindow?.postMessage(
+        { type: 'SRL_HOST_VIEWPORT_HEIGHT', height: $('#readingViewport').clientHeight },
+        '*',
+      )
+      return
+    }
+    if (!panel?.isConnected) return
+    const frame = scriptSession.frame
+    frame.style.top =
+      panel.getBoundingClientRect().top - $('#readingFlow').getBoundingClientRect().top + 'px'
+    frame.hidden = false
+  }
+  function mapProjectionPosition(position, panel, oldHeight) {
+    const floor = panel.closest('[data-floor]')
+    if (prefs.mode === 'page' || Number(floor.dataset.floor) !== position.floor || !oldHeight)
+      return position
+    const height = floor.getBoundingClientRect().height
+    // Static and executable layouts can have different heights. A pixel offset past
+    // the new floor's end would select the next floor and bounce back repeatedly.
+    return {
+      ...position,
+      offset: Math.min(Math.max(0, height - 6), (position.offset * height) / oldHeight),
+    }
+  }
+  function syncScriptFloor() {
+    if (!pageData || state?.scripts !== true || prefs.renderMode !== 'full') return
+    if (usesReaderWindow()) {
+      run(syncReaderWindow)
+      return
+    }
+    const floor = currentPosition().floor
+    const selected = [...lazyPanels].find(
+      ([_panel, item]) => item.whole && item.entry.index === floor,
+    )
+    if (selected) run(() => mountPanel(...selected))
+  }
   let panelEpoch = 0
   const panelObserver = new IntersectionObserver(
     (entries) => {
@@ -593,16 +887,21 @@
         const state = lazyPanels.get(item.target)
         if (!state) continue
         state.visible = item.isIntersecting
-        if (item.isIntersecting) run(() => mountPanel(item.target, state))
+        if (item.isIntersecting && !state.whole) run(() => mountPanel(item.target, state))
         // Keep mounted state within this bounded read batch (at most three floors).
         // Replacing an offscreen frame by its collapsed projection can resize pages,
         // re-enter visibility, and repeatedly recreate the same author's script.
       }
+      syncScriptFloor()
     },
     { root: $('#readingViewport'), rootMargin: '100% 100%' },
   )
   async function mountPanel(panel, item) {
-    if (item.frame || item.loading) return
+    if (
+      item.loading ||
+      (item.frame && (!item.whole || Number(item.frame.dataset.scriptFloor) === item.entry.index))
+    )
+      return
     item.loading = true
     const epoch = panelEpoch
     try {
@@ -618,7 +917,8 @@
           }),
         )
       const result = await floorDocuments.get(item.entry.index)
-      if (epoch !== panelEpoch || !panel.isConnected || !item.visible) return
+      if (epoch !== panelEpoch || !panel.isConnected || (!item.whole && !item.visible)) return
+      if (item.whole && item.entry.index !== currentPosition().floor) return
       if (result.contentHash !== pageData.contentHash) throw Error('聊天原件已变化，请重新打开阅读')
       let doc = item.whole
         ? result.messages[0]?.interactiveDocument
@@ -634,6 +934,41 @@
           window.getComputedStyle(panel.parentElement).color,
         )
         doc = '<!doctype html>' + parsed.documentElement.outerHTML
+      }
+      const scriptKey = JSON.stringify(
+        result.scriptRules?.filter((rule) => rule.enabled).map((rule) => rule.key) || [],
+      )
+      if (item.whole && scriptSession && scriptSession.scriptKey === scriptKey) {
+        const frame = scriptSession.frame
+        const position = currentPosition()
+        const oldHeight = panel.closest('[data-floor]').getBoundingClientRect().height
+        if (scriptSession.panel !== panel && scriptSession.panel?.isConnected) {
+          scriptSession.panel.removeAttribute('data-script-projection')
+          scriptSession.panel.style.removeProperty('height')
+        }
+        frame.dataset.scriptFloor = String(item.entry.index)
+        frame.title = `第 ${item.entry.index + 1} 楼脚本阅读`
+        item.frame = frame
+        scriptSession.panel = panel
+        panel.dataset.scriptProjection = 'true'
+        if (scriptSession.height) panel.style.height = scriptSession.height
+        restore(mapProjectionPosition(position, panel, oldHeight))
+        positionScriptSession(panel)
+        const update = {
+          protocol: 'srl-render-compat-v1',
+          type: 'SRL_ARCHIVED_FLOOR',
+          snapshot: result.messages[0]?.snapshot,
+          html: doc,
+        }
+        if (scriptSession.ready) frame.contentWindow?.postMessage(update, '*')
+        else scriptSession.pending = update
+        return
+      }
+      if (item.whole && scriptSession) {
+        panelFrames.delete(scriptSession.frame)
+        scriptControls.delete(scriptSession.frame)
+        scriptSession.frame.remove()
+        scriptSession = null
       }
       const frame = document.createElement('iframe')
       const bounds = panel.getBoundingClientRect()
@@ -657,7 +992,10 @@
       frame.addEventListener(
         'load',
         () => {
-          if (frame.isConnected && epoch === panelEpoch)
+          if (
+            frame.isConnected &&
+            (item.whole ? scriptSession?.frame === frame : epoch === panelEpoch)
+          )
             frame.contentWindow?.postMessage({ type: 'srl:preview-document', html: doc }, '*')
         },
         { once: true },
@@ -666,7 +1004,14 @@
       if (item.whole) frame.dataset.scriptFloor = String(item.entry.index)
       panelFrames.add(frame)
       // Keep the already readable projection until the child reports real layout.
-      panel.append(frame)
+      if (item.whole) {
+        scriptSession = { frame, panel, scriptKey, settings: scriptSessionSettings(), height: '' }
+        frame.style.position = 'absolute'
+        frame.style.left = '0'
+        frame.style.zIndex = '1'
+        shadow.append(frame)
+        positionScriptSession(panel)
+      } else panel.append(frame)
     } catch (error) {
       if (epoch === panelEpoch) {
         floorDocuments.delete(item.entry.index)
@@ -683,18 +1028,32 @@
   let virtualTopHeight = 0
   let virtualBottomHeight = 0
   let continuousLoading = false
-  function clearPanelFrames() {
+  function clearPanelFrames(preserveSession = false) {
     window.cancelAnimationFrame(layoutFrame)
     layoutFrame = 0
     pendingLayout = null
     lineMeasurements = new WeakMap()
     panelEpoch++
+    readerWindowLoading = null
     panelObserver.disconnect()
     lazyPanels.clear()
     floorDocuments.clear()
-    const frames = [...panelFrames]
+    const retained =
+      preserveSession &&
+      state?.scripts === true &&
+      prefs.renderMode === 'full' &&
+      scriptSession?.settings === scriptSessionSettings()
+        ? scriptSession.frame
+        : null
+    const frames = [...panelFrames].filter((frame) => frame !== retained)
     panelFrames.clear()
-    scriptControls.clear()
+    for (const frame of frames) scriptControls.delete(frame)
+    if (retained) {
+      panelFrames.add(retained)
+      retained.hidden = true
+      if (scriptSession.native) scriptSession.windowKey = ''
+    } else scriptSession = null
+    if (!scriptSession?.native) $('#readingFlow').style.visibility = ''
     updateScriptControlVisibility()
     pagePosition = null
     for (const frame of frames) frame.remove()
@@ -743,7 +1102,7 @@
       root.addEventListener('toggle', mediaLayoutChanged, true)
       root.innerHTML = entry.frontends?.[index] || ''
       maskNodes(root)
-      if (prefs.renderMode === 'full' && !entry.scriptCount) {
+      if (prefs.renderMode === 'full' && !entry.scriptCount && !usesReaderWindow()) {
         lazyPanels.set(panel, {
           entry,
           index,
@@ -812,6 +1171,56 @@
   }
   window.addEventListener('message', (event) => {
     if (
+      scriptSession?.native &&
+      scriptSession.frame.contentWindow === event.source &&
+      event.data?.protocol === 'srl-render-compat-v1'
+    ) {
+      if (event.data.type === 'SRL_ARCHIVED_READER_CHROME') {
+        toggleChrome()
+        return
+      }
+      if (event.data.type === 'SRL_ARCHIVED_READER_TURN') {
+        if (prefs.mode === 'scroll' && [1, -1].includes(event.data.delta))
+          run(() => turn(event.data.delta))
+        return
+      }
+      if (event.data.type === 'SRL_ARCHIVED_READER_LAYOUT') {
+        const data = event.data,
+          pos = data.position
+        if (
+          !pos ||
+          !pageData?.messages.some((entry) => entry.index === pos.floor) ||
+          ![pos.offset, data.top, data.height, data.viewport, data.delta].every(Number.isFinite)
+        )
+          return
+        scriptSession.position = pos
+        scriptSession.pendingPosition = null
+        scriptSession.frame.dataset.scriptFloor = String(pos.floor)
+        for (const size of data.floors || []) {
+          const floor = shadow.querySelector(`[data-floor="${size.index}"]`)
+          if (floor && Number.isFinite(size.height) && size.height > 0)
+            floor.style.height = size.height + 'px'
+        }
+        $('#readingFlow').style.visibility = 'hidden'
+        setReaderScrollTop(data.top)
+        positionLabel()
+        processReadingScroll(data.top, data.height, data.viewport, data.delta)
+        return
+      }
+    }
+    if (
+      event.data?.protocol === 'srl-render-compat-v1' &&
+      event.data.type === 'SRL_ARCHIVED_SESSION_READY' &&
+      scriptSession?.frame.contentWindow === event.source
+    ) {
+      scriptSession.ready = true
+      if (scriptSession.pending) {
+        scriptSession.frame.contentWindow.postMessage(scriptSession.pending, '*')
+        scriptSession.pending = null
+      }
+      return
+    }
+    if (
       event.data?.protocol === 'srl-render-compat-v1' &&
       event.data.type === 'SRL_SCRIPT_BUTTONS'
     ) {
@@ -852,14 +1261,24 @@
     }
     if (event.data?.type !== 'SRL_PREVIEW_HEIGHT') return
     const frame = [...panelFrames.keys()].find((item) => item.contentWindow === event.source)
+    if (frame?.dataset.readerWindow === 'true') return
     const height = Number(event.data.height)
     if (!frame || !Number.isFinite(height) || height <= 0) return
+    if (
+      frame.dataset.wholeFloor === 'true' &&
+      event.data.floor !== Number(frame.dataset.scriptFloor)
+    )
+      return
     const nextHeight = Math.min(100000, Math.ceil(height)) + 'px'
     const follow = frame.dataset.followPage === String(page)
     delete frame.dataset.followPage
     const loading = frame.classList.contains('panel-loading')
     if (!loading && frame.style.height === nextHeight) return
-    const pos = prefs.mode === 'page' ? pagePosition || currentPosition() : currentPosition()
+    let pos = prefs.mode === 'page' ? pagePosition || currentPosition() : currentPosition()
+    const projectionHeight =
+      loading && frame.dataset.wholeFloor === 'true'
+        ? scriptSession?.panel.closest('[data-floor]').getBoundingClientRect().height
+        : 0
     const active = shadow.activeElement === frame || follow
     const viewport = $('#readingViewport').getBoundingClientRect()
     const inView = (element) => {
@@ -881,12 +1300,19 @@
         : null
     const top = anchor?.getBoundingClientRect().top
     if (loading) {
-      const panel = frame.parentElement
+      const panel = frame.dataset.wholeFloor === 'true' ? scriptSession?.panel : frame.parentElement
       // Do not detach/reinsert the iframe: that restarts its document and scripts.
-      for (const child of [...panel.childNodes]) if (child !== frame) child.remove()
+      if (frame.dataset.wholeFloor === 'true') panel.dataset.scriptProjection = 'true'
+      else for (const child of [...panel.childNodes]) if (child !== frame) child.remove()
       frame.classList.remove('panel-loading')
     }
     frame.style.height = nextHeight
+    if (frame.dataset.wholeFloor === 'true' && scriptSession) {
+      scriptSession.height = nextHeight
+      scriptSession.panel.style.height = nextHeight
+      if (projectionHeight) pos = mapProjectionPosition(pos, scriptSession.panel, projectionHeight)
+      positionScriptSession(scriptSession.panel)
+    }
     scheduleLayout({ pos, anchor, top })
   })
   function enableInteractions(position = currentPosition()) {
@@ -963,9 +1389,8 @@
     if (key === fontKey && pageData) mediaLayoutChanged()
   }
   function renderPage() {
-    clearPanelFrames()
-    const scroll = $('#readingViewport')
-    shadow.innerHTML = ''
+    clearPanelFrames(true)
+    for (const child of [...shadow.childNodes]) if (child !== scriptSession?.frame) child.remove()
     const style = document.createElement('style')
     style.textContent =
       bodyStyles +
@@ -976,7 +1401,7 @@
         : prefs.css.replace(/url\(\s*([^)]*)\)/gi, (match, url) =>
             /^['"]?data:/i.test(url.trim()) ? match : 'none',
           )) +
-      '\n#chat .mes_block{min-width:0;max-width:100%;box-sizing:border-box}#chat.page-layout .mes_block{transform:none!important}#chat:not(.tavern-layout) .mes_text,#chat:not(.tavern-layout) .mes_text :is(p,q,em,strong,a,span){font-size:var(--font)!important;line-height:var(--leading)!important}'
+      '\n[data-script-projection]> *{visibility:hidden!important;pointer-events:none!important}#chat .mes_block{min-width:0;max-width:100%;box-sizing:border-box}#chat.page-layout .mes_block{transform:none!important}#chat:not(.tavern-layout) .mes_text,#chat:not(.tavern-layout) .mes_text :is(p,q,em,strong,a,span){font-size:var(--font)!important;line-height:var(--leading)!important}'
     shadow.append(style)
     if (prefs.mode === 'continuous')
       shadow.append(virtualSpacer('reader-virtual-top', virtualTopHeight))
@@ -997,10 +1422,17 @@
       shadow.append(virtualSpacer('reader-virtual-bottom', virtualBottomHeight))
     applyPrefs()
     page = 0
-    scroll.scrollTop = 0
+    setReaderScrollTop(0)
     calculatePages()
+    positionScriptSession(scriptSession?.panel)
   }
   function currentPosition() {
+    if (scriptSession?.native && scriptSession.position)
+      return {
+        ...(scriptSession.pendingPosition || scriptSession.position),
+        mode: prefs.mode,
+        hash: pageData?.contentHash,
+      }
     const rect = $('#readingViewport').getBoundingClientRect()
     const extended =
       prefs.mode === 'page' &&
@@ -1150,15 +1582,21 @@
     const { pos, anchor, top } = pendingLayout
     pendingLayout = null
     if (!pageData || $('#reader').hidden) return
+    if (scriptSession?.native) {
+      positionScriptSession()
+      return
+    }
     if (anchor?.isConnected) {
       calculatePages()
       page = pageForElement(anchor)
       calculatePages(false)
-      $('#readingViewport').scrollTop += anchor.getBoundingClientRect().top - top
+      setReaderScrollTop($('#readingViewport').scrollTop + anchor.getBoundingClientRect().top - top)
       pagePosition = currentPosition()
     } else restore(pos)
+    positionScriptSession(scriptSession?.panel)
   }
   function mediaLayoutChanged() {
+    if (scriptSession?.native) return
     if (pageData && !$('#reader').hidden) {
       lineMeasurements = new WeakMap()
       scheduleLayout({ pos: pagePosition || currentPosition() })
@@ -1172,6 +1610,16 @@
     $('#nextPage').disabled = page === pages - 1 && pageData.nextOffset === null
   }
   function restore(pos) {
+    if (scriptSession?.native && pos) {
+      scriptSession.pendingPosition = pos
+      scriptSession.frame.contentWindow.postMessage(
+        { protocol: 'srl-render-compat-v1', type: 'SRL_ARCHIVED_READER_RESTORE', position: pos },
+        '*',
+      )
+      positionLabel()
+      syncScriptFloor()
+      return
+    }
     pagePosition = prefs.mode === 'page' ? pos : null
     calculatePages()
     if (!pos) return
@@ -1187,12 +1635,17 @@
     if (prefs.mode === 'page') {
       page = pageForElement(el) + (pos.mode === 'page' ? pos.pageOffset || 0 : 0)
       calculatePages(false)
-      vp.scrollTop = pos.mode === 'page' ? pos.pageScroll || 0 : 0
+      setReaderScrollTop(pos.mode === 'page' ? pos.pageScroll || 0 : 0)
     } else {
-      vp.scrollTop +=
-        el.getBoundingClientRect().top - vp.getBoundingClientRect().top + (pos.offset || 0)
+      setReaderScrollTop(
+        vp.scrollTop +
+          el.getBoundingClientRect().top -
+          vp.getBoundingClientRect().top +
+          (pos.offset || 0),
+      )
     }
     positionLabel()
+    syncScriptFloor()
   }
   function readOptions() {
     return {
@@ -1423,7 +1876,7 @@
       return
     }
     flushLayout()
-    $('#readingViewport').scrollTop = 0
+    setReaderScrollTop(0)
     if (delta > 0 && page === pages - 1 && pageData.nextOffset !== null) {
       await read(pageData.nextOffset)
     } else if (delta < 0 && page === 0 && previousOffset() !== null) {
@@ -1486,7 +1939,8 @@
       } else {
         const previousTopHeight = virtualTopHeight
         virtualTopHeight = Math.max(0, virtualTopHeight - addedHeight)
-        if (addedHeight > previousTopHeight) viewport.scrollTop += addedHeight - previousTopHeight
+        if (addedHeight > previousTopHeight)
+          setReaderScrollTop(viewport.scrollTop + addedHeight - previousTopHeight)
         kept = merged.slice(0, 5)
       }
       const keepFloors = new Set(kept.map((entry) => entry.index))
@@ -1523,6 +1977,7 @@
         ;(content.lastElementChild?.querySelector('.mes_block') || content).append(end)
       }
       positionLabel()
+      syncScriptFloor()
     } finally {
       continuousLoading = false
     }
@@ -2509,24 +2964,44 @@
   $('#readingViewport').addEventListener(
     'scroll',
     () => {
+      if (scriptSession?.native) return
+      const viewport = $('#readingViewport')
+      const delta = viewport.scrollTop - lastReaderScrollTop
+      lastReaderScrollTop = viewport.scrollTop
       positionLabel()
-      if (prefs.mode === 'continuous' && pageData && !continuousLoading) {
-        const viewport = $('#readingViewport')
-        const distanceToBottom = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop
-        if (
-          distanceToBottom - virtualBottomHeight < 240 &&
-          viewport.scrollHeight > viewport.clientHeight + 1 &&
-          pageData.nextOffset !== null
-        )
-          run(() => extendContinuous('next'))
-        else if (viewport.scrollTop - virtualTopHeight < 240 && previousOffset() !== null)
-          run(() => extendContinuous('previous'))
-      }
-      clearTimeout(saveTimer)
-      saveTimer = setTimeout(() => run(recordPosition), 600)
+      syncScriptFloor()
+      processReadingScroll(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight, delta)
     },
     { passive: true },
   )
+  function processReadingScroll(top, height, viewportHeight, delta) {
+    if (prefs.mode === 'continuous' && pageData && !continuousLoading) {
+      const distanceToBottom = height - viewportHeight - top
+      if (
+        scriptSession?.native &&
+        top + viewportHeight <= virtualTopHeight &&
+        previousOffset() !== null
+      )
+        run(() => extendContinuous('previous'))
+      else if (
+        scriptSession?.native &&
+        distanceToBottom + viewportHeight <= virtualBottomHeight &&
+        pageData.nextOffset !== null
+      )
+        run(() => extendContinuous('next'))
+      else if (
+        delta > 0 &&
+        distanceToBottom - virtualBottomHeight < 240 &&
+        height > viewportHeight + 1 &&
+        pageData.nextOffset !== null
+      )
+        run(() => extendContinuous('next'))
+      else if (delta < 0 && top - virtualTopHeight < 240 && previousOffset() !== null)
+        run(() => extendContinuous('previous'))
+    }
+    clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => run(recordPosition), 600)
+  }
   $('#backgroundFile').onchange = (e) =>
     run(async () => {
       const f = e.target.files[0]
@@ -2572,6 +3047,10 @@
       next = vp.clientWidth + 'x' + vp.clientHeight
     if (next === size) return
     size = next
+    if (scriptSession?.native) {
+      requestAnimationFrame(() => positionScriptSession())
+      return
+    }
     const pos = pagePosition || state.position
     requestAnimationFrame(() => (pos ? restore(pos) : calculatePages()))
   })

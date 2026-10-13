@@ -2,7 +2,7 @@
 import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import DiscordSetupHelp from './DiscordSetupHelp.vue'
 import { discordSetupService } from '../core/AppContainer'
-import { hasDiscordSetupBrowser } from '../services/NativeDiscordSetupBrowser'
+import { hasDiscordSetupBrowser } from '../services/AssistantBrowserRuntime'
 import { setupStep, type DiscordSetupState } from '../services/DiscordSetupWorkflow'
 const available = hasDiscordSetupBrowser()
 const state = ref<DiscordSetupState>()
@@ -61,15 +61,6 @@ onBeforeUnmount(() => window.removeEventListener('srl:discord-setup-changed', re
           @click="continueSetup"
         >
           <span>{{ busy ? '处理中' : active ? '继续' : '开始协助' }}</span>
-        </button>
-        <button
-          type="button"
-          class="discord-setup-assistant__more"
-          aria-label="网页协助更多选项"
-          :disabled="busy"
-          @click="menuOpen = true"
-        >
-          ⋯
         </button>
       </div>
     </div>
@@ -135,10 +126,6 @@ onBeforeUnmount(() => window.removeEventListener('srl:discord-setup-changed', re
   color: var(--color-accent);
   border: 1px solid var(--color-line);
   border-radius: 8px;
-}
-.discord-setup-assistant__more {
-  width: 44px;
-  font-size: 22px;
 }
 .discord-setup-assistant button:disabled {
   opacity: 0.6;

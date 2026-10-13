@@ -460,6 +460,18 @@ describe('mode loading and recalled context', () => {
     expect(names).not.toContain('capture_current_ui')
     expect(names).toContain('get_navigation_targets')
   })
+  it('exposes the general browser tool only on a browser-capable device in every work mode', () => {
+    for (const mode of ['auto', 'appearance', 'features', 'creation'] as const) {
+      expect(getAssistantRequestTools({ ...request, mode }).map((tool) => tool.name)).not.toContain(
+        'browser',
+      )
+      const browser = getAssistantRequestTools({ ...request, mode, canUseBrowser: true })
+      expect(browser.map((tool) => tool.name)).toContain('browser')
+      expect(browser.find((tool) => tool.name === 'browser')!.parameters.required).toEqual([
+        'operation',
+      ])
+    }
+  })
   it('exposes page scripts only after explicit permission is enabled', () => {
     expect(getAssistantRequestTools(request).map((tool) => tool.name)).not.toContain(
       'run_page_script',
@@ -1472,7 +1484,7 @@ describe('ProductAssistantService', () => {
         message.content?.includes('await window.srlApp.ready()'),
       ),
     ).toBe(true)
-    expect(PRODUCT_ASSISTANT_TOOLS).toHaveLength(43)
+    expect(PRODUCT_ASSISTANT_TOOLS).toHaveLength(44)
   })
   it('returns verified guidance then read-only diagnostics through native tool results', async () => {
     const completeWithUsage = vi

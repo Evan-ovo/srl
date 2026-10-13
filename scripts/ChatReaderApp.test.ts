@@ -17,6 +17,7 @@ async function reader(
   unrelatedCharacters = 0,
   builtinReader = false,
   paragraphCount = 1,
+  pauseHistory = false,
 ) {
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true })
   windows.push(dom)
@@ -82,6 +83,13 @@ async function reader(
   let releaseFirstRead!: () => void
   const firstReadStarted = new Promise<void>((resolve) => (startFirstRead = resolve))
   const firstReadGate = new Promise<void>((resolve) => (releaseFirstRead = resolve))
+  let historyReady!: () => void, releaseHistory!: () => void
+  const historyStarted = new Promise<void>((resolve) => {
+    historyReady = resolve
+  })
+  const historyGate = new Promise<void>((resolve) => {
+    releaseHistory = resolve
+  })
   let readCalls = 0
   const setReaderNavigation = vi.fn<(_state: { page: string }) => Promise<void>>(async () => {})
   const setLoading = vi.fn(async () => {})
@@ -92,12 +100,18 @@ async function reader(
       interactive: boolean
       limit?: number
       scriptListOnly?: boolean
+      snapshotsOnly?: boolean
       scriptSources?: string[]
+      scripts?: boolean
     }) => {
       if (readCalls++ === 0) {
         startFirstRead()
         if (pauseFirstRead) await firstReadGate
         if (failFirstRead) throw new Error('读取夹具暂时失败')
+      }
+      if (options.snapshotsOnly && pauseHistory) {
+        historyReady()
+        await historyGate
       }
       return {
         contentHash: 'fixture',
@@ -110,6 +124,7 @@ async function reader(
         nextOffset:
           options.offset + (options.limit || 1) < 12 ? options.offset + (options.limit || 1) : null,
         previewDocumentUrl: 'data:text/html,fixture',
+        previewCapabilities: { archivedReaderWindow: true, archivedReaderHistory: true },
         messages: options.scriptListOnly
           ? []
           : Array.from({ length: Math.min(options.limit || 1, 12 - options.offset) }, (_, i) => ({
@@ -121,6 +136,20 @@ async function reader(
                 '<div data-chat-frontend="0"></div>',
               frontends: ['<p>测试用户的静态状态</p>'],
               interactiveFrontends: ['<p>测试用户的交互状态</p>'],
+              scriptCount: options.scripts ? 1 : 0,
+              snapshot: {
+                message_id: options.offset + i,
+                last_message_id: 11,
+                name: '角色',
+                role: 'assistant',
+                is_hidden: false,
+                message: '交互楼',
+                data: {},
+                extra: {},
+                swipe_id: 0,
+              },
+              interactiveDocument:
+                '<!doctype html><html><body><div id="chat"><div class="mes"><div class="mes_text">交互楼</div></div></div></body></html>',
             })),
       }
     },
@@ -184,6 +213,8 @@ async function reader(
     click,
     swipe,
     readChat,
+    historyStarted,
+    releaseHistory,
     listResources,
     saved,
     get maskPatternBuilds() {
@@ -514,6 +545,142 @@ describe('reader controls and identity display boundaries', () => {
     )
   })
 
+  it('does not treat a stationary layout scroll as a request for the next continuous batch', async () => {
+    const app = await reader({ mode: 'continuous' })
+    await app.waitUntilReady()
+    const viewport = app.document.querySelector('#readingViewport')!
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 600 },
+    })
+    const before = app.readChat.mock.calls.length
+    viewport.dispatchEvent(new app.document.defaultView!.Event('scroll'))
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(app.readChat.mock.calls.length).toBe(before)
+  })
+
+  it('loads backwards when moving towards the top even when both batch edges are nearby', async () => {
+    const app = await reader({ mode: 'continuous' })
+    await app.waitUntilReady()
+    const viewport = app.document.querySelector('#readingViewport')! as HTMLElement
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 1200 },
+    })
+    viewport.scrollTop = 800
+    viewport.dispatchEvent(new app.document.defaultView!.Event('scroll'))
+    await vi.waitFor(() => expect(app.shadow.querySelector('[data-floor="7"]')).not.toBeNull())
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 600 })
+    const before = app.readChat.mock.calls.length
+    viewport.scrollTop = 10
+    viewport.dispatchEvent(new app.document.defaultView!.Event('scroll'))
+    await vi.waitFor(() => expect(app.readChat.mock.calls.length).toBeGreaterThan(before))
+    expect(app.readChat.mock.calls[before]?.[0]).toMatchObject({ offset: 0, backward: true })
+  })
+
+  it('does not start a script after the user stops an in-flight history preparation', async () => {
+    const storage = new Map<string, unknown>([
+      ['preferences-v1', { renderMode: 'full', mode: 'continuous' }],
+      ['chat:chat', { scripts: true }],
+    ])
+    const app = await reader({}, storage, false, false, [], 0, false, 1, true)
+    await app.historyStarted
+    await app.click('#readerScripts')
+    await app.click('#stopReadingScripts')
+    app.releaseHistory()
+    await new Promise((resolve) => app.document.defaultView!.requestAnimationFrame(resolve))
+    expect(app.document.querySelector('iframe[data-reader-window]')).toBeNull()
+    expect(app.readChat.mock.calls.filter(([o]) => o.snapshotsOnly)).toHaveLength(1)
+    expect(storage.get('chat:chat')).toMatchObject({ scripts: false })
+  })
+  it('uses one native scrolling window, keeps floor dimensions separate and ignores layout-only paging', async () => {
+    const storage = new Map<string, unknown>([
+      ['preferences-v1', { renderMode: 'full', mode: 'continuous' }],
+      ['chat:chat', { scripts: true }],
+    ])
+    const app = await reader({}, storage)
+    await vi.waitFor(() =>
+      expect(app.document.querySelector('iframe[data-reader-window]')).not.toBeNull(),
+    )
+    const frame = app.document.querySelector('iframe[data-reader-window]')! as HTMLIFrameElement
+    expect(app.readChat.mock.calls.filter(([o]) => o.snapshotsOnly)).toHaveLength(1)
+    const height = frame.style.height
+    const send = (data: Record<string, unknown>) =>
+      app.document.defaultView!.dispatchEvent(
+        new app.document.defaultView!.MessageEvent('message', {
+          source: frame.contentWindow,
+          data,
+        }),
+      )
+    send({ type: 'SRL_PREVIEW_HEIGHT', floor: 0, height: 150, frontendsReady: false })
+    send({ type: 'SRL_PREVIEW_HEIGHT', floor: 0, height: 720, frontendsReady: true })
+    expect(frame.style.height).toBe(height)
+    const before = app.readChat.mock.calls.length
+    send({
+      protocol: 'srl-render-compat-v1',
+      type: 'SRL_ARCHIVED_READER_LAYOUT',
+      position: { floor: 1, offset: 27 },
+      top: 900,
+      height: 1400,
+      viewport: 500,
+      delta: 0,
+      floors: [
+        { index: 0, height: 720 },
+        { index: 1, height: 800 },
+      ],
+    })
+    await new Promise((resolve) => app.document.defaultView!.requestAnimationFrame(resolve))
+    expect(app.readChat.mock.calls.length).toBe(before)
+    expect(frame.dataset.scriptFloor).toBe('1')
+    expect(app.document.querySelector('#readerPosition')?.textContent).toContain('第 2 / 12 楼')
+    expect((app.shadow.querySelector('[data-floor="0"]') as HTMLElement).style.height).toBe('720px')
+    expect(frame.style.height).toBe(height)
+    vi.spyOn(
+      app.shadow.querySelector('[data-floor="0"]')!,
+      'getBoundingClientRect',
+    ).mockReturnValue({ height: 720, top: 0, bottom: 720 } as DOMRect)
+    const posted = vi.spyOn(frame.contentWindow!, 'postMessage')
+    app.shadow.dispatchEvent(new app.document.defaultView!.Event('load'))
+    await new Promise((resolve) => app.document.defaultView!.requestAnimationFrame(resolve))
+    expect(posted.mock.calls.some(([data]) => data.type === 'SRL_ARCHIVED_READER_RESTORE')).toBe(
+      false,
+    )
+    send({
+      protocol: 'srl-render-compat-v1',
+      type: 'SRL_ARCHIVED_READER_LAYOUT',
+      position: { floor: 1, offset: 40 },
+      top: 913,
+      height: 1400,
+      viewport: 500,
+      delta: 13,
+      floors: [],
+    })
+    await vi.waitFor(() => expect(app.readChat.mock.calls.length).toBeGreaterThan(before))
+    expect(app.document.querySelector('iframe[data-reader-window]')).toBe(frame)
+    await vi.waitFor(() => expect(app.shadow.querySelector('[data-floor="5"]')).not.toBeNull())
+    await new Promise((resolve) => app.document.defaultView!.requestAnimationFrame(resolve))
+    expect(app.readChat.mock.calls.filter(([o]) => o.snapshotsOnly)).toHaveLength(1)
+    const gapBefore = app.readChat.mock.calls.length
+    send({
+      protocol: 'srl-render-compat-v1',
+      type: 'SRL_ARCHIVED_READER_LAYOUT',
+      position: { floor: 3, offset: 0 },
+      top: 0,
+      height: 5000,
+      viewport: 500,
+      delta: 0,
+      floors: [],
+    })
+    await vi.waitFor(() =>
+      expect(
+        app.readChat.mock.calls
+          .slice(gapBefore)
+          .some(
+            ([options]) => 'backward' in options && options.backward === true && options.offset < 3,
+          ),
+      ).toBe(true),
+    )
+  })
   it('allows full mode with body masking and explicitly identifies the unmasked panel', async () => {
     const app = await reader({ mask: true, replacement: '某某' })
     expect(app.shadow.querySelector('.mes_text p')?.textContent).toBe('某某的正文')

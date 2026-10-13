@@ -34,18 +34,96 @@ import org.junit.runner.RunWith;
 
 /** Local HTML only, run on an explicitly selected isolated emulator; never logs into a site. */
 @RunWith(AndroidJUnit4.class)
-public class DiscordSetupBrowserWindowTest {
+public class AssistantBrowserWindowTest {
+    @Test public void sharedChatRetainsThePageAndAgentUntilPreviewReturns() throws Exception {
+        AssistantBrowserWindow[] window = new AssistantBrowserWindow[1]; WebView[] original = new WebView[1];
+        int[] document = new int[1];
+        int[] viewport = new int[2];
+        CountDownLatch loaded = new CountDownLatch(1);
+        String html = "<!doctype html><meta name='viewport' content='width=device-width'><body style='background:#21767f;color:white'><h1>当前配置网页</h1><button style='width:200px;height:60px' onclick=\"document.body.dataset.clicked=event.isTrusted\">保存配置</button><p>全屏对话时助手继续工作</p>";
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                WebView app = activity.getBridge().getWebView();
+                app.loadDataWithBaseURL("https://localhost/", "<body style='background:#f2f9fa'><h1>蒜惹菈完整对话</h1><p>保留同一份聊天记录</p></body>", "text/html", "UTF-8", null);
+                window[0] = new AssistantBrowserWindow(activity, app, event -> {});
+                window[0].conversation("chat-native-test");
+                window[0].open(null, "cf-deploy", "配置 Worker", "本地回归", new JSONArray(), "", false, false, false);
+                original[0] = window[0].web;
+                WebViewClient client = original[0].getWebViewClient();
+                original[0].setWebViewClient(new WebViewClient() {
+                    @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) { return fixtureHtml(html); }
+                    @Override public void onPageStarted(WebView view, String url, Bitmap icon) { client.onPageStarted(view, url, icon); }
+                    @Override public void onPageFinished(WebView view, String url) { client.onPageFinished(view, url); loaded.countDown(); }
+                });
+                window[0].agentRun("chat-native-run");
+                original[0].loadUrl("https://dash.cloudflare.com/account/workers/services/view/bridge/production/settings");
+            });
+            assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> {
+                document[0] = window[0].documentId;
+                viewport[0] = original[0].getWidth(); viewport[1] = original[0].getHeight();
+                assertFalse(window[0].paused);
+                assertTrue(window[0].chatPresentation("compact", "chat-native-test", null));
+                assertTrue(original[0].isShown());
+                assertFalse(window[0].paused);
+                assertFalse(window[0].chatPresentation("fullscreen", "expired-chat", new JSONObject()));
+            });
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            scenario.onActivity(activity -> {
+                assertEquals("chat keeps the observed page width", viewport[0], original[0].getWidth());
+                assertEquals("chat keeps the observed page height", viewport[1], original[0].getHeight());
+                JSONObject bounds = new JSONObject();
+                try { bounds.put("left", 160).put("top", 280).put("width", 180).put("height", 150).put("viewportWidth", activity.getBridge().getWebView().getWidth() / activity.getResources().getDisplayMetrics().density); } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+                assertTrue(window[0].chatPresentation("fullscreen", "chat-native-test", bounds));
+                window[0].phase("正在保存配置"); window[0].revealForAction("click");
+                try { java.lang.reflect.Field field = AssistantBrowserWindow.class.getDeclaredField("dialog"); field.setAccessible(true); assertFalse(((Dialog) field.get(window[0])).isShowing()); } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+                assertSame(original[0], window[0].web); assertEquals(document[0], window[0].documentId);
+                assertFalse(window[0].paused); assertEquals("chat-native-run", window[0].agentRunId);
+            });
+            CountDownLatch acted = new CountDownLatch(1);
+            scenario.onActivity(activity -> original[0].evaluateJavascript("(()=>{const r=document.querySelector('button').getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2})})()", raw -> {
+                try { JSONObject anchor = new JSONObject(new org.json.JSONTokener(raw).nextValue().toString()); assertTrue(window[0].clickPublicTarget(anchor, document[0], "chat-native-run")); acted.countDown(); } catch (org.json.JSONException error) { throw new AssertionError(error); }
+            }));
+            assertTrue(acted.await(5, TimeUnit.SECONDS));
+            CountDownLatch checked = new CountDownLatch(1);
+            scenario.onActivity(activity -> original[0].evaluateJavascript("document.body.dataset.clicked", raw -> { assertEquals("\"true\"", raw); checked.countDown(); }));
+            assertTrue(checked.await(5, TimeUnit.SECONDS));
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            int[] previewBounds = new int[4];
+            scenario.onActivity(activity -> {
+                try { java.lang.reflect.Field field = AssistantBrowserWindow.class.getDeclaredField("preview"); field.setAccessible(true); android.view.View view = (android.view.View) field.get(window[0]); int[] position = new int[2]; view.getLocationOnScreen(position); previewBounds[0] = position[0]; previewBounds[1] = position[1]; previewBounds[2] = view.getWidth(); previewBounds[3] = view.getHeight(); }
+                catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+            });
+            Bitmap screen = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+            assertNotNull(screen);
+            int visiblePagePixels = 0;
+            for (int y = previewBounds[1] + 8; y < previewBounds[1] + previewBounds[3] / 2; y += 4)
+                for (int x = previewBounds[0] + 8; x < previewBounds[0] + previewBounds[2] - 8; x += 4)
+                    if ((screen.getPixel(x, y) & 0xffffff) == 0x21767f) visiblePagePixels++;
+            assertTrue("preview must render the target page, not a blank placeholder", visiblePagePixels > 20);
+            try (FileOutputStream out = new FileOutputStream(new File(InstrumentationRegistry.getInstrumentation().getTargetContext().getExternalFilesDir(null), "task-chat-native.png"))) { screen.compress(Bitmap.CompressFormat.PNG, 100, out); }
+            screen.recycle();
+            onView(withContentDescription("当前网页和助手进度，点击返回网页协助")).perform(click());
+            scenario.onActivity(activity -> {
+                assertSame(original[0], window[0].web); assertEquals(document[0], window[0].documentId);
+                assertFalse(window[0].paused); assertEquals("chat-native-run", window[0].agentRunId);
+                window[0].close();
+                assertFalse(window[0].chatPresentation("fullscreen", "chat-native-test", new JSONObject()));
+                window[0].destroy();
+            });
+        }
+    }
     @Test public void agentTouchOpensPopupAndReturnsToItsOpener() throws Exception {
         String parentUrl = "https://dash.cloudflare.com/account/workers-and-pages/create";
         String popupUrl = "https://github.com/settings/installations/1234";
         String parentHtml = "<!doctype html><meta name='viewport' content='width=device-width'><button style='width:200px;height:60px' onclick=\"document.body.dataset.trusted=event.isTrusted;window.open('" + popupUrl + "','authorize')\">Connect GitHub</button><script>addEventListener('message',e=>{if(e.origin==='https://github.com')document.body.dataset.connected=e.data})</script>";
         String popupHtml = "<!doctype html><meta name='viewport' content='width=device-width'><button style='width:200px;height:60px' onclick=\"document.body.dataset.clicked=event.isTrusted;window.opener.postMessage('connected','https://dash.cloudflare.com');window.close()\">Save</button>";
-        DiscordSetupBrowserWindow[] window = new DiscordSetupBrowserWindow[1]; WebView[] parent = new WebView[1];
+        AssistantBrowserWindow[] window = new AssistantBrowserWindow[1]; WebView[] parent = new WebView[1];
         CountDownLatch loaded = new CountDownLatch(1), popupLoaded = new CountDownLatch(1), returned = new CountDownLatch(1);
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             scenario.onActivity(activity -> {
-                window[0] = new DiscordSetupBrowserWindow(activity, event -> {});
-                window[0].open(null, "cf-deploy", "窗口回归", "隔离 HTML", new JSONArray(), "", false, false);
+                window[0] = new AssistantBrowserWindow(activity, event -> {});
+                window[0].open(null, "cf-deploy", "窗口回归", "隔离 HTML", new JSONArray(), "", false, false, false);
                 parent[0] = window[0].web;
                 WebViewClient parentClient = parent[0].getWebViewClient(); WebChromeClient parentChrome = parent[0].getWebChromeClient();
                 parent[0].setWebViewClient(new WebViewClient() {
@@ -94,7 +172,7 @@ public class DiscordSetupBrowserWindowTest {
         }
     }
     private static WebResourceResponse fixtureHtml(String value) { return new WebResourceResponse("text/html", "UTF-8", new ByteArrayInputStream(value.getBytes(StandardCharsets.UTF_8))); }
-    private static void clickFixture(ActivityScenario<MainActivity> scenario, DiscordSetupBrowserWindow[] window, boolean checkPause) throws Exception {
+    private static void clickFixture(ActivityScenario<MainActivity> scenario, AssistantBrowserWindow[] window, boolean checkPause) throws Exception {
         CountDownLatch done = new CountDownLatch(1);
         scenario.onActivity(activity -> window[0].web.evaluateJavascript("(()=>{let r=document.querySelector('button').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()", raw -> {
             try {
@@ -135,21 +213,21 @@ public class DiscordSetupBrowserWindowTest {
         assertThrows(Exception.class, () -> rsa.doFinal(android.util.Base64.decode(receipt.get("key"), android.util.Base64.NO_WRAP)));
     }
     private static final String URL = "https://discord.com/developers/applications/1234567890123456789/information";
-    private Dialog dialog(DiscordSetupBrowserWindow window) throws Exception {
-        java.lang.reflect.Field field = DiscordSetupBrowserWindow.class.getDeclaredField("dialog"); field.setAccessible(true); return (Dialog) field.get(window);
+    private Dialog dialog(AssistantBrowserWindow window) throws Exception {
+        java.lang.reflect.Field field = AssistantBrowserWindow.class.getDeclaredField("dialog"); field.setAccessible(true); return (Dialog) field.get(window);
     }
     @Test public void loginBackAndExternalVerificationResumeUseTheCurrentTaskOnly() throws Exception {
         String login = "https://dash.cloudflare.com/login";
-        DiscordSetupBrowserWindow[] window = new DiscordSetupBrowserWindow[1];
+        AssistantBrowserWindow[] window = new AssistantBrowserWindow[1];
         AtomicInteger resumes = new AtomicInteger(), pauses = new AtomicInteger(), loads = new AtomicInteger();
         java.util.concurrent.BlockingQueue<String> loaded = new java.util.concurrent.LinkedBlockingQueue<>();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             scenario.onActivity(activity -> {
-                window[0] = new DiscordSetupBrowserWindow(activity, event -> {
+                window[0] = new AssistantBrowserWindow(activity, event -> {
                     if ("agent-resume".equals(event.optString("action"))) resumes.incrementAndGet();
                     if ("agent-pause".equals(event.optString("action"))) pauses.incrementAndGet();
                 });
-                window[0].open(null, "d1-create", "创建 D1 数据库", "本机登录返回夹具", new JSONArray().put(new com.getcapacitor.JSObject().put("id", "d1-create")), "", false, false);
+                window[0].open(null, "d1-create", "创建 D1 数据库", "本机登录返回夹具", new JSONArray().put(new com.getcapacitor.JSObject().put("id", "d1-create")), "", false, false, false);
                 WebViewClient owner = window[0].web.getWebViewClient();
                 window[0].web.setWebViewClient(new WebViewClient() {
                     @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -197,7 +275,7 @@ public class DiscordSetupBrowserWindowTest {
     @Test public void compactBrowserFailureAndSensitiveNavigation() throws Exception {
         boolean dark = Boolean.parseBoolean(InstrumentationRegistry.getArguments().getString("dark", "false"));
         String capture = InstrumentationRegistry.getArguments().getString("capture", "discord-ui");
-        DiscordSetupBrowserWindow[] window = new DiscordSetupBrowserWindow[1];
+        AssistantBrowserWindow[] window = new AssistantBrowserWindow[1];
         WebViewClient[] client = new WebViewClient[1];
         AtomicInteger pauses = new AtomicInteger();
         CountDownLatch loaded = new CountDownLatch(1);
@@ -209,9 +287,9 @@ public class DiscordSetupBrowserWindowTest {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             scenario.onActivity(activity -> {
                 try {
-                    window[0] = new DiscordSetupBrowserWindow(activity, event -> { if ("agent-pause".equals(event.optString("action"))) pauses.incrementAndGet(); });
+                    window[0] = new AssistantBrowserWindow(activity, event -> { if ("agent-pause".equals(event.optString("action"))) pauses.incrementAndGet(); });
                     JSONArray steps = new JSONArray().put(new JSONObject().put("id", "discord-app").put("title", "找到 Discord 三个配置值"));
-                    window[0].open(null, "discord-app", "找到 Discord 配置值", "打开自己的 App → General Information。Application ID 与 Public Key 可保存在本机；Bot Token 去 Bot 页由你保存，不读取。", steps, "", false, dark);
+                    window[0].open(null, "discord-app", "找到 Discord 配置值", "打开自己的 App → General Information。Application ID 与 Public Key 可保存在本机；Bot Token 去 Bot 页由你保存，不读取。", steps, "", false, dark, false);
                     File petFile = new File(activity.getExternalFilesDir(null), "test-pet.png");
                     if (petFile.exists()) {
                         Bitmap original = android.graphics.BitmapFactory.decodeFile(petFile.getAbsolutePath());
@@ -308,7 +386,7 @@ public class DiscordSetupBrowserWindowTest {
                 try {
                     assertEquals("manual screenshots remain allowed on login pages", 0, dialog(window[0]).getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE);
                     returningToPublic.set(true);
-                    window[0].open(URL, "discord-app", "找到 Discord 配置值", "打开自己的 App → General Information。", window[0].steps, "", false, dark);
+                    window[0].open(URL, "discord-app", "找到 Discord 配置值", "打开自己的 App → General Information。", window[0].steps, "", false, dark, false);
                     assertEquals("navigation does not force screenshot protection", 0, dialog(window[0]).getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE);
                 } catch (Exception error) { throw new RuntimeException(error); }
             });

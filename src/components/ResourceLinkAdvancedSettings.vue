@@ -2,7 +2,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import DiscordSetupAssistant from './DiscordSetupAssistant.vue'
 import { discordSetupService } from '../core/AppContainer'
-import { hasDiscordSetupBrowser } from '../services/NativeDiscordSetupBrowser'
+import { hasDiscordSetupBrowser } from '../services/AssistantBrowserRuntime'
 import { useAssistantHelpContext } from '../composables/UseAssistantHelpContext'
 
 import { useTransientStatus } from '../composables/UseTransientStatus'

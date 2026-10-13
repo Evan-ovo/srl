@@ -30,7 +30,7 @@ export interface UserPersonaImportReport {
   failed: Array<{ fileName: string; message: string }>
 }
 
-export function isUserPersonaAvatarResource(resource: Resource): boolean {
+export function isUserPersonaAvatarResource(resource: Pick<Resource, 'metadata'>): boolean {
   return isUserPersonaAvatarAttachment(resource)
 }
 
@@ -90,7 +90,10 @@ export class UserPersonaService {
       })
       current = (await this.resourceService.get(current.id)) ?? current
     }
-    if (coverResource !== undefined) {
+    if (
+      coverResource !== undefined &&
+      (coverResource || current.thumbnailBlob || current.thumbnailAssetId)
+    ) {
       current = await this.resourceService.updateThumbnail(
         current.id,
         coverResource?.thumbnailBlob ?? coverResource?.originalBlob,
@@ -132,6 +135,10 @@ export class UserPersonaService {
   }
 
   async loadAvatarResource(resourceId: string): Promise<Resource | undefined> {
+    // Most related resources are large character cards or world books. Check the
+    // attachment identity from metadata before requesting their original bytes.
+    const summary = await this.resourceService.getSummary(resourceId)
+    if (!summary || !isUserPersonaAvatarResource(summary)) return undefined
     const resource = await this.resourceService.get(resourceId)
     return resource && isUserPersonaAvatarResource(resource) ? resource : undefined
   }

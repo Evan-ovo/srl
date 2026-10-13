@@ -7,7 +7,14 @@ import {
   productAssistantWorkspaceService as workspace,
   discordSetupService,
 } from '../core/AppContainer'
-import { hasDiscordSetupBrowser, discordSetupSession } from '../services/NativeDiscordSetupBrowser'
+import {
+  hasDiscordSetupBrowser,
+  hasAssistantBrowser,
+  discordSetupSession,
+  nativeAssistantBrowser,
+  assistantBrowserSession,
+} from '../services/AssistantBrowserRuntime'
+import { taskCenter } from '../core/TaskCenter'
 import {
   newAssistantConversation,
   type AssistantConversation,
@@ -75,12 +82,14 @@ const props = withDefaults(
     captureReference?: (signal: AbortSignal) => Promise<AssistantImage>
     compact?: boolean
     visible?: boolean
+    backgroundTask?: boolean
   }>(),
   { visible: true, navigate: undefined, captureReference: undefined },
 )
 const emit = defineEmits<{ back: []; expand: []; activity: [value: boolean] }>()
 const service = new ProductAssistantService(mainApiService)
 const appSession = new ProductAssistantAppSession(externalAppService)
+let browserEventHandle: Awaited<ReturnType<typeof nativeAssistantBrowser.addListener>> | undefined
 const currentApp = ref<AssistantAppSummary>()
 const toolHost = useTemplateRef<ProductAssistantToolHost>('toolHost')
 const {
@@ -196,7 +205,7 @@ const visibleHistory = computed(() =>
           history.value.indexOf(turn) >= chatContext.summary.value.count),
     ),
 )
-const canReturnToDiscordBrowser = computed(
+const isBrowserTaskChat = computed(
   () =>
     hasDiscordSetupBrowser() &&
     discordSetupSession.active &&
@@ -206,12 +215,16 @@ const canReturnToDiscordBrowser = computed(
     !discordSetupSession.browserVisible &&
     !settingsOpen.value,
 )
-async function returnToDiscordBrowser(showControls = false) {
+async function openBrowserTaskControls() {
   try {
-    await discordSetupService.returnToBrowser(showControls)
+    await discordSetupService.returnToBrowser(true)
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '暂时无法返回配置网页'
+    error.value = cause instanceof Error ? cause.message : '暂时无法打开网页协助操作'
   }
+}
+async function stopAssistantAction() {
+  if (isBrowserTaskChat.value) await discordSetupService.pauseAgent()
+  else controller?.abort()
 }
 const resultViewer =
   useTemplateRef<InstanceType<typeof ProductAssistantResultViewer>>('resultViewer')
@@ -350,6 +363,27 @@ onMounted(async () => {
   window.addEventListener('srl:discord-setup-stop', stopDiscordGeneration)
   window.addEventListener('srl:discord-setup-fullscreen', receiveDiscordSetupDraft)
   try {
+    browserEventHandle = await nativeAssistantBrowser.addListener('browserAction', (event) => {
+      if (!browserTaskId || browserTaskConversationId !== conversationId.value) return
+      if (event.action === 'visibility') {
+        assistantBrowserSession.browserVisible = event.visible === true
+      } else if (event.action === 'agent-pause') {
+        assistantBrowserSession.agentRunning = false
+        taskCenter.update(browserTaskId, { phase: '已暂停，等待用户或助手继续' })
+      } else if (event.action === 'agent-resume' || event.action === 'page-ready') {
+        assistantBrowserSession.agentRunning = true
+        taskCenter.update(browserTaskId, { phase: '网页已就绪，等待助手观察' })
+      } else if (event.action === 'return') {
+        taskCenter.complete(browserTaskId)
+        browserTaskId = ''
+        assistantBrowserSession.active = false
+        assistantBrowserSession.agentRunning = false
+      }
+    })
+  } catch {
+    // Browser task execution remains available; native UI status events are optional.
+  }
+  try {
     await loadConversation(await workspace.initialize())
     preferences.value = workspace.preferences()
     const activeOwner = workspace.conversationActivityOwner?.(conversationId.value)
@@ -361,6 +395,8 @@ onMounted(async () => {
     initializing.value = false
     await scrollToLatest()
   }
+  if (((props.compact && props.visible) || props.backgroundTask) && discordSetupSession.active)
+    await ensureDiscordSetupConversation()
 })
 watch(
   [input, images, designReferences, history],
@@ -391,6 +427,8 @@ watch(
     } finally {
       initializing.value = false
     }
+    if (((props.compact && props.visible) || props.backgroundTask) && discordSetupSession.active)
+      await ensureDiscordSetupConversation()
   },
 )
 function getChatContext(): AssistantContext {
@@ -410,6 +448,7 @@ function getChatContext(): AssistantContext {
     toolCallingEnabled: preferences.value.toolCallingEnabled !== false,
     canRunPageScripts: preferences.value.allowPageScripts === true,
     canConfigureDiscordBrowser: hasDiscordSetupBrowser(),
+    canUseBrowser: hasAssistantBrowser(),
     toolCallLimit: preferences.value.toolCallLimit,
     canSearchWeb: preferences.value.providerSearch === true,
     preferenceMemories: workspace
@@ -424,6 +463,244 @@ async function executeChatOperation(
   signal: AbortSignal,
   apiConfig?: MainApiConfig,
 ): Promise<AssistantExecution> {
+  if (reply.action === 'browser') {
+    if (!hasDiscordSetupBrowser()) throw new Error('当前设备不支持网页协助')
+    const args = reply.args
+    const operation = args.operation ?? ''
+    const ownsTask = browserTaskId && browserTaskConversationId === conversationId.value
+    if (operation === 'open' && !ownsTask) {
+      const url = args.url?.trim() ?? ''
+      let parsed: URL
+      try {
+        parsed = new URL(url)
+      } catch {
+        throw new Error('请提供完整的 HTTPS 网站地址')
+      }
+      if (parsed.protocol !== 'https:' || !parsed.hostname.includes('.'))
+        throw new Error('网页协助只接受公开 HTTPS 网站')
+      const accepted = await confirmAction(
+        {
+          title: '开启网页协助',
+          confirmLabel: '开启并观察',
+          message: `目标：${parsed.origin}\n助手会读取公开页面内容并按你的要求操作。登录、验证码、密码和秘密值仍由你自己填写；保存、提交、购买或部署等重要动作会再次确认。页面截图仅从本网页读取。`,
+        },
+        signal,
+      )
+      if (!accepted || signal.aborted || !alive)
+        return { text: '已取消网页协助。', ok: false, cancelled: true }
+      if (browserTaskId) {
+        await nativeAssistantBrowser.close().catch(() => {})
+        taskCenter.complete(browserTaskId)
+      }
+      browserTaskId = crypto.randomUUID()
+      browserTaskConversationId = conversationId.value
+      const generation = ++browserTaskGeneration
+      const taskId = browserTaskId
+      assistantBrowserSession.active = true
+      assistantBrowserSession.agentRunning = true
+      taskCenter.start({
+        operationId: taskId,
+        name: `网页协助 · ${parsed.hostname}`,
+        phase: '打开网页',
+        cancelable: true,
+        action: { label: '继续网页协助', run: () => resumeBrowserWindow(taskId) },
+        cancel: async () => {
+          await nativeAssistantBrowser.close()
+          if (browserTaskId === taskId) {
+            browserTaskId = ''
+            assistantBrowserSession.active = false
+            assistantBrowserSession.agentRunning = false
+          }
+        },
+      })
+      try {
+        await nativeAssistantBrowser.open({
+          url,
+          site: 'general',
+          purpose: 'general',
+          step: 'browser-general',
+          title: '网页协助',
+          hint: '根据用户目标理解当前网页；使用实际页面内容定位操作，不依赖教程固定位置。',
+          steps: [],
+          template: '',
+          mode: 'agent',
+          agentRunId: taskId,
+          conversationId: conversationId.value,
+          showControls: true,
+        })
+        const snapshot = await nativeAssistantBrowser.waitReady()
+        if (signal.aborted || !alive || generation !== browserTaskGeneration)
+          throw new DOMException('网页任务已取消', 'AbortError')
+        taskCenter.update(taskId, { phase: snapshot.loading ? '等待网页加载' : '观察网页' })
+        assistantBrowserSession.webStepActive = true
+        return {
+          text: '网页已打开，正在读取当前页面。',
+          ok: true,
+          data: snapshot as unknown as Record<string, unknown>,
+        }
+      } catch (cause) {
+        if (browserTaskId === taskId) {
+          taskCenter.fail(taskId, cause)
+          browserTaskId = ''
+          assistantBrowserSession.active = false
+          assistantBrowserSession.agentRunning = false
+        }
+        throw cause
+      }
+    }
+    if (!ownsTask)
+      throw new Error('当前聊天没有正在进行的网页任务；请先用 browser.open 打开目标网页')
+    const taskId = browserTaskId
+    const generation = browserTaskGeneration
+    if (signal.aborted) throw new DOMException('网页任务已取消', 'AbortError')
+    const latest = async () => {
+      const result = await nativeAssistantBrowser.inspect({ query: args.query })
+      if (signal.aborted || generation !== browserTaskGeneration || browserTaskId !== taskId)
+        throw new DOMException('网页任务已停止，旧回执已丢弃', 'AbortError')
+      return result
+    }
+    const snapshotData = (value: unknown) =>
+      value && typeof value === 'object' ? (value as Record<string, unknown>) : { result: value }
+    taskCenter.update(taskId, {
+      phase: operation === 'inspect' ? '观察网页' : `网页操作：${operation}`,
+    })
+    if (operation === 'pause') {
+      await nativeAssistantBrowser.pauseAgent()
+      assistantBrowserSession.agentRunning = false
+      taskCenter.update(taskId, { phase: '已暂停，等待继续' })
+      taskCenter.setAction(taskId, {
+        label: '继续网页协助',
+        run: () => resumeBrowserWindow(taskId),
+      })
+      return { text: '网页任务已暂停，当前页面和任务仍保留。', ok: true }
+    }
+    if (operation === 'resume') {
+      await resumeBrowserWindow(taskId)
+      return {
+        text: '已恢复网页任务；先观察当前页面。',
+        ok: true,
+        data: snapshotData(await latest()),
+      }
+    }
+    if (operation === 'open') {
+      if (!args.url) throw new Error('请提供新网页 HTTPS 地址')
+      const current = await latest()
+      const value = await nativeAssistantBrowser.act({
+        operation: 'navigate',
+        url: args.url,
+        documentId: current.documentId,
+        tabId: current.tabId,
+      })
+      return {
+        text: '已请求打开新网页，正在等待页面结果。',
+        ok: value.ok !== false,
+        data: snapshotData(value),
+      }
+    }
+    if (operation === 'close') {
+      await nativeAssistantBrowser.close()
+      taskCenter.setAction(taskId, undefined)
+      taskCenter.complete(taskId)
+      browserTaskId = ''
+      assistantBrowserSession.active = false
+      assistantBrowserSession.browserVisible = false
+      assistantBrowserSession.agentRunning = false
+      return { text: '网页任务已关闭。', ok: true }
+    }
+    if (operation === 'finish') {
+      const verified = await latest()
+      if (verified.loading || verified.failed || verified.paused)
+        throw new Error('当前页面仍在加载、失败或等待用户操作，先处理并核验后再结束任务')
+      taskCenter.setAction(taskId, undefined)
+      taskCenter.complete(taskId)
+      assistantBrowserSession.agentRunning = false
+      return {
+        text: '已读取结束前的当前页面状态，可据此汇报实际结果。',
+        ok: true,
+        data: snapshotData(verified),
+      }
+    }
+    if (operation === 'inspect')
+      return { text: '已观察当前网页。', ok: true, data: snapshotData(await latest()) }
+    if (operation === 'list-tabs')
+      return {
+        text: '当前网页标签页。',
+        ok: true,
+        data: snapshotData(await nativeAssistantBrowser.listTabs()),
+      }
+    const metadata = await latest()
+    const documentId = Number(args.document_id ?? metadata.documentId)
+    const tabId = Number(args.tab_id ?? metadata.tabId)
+    if (!Number.isSafeInteger(documentId) || !Number.isSafeInteger(tabId))
+      throw new Error('页面编号无效，请重新观察')
+    if (operation === 'read-page') {
+      const value = await nativeAssistantBrowser.readPage({
+        documentId,
+        tabId,
+        offset: Number(args.offset ?? 0),
+        query: args.query,
+        region: args.region,
+      })
+      return { text: '已读取页面正文。', ok: true, data: snapshotData(value) }
+    }
+    if (operation === 'screenshot') {
+      const image = await nativeAssistantBrowser.capture({ documentId, tabId })
+      return {
+        text: '已取得当前网页截图。',
+        ok: true,
+        data: { imageDataUrl: image.dataUrl, documentId: image.documentId, tabId: image.tabId },
+      }
+    }
+    if (operation === 'navigate') {
+      const value = await nativeAssistantBrowser.act({
+        operation,
+        url: args.url,
+        documentId,
+        tabId,
+      })
+      return {
+        text: '已请求打开新网页，正在等待页面结果。',
+        ok: value.ok !== false,
+        data: snapshotData(value),
+      }
+    }
+    if (operation === 'back') {
+      const value = await nativeAssistantBrowser.back({ tabId })
+      return {
+        text: value.moved ? '已返回上一网页。' : '当前没有可返回的网页。',
+        ok: true,
+        data: snapshotData(value),
+      }
+    }
+    if (operation === 'switch-tab') {
+      const value = await nativeAssistantBrowser.switchTab({ tabId: Number(args.target) })
+      return { text: '已切换标签页，请重新观察。', ok: true, data: snapshotData(value) }
+    }
+    if (operation === 'wait') {
+      const value = await nativeAssistantBrowser.wait({
+        documentId,
+        tabId,
+        milliseconds: Number(args.milliseconds ?? 1000),
+      })
+      return { text: '等待结束，页面状态已返回。', ok: true, data: snapshotData(value) }
+    }
+    const value = await nativeAssistantBrowser.act({
+      operation,
+      documentId,
+      tabId,
+      ...(args.target ? { target: args.target } : {}),
+      ...(args.value !== undefined ? { value: args.value } : {}),
+      ...(args.key ? { key: args.key } : {}),
+      ...(args.direction ? { direction: args.direction as 'up' | 'down' } : {}),
+    })
+    if (signal.aborted || generation !== browserTaskGeneration || browserTaskId !== taskId)
+      throw new DOMException('网页任务已停止，旧操作结果已丢弃', 'AbortError')
+    return {
+      text: `网页操作 ${operation} 已返回结果。`,
+      ok: value.ok !== false,
+      data: snapshotData(value),
+    }
+  }
   if (reply.action === 'discord-setup') {
     if (!hasDiscordSetupBrowser()) throw new Error('请使用支持配置浏览器的新版 Android APK')
     const handoff = async () => {
@@ -640,6 +917,29 @@ async function expandChat() {
   }
 }
 let controller: AbortController | undefined
+let browserTaskId = ''
+let browserTaskConversationId = ''
+let browserTaskGeneration = 0
+async function resumeBrowserWindow(taskId: string): Promise<void> {
+  if (!taskId || browserTaskId !== taskId) return
+  await nativeAssistantBrowser.open({
+    site: 'general',
+    purpose: 'general',
+    step: 'browser-general',
+    title: '网页协助',
+    hint: '从当前页面继续，先重新观察页面再操作。',
+    steps: [],
+    template: '',
+    mode: 'agent',
+    agentRunId: taskId,
+    conversationId: browserTaskConversationId,
+    resumeCurrent: true,
+    showControls: true,
+  })
+  assistantBrowserSession.active = true
+  assistantBrowserSession.agentRunning = true
+  taskCenter.update(taskId, { phase: '重新观察网页' })
+}
 let discordGeneration = false
 let discordRunId: string | undefined
 function stopDiscordGeneration() {
@@ -647,6 +947,7 @@ function stopDiscordGeneration() {
 }
 let alive = true
 onBeforeUnmount(() => {
+  void browserEventHandle?.remove()
   unsubscribePreferences()
   if (ownsConversationActivity && conversationId.value)
     workspace.setConversationActivity?.(conversationId.value, instanceId, false)
@@ -783,7 +1084,7 @@ async function receiveDiscordSetupDraft(event?: Event): Promise<void> {
 async function continueDiscordSetup(event?: Event): Promise<void> {
   if (
     !alive ||
-    !props.visible ||
+    !(props.visible || props.backgroundTask) ||
     busy.value ||
     reading.value ||
     initializing.value ||
@@ -841,7 +1142,7 @@ async function continueDiscordSetup(event?: Event): Promise<void> {
     void continueDiscordSetup()
   }
 }
-watch([() => props.visible, initializing, busy, reading], () => {
+watch([() => props.visible, () => props.backgroundTask, initializing, busy, reading], () => {
   void receiveDiscordSetupDraft()
   void continueDiscordSetup()
 })
@@ -1261,12 +1562,18 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
       </template>
       <template #actions>
         <button
-          v-if="canReturnToDiscordBrowser"
+          v-if="isBrowserTaskChat"
           type="button"
-          class="assistant-return-browser"
-          @click="returnToDiscordBrowser()"
+          class="feature-header-action"
+          aria-label="网页协助操作"
+          @click="openBrowserTaskControls"
         >
-          返回网页配置
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M5 5h14M5 12h14M5 19h14" />
+            <circle cx="9" cy="5" r="2" />
+            <circle cx="15" cy="12" r="2" />
+            <circle cx="9" cy="19" r="2" />
+          </svg>
         </button>
         <button
           v-if="settingsOpen && historyPage"
@@ -1368,6 +1675,12 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         </button>
       </template>
     </FeatureAppHeader>
+    <div
+      v-if="!compact && !settingsOpen && $slots['task-preview']"
+      class="assistant-browser-preview-row"
+    >
+      <slot name="task-preview" />
+    </div>
     <ProductAssistantSettings
       v-if="settingsOpen"
       ref="settings"
@@ -1628,11 +1941,10 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
       </footer>
     </section>
     <form v-show="!settingsOpen && !runningTool" class="chat-composer" @submit.prevent="send">
-      <div v-if="canReturnToDiscordBrowser" class="chat-configuration-actions">
+      <div v-if="isBrowserTaskChat" class="chat-configuration-actions">
         <span role="status">{{
           discordSetupSession.agentRunning ? '小助手操作中' : '已暂停'
         }}</span>
-        <button type="button" @click="returnToDiscordBrowser(true)">网页配置操作</button>
       </div>
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
       <div v-if="editingId" class="chat-editing">
@@ -1692,11 +2004,22 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
           @keydown.meta.enter.prevent="!$event.isComposing && send()"
         />
         <button
-          v-if="busy && !remoteBusy"
+          v-if="isBrowserTaskChat && (busy || discordSetupSession.agentRunning) && !remoteBusy"
+          type="button"
+          class="chat-send chat-send--stop"
+          aria-label="暂停网页协助"
+          @click="stopAssistantAction"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="7" y="7" width="10" height="10" rx="2" />
+          </svg>
+        </button>
+        <button
+          v-if="busy && !remoteBusy && !isBrowserTaskChat"
           type="button"
           class="chat-send chat-send--stop"
           aria-label="停止生成"
-          @click="controller?.abort()"
+          @click="stopAssistantAction"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <rect x="7" y="7" width="10" height="10" rx="2" />
@@ -1717,13 +2040,16 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
           class="chat-send"
           :aria-label="editingId ? '保存修改' : '发送'"
           :disabled="
-            initializing || reading || (!input.trim() && !images.length && !designReferences.length)
+            busy ||
+            initializing ||
+            reading ||
+            (!input.trim() && !images.length && !designReferences.length)
           "
         >
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" /></svg>
         </button>
         <button
-          v-if="!busy"
+          v-if="!busy && !isBrowserTaskChat"
           type="button"
           class="chat-generate"
           aria-label="生成回复"

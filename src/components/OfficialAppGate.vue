@@ -69,7 +69,9 @@ function reload() {
 </script>
 <template>
   <span v-if="component" hidden :data-official-app-ready="appId"></span>
-  <component :is="component" v-if="component" v-bind="$attrs" @back="emit('back')" />
+  <component :is="component" v-if="component" v-bind="$attrs" @back="emit('back')">
+    <template #task-preview><slot name="task-preview" /></template>
+  </component>
   <template v-else>
     <FeatureAppHeader :title="appName" @back="emit('back')" />
     <section class="official-app-install" :aria-busy="busy">

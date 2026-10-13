@@ -30,6 +30,7 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
   private mutationQueue: Promise<void> = Promise.resolve()
   readonly listGalleryListSummaries?: ResourceStorageAdapter['listGalleryListSummaries']
   readonly getReadSource?: ResourceStorageAdapter['getReadSource']
+  readonly updateMetadataMany?: ResourceStorageAdapter['updateMetadataMany']
 
   constructor(delegate: ResourceStorageAdapter, vault: VaultService) {
     this.delegate = delegate
@@ -37,6 +38,9 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     // Keep this optional so older delegates retain the service's summary fallback.
     this.listGalleryListSummaries = delegate.listGalleryListSummaries?.bind(delegate)
     this.getReadSource = delegate.getReadSource?.bind(delegate)
+    if (delegate.updateMetadataMany)
+      this.updateMetadataMany = (patches) =>
+        this.enqueueMutation(() => delegate.updateMetadataMany!(patches))
   }
 
   getVersionMatchFingerprintCache(): Promise<ResourceVersionMatchFingerprintCache | undefined> {
@@ -257,10 +261,7 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     onProgress?: (progress: { completed: number; total: number }) => void,
   ): Promise<void> {
     await this.enqueueMutation(async () => {
-      const selected = new Set(ids)
-      const versionResources = (await this.listVersionListSummaries()).filter(
-        (version) => version.versionGroupId && selected.has(version.versionGroupId),
-      )
+      const versionResources = await this.listVersionListSummariesForResources(ids)
       const fileCount = ids.length + versionResources.length
       const total = fileCount * 2
       await this.delegate.deleteMany(ids, (progress) => {

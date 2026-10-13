@@ -126,6 +126,8 @@ describe('接口手册随源码更新', () => {
       return readFileSync(path, 'utf8')
     }
     const first = createAppearanceReferenceCatalog(root, read, (path) => watched.add(path))
+    expect(first.scopes.global).toContain('src/styles/Startup.css:1')
+    expect(first.scopes.shell).toContain('src/styles/RecoveryControls.css:1')
     expect([...counts.values()].every((count) => count === 1)).toBe(true)
     expect(watched.has(resolve('src/styles/AppearanceOriginalCssActions.css'))).toBe(true)
     expect(watched.has(resolve('src/services/AppearanceOriginalCssService.ts'))).toBe(true)

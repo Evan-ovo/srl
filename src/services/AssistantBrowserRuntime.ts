@@ -14,19 +14,29 @@ export function maskDiscordSetupSecrets(text: string): string {
     )
 }
 /** Transient UI ownership; Cookie/editor/secret data never enters it. */
-export const discordSetupSession = reactive({
+export const assistantBrowserSession = reactive({
   active: false,
   browserVisible: false,
   agentRunning: false,
   webStepActive: false,
   assistantConversationId: '',
 })
-export interface DiscordBrowserSnapshot {
+/** Backward-compatible view of the shared runtime session for Discord's workflow owner. */
+export const discordSetupSession = assistantBrowserSession
+export interface AssistantBrowserSnapshot {
   documentId: number
+  tabId?: number
   url: string
+  title?: string
+  text?: string
+  nextOffset?: number | null
+  regions?: Array<{ target: string; label: string }>
+  links?: Array<{ target: string; label: string; url?: string; disabled?: boolean }>
+  forms?: Array<{ target: string; label: string; controls: number; invalid?: boolean }>
   paused: boolean
   loading?: boolean
   failed?: boolean
+  moved?: boolean
   pageAccess?: 'public' | 'authentication' | 'protected' | 'external'
   chatOpen?: boolean
   pageKind?: string
@@ -51,7 +61,7 @@ export interface DiscordBrowserSnapshot {
     visible?: boolean
   }>
 }
-export interface DiscordBrowserEvent {
+export interface AssistantBrowserEvent {
   action:
     | 'next'
     | 'select-step'
@@ -75,13 +85,22 @@ export interface DiscordBrowserEvent {
     | 'agent-resume'
     | 'capture-bot-secret'
     | 'installation-ready'
+    | 'browser-resume'
+    | 'browser-pause'
+    | 'browser-close'
+    | 'browser-task-ready'
   step?: string
   workerUrl?: string
   visible?: boolean
   text?: string
   applicationId?: string
 }
-export interface DiscordSetupBrowser {
+export interface AssistantBrowserRuntime {
+  chatPresentation?(options: {
+    mode: 'compact' | 'fullscreen' | 'browser'
+    conversationId: string
+    bounds?: { left: number; top: number; width: number; height: number; viewportWidth: number }
+  }): Promise<void>
   captureBotSecret?(options: {
     documentId: number
     applicationId: string
@@ -91,6 +110,7 @@ export interface DiscordSetupBrowser {
   open(options: {
     url?: string
     site: string
+    purpose?: 'discord-setup' | 'general'
     step: string
     title: string
     hint: string
@@ -106,10 +126,32 @@ export interface DiscordSetupBrowser {
     expectedApplicationId?: string
   }): Promise<void>
   pauseAgent(): Promise<void>
-  waitReady(): Promise<DiscordBrowserSnapshot>
-  waitStatus(options: { documentId: number; target: string }): Promise<DiscordBrowserSnapshot>
+  waitReady(): Promise<AssistantBrowserSnapshot>
+  waitStatus(options: { documentId: number; target: string }): Promise<AssistantBrowserSnapshot>
+  back(options?: { tabId?: number }): Promise<AssistantBrowserSnapshot>
+  listTabs(): Promise<{
+    tabs: Array<{ tabId: number; active: boolean; url: string; title: string }>
+  }>
+  switchTab(options: { tabId: number }): Promise<AssistantBrowserSnapshot>
+  capture(options: {
+    documentId: number
+    tabId: number
+  }): Promise<{ dataUrl: string; tabId: number; documentId: number }>
+  wait(options: {
+    documentId: number
+    tabId: number
+    milliseconds: number
+  }): Promise<AssistantBrowserSnapshot>
   cancelWait(): Promise<void>
-  inspect(options?: { metadataOnly?: boolean; query?: string }): Promise<DiscordBrowserSnapshot>
+  inspect(options?: { metadataOnly?: boolean; query?: string }): Promise<AssistantBrowserSnapshot>
+  readPage(options: {
+    documentId: number
+    tabId: number
+    offset?: number
+    limit?: number
+    query?: string
+    region?: string
+  }): Promise<AssistantBrowserSnapshot>
   act(options: {
     documentId: number
     operation: string
@@ -135,6 +177,8 @@ export interface DiscordSetupBrowser {
     expectedRevision?: string
     expectedFork?: string
     validateTemplate?: boolean
+    key?: string
+    tabId?: number
   }): Promise<Record<string, unknown>>
   close(options?: { keepRunning?: boolean }): Promise<void>
   confirmSuccess(options: { documentId: number; step: string }): Promise<{ confirmed: boolean }>
@@ -142,17 +186,20 @@ export interface DiscordSetupBrowser {
   restore(options: { resume: boolean }): Promise<void>
   pet(options: { dataUrl: string }): Promise<void>
   addListener(
-    event: 'setupAction',
-    callback: (event: DiscordBrowserEvent) => void,
+    event: 'setupAction' | 'browserAction',
+    callback: (event: AssistantBrowserEvent) => void,
   ): Promise<PluginListenerHandle>
   message(options: { text: string; phase?: string }): Promise<void>
 }
-export const nativeDiscordSetupBrowser = registerPlugin<DiscordSetupBrowser>(
-  'NativeDiscordSetupBrowser',
-)
-export function hasDiscordSetupBrowser(): boolean {
+export type DiscordBrowserSnapshot = AssistantBrowserSnapshot
+export type DiscordBrowserEvent = AssistantBrowserEvent
+export type DiscordSetupBrowser = AssistantBrowserRuntime
+export const nativeAssistantBrowser =
+  registerPlugin<AssistantBrowserRuntime>('NativeAssistantBrowser')
+export const nativeDiscordSetupBrowser = nativeAssistantBrowser
+export function hasAssistantBrowser(): boolean {
   return (
-    Capacitor.getPlatform() === 'android' &&
-    Capacitor.isPluginAvailable('NativeDiscordSetupBrowser')
+    Capacitor.getPlatform() === 'android' && Capacitor.isPluginAvailable('NativeAssistantBrowser')
   )
 }
+export const hasDiscordSetupBrowser = hasAssistantBrowser

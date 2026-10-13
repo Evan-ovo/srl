@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import ActionSheet, { type ActionSheetAction } from './ActionSheet.vue'
 import { discordSetupService } from '../core/AppContainer'
-import { discordSetupSession } from '../services/NativeDiscordSetupBrowser'
+import { discordSetupSession } from '../services/AssistantBrowserRuntime'
 import {
   setupStep,
   type DiscordSetupState,

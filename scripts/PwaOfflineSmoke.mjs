@@ -15,6 +15,12 @@ const requireValue = (condition, message) => {
 }
 
 requireValue(manifest.version === buildInfo.buildId, '完整离线清单版本与 BuildInfo 不一致')
+const appContainer = manifest.assets.filter((asset) =>
+  /^\/assets\/AppContainer-[^/]+\.js$/u.test(asset.url),
+)
+requireValue(appContainer.length > 0, '离线主界面缺少AppContainer执行Owner分包')
+for (const asset of appContainer)
+  requireValue(serviceWorker.includes(asset.url.slice(1)), '默认precache缺少主界面AppContainer依赖')
 requireValue(
   Array.isArray(manifest.assets) && manifest.assets.length > 20,
   '完整离线清单缺少 Feature 资源',

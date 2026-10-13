@@ -24,7 +24,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(NativeFileExportPlugin.class);
         registerPlugin(NativeFilePickerPlugin.class);
         registerPlugin(NativeSecurityPlugin.class);
-        registerPlugin(NativeDiscordSetupBrowserPlugin.class);
+        registerPlugin(NativeAssistantBrowserPlugin.class);
         registerPlugin(NativeShortcutPlugin.class);
         registerPlugin(NativeSafBackupPlugin.class);
         registerPlugin(NativeTavernDirectoryPlugin.class);

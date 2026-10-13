@@ -189,9 +189,12 @@ function offlineAssetManifestPlugin(): Plugin {
             visitStartup(file.fileName)
           if (
             file.type === 'chunk' &&
-            Object.keys(file.modules).some(
+            [
+              ...Object.keys(file.modules),
+              ...(file.facadeModuleId ? [file.facadeModuleId] : []),
+            ].some(
               (id) =>
-                /\/src\/(?:Bootstrap|Main|App|components\/DiscordSourceHandoffIntake)\.(?:ts|vue)$/u.test(
+                /\/src\/(?:Bootstrap|Main|App|core\/AppContainer|components\/DiscordSourceHandoffIntake)\.(?:ts|vue)$/u.test(
                   id.replaceAll('\\', '/'),
                 ) || id.replaceAll('\\', '/').includes('/workbox-window/'),
             )

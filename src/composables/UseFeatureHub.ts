@@ -74,6 +74,7 @@ export type FeatureHubProps = {
   sharedAppFiles?: File[]
   navigateLibrary?: (id: string) => Promise<void>
   assistantDestination?: string
+  sharedAssistantChat?: boolean
 }
 
 export type FeatureHubEvents = {
@@ -112,6 +113,7 @@ export type FeatureHubEvents = {
   'assistant-activity': [value: boolean]
   'assistant-retained': []
   'assistant-destination-consumed': []
+  'open-assistant-chat': []
 }
 
 export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<FeatureHubEvents>) {
@@ -288,6 +290,11 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
   }
 
   function openBuiltInFeatureApp(id: BuiltInFeatureAppId): void {
+    if (id === 'assistant' && props.sharedAssistantChat) {
+      activePage.value = 'home'
+      emit('open-assistant-chat')
+      return
+    }
     const descriptor = getFeatureAppDescriptor(id)
     activePage.value = descriptor.page
   }
@@ -564,7 +571,9 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
       resume.subpage !== 'home' &&
       FEATURE_APP_REGISTRY.some((descriptor) => descriptor.page === resume.subpage)
     ) {
-      activePage.value = resume.subpage as BuiltInFeatureAppPage
+      if (resume.subpage === 'assistant' && props.sharedAssistantChat)
+        openBuiltInFeatureApp('assistant')
+      else activePage.value = resume.subpage as BuiltInFeatureAppPage
     }
     resumeTrackingReady = true
     if (props.assistantDestination) {

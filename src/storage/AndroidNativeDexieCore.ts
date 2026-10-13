@@ -16,6 +16,7 @@ import {
   encodeAppDatabaseIndexes,
   encodeAppDatabaseKey,
   encodeAppDatabaseValue,
+  isEncodedBlobValue,
 } from './AndroidAppDatabaseMigration'
 import {
   APP_DATABASE_STORES,
@@ -25,7 +26,13 @@ import {
   type NativeKeyPageQuery,
 } from './NativeAppDatabaseBridge'
 
-type StoreChange = { key: IDBValidKey; value?: unknown; deleted: boolean; encoded?: boolean }
+type StoreChange = {
+  key: IDBValidKey
+  value?: unknown
+  deleted: boolean
+  encoded?: boolean
+  preservedBinaryFields?: string[]
+}
 
 interface NativeTransaction extends DBCoreTransaction {
   readonly mode: 'readonly' | 'readwrite'
@@ -443,7 +450,18 @@ class NativeTransactionFacade implements NativeTransaction {
     const changes = this.changesFor(store)
     const staged = changes.get(token)
     if (staged) {
-      return staged.deleted ? undefined : cloneValue(staged.value)
+      if (staged.deleted) return undefined
+      const value = cloneValue(staged.value) as Record<string, unknown>
+      for (const field of staged.preservedBinaryFields ?? []) {
+        value[field] = await decodeAppDatabaseValue(
+          value[field],
+          store as NativeAppDatabaseStore,
+          token,
+          this.native,
+          loadBinary,
+        )
+      }
+      return value
     }
     const cached = this.cacheFor(store).get(token)
     if (cached) {
@@ -895,6 +913,15 @@ async function applyMutations(
   request: DBCoreMutateRequest,
 ) {
   if (trans.mode !== 'readwrite') throw new Error('只读事务不能写入')
+  // Only the storage metadata owner opts in; ordinary Dexie reads/modifiers still
+  // receive real binary values. Retained references come from the stored record.
+  const metadataOnly =
+    (request as DBCoreMutateRequest & { resourceMetadataOnly?: boolean }).resourceMetadataOnly ===
+    true
+  if (metadataOnly && !['resources', 'resourceVersions'].includes(store))
+    throw new Error('元数据更新仅支持资源表')
+  if (metadataOnly && (request.type !== 'put' || !request.updates))
+    throw new Error('元数据更新必须按资源主键提交补丁')
   const changes = trans.changesFor(store)
   const failures: Record<number, Error> = {}
   const results: unknown[] = []
@@ -910,7 +937,8 @@ async function applyMutations(
     if (
       request.type === 'put' &&
       request.upsert === false &&
-      (await trans.get(store, actualKey)) === undefined
+      !metadataOnly &&
+      (await trans.get(store, actualKey, !metadataOnly)) === undefined
     )
       return
     const uniqueIndexes = schema.indexes.filter(
@@ -961,7 +989,8 @@ async function applyMutations(
     if (putRequest.updates) {
       for (let index = 0; index < putRequest.updates.keys.length; index += 1) {
         const key = putRequest.updates.keys[index] as IDBValidKey
-        const current = (await trans.get(store, key)) as Record<string, unknown> | undefined
+        const current = (await trans.get(store, key, !metadataOnly)) as
+          Record<string, unknown> | undefined
         if (!current) continue
         const updated = { ...current }
         for (const [path, value] of Object.entries(putRequest.updates.changeSpecs[index] ?? {})) {
@@ -975,6 +1004,24 @@ async function applyMutations(
           target[parts.at(-1)!] = value
         }
         await putOne(updated, key, index)
+        if (metadataOnly) {
+          const containsBinaryReference = (value: unknown): boolean =>
+            isEncodedBlobValue(value) ||
+            (!!value &&
+              typeof value === 'object' &&
+              Object.values(value).some(containsBinaryReference))
+          const specs = putRequest.updates.changeSpecs[index] ?? {}
+          changes.get(encodeAppDatabaseKey(key))!.preservedBinaryFields = [
+            'originalBlob',
+            'original',
+            'thumbnailBlob',
+            'thumbnail',
+          ].filter(
+            (field) =>
+              !Object.keys(specs).some((path) => path === field || path.startsWith(`${field}.`)) &&
+              containsBinaryReference(current[field]),
+          )
+        }
       }
     } else if (putRequest.criteria && putRequest.changeSpec) {
       const index = putRequest.criteria.index
@@ -1085,8 +1132,13 @@ export function createAndroidNativeDexieCore(options: {
                     if (change.deleted) deletes.push(key)
                     else {
                       const blobOwnerKey = `__srl_tx_${crypto.randomUUID()}`
+                      const value = { ...(change.value as Record<string, unknown>) }
+                      const preserved = Object.fromEntries(
+                        (change.preservedBinaryFields ?? []).map((field) => [field, value[field]]),
+                      )
+                      for (const field of Object.keys(preserved)) delete value[field]
                       const encoded = await encodeAppDatabaseValue(
-                        change.value,
+                        value,
                         store as NativeAppDatabaseStore,
                         key,
                         native,
@@ -1094,6 +1146,7 @@ export function createAndroidNativeDexieCore(options: {
                       )
                       if (!encoded || typeof encoded !== 'object' || Array.isArray(encoded))
                         throw new Error(`原生数据库记录必须是对象：${store}`)
+                      Object.assign(encoded, preserved)
                       collectStagedBlobs(encoded, store as NativeAppDatabaseStore, stagedBlobs)
                       puts.push({
                         key,

@@ -46,6 +46,61 @@ function avatarResource(): Resource {
 }
 
 describe('UserPersonaService', () => {
+  it('reads only verified avatar attachments after checking related metadata', async () => {
+    const avatar = avatarResource()
+    const getSummary = vi
+      .fn()
+      .mockResolvedValueOnce(personaResource())
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(avatar)
+      .mockResolvedValueOnce(avatar)
+    const get = vi.fn().mockResolvedValueOnce(avatar).mockResolvedValueOnce(personaResource())
+    const service = new UserPersonaService({
+      getSummary,
+      get,
+    } as unknown as ResourceService)
+    expect(await service.loadAvatarResource('character')).toBeUndefined()
+    expect(await service.loadAvatarResource('missing')).toBeUndefined()
+    expect(get).not.toHaveBeenCalled()
+    expect(await service.loadAvatarResource(avatar.id)).toEqual(avatar)
+    expect(get).toHaveBeenCalledTimes(1)
+    // An attachment changed after the metadata read must still be checked on load.
+    expect(await service.loadAvatarResource(avatar.id)).toBeUndefined()
+    expect(get).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['imported', 'duplicate'] as const)(
+    'skips an empty cover write when a %s persona has no thumbnail',
+    async (status) => {
+      const resource = personaResource()
+      const importFiles = vi.fn(async () => [{ status, resource }])
+      const updateThumbnail = vi.fn()
+      const service = new UserPersonaService({
+        importFiles,
+        updateThumbnail,
+      } as unknown as ResourceService)
+      const loaded = (
+        await import('../parser/SillyTavernPersonaBackup')
+      ).parseSillyTavernPersonaBackup(JSON.parse(await resource.originalBlob.text()))
+      await service.create(loaded.entries[0]!, [], null)
+      expect(updateThumbnail).not.toHaveBeenCalled()
+    },
+  )
+
+  it('still clears an existing duplicate persona cover when explicitly saved without an avatar', async () => {
+    const resource = { ...personaResource(), thumbnailBlob: new Blob(['old cover']) }
+    const importFiles = vi.fn(async () => [{ status: 'duplicate', resource }])
+    const updateThumbnail = vi.fn(async () => resource)
+    const service = new UserPersonaService({
+      importFiles,
+      updateThumbnail,
+    } as unknown as ResourceService)
+    const loaded = (
+      await import('../parser/SillyTavernPersonaBackup')
+    ).parseSillyTavernPersonaBackup(JSON.parse(await resource.originalBlob.text()))
+    await service.create(loaded.entries[0]!, [], null)
+    expect(updateThumbnail).toHaveBeenCalledWith(resource.id, undefined)
+  })
   it('caches a validated avatar as an internal persona attachment', async () => {
     const avatar = avatarResource()
     const importPreparedFile = vi.fn(async () => ({

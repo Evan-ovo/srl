@@ -2,7 +2,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import DiscordSetupHelp from './DiscordSetupHelp.vue'
-import { discordSetupSession } from '../services/NativeDiscordSetupBrowser'
+import { discordSetupSession } from '../services/AssistantBrowserRuntime'
 const start = vi.hoisted(() => vi.fn())
 const current = vi.hoisted(() => vi.fn())
 const resume = vi.hoisted(() => vi.fn())

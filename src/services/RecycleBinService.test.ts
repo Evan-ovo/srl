@@ -424,7 +424,9 @@ describe('RecycleBinService', () => {
       .mockRejectedValue(new Error('must not load all originals'))
     const catalogueReads = vi.spyOn(resourceStorage, 'listResourceListSummaries')
     const { record: entry, resources } = await recycleBin.moveToRecycleBin([atlas.id])
-    expect(catalogueReads).toHaveBeenCalledTimes(3)
+    expect(catalogueReads.mock.calls.filter(([filter]) => !filter)).toHaveLength(2)
+    expect(catalogueReads).toHaveBeenCalledWith({ ids: [atlas.id] })
+    expect(catalogueReads).toHaveBeenCalledWith({ types: [RESOURCE_TYPE.OTHER] })
     expect(resources?.map((resource) => resource.id).sort()).toEqual(['companion', 'untouched'])
     expect(resources?.find((resource) => resource.id === companion.id)?.relatedResourceIds).toEqual(
       [],

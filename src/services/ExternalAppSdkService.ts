@@ -342,7 +342,54 @@ export class ExternalAppSdkService {
     )
   }
 
+  readChat(
+    appId: string,
+    payload: Record<string, unknown> & { snapshotsOnly: true },
+  ): Promise<{
+    messages: Array<{
+      index: number
+      snapshot: import('../utils/RenderCompatibilityRuntime').ArchivedMessageSnapshot
+    }>
+    nextOffset: number | null
+    previousOffset?: number | null
+    total: number
+    contentHash: string
+    previewCapabilities: { archivedReaderWindow: true; archivedReaderHistory: true }
+  }>
+  readChat(appId: string, payload: unknown): ReturnType<ExternalAppSdkService['readChatPage']>
   async readChat(appId: string, payload: unknown) {
+    const input = (payload ?? {}) as Record<string, unknown>
+    if (input.snapshotsOnly !== true) return this.readChatPage(appId, payload)
+    await this.requirePermission(appId, [
+      EXTERNAL_APP_PERMISSION.RESOURCES_LIBRARY_READ,
+      EXTERNAL_APP_PERMISSION.RESOURCES_CONTENT_READ,
+    ])
+    const reader = new ChatReaderService(this.resources)
+    const chat = await reader.getReadChat(normalizeResourceId(input.id))
+    const page = await reader.readResource(
+      chat,
+      normalizedInteger(input.offset, 0, 10_000_000),
+      normalizedInteger(input.limit, 20, 50),
+    )
+    const { archivedChatSnapshot, selectChatReply } = await import('./ChatReaderRendering')
+    const overrides = isRecord(input.replyOverrides) ? input.replyOverrides : {}
+    return {
+      ...page,
+      messages: page.messages.map((entry) => ({
+        index: entry.index,
+        snapshot: archivedChatSnapshot(
+          selectChatReply(entry, overrides[String(entry.index)]),
+          page.total,
+        ),
+      })),
+      previewCapabilities: {
+        archivedReaderWindow: true as const,
+        archivedReaderHistory: true as const,
+      },
+    }
+  }
+
+  private async readChatPage(appId: string, payload: unknown) {
     await this.requirePermission(appId, [
       EXTERNAL_APP_PERMISSION.RESOURCES_LIBRARY_READ,
       EXTERNAL_APP_PERMISSION.RESOURCES_CONTENT_READ,
@@ -673,6 +720,7 @@ export class ExternalAppSdkService {
       scriptErrors,
       replyDiff,
       presetName: regexContext.presetName,
+      previewCapabilities: { archivedReaderWindow: true, archivedReaderHistory: true },
       previewDocumentUrl: OPAQUE_PREVIEW_DOCUMENT_URL,
       userNames: names,
       characterId: character!.id,

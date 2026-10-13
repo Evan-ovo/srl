@@ -1,3 +1,5 @@
+import recoveryCss from '../styles/RecoveryControls.css?inline'
+import { readStoredCustomUiCss, CUSTOM_UI_CSS_KEY } from '../services/BrowserAppearancePreferences'
 const STARTUP_STATE_KEY = 'srl.startup.state.v1'
 const SAFE_MODE_SESSION_KEY = 'srl.safeMode.session.v1'
 const RESCUE_HOST_ID = 'srl-startup-rescue-layer'
@@ -36,11 +38,7 @@ function writeState(state: StartupState): void {
 }
 
 function storedCss(): string {
-  try {
-    return localStorage.getItem('srl.ui.customCss')?.trim() || ''
-  } catch {
-    return ''
-  }
+  return readStoredCustomUiCss().trim()
 }
 
 function restart(safe: boolean): void {
@@ -116,14 +114,7 @@ export function isSafeModeActive(): boolean {
   }
 }
 
-const RECOVERY_STYLE = `<style>
-  *,*::before,*::after{box-sizing:border-box}
-  .bar{pointer-events:auto;width:100%;max-width:560px;max-height:calc(100dvh - 32px);overflow:auto;margin:0 auto;padding:12px 14px;border:1px solid #7eaaa1;border-radius:14px;background:#f4fffc;color:#173832;font:14px/1.5 system-ui,sans-serif;box-shadow:0 8px 28px #102d2833}
-  strong{display:block}p{margin:6px 0 10px;color:#49645f}summary{cursor:pointer;min-height:32px;font-weight:600}
-  .actions{display:flex;flex-wrap:wrap;gap:8px}.actions button{flex:1;min-height:44px;padding:8px 12px;border:1px solid #6b9c93;border-radius:10px;background:#fff;color:#173832;font:600 14px/1.4 system-ui;cursor:pointer;overflow-wrap:anywhere}
-  .actions .safe{border-color:#187f73;background:#187f73;color:#fff}[hidden]{display:none!important}
-  @media(prefers-color-scheme:dark){.bar{background:#202d28;color:#e4eee8;border-color:#6b8978}p{color:#c2d0c6}.actions button{background:#293d32;color:#e4eee8}}
-</style>`
+const RECOVERY_STYLE = `<style>${recoveryCss}</style>`
 
 export function installStartupRescuePrompt(): void {
   const { host, root } = protectedHost()
@@ -146,7 +137,7 @@ export function installSafeModeBanner(): void {
   })
   root.querySelector('[data-confirm-clear]')?.addEventListener('click', () => {
     try {
-      localStorage.removeItem('srl.ui.customCss')
+      localStorage.removeItem(CUSTOM_UI_CSS_KEY)
       localStorage.removeItem('srl.appearance.pending.v1')
       localStorage.removeItem('srl.appearance.lastGood.v1')
     } catch {

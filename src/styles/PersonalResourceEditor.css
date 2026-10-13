@@ -3,6 +3,9 @@
   min-width: 0;
   gap: 0.75rem;
 }
+.personal-resource-editor-overlay {
+  z-index: 25;
+}
 .personal-resource-editor {
   width: min(680px, 100%);
   display: flex;

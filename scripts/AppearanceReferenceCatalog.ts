@@ -136,7 +136,19 @@ export function createAppearanceReferenceCatalog(
   for (const [id, entry] of Object.entries(roots))
     scopes[id] = [...new Set([...common, ...collect(entry)].map((source) => source.path))]
   scopes.global = [
-    ...new Set([...scopes.global!, ...collect('src/Styles.css').map((source) => source.path)]),
+    ...new Set([
+      ...scopes.global!,
+      ...collect('src/Styles.css').map((source) => source.path),
+      ...collect('src/styles/Startup.css').map((source) => source.path),
+      ...collect('src/styles/RecoveryControls.css').map((source) => source.path),
+    ]),
+  ]
+  scopes.shell = [
+    ...new Set([
+      ...scopes.shell!,
+      ...collect('src/styles/Startup.css').map((source) => source.path),
+      ...collect('src/styles/RecoveryControls.css').map((source) => source.path),
+    ]),
   ]
   for (const app of FEATURE_APP_REGISTRY.filter((app) => app.visible))
     if (!roots[app.id]) throw new Error(`接口手册缺少 APP 源码入口：${app.id}`)
