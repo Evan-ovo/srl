@@ -1,5 +1,10 @@
 /* 设计令牌、结构化预览与富内容基础 */
 :root {
+  /* 详情子弹层按父层派生，调整父层时不会再次把编辑器盖住。 */
+  --layer-resource-detail: 24;
+  --layer-resource-editor: calc(var(--layer-resource-detail) + 1);
+  --layer-resource-dialog: calc(var(--layer-resource-detail) + 6);
+  --layer-resource-viewer: calc(var(--layer-resource-detail) + 8);
   --glass-panel: linear-gradient(145deg, rgba(255, 255, 255, 0.68), rgba(235, 249, 251, 0.42));
   --glass-panel-strong: linear-gradient(
     145deg,
@@ -2138,12 +2143,14 @@ label:has(input:focus-visible) {
   color: inherit;
 }
 
-/* 公共控件的基础规则唯一归属；各面板只补布局和必要的尺寸差异。 */
+/* data-srl-controls 接入公共材质；排版、滑杆/色盘和可见内层仍归各组件。 */
 .button,
 .import-choice-card,
 .batch-bar__button,
 .batch-bar__close,
 :where(
+  [data-srl-controls]
+    button:not(.feature-back-button, .feature-header-action, .appearance-action-hit),
   .feature-desktop__pagination > button:not(.feature-desktop__page-dot),
   .confirm-dialog button,
   :is(
@@ -2161,32 +2168,6 @@ label:has(input:focus-visible) {
       .official-app-install,
       .draw-carousel__controls,
       .gallery-reveal__actions,
-      .stitch,
-      .stitch-sheet,
-      .stitch-editor,
-      .fw-workbench,
-      .source-ai-workspace,
-      .frontend-workshop-source-session__preview,
-      .frontend-workshop-source-editor,
-      .frontend-workshop-source-history-panel,
-      .frontend-workshop-source-components,
-      .source-inspector-body,
-      .source-inspector-tabs,
-      .fw-layer-panel,
-      .fw-greeting-strip,
-      .fw-ai-component-draft,
-      .fw-inspector,
-      .frontend-workbench__tool-rail,
-      .frontend-image-picker,
-      .image-generation-app,
-      .generated-album,
-      .generated-album__settings,
-      .generated-album__detail,
-      .persona-app,
-      .persona-app__rename-dialog,
-      .tavern-bridge,
-      .tavern-transfer-settings,
-      .tavern-parcel,
       .author-tools-dialog,
       .product-assistant,
       .chat-history-recovery,
@@ -2201,8 +2182,6 @@ label:has(input:focus-visible) {
       .discord-downloads,
       .discord-inbox-center__secondary,
       .native-inbox-mode,
-      .external-app-manager,
-      .external-app-manager__panel,
       .folder-type-filter,
       .folder-organizer__selection,
       .folder-rename__cover-actions,
@@ -2318,6 +2297,20 @@ button:where(
 .batch-bar__move select,
 :is(.batch-bar__tags, .settings-number-row__control) input,
 :where(
+  [data-srl-controls]
+    :is(
+      input:not(
+        [type='checkbox'],
+        [type='radio'],
+        [type='file'],
+        [type='range'],
+        [type='color'],
+        [type='hidden'],
+        [role='switch']
+      ),
+      select,
+      textarea
+    ),
   .source-link-row__grid input,
   .source-link-row__grid select,
   :is(
@@ -2329,21 +2322,8 @@ button:where(
       .resource-link-card,
       .resource-version-card__note,
       .version-import-dialog__note,
-      .stitch,
-      .stitch-sheet,
-      .stitch-editor,
-      .fw-workbench,
-      .source-ai-workspace,
-      .frontend-workshop-source-editor,
-      .frontend-workshop-source-components,
       .source-property,
-      .fw-greeting-strip,
-      .source-inspector-body,
-      .image-generation-app,
-      .persona-app,
-      .tavern-parcel,
-      .product-assistant,
-      .external-app-manager__panel
+      .product-assistant
     )
     textarea,
   .feedback-center__community-search input,
@@ -2362,42 +2342,8 @@ button:where(
   .resource-relations__search select,
   .color-input,
   .feature-hub[data-feature-page='draw'] select,
-  :is(.stitch, .fw-workbench, .image-generation-app)
-    input:not([type='checkbox'], [type='radio'], [type='file'], [type='range'], [type='color']),
-  .stitch select,
-  :is(
-      .stitch-sheet,
-      .frontend-workshop-source-components,
-      .frontend-image-picker,
-      .generated-album,
-      .generated-album__detail,
-      .persona-app,
-      .tavern-bridge,
-      .tavern-parcel
-    )
-    input:not([type='checkbox'], [type='radio'], [type='file']),
-  .stitch-sheet select,
-  .stitch-editor input:not([type='checkbox'], [type='radio']),
-  .stitch-editor select,
-  .fw-workbench select,
-  .source-ai-workspace select,
-  .frontend-workshop-source-history-panel select,
-  .frontend-workshop-source-components select,
   .source-property input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']),
   .source-property select,
-  .fw-layer-panel input,
-  .fw-ai-component-draft input,
-  .source-inspector-body
-    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']),
-  .source-inspector-body select,
-  .frontend-image-picker select,
-  .image-generation-app select,
-  .generated-album select,
-  .generated-album__detail select,
-  .persona-app select,
-  .persona-app__rename-dialog input,
-  .tavern-bridge select,
-  .tavern-parcel select,
   .product-assistant input:not([type='checkbox'], [type='radio'], [type='file'], [role='switch']),
   .product-assistant select,
   .export-option--split select,
@@ -2408,8 +2354,6 @@ button:where(
   .cloud-config input:not([type='checkbox']),
   .cloud-config select,
   .discord-inbox-pairing input,
-  .external-app-manager__panel input:not([type='radio'], [type='checkbox'], [type='file']),
-  .external-app-manager__panel select,
   .folder-rename__sheet input:not([type='file']),
   .folder-detail__search,
   .folder-tray__search
@@ -2426,7 +2370,7 @@ button:where(
   font-size: var(--text-label);
 }
 
-:where(.chat-settings-toggle, .tavern-transfer-settings__row) input[role='switch'] {
+input:where([type='checkbox'])[role='switch'] {
   box-sizing: border-box;
   justify-self: end;
   width: 44px;
@@ -2441,7 +2385,7 @@ button:where(
   border: 1px solid var(--control-border, var(--color-line));
   background: var(--control-background, var(--color-line));
 }
-:where(.chat-settings-toggle, .tavern-transfer-settings__row) input[role='switch']::before {
+input:where([type='checkbox'])[role='switch']::before {
   display: block;
   width: 18px;
   height: 18px;
@@ -2449,12 +2393,11 @@ button:where(
   background: var(--color-surface);
   content: '';
 }
-:where(.chat-settings-toggle, .tavern-transfer-settings__row) input[role='switch']:checked {
+input:where([type='checkbox'])[role='switch']:checked {
   border-color: var(--button-primary-border, var(--color-accent));
   background: var(--button-primary-background, var(--color-accent));
 }
-:is(.chat-settings-toggle, .tavern-transfer-settings__row)
-  input[type='checkbox'][role='switch']:checked::before {
+input:where([type='checkbox'])[role='switch']:checked::before {
   transform: translateX(18px);
   background: var(--button-primary-color, var(--color-on-accent));
 }
@@ -2464,6 +2407,7 @@ button:where(
 }
 
 :where(
+  [data-srl-dialog],
   .confirm-dialog,
   .project-notice,
   .action-sheet__panel,
@@ -2477,9 +2421,6 @@ button:where(
   .source-ai-workspace__settings,
   .fw-popover,
   .chat-message-menu,
-  .persona-app__rename-dialog,
-  .generated-album__settings,
-  .generated-album__detail,
   .author-tools-dialog__sheet,
   .tavern-transfer-settings,
   .chat-history-recovery,
@@ -2488,7 +2429,6 @@ button:where(
   .frontend-workshop-source-components__sheet,
   .frontend-workshop-source-components__detail,
   .discord-inbox-dialog,
-  .external-app-manager__panel,
   .folder-organizer__sheet,
   .folder-rename__sheet
 ) {
@@ -2561,18 +2501,15 @@ button:where(
 
 .brand__name {
   display: block;
+  font-family: var(--font-display);
+  font-size: clamp(1rem, 1.25vw, 1.125rem);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .mobile-brand-actions,
 .mobile-bottom-nav {
   display: none;
-}
-
-.brand__name {
-  font-family: var(--font-display);
-  font-size: clamp(1rem, 1.25vw, 1.125rem);
-  font-weight: 600;
-  letter-spacing: 0.04em;
 }
 
 .sidebar__nav {

@@ -8,6 +8,10 @@ export const DISCORD_BRIDGE_DEPLOY_URL = `https://deploy.workers.cloudflare.com/
   DISCORD_BRIDGE_PUBLIC_REPOSITORY_URL,
 )}`
 
+/** Migration follows the code's DB binding, including legitimate custom database names. */
+export const DISCORD_BRIDGE_AGENT_DEPLOY_COMMAND =
+  'npx wrangler d1 migrations apply DB --remote && npx wrangler deploy'
+
 /** Shared by the GitHub tutorial and the APK browser; Bot Token never belongs in this file. */
 export const DISCORD_BRIDGE_WRANGLER_TEMPLATE = JSON.stringify(
   {

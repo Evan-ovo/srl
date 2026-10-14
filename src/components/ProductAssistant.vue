@@ -6,15 +6,15 @@ import {
   externalAppService,
   productAssistantWorkspaceService as workspace,
   discordSetupService,
+  resourceService,
 } from '../core/AppContainer'
 import {
   hasDiscordSetupBrowser,
   hasAssistantBrowser,
-  discordSetupSession,
   nativeAssistantBrowser,
-  assistantBrowserSession,
+  discordSetupSession,
 } from '../services/AssistantBrowserRuntime'
-import { taskCenter } from '../core/TaskCenter'
+import { assistantBrowserTaskService } from '../services/AssistantBrowserTaskService'
 import {
   newAssistantConversation,
   type AssistantConversation,
@@ -23,6 +23,16 @@ import {
   type AssistantTaskTemplate,
 } from '../services/ProductAssistantWorkspaceService'
 import ProductAssistantSettings from './ProductAssistantSettings.vue'
+import ProductAssistantResourceCitations from './ProductAssistantResourceCitations.vue'
+import ProductAssistantTaskContext from './ProductAssistantTaskContext.vue'
+import ProductAssistantReferencesPanel from './ProductAssistantReferencesPanel.vue'
+import { useProductAssistantTasks } from '../composables/UseProductAssistantTasks'
+import {
+  toolMessage,
+  visibleToolCalls,
+  visibleSources,
+  visibleToolResults,
+} from '../services/ProductAssistantTask'
 import ProductAssistantComparison from './ProductAssistantComparison.vue'
 import ProductAssistantResultViewer from './ProductAssistantResultViewer.vue'
 import { useProductAssistantMessageActions } from '../composables/UseProductAssistantMessageActions'
@@ -89,7 +99,6 @@ const props = withDefaults(
 const emit = defineEmits<{ back: []; expand: []; activity: [value: boolean] }>()
 const service = new ProductAssistantService(mainApiService)
 const appSession = new ProductAssistantAppSession(externalAppService)
-let browserEventHandle: Awaited<ReturnType<typeof nativeAssistantBrowser.addListener>> | undefined
 const currentApp = ref<AssistantAppSummary>()
 const toolHost = useTemplateRef<ProductAssistantToolHost>('toolHost')
 const {
@@ -104,42 +113,11 @@ const input = ref('')
 const images = ref<AssistantImage[]>([])
 const designReferences = ref<AssistantDesignReference[]>([])
 const history = ref<AssistantTurn[]>([])
+const referencesPanel =
+  useTemplateRef<InstanceType<typeof ProductAssistantReferencesPanel>>('referencesPanel')
 const toolCalling = computed(() =>
   history.value.some((turn) => turn.toolCalls?.some((call) => call.state === 'running')),
 )
-function toolMessage(call: AssistantToolCall): string {
-  if (call.state === 'running') return `正在${call.label}…`
-  if (call.state === 'completed') return `已${call.label}`
-  if (call.state === 'cancelled') return `已取消${call.label}`
-  return `${call.label}未完成`
-}
-function visibleToolCalls(calls: AssistantToolCall[] = []): AssistantToolCall[] {
-  return calls.filter(
-    (call) =>
-      !(
-        call.state === 'completed' && ['读取 GitHub 资料', '复用 GitHub 资料'].includes(call.label)
-      ),
-  )
-}
-function isGitHubSource(url: string): boolean {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase()
-    return (
-      hostname === 'github.com' ||
-      hostname.endsWith('.github.com') ||
-      hostname === 'githubusercontent.com' ||
-      hostname.endsWith('.githubusercontent.com')
-    )
-  } catch {
-    return false
-  }
-}
-function visibleSources(turn: AssistantTurn) {
-  return turn.sources?.filter((source) => !isGitHubSource(source.url)) ?? []
-}
-function visibleToolResults(turn: AssistantTurn) {
-  return turn.toolResults?.filter((result) => result.title !== '公开资料回执') ?? []
-}
 const busy = ref(false)
 watch(busy, (value) => emit('activity', value), { immediate: true, flush: 'sync' })
 const remoteBusy = ref(false)
@@ -169,6 +147,18 @@ const preferences = ref(workspace.preferences())
 const unsubscribePreferences = workspace.onPreferencesChange((value) => {
   preferences.value = value
 })
+const taskState = useProductAssistantTasks({
+  busy,
+  error,
+  mode: () => preferences.value.mode,
+  enabled: () => preferences.value.toolCallingEnabled !== false,
+  isAlive: () => alive,
+  persist,
+  onScopeChange: () => consent.clear(),
+  workspace,
+  resources: resourceService,
+})
+const { taskSkill, referenceResources, selectReferenceResources, clearTaskSkill } = taskState
 const conversationId = ref('')
 const conversationCustomTitle = ref<string>()
 watch(
@@ -217,15 +207,53 @@ const isBrowserTaskChat = computed(
 )
 async function openBrowserTaskControls() {
   try {
-    await discordSetupService.returnToBrowser(true)
+    await (discordSetupSession.purpose === 'general'
+      ? assistantBrowserTaskService.returnToBrowser(true)
+      : discordSetupService.returnToBrowser(true))
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '暂时无法打开网页协助操作'
   }
 }
 async function stopAssistantAction() {
-  if (isBrowserTaskChat.value) await discordSetupService.pauseAgent()
-  else controller?.abort()
+  if (isBrowserTaskChat.value) {
+    controller?.abort()
+    if (discordSetupSession.purpose === 'general') await assistantBrowserTaskService.pause()
+    else await discordSetupService.pauseAgent()
+  } else controller?.abort()
 }
+const generalBrowserPreview = useTemplateRef<HTMLButtonElement>('generalBrowserPreview')
+async function syncGeneralBrowserPreview() {
+  await nextTick()
+  const preview = generalBrowserPreview.value
+  if (
+    !preview ||
+    !isBrowserTaskChat.value ||
+    discordSetupSession.purpose !== 'general' ||
+    !nativeAssistantBrowser.chatPresentation
+  )
+    return
+  const bounds = preview.getBoundingClientRect()
+  await nativeAssistantBrowser
+    .chatPresentation({
+      mode: 'fullscreen',
+      conversationId: conversationId.value,
+      bounds: {
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+        viewportWidth: innerWidth,
+      },
+    })
+    .catch(() => {})
+}
+watch(
+  [generalBrowserPreview, isBrowserTaskChat],
+  () => {
+    void syncGeneralBrowserPreview()
+  },
+  { flush: 'post' },
+)
 const resultViewer =
   useTemplateRef<InstanceType<typeof ProductAssistantResultViewer>>('resultViewer')
 const fileInput = ref<HTMLInputElement>()
@@ -278,6 +306,7 @@ function conversation(): AssistantConversation {
     draft,
     ...(projectReference.value?.projectId === draft?.manifest.id ? projectReference.value : {}),
     contextSummary: chatContext.summary.value,
+    ...taskState.snapshot(),
   }
 }
 async function persist(): Promise<void> {
@@ -313,6 +342,7 @@ async function loadConversation(value: AssistantConversation): Promise<void> {
   input.value = value.input
   images.value = value.images
   designReferences.value = value.designReferences ?? []
+  taskState.load(value)
   currentApp.value = appSession.summary()
   messageLimit.value = 40
   showSummarized.value = false
@@ -340,11 +370,14 @@ async function syncConversationSnapshot(
     value.id !== conversationId.value ||
     initializing.value ||
     ownsConversationActivity ||
-    JSON.stringify(history.value) === JSON.stringify(value.history)
+    (JSON.stringify(history.value) === JSON.stringify(value.history) &&
+      JSON.stringify(taskSkill.value) === JSON.stringify(value.taskSkill) &&
+      JSON.stringify(referenceResources.value) === JSON.stringify(value.referenceResources ?? []))
   )
     return
   const revision = ++conversationSyncRevision
   applyingConversationSnapshot = true
+  taskState.load(value)
   history.value = retainAssistantHistory(
     value.history.map((turn, index) => ({ ...turn, id: turn.id || `legacy-${index}` })),
   )
@@ -362,30 +395,16 @@ onMounted(async () => {
   window.addEventListener('srl:discord-setup-assist', continueDiscordSetup)
   window.addEventListener('srl:discord-setup-stop', stopDiscordGeneration)
   window.addEventListener('srl:discord-setup-fullscreen', receiveDiscordSetupDraft)
-  try {
-    browserEventHandle = await nativeAssistantBrowser.addListener('browserAction', (event) => {
-      if (!browserTaskId || browserTaskConversationId !== conversationId.value) return
-      if (event.action === 'visibility') {
-        assistantBrowserSession.browserVisible = event.visible === true
-      } else if (event.action === 'agent-pause') {
-        assistantBrowserSession.agentRunning = false
-        taskCenter.update(browserTaskId, { phase: '已暂停，等待用户或助手继续' })
-      } else if (event.action === 'agent-resume' || event.action === 'page-ready') {
-        assistantBrowserSession.agentRunning = true
-        taskCenter.update(browserTaskId, { phase: '网页已就绪，等待助手观察' })
-      } else if (event.action === 'return') {
-        taskCenter.complete(browserTaskId)
-        browserTaskId = ''
-        assistantBrowserSession.active = false
-        assistantBrowserSession.agentRunning = false
-      }
-    })
-  } catch {
-    // Browser task execution remains available; native UI status events are optional.
-  }
+  window.addEventListener('srl:assistant-browser-ready', continueGeneralBrowser)
+  window.addEventListener('srl:assistant-browser-stop', stopGeneralBrowser)
+  window.addEventListener('resize', syncGeneralBrowserPreview)
   try {
     await loadConversation(await workspace.initialize())
     preferences.value = workspace.preferences()
+    if (hasAssistantBrowser())
+      await assistantBrowserTaskService
+        .recover(conversationId.value, preferences.value.desktopPet === true)
+        .catch(() => false)
     const activeOwner = workspace.conversationActivityOwner?.(conversationId.value)
     if (activeOwner && activeOwner !== instanceId)
       applyRemoteActivity(conversationId.value, activeOwner, true)
@@ -399,7 +418,7 @@ onMounted(async () => {
     await ensureDiscordSetupConversation()
 })
 watch(
-  [input, images, designReferences, history],
+  [input, images, designReferences, history, taskSkill, referenceResources],
   () => {
     if (!applyingConversationSnapshot) saveLater()
   },
@@ -435,6 +454,7 @@ function getChatContext(): AssistantContext {
   const context = props.getContext()
   return {
     ...context,
+    ...taskState.context(),
     canCaptureUi: preferences.value.allowScreenshots !== false,
     canCaptureCurrent: context.canCaptureCurrent && preferences.value.allowScreenshots !== false,
     assistantName: preferences.value.name,
@@ -443,12 +463,17 @@ function getChatContext(): AssistantContext {
       props.compact && preferences.value.desktopPet && preferences.value.aiPetExpressions,
     ),
     petSummaryEnabled: preferences.value.desktopPet === true,
-    mode: preferences.value.mode || 'auto',
     canUseNetwork: preferences.value.networkEnabled === true,
     toolCallingEnabled: preferences.value.toolCallingEnabled !== false,
     canRunPageScripts: preferences.value.allowPageScripts === true,
     canConfigureDiscordBrowser: hasDiscordSetupBrowser(),
     canUseBrowser: hasAssistantBrowser(),
+    activeBrowserPurpose:
+      discordSetupSession.active &&
+      !discordSetupSession.completed &&
+      conversationId.value === discordSetupSession.assistantConversationId
+        ? discordSetupSession.purpose
+        : undefined,
     toolCallLimit: preferences.value.toolCallLimit,
     canSearchWeb: preferences.value.providerSearch === true,
     preferenceMemories: workspace
@@ -463,243 +488,19 @@ async function executeChatOperation(
   signal: AbortSignal,
   apiConfig?: MainApiConfig,
 ): Promise<AssistantExecution> {
+  const taskResult = await taskState.execute(reply, request, signal)
+  if (taskResult) return taskResult
   if (reply.action === 'browser') {
-    if (!hasDiscordSetupBrowser()) throw new Error('当前设备不支持网页协助')
-    const args = reply.args
-    const operation = args.operation ?? ''
-    const ownsTask = browserTaskId && browserTaskConversationId === conversationId.value
-    if (operation === 'open' && !ownsTask) {
-      const url = args.url?.trim() ?? ''
-      let parsed: URL
-      try {
-        parsed = new URL(url)
-      } catch {
-        throw new Error('请提供完整的 HTTPS 网站地址')
-      }
-      if (parsed.protocol !== 'https:' || !parsed.hostname.includes('.'))
-        throw new Error('网页协助只接受公开 HTTPS 网站')
-      const accepted = await confirmAction(
-        {
-          title: '开启网页协助',
-          confirmLabel: '开启并观察',
-          message: `目标：${parsed.origin}\n助手会读取公开页面内容并按你的要求操作。登录、验证码、密码和秘密值仍由你自己填写；保存、提交、购买或部署等重要动作会再次确认。页面截图仅从本网页读取。`,
-        },
-        signal,
-      )
-      if (!accepted || signal.aborted || !alive)
-        return { text: '已取消网页协助。', ok: false, cancelled: true }
-      if (browserTaskId) {
-        await nativeAssistantBrowser.close().catch(() => {})
-        taskCenter.complete(browserTaskId)
-      }
-      browserTaskId = crypto.randomUUID()
-      browserTaskConversationId = conversationId.value
-      const generation = ++browserTaskGeneration
-      const taskId = browserTaskId
-      assistantBrowserSession.active = true
-      assistantBrowserSession.agentRunning = true
-      taskCenter.start({
-        operationId: taskId,
-        name: `网页协助 · ${parsed.hostname}`,
-        phase: '打开网页',
-        cancelable: true,
-        action: { label: '继续网页协助', run: () => resumeBrowserWindow(taskId) },
-        cancel: async () => {
-          await nativeAssistantBrowser.close()
-          if (browserTaskId === taskId) {
-            browserTaskId = ''
-            assistantBrowserSession.active = false
-            assistantBrowserSession.agentRunning = false
-          }
-        },
-      })
-      try {
-        await nativeAssistantBrowser.open({
-          url,
-          site: 'general',
-          purpose: 'general',
-          step: 'browser-general',
-          title: '网页协助',
-          hint: '根据用户目标理解当前网页；使用实际页面内容定位操作，不依赖教程固定位置。',
-          steps: [],
-          template: '',
-          mode: 'agent',
-          agentRunId: taskId,
-          conversationId: conversationId.value,
-          showControls: true,
-        })
-        const snapshot = await nativeAssistantBrowser.waitReady()
-        if (signal.aborted || !alive || generation !== browserTaskGeneration)
-          throw new DOMException('网页任务已取消', 'AbortError')
-        taskCenter.update(taskId, { phase: snapshot.loading ? '等待网页加载' : '观察网页' })
-        assistantBrowserSession.webStepActive = true
-        return {
-          text: '网页已打开，正在读取当前页面。',
-          ok: true,
-          data: snapshot as unknown as Record<string, unknown>,
-        }
-      } catch (cause) {
-        if (browserTaskId === taskId) {
-          taskCenter.fail(taskId, cause)
-          browserTaskId = ''
-          assistantBrowserSession.active = false
-          assistantBrowserSession.agentRunning = false
-        }
-        throw cause
-      }
-    }
-    if (!ownsTask)
-      throw new Error('当前聊天没有正在进行的网页任务；请先用 browser.open 打开目标网页')
-    const taskId = browserTaskId
-    const generation = browserTaskGeneration
-    if (signal.aborted) throw new DOMException('网页任务已取消', 'AbortError')
-    const latest = async () => {
-      const result = await nativeAssistantBrowser.inspect({ query: args.query })
-      if (signal.aborted || generation !== browserTaskGeneration || browserTaskId !== taskId)
-        throw new DOMException('网页任务已停止，旧回执已丢弃', 'AbortError')
-      return result
-    }
-    const snapshotData = (value: unknown) =>
-      value && typeof value === 'object' ? (value as Record<string, unknown>) : { result: value }
-    taskCenter.update(taskId, {
-      phase: operation === 'inspect' ? '观察网页' : `网页操作：${operation}`,
-    })
-    if (operation === 'pause') {
-      await nativeAssistantBrowser.pauseAgent()
-      assistantBrowserSession.agentRunning = false
-      taskCenter.update(taskId, { phase: '已暂停，等待继续' })
-      taskCenter.setAction(taskId, {
-        label: '继续网页协助',
-        run: () => resumeBrowserWindow(taskId),
-      })
-      return { text: '网页任务已暂停，当前页面和任务仍保留。', ok: true }
-    }
-    if (operation === 'resume') {
-      await resumeBrowserWindow(taskId)
-      return {
-        text: '已恢复网页任务；先观察当前页面。',
-        ok: true,
-        data: snapshotData(await latest()),
-      }
-    }
-    if (operation === 'open') {
-      if (!args.url) throw new Error('请提供新网页 HTTPS 地址')
-      const current = await latest()
-      const value = await nativeAssistantBrowser.act({
-        operation: 'navigate',
-        url: args.url,
-        documentId: current.documentId,
-        tabId: current.tabId,
-      })
-      return {
-        text: '已请求打开新网页，正在等待页面结果。',
-        ok: value.ok !== false,
-        data: snapshotData(value),
-      }
-    }
-    if (operation === 'close') {
-      await nativeAssistantBrowser.close()
-      taskCenter.setAction(taskId, undefined)
-      taskCenter.complete(taskId)
-      browserTaskId = ''
-      assistantBrowserSession.active = false
-      assistantBrowserSession.browserVisible = false
-      assistantBrowserSession.agentRunning = false
-      return { text: '网页任务已关闭。', ok: true }
-    }
-    if (operation === 'finish') {
-      const verified = await latest()
-      if (verified.loading || verified.failed || verified.paused)
-        throw new Error('当前页面仍在加载、失败或等待用户操作，先处理并核验后再结束任务')
-      taskCenter.setAction(taskId, undefined)
-      taskCenter.complete(taskId)
-      assistantBrowserSession.agentRunning = false
-      return {
-        text: '已读取结束前的当前页面状态，可据此汇报实际结果。',
-        ok: true,
-        data: snapshotData(verified),
-      }
-    }
-    if (operation === 'inspect')
-      return { text: '已观察当前网页。', ok: true, data: snapshotData(await latest()) }
-    if (operation === 'list-tabs')
-      return {
-        text: '当前网页标签页。',
-        ok: true,
-        data: snapshotData(await nativeAssistantBrowser.listTabs()),
-      }
-    const metadata = await latest()
-    const documentId = Number(args.document_id ?? metadata.documentId)
-    const tabId = Number(args.tab_id ?? metadata.tabId)
-    if (!Number.isSafeInteger(documentId) || !Number.isSafeInteger(tabId))
-      throw new Error('页面编号无效，请重新观察')
-    if (operation === 'read-page') {
-      const value = await nativeAssistantBrowser.readPage({
-        documentId,
-        tabId,
-        offset: Number(args.offset ?? 0),
-        query: args.query,
-        region: args.region,
-      })
-      return { text: '已读取页面正文。', ok: true, data: snapshotData(value) }
-    }
-    if (operation === 'screenshot') {
-      const image = await nativeAssistantBrowser.capture({ documentId, tabId })
-      return {
-        text: '已取得当前网页截图。',
-        ok: true,
-        data: { imageDataUrl: image.dataUrl, documentId: image.documentId, tabId: image.tabId },
-      }
-    }
-    if (operation === 'navigate') {
-      const value = await nativeAssistantBrowser.act({
-        operation,
-        url: args.url,
-        documentId,
-        tabId,
-      })
-      return {
-        text: '已请求打开新网页，正在等待页面结果。',
-        ok: value.ok !== false,
-        data: snapshotData(value),
-      }
-    }
-    if (operation === 'back') {
-      const value = await nativeAssistantBrowser.back({ tabId })
-      return {
-        text: value.moved ? '已返回上一网页。' : '当前没有可返回的网页。',
-        ok: true,
-        data: snapshotData(value),
-      }
-    }
-    if (operation === 'switch-tab') {
-      const value = await nativeAssistantBrowser.switchTab({ tabId: Number(args.target) })
-      return { text: '已切换标签页，请重新观察。', ok: true, data: snapshotData(value) }
-    }
-    if (operation === 'wait') {
-      const value = await nativeAssistantBrowser.wait({
-        documentId,
-        tabId,
-        milliseconds: Number(args.milliseconds ?? 1000),
-      })
-      return { text: '等待结束，页面状态已返回。', ok: true, data: snapshotData(value) }
-    }
-    const value = await nativeAssistantBrowser.act({
-      operation,
-      documentId,
-      tabId,
-      ...(args.target ? { target: args.target } : {}),
-      ...(args.value !== undefined ? { value: args.value } : {}),
-      ...(args.key ? { key: args.key } : {}),
-      ...(args.direction ? { direction: args.direction as 'up' | 'down' } : {}),
-    })
-    if (signal.aborted || generation !== browserTaskGeneration || browserTaskId !== taskId)
-      throw new DOMException('网页任务已停止，旧操作结果已丢弃', 'AbortError')
-    return {
-      text: `网页操作 ${operation} 已返回结果。`,
-      ok: value.ok !== false,
-      data: snapshotData(value),
-    }
+    if (!hasAssistantBrowser()) throw new Error('当前设备不支持网页协助')
+    if (reply.args.operation === 'screenshot' && preferences.value.allowScreenshots === false)
+      throw new Error('网页截图权限已关闭')
+    const data = await assistantBrowserTaskService.execute(
+      reply.args,
+      conversationId.value,
+      signal,
+      { sharedChat: preferences.value.desktopPet === true },
+    )
+    return { ok: data.ok !== false, text: String(data.hint ?? '网页工具已返回实际结果。'), data }
   }
   if (reply.action === 'discord-setup') {
     if (!hasDiscordSetupBrowser()) throw new Error('请使用支持配置浏览器的新版 Android APK')
@@ -714,12 +515,20 @@ async function executeChatOperation(
         showInChat: false,
       }
     }
-    if (!['start', 'return'].includes(reply.args.operation ?? '')) {
+    if (
+      !['start', 'return', 'list-saved-config', 'restore-saved-config'].includes(
+        reply.args.operation ?? '',
+      )
+    ) {
       const routed = await handoff()
       if (routed) return routed
     }
     const data = await discordSetupService.execute(reply.args, signal)
-    const routed = await handoff()
+    const routed = ['list-saved-config', 'restore-saved-config'].includes(
+      reply.args.operation ?? '',
+    )
+      ? undefined
+      : await handoff()
     if (routed) return routed
     return {
       text:
@@ -917,29 +726,6 @@ async function expandChat() {
   }
 }
 let controller: AbortController | undefined
-let browserTaskId = ''
-let browserTaskConversationId = ''
-let browserTaskGeneration = 0
-async function resumeBrowserWindow(taskId: string): Promise<void> {
-  if (!taskId || browserTaskId !== taskId) return
-  await nativeAssistantBrowser.open({
-    site: 'general',
-    purpose: 'general',
-    step: 'browser-general',
-    title: '网页协助',
-    hint: '从当前页面继续，先重新观察页面再操作。',
-    steps: [],
-    template: '',
-    mode: 'agent',
-    agentRunId: taskId,
-    conversationId: browserTaskConversationId,
-    resumeCurrent: true,
-    showControls: true,
-  })
-  assistantBrowserSession.active = true
-  assistantBrowserSession.agentRunning = true
-  taskCenter.update(taskId, { phase: '重新观察网页' })
-}
 let discordGeneration = false
 let discordRunId: string | undefined
 function stopDiscordGeneration() {
@@ -947,7 +733,6 @@ function stopDiscordGeneration() {
 }
 let alive = true
 onBeforeUnmount(() => {
-  void browserEventHandle?.remove()
   unsubscribePreferences()
   if (ownsConversationActivity && conversationId.value)
     workspace.setConversationActivity?.(conversationId.value, instanceId, false)
@@ -955,6 +740,9 @@ onBeforeUnmount(() => {
   unsubscribeConversation?.()
   unsubscribeActivity?.()
   window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleSettingsBack, true)
+  window.removeEventListener('srl:assistant-browser-ready', continueGeneralBrowser)
+  window.removeEventListener('srl:assistant-browser-stop', stopGeneralBrowser)
+  window.removeEventListener('resize', syncGeneralBrowserPreview)
   window.removeEventListener('srl:discord-setup-assist', continueDiscordSetup)
   window.removeEventListener('srl:discord-setup-stop', stopDiscordGeneration)
   window.removeEventListener('srl:discord-setup-fullscreen', receiveDiscordSetupDraft)
@@ -1040,6 +828,7 @@ async function send(): Promise<void> {
 }
 let discordConversationSwitch: Promise<boolean> | undefined
 function ensureDiscordSetupConversation(): Promise<boolean> {
+  if (discordSetupSession.purpose === 'general') return Promise.resolve(true)
   if (discordConversationSwitch) return discordConversationSwitch
   discordConversationSwitch = (async () => {
     const id = await discordSetupService.assistantConversationId?.()
@@ -1081,6 +870,38 @@ async function receiveDiscordSetupDraft(event?: Event): Promise<void> {
     error.value = '小窗问题已保留在草稿中，但保存失败，请重试保存。'
   }
 }
+function stopGeneralBrowser(event: Event) {
+  if (event instanceof CustomEvent && event.detail?.conversationId === conversationId.value)
+    controller?.abort()
+}
+let generalBrowserReady = false
+async function continueGeneralBrowser(event?: Event): Promise<void> {
+  if (event) generalBrowserReady = true
+  if (!generalBrowserReady || !alive || busy.value || initializing.value || reading.value) return
+  if (
+    discordSetupSession.purpose !== 'general' ||
+    !assistantBrowserTaskService.owns(conversationId.value) ||
+    !discordSetupSession.agentRunning
+  ) {
+    generalBrowserReady = false
+    return
+  }
+  generalBrowserReady = false
+  history.value = retainAssistantHistory([
+    ...history.value,
+    {
+      role: 'user',
+      id: crypto.randomUUID(),
+      text: '当前网页已就绪。先观察实际页面继续用户原目标；已成功操作不重复，用户暂停或反馈优先。',
+      status: 'browser-task-internal',
+    },
+  ])
+  await persist()
+  await generate()
+}
+watch([busy, initializing, reading], () => {
+  void continueGeneralBrowser()
+})
 async function continueDiscordSetup(event?: Event): Promise<void> {
   if (
     !alive ||
@@ -1175,6 +996,7 @@ async function generate(): Promise<void> {
     }
     if (!prepared || !alive) return
     const { config, request } = prepared
+    taskState.clearCache()
     const turn = [...history.value].reverse().find((item) => item.role === 'user')!
     const calls = ref<AssistantToolCall[]>([...(turn.toolCalls ?? [])])
     const generationId = crypto.randomUUID()
@@ -1200,6 +1022,11 @@ async function generate(): Promise<void> {
         executeChatOperation(command, snapshot, executionSignal, config),
       onPhase: (value) => {
         phase.value = value
+        if (
+          discordSetupSession.purpose === 'general' &&
+          assistantBrowserTaskService.owns(conversationId.value)
+        )
+          void assistantBrowserTaskService.showProgress(value)
         if (discordGeneration) void discordSetupService.showAssistantProgress?.(value)
         void scrollToLatest()
       },
@@ -1244,6 +1071,7 @@ async function generate(): Promise<void> {
       comparison: result.comparison,
       navigation: result.navigation,
       sources: result.sources,
+      resourceCitations: result.resourceCitations,
     })
     if (result.warning) {
       error.value = result.warning
@@ -1282,6 +1110,7 @@ async function generate(): Promise<void> {
       await scrollToLatest()
     }
   } finally {
+    taskState.clearCache()
     try {
       await persist()
       if (navigation && alive && !signal.aborted) {
@@ -1362,13 +1191,15 @@ async function useTaskTemplate(value: AssistantTaskTemplate): Promise<void> {
     error.value = '请先完成或取消消息编辑，再使用模板'
     return
   }
-  const text = workspace.templateText(value)
+  const text = taskState.templateText(value)
+  if (text === undefined) return
   const next = input.value.trim() ? `${input.value}\n\n${text}` : text
   if (next.length > 8000) {
     error.value = '加入模板后超过 8000 字，请先整理输入内容'
     return
   }
   input.value = next
+  taskState.useTemplate(value)
   try {
     await persist()
     settingsOpen.value = false
@@ -1538,7 +1369,7 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         projectsPage
           ? 'APP 项目'
           : templatesPage
-            ? '任务模板'
+            ? '模板与技能'
             : promptPage
               ? '系统提示词'
               : apiPage
@@ -1676,10 +1507,25 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
       </template>
     </FeatureAppHeader>
     <div
-      v-if="!compact && !settingsOpen && $slots['task-preview']"
+      v-if="
+        !compact &&
+        !settingsOpen &&
+        ($slots['task-preview'] || (isBrowserTaskChat && discordSetupSession.purpose === 'general'))
+      "
       class="assistant-browser-preview-row"
     >
-      <slot name="task-preview" />
+      <slot name="task-preview">
+        <button
+          v-if="isBrowserTaskChat && discordSetupSession.purpose === 'general'"
+          ref="generalBrowserPreview"
+          type="button"
+          class="assistant-browser-task-preview"
+          aria-label="当前网页和操作进度，点此返回网页"
+          @click="assistantBrowserTaskService.returnToBrowser()"
+        >
+          当前网页 · 点此返回
+        </button>
+      </slot>
     </div>
     <ProductAssistantSettings
       v-if="settingsOpen"
@@ -1712,7 +1558,18 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
       @memories-saved="consent.clear()"
       @open="switchChat"
       @saved="settingsSaved"
-    />
+    >
+      <template #task-context>
+        <ProductAssistantTaskContext
+          :skill="taskSkill"
+          :resources="referenceResources"
+          :disabled="busy || initializing"
+          @select="referencesPanel?.open()"
+          @clear-resources="selectReferenceResources([])"
+          @clear-skill="clearTaskSkill"
+        />
+      </template>
+    </ProductAssistantSettings>
     <div
       v-show="!settingsOpen && !runningTool"
       ref="messages"
@@ -1893,6 +1750,11 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
                 查看 APP 预览 <span aria-hidden="true">↗</span>
               </button>
             </div>
+            <ProductAssistantResourceCitations
+              v-if="turn.resourceCitations?.length"
+              :citations="turn.resourceCitations"
+              @source="referencesPanel?.showCitation($event)"
+            />
           </div>
         </article>
         <div
@@ -1943,7 +1805,11 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
     <form v-show="!settingsOpen && !runningTool" class="chat-composer" @submit.prevent="send">
       <div v-if="isBrowserTaskChat" class="chat-configuration-actions">
         <span role="status">{{
-          discordSetupSession.agentRunning ? '小助手操作中' : '已暂停'
+          discordSetupSession.completed
+            ? '任务已完成'
+            : discordSetupSession.agentRunning
+              ? '小助手操作中'
+              : '已暂停'
         }}</span>
       </div>
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
@@ -2075,6 +1941,12 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
       />
     </form>
     <ProductAssistantResultViewer ref="resultViewer" />
+    <ProductAssistantReferencesPanel
+      ref="referencesPanel"
+      :selected="referenceResources"
+      :disabled="busy || initializing"
+      @select="selectReferenceResources"
+    />
     <dialog
       ref="actionMenu"
       class="chat-message-menu"

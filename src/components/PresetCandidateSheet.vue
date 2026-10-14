@@ -43,6 +43,7 @@ const {
   <div
     v-if="candidateSheetOpen"
     class="stitch-sheet mobile-dialog-viewport"
+    data-srl-controls
     role="dialog"
     aria-modal="true"
     aria-label="本次候选篮子"

@@ -36,7 +36,7 @@
   color: var(--color-danger);
 }
 
-:is(.appearance-studio, .appearance-ui-editor, .appearance-code-reference)
+:is(.appearance-studio, .appearance-ui-editor, .appearance-code-reference, [data-srl-controls])
   button.appearance-action-hit {
   display: inline-flex;
   align-items: center;

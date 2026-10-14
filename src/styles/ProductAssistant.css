@@ -1570,3 +1570,14 @@
   width: 16px;
   height: 16px;
 }
+
+.assistant-browser-task-preview {
+  width: 180px;
+  height: 130px;
+  flex: 0 0 auto;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+  background: var(--color-surface-raised);
+  color: var(--color-ink-soft);
+  cursor: pointer;
+}

@@ -191,7 +191,7 @@
   position: fixed;
   inset: var(--visual-viewport-offset-top, 0px) 0 auto;
   height: var(--visual-viewport-height, 100dvh);
-  z-index: 32;
+  z-index: var(--layer-resource-viewer);
   background: var(--viewer-background);
   color: var(--viewer-color);
   overscroll-behavior: none;
@@ -356,7 +356,7 @@
 }
 
 :root body .editor-overlay.resource-gallery-dialog {
-  z-index: 30;
+  z-index: var(--layer-resource-dialog);
   inset: var(--visual-viewport-offset-top, 0px) 0 auto;
   height: var(--visual-viewport-height, 100dvh);
   grid-template-rows: minmax(0, 1fr);

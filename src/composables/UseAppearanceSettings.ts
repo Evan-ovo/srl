@@ -184,6 +184,10 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
       showNotice('当前处于安全模式；恢复正常启动后才能应用自定义 CSS')
       return
     }
+    if (options?.assistant && appearanceTransaction.hasPendingViewTrial()) {
+      showNotice('请先保留或恢复当前Vue试用，再继续修改外观')
+      return
+    }
     if (options?.assistant) appearanceTransaction.keep()
     if (options?.views !== undefined) appearanceTransaction.rollback()
     const previousCss = browserStorageService.getCustomUiCss()
@@ -208,7 +212,7 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
         nextCss,
         apply,
         persist,
-        autoKeep: options?.assistant,
+        autoKeep: options?.assistant === true && !viewsChanged,
         ...(viewsChanged
           ? { previousViews: JSON.stringify(previousViews), title: '自定义界面与样式已临时应用' }
           : {}),
@@ -216,7 +220,11 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
         onRollback: () => {
           if (viewsChanged) browserStorageService.setCustomUiViews(previousViews)
           showNotice(
-            options?.assistant ? '已恢复 AI 修改前的 CSS' : '未确认更改，已自动恢复上一版 CSS',
+            viewsChanged
+              ? '已恢复修改前的界面与样式'
+              : options?.assistant
+                ? '已恢复 AI 修改前的 CSS'
+                : '未确认更改，已自动恢复上一版 CSS',
           )
         },
       })
@@ -238,9 +246,11 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
       }
     }
     showNotice(
-      options?.assistant
+      options?.assistant && !viewsChanged
         ? 'AI 美化已应用，可通过对话撤销'
-        : '自定义 CSS 已临时应用，请在 15 秒内选择“保留更改”',
+        : viewsChanged
+          ? 'Vue已临时应用，请在15秒内选择“保留更改”'
+          : '自定义 CSS 已临时应用，请在 15 秒内选择“保留更改”',
     )
   }
 

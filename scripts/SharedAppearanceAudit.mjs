@@ -44,6 +44,9 @@ export async function auditSharedAppearance(browser) {
     'ResourceGallery',
     'AppearanceStudio',
     'GlassRefinement',
+    'FeatureBackButton',
+    'FeatureAppHeader',
+    'AppearanceOriginalCssActions',
     'ConfirmDialog',
     'ProjectActivityCenter',
     'ProjectNoticeDialog',
@@ -88,6 +91,19 @@ export async function auditSharedAppearance(browser) {
   try {
     await page.setContent(`<style>${styles.join('\n')}\n*,*::before,*::after{transition:none!important;animation:none!important}</style>
       <main id="app">
+        <section data-srl-controls>
+          <button id="semantic-button">普通操作</button>
+          <input id="semantic-input"><select id="semantic-select"><option>选择</option></select>
+          <textarea id="semantic-textarea"></textarea>
+          <input type="checkbox" role="switch" id="semantic-switch">
+          <input type="range" id="semantic-range"><input type="checkbox" id="semantic-checkbox">
+          <button class="feature-back-button" id="semantic-back">返回</button>
+          <button class="feature-header-action" id="semantic-header">操作</button>
+          <button class="appearance-action-hit" id="semantic-hit"><span class="appearance-action-face" id="semantic-face">复制</span></button>
+          <section data-srl-controls style="--button-background:#123456;--control-background:#654321"><button id="semantic-local-button">局部</button><input id="semantic-local-input"></section>
+        </section>
+        <input type="range" id="unscoped-range"><input type="checkbox" id="unscoped-checkbox">
+        <section data-srl-dialog id="semantic-dialog"></section>
         <button class="button button--primary" id="primary">保存</button>
         <dialog open class="chat-image-viewer"><button id="image-viewer-close">关闭</button></dialog>
         <label class="tavern-transfer-settings__row"><input type="checkbox" role="switch" id="transfer-switch"></label>
@@ -227,7 +243,21 @@ export async function auditSharedAppearance(browser) {
         }`,
         })
         const custom = await measure()
-        for (const id of ['transfer-switch', 'assistant-switch']) {
+        assert.equal(custom['semantic-button'].background, 'rgb(238, 221, 238)')
+        assert.equal(custom['semantic-local-button'].background, 'rgb(18, 52, 86)')
+        assert.equal(custom['semantic-local-input'].background, 'rgb(101, 67, 33)')
+        for (const id of ['semantic-input', 'semantic-select', 'semantic-textarea']) {
+          assert.equal(custom[id].background, 'rgb(250, 240, 224)', id)
+          assert.equal(custom[id].border, 'rgb(119, 68, 51)', id)
+        }
+        for (const id of ['semantic-back', 'semantic-header', 'semantic-hit']) {
+          assert.equal(custom[id].background, 'rgba(0, 0, 0, 0)', id + ': transparent hit area')
+          assert.equal(custom[id].shadow, 'none', id + ': no second shadow')
+        }
+        assert.equal(custom['semantic-face'].background, 'rgb(238, 221, 238)')
+        for (const type of ['range', 'checkbox'])
+          assert.deepEqual(custom['semantic-' + type], custom['unscoped-' + type], type)
+        for (const id of ['transfer-switch', 'assistant-switch', 'semantic-switch']) {
           assert.equal(
             custom[id].background,
             'rgb(250, 240, 224)',
@@ -261,6 +291,7 @@ export async function auditSharedAppearance(browser) {
           'migration-dialog',
           'external-dialog',
           'repair-dialog',
+          'semantic-dialog',
         ]) {
           assert.equal(
             custom[id].background,

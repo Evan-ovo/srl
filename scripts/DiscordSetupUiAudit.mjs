@@ -14,7 +14,12 @@ import { startAuditPreview } from './AuditPreviewServer.mjs'
 const root = process.cwd(),
   fixture = resolve(root, '.codex-tmp', process.env.SRL_AUDIT_RUN, 'setup-ui')
 const output = resolve(process.env.SRL_AUDIT_OUTPUT_DIR)
-const taskChatAudit = ['task-chat', 'return-browser'].includes(process.env.SRL_DISCORD_UI_SCOPE)
+const generalTaskChatAudit = process.env.SRL_DISCORD_UI_SCOPE === 'general-task-chat'
+const browserLayerAudit = process.env.SRL_DISCORD_UI_SCOPE === 'browser-layer'
+const taskChatAudit =
+  generalTaskChatAudit ||
+  browserLayerAudit ||
+  ['task-chat', 'return-browser'].includes(process.env.SRL_DISCORD_UI_SCOPE)
 const path = (p) => resolve(root, p).replaceAll('\\', '/')
 const permissionSource = await readFile(
   resolve(root, 'src/services/DiscordSetupService.ts'),
@@ -73,35 +78,39 @@ if (taskChatAudit) {
   mocks.AppContainer = `
 export * from '${path('src/core/AppContainer.ts')}?real';
 const chat={id:'task-chat-fixture',title:'Discord Bridge 网页协助',updatedAt:1,input:'',images:[],history:[{id:'u',role:'user',text:'请继续配置'},{id:'a',role:'assistant',text:'正在检查当前网页，已保存的配置不会重复填写。'}]};
-const preferences={name:'蒜惹菈',avatar:'data:image/png;base64,${(await readFile(resolve(root, 'public/icons/assistant-avatar.png'))).toString('base64')}',desktopPet:true,petAssetMode:'svg',petWalkingAnimation:false,mode:'agent'};
+const preferences={name:'蒜惹菈',avatar:'data:image/png;base64,${(await readFile(resolve(root, 'public/icons/assistant-avatar.png'))).toString('base64')}',desktopPet:${!generalTaskChatAudit},petAssetMode:'svg',petWalkingAnimation:false,mode:'agent'};
 const listeners=new Set();
 window.testTaskReply=()=>{chat.history=[...chat.history,{id:'next',role:'assistant',text:'已完成网页检查，接着处理配置。'}];for(const listener of listeners)listener({...chat})};
 export const productAssistantWorkspaceService={preferences:()=>preferences,onPreferencesChange:()=>()=>{},savePreferences:async()=>preferences,initialize:async()=>chat,continueDiscordSetupConversation:async()=>chat,save:async(value)=>{Object.assign(chat,value);return chat},flush:async()=>{},list:async()=>[chat],switch:async()=>chat,templates:()=>[],memories:()=>[],config:()=>({}),onConversationChange:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},onConversationActivityChange:()=>()=>{}};
-export const discordSetupService={assistantConversationId:async()=>chat.id,peekAssistantRequest:()=>undefined,peekAssistantDraft:()=>undefined,takeAssistantDraft:()=>undefined,agentRunId:()=>undefined,returnToBrowser:async()=>{window.returned=true;window.taskSession.browserVisible=true}};
+export const discordSetupService={current:async()=>({task:'configure',mode:'agent',step:'github-fork',startedAt:1,assistantConversationId:chat.id}),attachLocalForm:()=>()=>{},localConnectionDraft:async()=>undefined,assistantConversationId:async()=>chat.id,peekAssistantRequest:()=>undefined,peekAssistantDraft:()=>undefined,takeAssistantDraft:()=>undefined,agentRunId:()=>undefined,returnToBrowser:async()=>{window.returned=true;window.taskSession.browserVisible=true}};
 `
   mocks.AssistantBrowserRuntime = `
 export * from '${path('src/services/AssistantBrowserRuntime.ts')}?real';
 import {reactive} from 'vue';
 export const hasDiscordSetupBrowser=()=>true;
-export const discordSetupSession=reactive({active:true,webStepActive:true,browserVisible:false,agentRunning:true,assistantConversationId:'task-chat-fixture'});
+export const hasAssistantBrowser=()=>true;
+export const discordSetupSession=reactive({active:true,purpose:'${generalTaskChatAudit ? 'general' : 'discord-setup'}',webStepActive:true,browserVisible:false,agentRunning:true,assistantConversationId:'task-chat-fixture'});
 export const assistantBrowserSession=discordSetupSession;window.taskSession=discordSetupSession;
 export const nativeDiscordSetupBrowser={pet:async()=>{},addListener:async()=>({remove:async()=>{}}),chatPresentation:async(options)=>{window.presentation=options}};
 export const nativeAssistantBrowser=nativeDiscordSetupBrowser;
 `
+  mocks.AssistantBrowserTaskService = `export const assistantBrowserTaskService={owns:()=>true,recover:async()=>true,returnToBrowser:async()=>{window.returned=true;window.taskSession.browserVisible=true},showProgress:async()=>{},pause:async()=>{}};`
   await writeFile(
     resolve(fixture, 'main.js'),
     `
 import {createApp,h} from 'vue';
 import Pet from '${path('src/components/ProductAssistantPet.vue')}';
+import Assistant from '${path('src/components/ProductAssistant.vue')}';
+${browserLayerAudit ? `import Advanced from '${path('src/components/ResourceLinkAdvancedSettings.vue')}';` : ''}
 import '${path('src/styles/Foundation.css')}';
 import '${path('src/styles/GlassRefinement.css')}';
 import '${path('src/styles/ProductAssistant.css')}';
 import '${path('src/styles/AppearanceStudio.css')}';
 import '${path('src/styles/ProductAssistantPet.css')}';
 document.documentElement.dataset.theme=new URL(location.href).searchParams.get('theme')||'light';
-createApp({render:()=>h('main',{class:'app-shell'},'资源库背景')}).mount('#app');
+createApp({render:()=>h('main',{class:'app-shell'},${browserLayerAudit ? '[h(Advanced)]' : "'资源库背景'"})}).mount('#app');
 const petHost=document.createElement('div');document.body.append(petHost);
-createApp({render:()=>h(Pet,{theme:document.documentElement.dataset.theme,layoutMode:'grid',uiFontScale:'standard',customCss:'',navigate:async()=>{}})}).mount(petHost);
+${generalTaskChatAudit ? `createApp({render:()=>h(Assistant,{getContext:()=>({mode:'features',theme:document.documentElement.dataset.theme,layoutMode:'grid',uiFontScale:'standard',customCss:'',scopes:[],preferences:{}}),execute:async()=>({summary:'完成'})})}).mount(petHost);` : `createApp({render:()=>h(Pet,{theme:document.documentElement.dataset.theme,layoutMode:'grid',uiFontScale:'standard',customCss:'',navigate:async()=>{}})}).mount(petHost);`}
 const style=document.createElement('style');style.textContent='body{margin:0;font-family:sans-serif;color:var(--color-ink);background:var(--color-canvas)}';document.head.append(style);
 `,
   )
@@ -148,10 +157,15 @@ const browser = await launchAuditBrowser(auditEnvironment())
 let cases = 0
 if (taskChatAudit) {
   try {
-    for (const width of [320, 390, 430])
+    for (const [width, height] of [
+      [320, 800],
+      [375, 812],
+      [390, 844],
+      [430, 932],
+    ])
       for (const theme of ['light', 'dark']) {
         const context = await browser.newContext({
-          viewport: { width, height: 844 },
+          viewport: { width, height },
           hasTouch: true,
           isMobile: true,
         })
@@ -160,7 +174,38 @@ if (taskChatAudit) {
             errors = []
           page.on('pageerror', (error) => errors.push(error.message))
           await page.goto(preview.url + '?theme=' + theme)
+          if (generalTaskChatAudit) {
+            const previewCard = page.getByRole('button', {
+              name: '当前网页和操作进度，点此返回网页',
+              exact: true,
+            })
+            await previewCard.waitFor()
+            await page.waitForFunction(() => window.presentation?.mode === 'fullscreen')
+            const valid = await page.evaluate(() => {
+              const r = document
+                .querySelector('.assistant-browser-task-preview')
+                .getBoundingClientRect()
+              const composer = document.querySelector('.chat-composer').getBoundingClientRect()
+              return (
+                r.width > 0 &&
+                r.right <= innerWidth &&
+                r.bottom <= composer.top &&
+                document.documentElement.scrollWidth <= innerWidth &&
+                window.taskSession.agentRunning
+              )
+            })
+            if (!valid || (await previewCard.count()) !== 1)
+              throw Error('General webpage preview layout failed at ' + width + '/' + theme)
+            await previewCard.tap()
+            if (!(await page.evaluate(() => window.returned && window.taskSession.agentRunning)))
+              throw Error('Returning to original browser restarted or paused it')
+            if (errors.length) throw Error(errors.join('\n'))
+            cases++
+            continue
+          }
           await page.locator('.assistant-pet-dialog').waitFor({ state: 'attached' })
+          if (browserLayerAudit)
+            await page.locator('.resource-source-advanced-overlay').waitFor({ state: 'visible' })
           await page.evaluate(() => window.dispatchEvent(new Event('srl:discord-setup-quick-chat')))
           const chat = page.locator('.assistant-pet-dialog')
           await chat.waitFor({ state: 'visible' })
@@ -169,6 +214,17 @@ if (taskChatAudit) {
             .waitFor()
           if (await page.evaluate(() => window.presentation?.mode !== 'compact'))
             throw Error('Task chat did not open compact')
+          if (browserLayerAudit) {
+            await page.locator('.resource-source-advanced-overlay').waitFor({ state: 'hidden' })
+            const reachable = await page.evaluate(() => {
+              const dialog = document.querySelector('.assistant-pet-dialog')
+              const rect = dialog.getBoundingClientRect()
+              return dialog.contains(
+                document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2),
+              )
+            })
+            if (!reachable) throw Error('Advanced settings intercepts the compact chat')
+          }
           await page.getByRole('button', { name: '展开完整对话', exact: true }).tap()
           await page.locator('.assistant-browser-preview').waitFor()
           await page.waitForFunction(() => window.presentation?.mode === 'fullscreen')
@@ -217,6 +273,8 @@ if (taskChatAudit) {
             await page.screenshot({ path: resolve(output, 'task-chat-full.png') })
           await page.getByRole('button', { name: '查看当前网页并返回网页协助', exact: true }).tap()
           await chat.waitFor({ state: 'hidden' })
+          if (browserLayerAudit)
+            await page.locator('.resource-source-advanced-overlay').waitFor({ state: 'visible' })
           if (
             !(await page.evaluate(
               () =>
@@ -235,7 +293,7 @@ if (taskChatAudit) {
     console.log(
       'Task chat passed: ' +
         cases +
-        ' real touch layouts, actual shared chat components; native preview validated separately in emulator.',
+        ' real touch layouts and actual shared chat components; native execution is verified separately.',
     )
   } finally {
     await browser.close()

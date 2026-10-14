@@ -1324,7 +1324,7 @@
 
 /* 版本对比对话框 */
 .editor-overlay.version-diff-overlay:not(.version-diff-overlay--import) {
-  z-index: 25;
+  z-index: var(--layer-resource-editor);
 }
 
 .version-diff {

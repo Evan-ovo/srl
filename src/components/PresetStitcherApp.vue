@@ -172,6 +172,7 @@ function jumpToReviewChangedPage(): void {
 <template>
   <section
     class="stitch"
+    data-srl-controls
     :class="{ 'is-reading': fullWorkspaceActive, 'is-workbench': step === 'workbench' }"
     aria-label="缝了么预设工作台"
   >
@@ -835,6 +836,7 @@ function jumpToReviewChangedPage(): void {
       <div
         v-if="variableWriterOpen"
         class="stitch-sheet mobile-dialog-viewport"
+        data-srl-controls
         role="dialog"
         aria-modal="true"
         aria-label="写入聊天变量"
@@ -879,6 +881,7 @@ function jumpToReviewChangedPage(): void {
       <div
         v-if="slotWriterOpen"
         class="stitch-sheet mobile-dialog-viewport"
+        data-srl-controls
         role="dialog"
         aria-modal="true"
         aria-label="创建填写占位"
@@ -925,6 +928,7 @@ function jumpToReviewChangedPage(): void {
       <div
         v-if="sourcePickerOpen"
         class="stitch-sheet mobile-dialog-viewport"
+        data-srl-controls
         role="dialog"
         aria-modal="true"
         aria-label="选择填充内容"

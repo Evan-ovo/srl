@@ -195,8 +195,8 @@ final class AssistantBrowserPolicy {
     /** Human evidence, never inferred from a dispatched click or a generic success label. */
     static String successChecklist(String step) {
         switch (step) {
-            case "github-sync": return "1. 当前是自己的 Fork，分支为 main。\n2. Sync fork 已显示与上游同步（up to date），没有待更新提交。\n3. 没有冲突或错误，自己的 Wrangler 配置仍保留。";
-            case "github-save": return "1. 已提交到自己 Fork 的 main，已返回 wrangler.jsonc 文件页。\n2. 最新提交包含本次修改，三个占位值已替换，文件内容与刚才检查的配置一致。\n3. 没有提交失败或未保存提示。";
+            case "github-sync": return "1. 当前 Fork 和部署分支已核对。\n2. Fork 已核验与上游同步（up to date）；已有最新结果直接复用。\n3. 没有冲突或错误，自己的 Wrangler 配置仍保留。";
+            case "github-save": return "1. 目标仓库/部署分支的 Wrangler 文件已保存；无需固定 main 或制造新提交。\n2. 实际已提交文件满足本次三个参数；已有正确的最新提交直接复用，不为制造差异重写。\n3. 没有提交失败或未保存提示。";
             case "cf-deploy": return "1. 当前是本次配置的 Worker。\n2. 页面显示当前生产部署成功，没有失败或仍在排队；只有 Build successful 不算部署成功。\n3. 不要求仓库名称、分支和提交号一致；Secret 与连接健康在后续步骤检查。";
             case "cf-secret": return "1. 当前是本次配置的 Worker。\n2. DISCORD_BOT_TOKEN 类型为 Secret，已保存并重新部署。\n3. 最新生产部署已生效，没有失败提示。不要在这里输入或展示 Token。";
             case "discord-endpoint": return "1. 当前是同一个 Discord App。\n2. Interactions Endpoint URL 为本次 Worker 根链接加 /interactions。\n3. 已保存，Discord 端点验证通过，没有签名、地址或保存错误。";

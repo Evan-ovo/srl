@@ -2,8 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PreviewPolicy } from '../services/BrowserStorageService'
+import type { CustomUiViews } from '../types/UiCustomization'
+import { createUiView, normalizeUiViews } from '../core/UiCustomization'
+import { appearanceTransaction } from '../core/AppearanceSafety'
 
 let policy: PreviewPolicy = { allowRemoteResources: false, allowScripts: false }
+let views: CustomUiViews = {}
 
 const storage = {
   getLayoutMode: vi.fn(() => 'grid' as const),
@@ -22,6 +26,10 @@ const storage = {
     return next
   }),
   getCustomUiCss: vi.fn(() => ''),
+  getCustomUiViews: vi.fn(() => normalizeUiViews(views)),
+  setCustomUiViews: vi.fn((value: CustomUiViews) => {
+    views = normalizeUiViews(value)
+  }),
   getCustomUiPresets: vi.fn(() => []),
   setCustomUiCss: vi.fn(),
   getExtractCharacterAssets: vi.fn(() => false),
@@ -80,6 +88,7 @@ describe('useAppearanceSettings', () => {
       ?.click()
     vi.clearAllMocks()
     policy = { allowRemoteResources: false, allowScripts: false }
+    views = {}
     notices = []
     document.head.innerHTML = ''
     document.documentElement.removeAttribute('data-theme')
@@ -88,6 +97,25 @@ describe('useAppearanceSettings', () => {
   })
 
   const create = () => useAppearanceSettings((message) => notices.push(message))
+  it('AI的Vue变化采用原15秒试用；CSS不变也能试用，未保留会恢复其它APP', () => {
+    vi.useFakeTimers()
+    const before = { ...createUiView(), enabled: true }
+    views = { cabinet: before }
+    const appearance = create()
+    const next = { ...createUiView(), enabled: true }
+    appearance.saveCustomUiCss('', { assistant: true, views: { cabinet: before, library: next } })
+    expect(views.library?.enabled).toBe(true)
+    expect(appearanceTransaction.hasPendingViewTrial()).toBe(true)
+    const calls = storage.setCustomUiCss.mock.calls.length
+    appearance.saveCustomUiCss('.new{color:red}', { assistant: true })
+    expect(storage.setCustomUiCss).toHaveBeenCalledTimes(calls)
+    expect(notices.at(-1)).toContain('保留或恢复')
+    vi.advanceTimersByTime(15_001)
+    expect(views.library).toBeUndefined()
+    expect(views.cabinet).toEqual(before)
+    expect(appearanceTransaction.hasPendingViewTrial()).toBe(false)
+    vi.useRealTimers()
+  })
 
   it('增加多线路必须先确认，取消不保存也不调整原生队列', async () => {
     confirmMock.mockResolvedValueOnce(false)

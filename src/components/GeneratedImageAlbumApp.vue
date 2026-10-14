@@ -407,7 +407,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="generated-album">
+  <section class="generated-album" data-srl-controls>
     <FeatureAppHeader title="生图相册" @back="$emit('back')">
       <template #actions>
         <button
@@ -446,6 +446,8 @@ onUnmounted(() => {
         <section
           ref="settingsPanel"
           class="generated-album__settings"
+          data-srl-controls
+          data-srl-dialog
           role="dialog"
           aria-modal="true"
           aria-label="相册设置"
@@ -555,6 +557,8 @@ onUnmounted(() => {
       >
         <section
           class="generated-album__detail"
+          data-srl-controls
+          data-srl-dialog
           role="dialog"
           aria-modal="true"
           aria-labelledby="generated-album-detail-title"

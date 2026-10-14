@@ -5,7 +5,7 @@ import { appearanceScopes } from '../core/AppearanceScopes'
 import { createProtectedHost } from '../core/AppearanceSafety'
 import { BrowserStorageService } from '../services/BrowserStorageService'
 import { createUiDomSession, UI_PRIVATE_SELECTOR } from '../services/UiViewDom'
-import { sanitizeCssForPreview } from '../utils/PreviewSafety'
+import { readUiViewPreviewCss } from '../core/UiViewPreview'
 import { APPLIED_CSS_CHANGED_EVENT } from '../core/AppearanceScopes'
 import type { CustomCssScope } from '../types/BrowserPreferences'
 import type { CustomUiViews, UiViewSnapshot, UiNativePlacement } from '../types/UiCustomization'
@@ -168,26 +168,7 @@ async function invoke(action: import('../types/UiCustomization').UiViewAction) {
   refreshState()
 }
 function refreshStyles() {
-  const values: string[] = []
-  for (const sheet of [...document.styleSheets]) {
-    try {
-      values.push([...sheet.cssRules].map((rule) => rule.cssText).join('\n'))
-    } catch {
-      /* Cross-origin author styles are not part of the native UI. */
-    }
-  }
-  const tokens = [...getComputedStyle(document.documentElement)]
-    .filter((property) => property.startsWith('--'))
-    .map(
-      (property) =>
-        `${property}:${getComputedStyle(document.documentElement).getPropertyValue(property)}`,
-    )
-    .join(';')
-  css.value = sanitizeCssForPreview(`${values.join('\n')}\n:root{${tokens}}`, {
-    allowExternalResources: previewPolicy.value.allowRemoteResources,
-    allowLocalResources: true,
-    preserveLength: true,
-  })
+  css.value = readUiViewPreviewCss(previewPolicy.value.allowRemoteResources)
 }
 function visible(element: HTMLElement) {
   for (let node: HTMLElement | null = element; node; node = node.parentElement)

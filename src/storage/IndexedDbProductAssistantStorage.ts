@@ -401,6 +401,12 @@ export class IndexedDbProductAssistantStorage implements ProductAssistantStorage
     await this.database.transaction('rw', this.database.settings, async () => {
       const items = await this.templates()
       const index = items.findIndex((item) => item.id === value.id)
+      if (value.description !== undefined) {
+        const previous = index < 0 ? undefined : items[index]
+        if (previous?.version && previous.version !== value.version)
+          throw new Error('技能已被其他窗口修改，请重新打开后编辑；当前草稿保留')
+        value = { ...value, version: (previous?.version ?? 0) + 1 }
+      }
       if (index < 0) {
         if (items.length >= 30) throw new Error('最多保存 30 个任务模板')
         items.push(value)

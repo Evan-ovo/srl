@@ -3,6 +3,18 @@ import { Buffer } from 'node:buffer'
 import { unzipSync, strFromU8 } from 'fflate'
 import { resolve } from 'node:path'
 
+async function returnToRoles(page, app) {
+  await page.locator('.chat-reader-app[aria-busy="false"]').waitFor()
+  if ((await page.locator('.chat-reader-app').getAttribute('data-reader-page')) === 'reader') {
+    await app.locator('#readerMenu').tap()
+    await app.locator('#readerBack').tap()
+    await page.locator('.chat-reader-app[data-reader-page="chats"]').waitFor()
+  }
+  if ((await page.locator('.chat-reader-app').getAttribute('data-reader-page')) === 'chats')
+    await page.getByRole('button', { name: '返回角色列表', exact: true }).tap()
+  await page.locator('.chat-reader-app[data-reader-page="roles"]').waitFor()
+}
+
 // Runs only against ChatReaderAudit's isolated browser database and synthetic records.
 export async function auditReaderBackup({ page, app, out }) {
   await page.reload()
@@ -64,9 +76,10 @@ export async function auditReaderBackup({ page, app, out }) {
   await page.getByRole('button', { name: '确认仅卸载 APP', exact: true }).tap()
   await page.getByRole('button', { name: '知道了', exact: true }).tap()
   await row.getByRole('button', { name: '下载', exact: true }).tap()
-  await row.getByRole('button', { name: '重下', exact: true }).waitFor()
+  await row.getByText(/已安装/).waitFor()
   await page.getByRole('button', { name: '返回功能桌面', exact: true }).tap()
   await page.locator('.feature-app--reader').tap()
+  await returnToRoles(page, app)
   await app.locator('[data-role]').filter({ hasText: '陆沉' }).tap()
   await app.getByText('测试备注', { exact: true }).waitFor()
   await page.reload()
@@ -87,6 +100,7 @@ export async function auditReaderBackup({ page, app, out }) {
   await restore.getByRole('button', { name: '返回资源库', exact: true }).tap()
   await page.getByRole('button', { name: '功能', exact: true }).tap()
   await page.locator('.feature-app--reader').tap()
+  await returnToRoles(page, app)
   await app.locator('[data-role]').filter({ hasText: '陆沉' }).tap()
   await app.getByText('测试备注', { exact: true }).waitFor()
   await page.screenshot({ path: resolve(out, 'reader-backup-restored.png') })

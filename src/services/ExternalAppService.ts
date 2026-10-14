@@ -712,6 +712,30 @@ export class ExternalAppService {
     if (!(await this.hasPermission(appId, EXTERNAL_APP_PERMISSION.STORAGE))) {
       throw new Error('该 APP 未获得本地存储权限')
     }
+    await this.writeData(appId, key, value)
+  }
+
+  /** Trusted native reader; shares keys and persistence with portable reader backups. */
+  async readReaderData(keys: string[]): Promise<Record<string, unknown>> {
+    const normalized = [...new Set(keys.map(normalizeDataKey))]
+    const result: Record<string, unknown> = Object.create(null)
+    for (let offset = 0; offset < normalized.length; offset += 100) {
+      const batch = normalized.slice(offset, offset + 100)
+      const records = this.storage.getDataMany
+        ? await this.storage.getDataMany(CHAT_READER_APP_ID, batch)
+        : await Promise.all(batch.map((key) => this.storage.getData(CHAT_READER_APP_ID, key)))
+      batch.forEach((key, index) => {
+        result[key] = records[index]?.value ?? null
+      })
+    }
+    return result
+  }
+
+  async writeReaderData(key: string, value: unknown): Promise<void> {
+    await this.writeData(CHAT_READER_APP_ID, normalizeDataKey(key), value)
+  }
+
+  private async writeData(appId: string, key: string, value: unknown): Promise<void> {
     const normalized = cloneJsonValue(value)
     const existing = await this.storage.listData(appId)
     const nextSize = TEXT_ENCODER.encode(JSON.stringify(normalized)).byteLength
@@ -730,12 +754,13 @@ export class ExternalAppService {
       value: normalized,
       updatedAt: Date.now(),
     })
-    await this.updateHealth(appId, {
-      dataBytes: retainedSize + nextSize,
-      dataEntries: existing.some((record) => record.key === key)
-        ? existing.length
-        : existing.length + 1,
-    })
+    if (await this.storage.getSummary(appId))
+      await this.updateHealth(appId, {
+        dataBytes: retainedSize + nextSize,
+        dataEntries: existing.some((record) => record.key === key)
+          ? existing.length
+          : existing.length + 1,
+      })
   }
 
   async removeData(appId: string, keyValue: unknown): Promise<void> {

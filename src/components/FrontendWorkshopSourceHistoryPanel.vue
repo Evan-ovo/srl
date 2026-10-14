@@ -179,7 +179,7 @@ async function restoreCheckpoint(): Promise<void> {
 </script>
 
 <template>
-  <div class="frontend-workshop-source-history-panel">
+  <div class="frontend-workshop-source-history-panel" data-srl-controls>
     <div class="frontend-workshop-source-history-panel__checkpoints" aria-label="Source 检查点">
       <button type="button" :disabled="busy || externalBusy" @click="createCheckpoint">
         保存点

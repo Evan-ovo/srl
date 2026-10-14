@@ -102,6 +102,7 @@ const beforeGreetingIndex = computed(() => {
 <template>
   <section
     class="source-ai-workspace mobile-dialog-viewport"
+    data-srl-controls
     :class="{ 'is-preview-expanded': previewExpanded, 'is-planning': mode === 'plan' }"
     role="dialog"
     aria-modal="true"

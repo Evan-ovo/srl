@@ -9,16 +9,34 @@ import {
 
 describe('assistant focused work and result-only replies', () => {
   it('uses the same minimal-tool and outcome-only rules in every active mode', () => {
-    for (const mode of ['auto', 'features', 'appearance', 'creation'] as const) {
+    for (const mode of ['auto', 'features', 'creation'] as const) {
       const prompt = assistantKnowledgeForMode(mode)
       expect(prompt).toContain('已有可靠信息足以回答时直接回答，不为证明而调用工具')
-      expect(prompt).toContain('已有充分证据或目标状态达成就停止')
+      expect(prompt).toContain('目标达成且复验通过才报告完成')
+      expect(prompt).toContain('猜测、错误分类、单次工具成功或症状暂时消失不算定位/修复')
+      expect(prompt).toContain('任务仍未完成')
       expect(prompt).toContain('不要把每次工具调用写成进度播报')
       expect(prompt).toContain('结束时只报告实际结果')
       expect(prompt).toContain('询问教程、用法或操作步骤时，优先在聊天中直接说明，不自动跳转')
       expect(prompt).toContain('查到一条覆盖问题的功能指南后停止，不为证明再读源码')
       expect(prompt).toContain('常规入口和教程不查GitHub')
     }
+  })
+
+  it('外观只用简短美化规则，CSS优先且保留用户提示词覆盖', () => {
+    const prompt = assistantKnowledgeForMode('appearance')
+    expect(prompt).toContain('优先CSS')
+    expect(prompt).toContain('CSS不能完成')
+    expect(prompt).toContain('已有依据不重复读取')
+    expect(prompt).toContain('不隐藏受保护恢复入口')
+    expect(prompt).not.toMatch(/GitHub|网页代理|Cloudflare|酒馆预设/u)
+    expect(prompt.length).toBeLessThan(1000)
+    expect(
+      assistantKnowledgeForMode('appearance', true, {
+        common: '用户通用规则',
+        appearance: '用户外观规则',
+      }),
+    ).toBe('用户通用规则\n用户外观规则')
   })
 
   it('keeps the work discipline when tool calling is disabled', () => {

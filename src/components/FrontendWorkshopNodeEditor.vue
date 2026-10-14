@@ -262,7 +262,7 @@ function removeBehavior(behaviorId: string): void {
 </script>
 
 <template>
-  <section class="fw-inspector">
+  <section class="fw-inspector" data-srl-controls>
     <div v-if="!selectedNode" class="fw-inspector__empty">先在画布中选择一个元素。</div>
 
     <template v-else>

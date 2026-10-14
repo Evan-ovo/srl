@@ -1,9 +1,26 @@
-/* global window, document, FileReader, ResizeObserver, IntersectionObserver, requestAnimationFrame, setTimeout, clearTimeout, NodeFilter */
-'use strict'
-;(() => {
+/* global FileReader, ResizeObserver, IntersectionObserver, setTimeout, clearTimeout, NodeFilter */
+export function mountChatReader(root, api) {
+  const document = root.ownerDocument
+  const window = document.defaultView
+  const surface = root.querySelector('.chat-reader-surface') || root
+  const lifecycle = new window.AbortController()
+  let disposed = false
+  const listen = (target, event, handler, options = {}) =>
+    target.addEventListener(
+      event,
+      handler,
+      typeof options === 'boolean'
+        ? { capture: options, signal: lifecycle.signal }
+        : { ...options, signal: lifecycle.signal },
+    )
+  const requestAnimationFrame = (callback) =>
+    window.requestAnimationFrame(() => {
+      if (!disposed) callback()
+    })
+
   // This APP has no database or chat-file store. All originals and bindings are owned by SRL.
-  const $ = (s) => document.querySelector(s)
-  const $$ = (s) => [...document.querySelectorAll(s)]
+  const $ = (s) => root.querySelector(s)
+  const $$ = (s) => [...root.querySelectorAll(s)]
   const esc = (t) =>
     String(t ?? '').replace(
       /[&<>"']/g,
@@ -26,38 +43,6 @@
   }
   const icon = (name) =>
     `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] || paths.more}"/></svg>`
-  // ExternalAppHost permits 60 requests / 10 seconds. Keep headroom for host UI requests.
-  const requestTimes = []
-  let requestQueue = Promise.resolve()
-  function scheduleRequest(call) {
-    const task = requestQueue
-      .catch(() => {})
-      .then(async () => {
-        while (requestTimes.length && Date.now() - requestTimes[0] > 10000) requestTimes.shift()
-        if (requestTimes.length >= 50) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, Math.max(1, 10001 - (Date.now() - requestTimes[0]))),
-          )
-          while (requestTimes.length && Date.now() - requestTimes[0] > 10000) requestTimes.shift()
-        }
-        requestTimes.push(Date.now())
-        return call()
-      })
-    requestQueue = task
-    return task
-  }
-  const wrapSdk = (obj) =>
-    Object.fromEntries(
-      Object.entries(obj).map(([key, value]) => [
-        key,
-        typeof value === 'function'
-          ? (...args) => scheduleRequest(() => value(...args))
-          : value && typeof value === 'object'
-            ? wrapSdk(value)
-            : value,
-      ]),
-    )
-  const api = window.srlApp ? wrapSdk(window.srlApp) : undefined
   const shadow = $('#readingFlow').attachShadow({ mode: 'open' })
   const readingBaseCss =
     ':host{display:block}p{margin:0 0 1em;text-align:justify;overflow-wrap:anywhere}img,video{max-width:100%;height:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}table{display:block;max-width:100%;overflow:auto}.mes_text{overflow-wrap:anywhere}.floor{break-inside:auto}'
@@ -68,11 +53,10 @@
     if (!style) {
       style = document.createElement('style')
       style.id = 'reader-shell-style'
-      document.head.append(style)
+      root.append(style)
     }
-    style.textContent = css || ''
+    style.textContent = (css || '').replace(/:root\b|\bbody\b/g, '.chat-reader-surface')
   }
-  window.addEventListener('srlappappearance', (event) => applyShellCss(event.detail))
   let prefs = {
     renderMode: 'simple',
     mode: 'scroll',
@@ -139,9 +123,16 @@
   let storageQueue = Promise.resolve()
   const run = (fn) =>
     Promise.resolve()
-      .then(fn)
+      .then(() => (disposed ? undefined : fn()))
       .catch((error) => notify(error instanceof Error ? error.message : String(error), true))
+  // Event targets are retargeted to the host after dispatch across a ShadowRoot.
+  // Capture the actual control before scheduling asynchronous work.
+  const runEvent = (event, handler) => {
+    const target = event.target
+    return run(() => handler(target))
+  }
   function notify(text, error = false) {
+    if (disposed) return
     if ($('#sheet').open) {
       const feedback = $('#sheetFeedback')
       feedback.textContent = text
@@ -235,23 +226,7 @@
     $('#libraryContent').innerHTML = `<p class="loading">${esc(text)}</p>`
   }
   async function allResources(types, ids) {
-    const results = []
-    let offset = 0
-    let cursor
-    do {
-      const response = await api.resources.list({
-        types,
-        ...(ids ? { ids } : {}),
-        offset,
-        limit: 50,
-        snapshot: true,
-        ...(cursor ? { cursor } : {}),
-      })
-      results.push(...response.items)
-      offset = response.nextOffset
-      cursor = response.cursor
-    } while (offset !== null)
-    return results
+    return api.resources.summaries(types, ids)
   }
   function boundRole(c) {
     const matches = c.relatedResourceIds
@@ -314,16 +289,10 @@
   }
   async function refresh(render = true) {
     loading('正在读取资源库…')
-    chats = (await allResources(['chat'])).filter((r) => r.type === 'chat')
-    const boundIds = [...new Set(chats.flatMap((c) => c.relatedResourceIds))]
-    const boundCards = []
-    for (let start = 0; start < boundIds.length; start += 50)
-      boundCards.push(...(await allResources(['characterCard'], boundIds.slice(start, start + 50))))
-    characters = [
-      ...new Map(
-        boundCards.filter((r) => r.type === 'characterCard').map((r) => [r.id, r]),
-      ).values(),
-    ]
+    const directory = await api.resources.directory()
+    if (disposed) return
+    chats = directory.chats
+    characters = directory.characters
     characters.sort((a, b) => b.revision - a.revision || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     for (const c of chats) {
       if (c.chatCharacter && !characters.some((r) => r.id === c.chatCharacter.id))
@@ -381,9 +350,18 @@
         role === 'unbound' ? !boundRole(c) : boundRole(c)?.id === role,
       )
       const shown = group.slice(0, listLimit)
-      for (const c of shown) {
-        await getState(c.id)
-        if (revision !== version) return
+      const missing = shown.filter((c) => !stateCache.has(c.id))
+      if (missing.length) {
+        const values = await api.storage.getMany(missing.map((c) => 'chat:' + c.id))
+        if (disposed || revision !== version) return
+        for (const c of missing)
+          stateCache.set(c.id, {
+            note: '',
+            title: '',
+            pinned: false,
+            marks: [],
+            ...values['chat:' + c.id],
+          })
       }
       const list = shown
         .filter((c) =>
@@ -412,7 +390,7 @@
     $('#librarySearch').value = ''
     $('#librarySearchWrap').hidden = true
     await renderLibrary()
-    window.scrollTo(0, 0)
+    surface.scrollTo(0, 0)
   }
   async function bindPanel(c) {
     sheet('绑定角色卡', '<p class="hint">正在读取角色卡…</p>')
@@ -469,15 +447,15 @@
     }
     const colors = themes[prefs.theme] || themes.paper
     ;['paper', 'surface', 'ink', 'muted', 'line', 'accent', 'soft'].forEach((k, i) =>
-      document.documentElement.style.setProperty('--' + k, colors[i]),
+      surface.style.setProperty('--' + k, colors[i]),
     )
     for (const [k, v] of Object.entries({
       font: prefs.font + 'px',
       leading: prefs.leading,
       measure: prefs.width + 'px',
     }))
-      document.documentElement.style.setProperty('--' + k, v)
-    document.documentElement.style.colorScheme = prefs.theme === 'night' ? 'dark' : 'light'
+      surface.style.setProperty('--' + k, v)
+    surface.style.colorScheme = prefs.theme === 'night' ? 'dark' : 'light'
     $('#reader').classList.toggle('page-mode', prefs.mode === 'page')
     $('#reader').classList.toggle('continuous-mode', prefs.mode === 'continuous')
     $('#prevPage').hidden = prefs.mode === 'continuous'
@@ -1169,7 +1147,7 @@
     }
     floorDocuments.delete(floor)
   }
-  window.addEventListener('message', (event) => {
+  listen(window, 'message', (event) => {
     if (
       scriptSession?.native &&
       scriptSession.frame.contentWindow === event.source &&
@@ -1348,7 +1326,7 @@
       .map(
         (key) =>
           `  --${key}: ${window
-            .getComputedStyle(document.documentElement)
+            .getComputedStyle(surface)
             .getPropertyValue('--' + key)
             .trim()};`,
       )
@@ -1371,6 +1349,8 @@
   }
   let fontKey = ''
   const readerFontStyle = document.createElement('style')
+  // Font faces are registered on the document; the service returns only filtered @font-face rules.
+  // Reader selectors stay in the ShadowRoot, and this style is removed on disposal.
   document.head.append(readerFontStyle)
   async function syncReaderFonts() {
     const key = (prefs.styleId || '') + ':' + prefs.remote
@@ -1708,6 +1688,7 @@
     }
   }
   async function read(offset = 0, pos = null, backward = false, loadedResult = null) {
+    if (disposed) return
     const version = ++readVersion
     const initialFonts = starting ? syncReaderFonts() : Promise.resolve()
     if (!starting) run(syncReaderFonts)
@@ -1717,7 +1698,7 @@
       loadedResult || api.resources.readChat(pageReadRequest(activeId, offset, backward)),
       initialFonts,
     ])
-    if (chat?.id !== activeId || version !== readVersion) return
+    if (disposed || chat?.id !== activeId || version !== readVersion) return
     // A large preceding floor may fill the bounded SDK page before the requested floor.
     if (pos && offset < pos.floor && result.nextOffset !== null && result.nextOffset <= pos.floor)
       return read(pos.floor, pos)
@@ -1734,12 +1715,12 @@
     if (starting) restore(pos)
     else
       await new Promise((resolve) =>
-        requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
           if (chat?.id === activeId && version === readVersion) restore(pos)
           resolve()
         }),
       )
-    if (chat?.id !== activeId || version !== readVersion) return
+    if (disposed || chat?.id !== activeId || version !== readVersion) return
     $('#readerSubtitle').textContent =
       prefs.mask && prefs.renderMode === 'full'
         ? '完整阅读 · 正文打码，状态栏未打码'
@@ -1781,7 +1762,7 @@
     $('#library').hidden = true
     $('#reader').hidden = false
     await syncNavigation()
-    document.body.style.overflow = 'hidden'
+    surface.style.overflow = 'hidden'
     $('#readerTitle').textContent = state.title || chat.name
     toggleChrome(false)
     clearTimeout(toastTimer)
@@ -1815,7 +1796,7 @@
     clearPanelFrames()
     $('#reader').hidden = true
     $('#library').hidden = false
-    document.body.style.overflow = ''
+    surface.style.overflow = ''
     $('#sheet').close()
     roleAppearance = null
     resolveAppearance()
@@ -1844,7 +1825,7 @@
       colors: Object.fromEntries(
         ['paper', 'ink', 'muted', 'line', 'accent', 'soft'].map((key) => [
           key,
-          document.documentElement.style.getPropertyValue('--' + key).trim(),
+          surface.style.getPropertyValue('--' + key).trim(),
         ]),
       ),
     })
@@ -2591,12 +2572,12 @@
       )
       $('#appearanceScope').value = roleAppearance?.enabled ? 'character' : 'default'
       $('#appearanceScope').onchange = (event) =>
-        run(() => changeAppearanceMode(event.target.value === 'character'))
+        runEvent(event, (target) => changeAppearanceMode(target.value === 'character'))
       $('#panelAppearance').value = prefs.panelAppearance || 'author'
       $('#panelAppearance').onchange = (event) =>
-        run(async () => {
+        runEvent(event, async (target) => {
           const pos = currentPosition()
-          prefs.panelAppearance = event.target.value
+          prefs.panelAppearance = target.value
           await savePrefs()
           await read(pageData.messages[0]?.index || 0, pos)
         })
@@ -2621,7 +2602,7 @@
           $('#fontValue').textContent = prefs.font + 'px'
         })
       $('#lineRange').onchange = (e) =>
-        run(() => update(() => (prefs.leading = Number(e.target.value))))
+        runEvent(e, (target) => update(() => (prefs.leading = Number(target.value))))
       $('#pickBg').onclick = () => $('#backgroundFile').click()
       $('#clearBg').onclick = () => {
         background = ''
@@ -2727,12 +2708,12 @@
   ])
     $(`[data-panel="${name}"]`).innerHTML = icon(ic) + text
   $('#libraryContent').onclick = (e) =>
-    run(async () => {
+    runEvent(e, async (target) => {
       if (suppress) {
         suppress = false
         return
       }
-      const t = e.target.closest('button')
+      const t = target.closest('button')
       if (!t) return
       if (t.dataset.chat) await openChat(t.dataset.chat)
       else if (t.dataset.role) await selectRole(t.dataset.role)
@@ -2744,17 +2725,6 @@
       }
     })
   $('#libraryBack').onclick = () => run(navigateBack)
-  window.addEventListener('srlappnavigation', (event) => {
-    if (!runtime.builtinReader) return
-    if (event.detail === 'back') run(navigateBack)
-    if (event.detail === 'search') $('#searchToggle').click()
-    if (event.detail === 'cover') $('#characterCover').click()
-  })
-  window.addEventListener('srlappback', (event) => {
-    if (!runtime.builtinReader) return
-    event.preventDefault()
-    run(navigateBack)
-  })
   $('#librarySearch').oninput = () => run(renderLibrary)
   $('#searchToggle').onclick = () => {
     $('#librarySearchWrap').hidden = !$('#librarySearchWrap').hidden
@@ -2780,7 +2750,8 @@
     }
   })
   // Only suppress the compatibility click belonging to the hold/swipe, never a new gesture.
-  document.addEventListener(
+  listen(
+    root,
     'pointerdown',
     () => {
       suppress = false
@@ -2803,8 +2774,8 @@
     }
   })
   $('#sheetBody').onclick = (e) =>
-    run(async () => {
-      const t = e.target.closest('button')
+    runEvent(e, async (target) => {
+      const t = target.closest('button')
       if (!t) return
       if (t.dataset.regexSource) await regexSourcePanel(t.dataset.regexSource)
       if (t.dataset.regexPage !== undefined)
@@ -2914,12 +2885,12 @@
     const interactive = e
       .composedPath()
       .some((el) => el?.matches?.('a,summary,input,textarea,button,select'))
-    run(async () => {
+    runEvent(e, async (target) => {
       if (suppress) {
         suppress = false
         return
       }
-      const t = e.target.closest('button')
+      const t = target.closest('button')
       if (t?.dataset.hiddenRules !== undefined) hiddenRulePanel(Number(t.dataset.hiddenRules))
       else if (!interactive && !window.getSelection()?.toString()) toggleChrome()
     })
@@ -3003,18 +2974,18 @@
     saveTimer = setTimeout(() => run(recordPosition), 600)
   }
   $('#backgroundFile').onchange = (e) =>
-    run(async () => {
-      const f = e.target.files[0]
+    runEvent(e, async (target) => {
+      const f = target.files[0]
       if (!f) return
       if (f.size > 2 * 1024 * 1024) throw Error('背景图片请控制在 2 MiB 以内')
       background = await dataUrl(f)
       $('#reader').style.backgroundImage = `url("${background}")`
       $('#reader').style.setProperty('--veil', 0.85)
-      e.target.value = ''
+      target.value = ''
     })
   $('#cssFile').onchange = (e) =>
-    run(async () => {
-      const f = e.target.files[0]
+    runEvent(e, async (target) => {
+      const f = target.files[0]
       if (!f) return
       if (f.size > 50000) throw Error('美化文件过大')
       let source = await f.text()
@@ -3025,16 +2996,16 @@
       }
       $('#cssInput').value = source
       pendingStyleId = ''
-      e.target.value = ''
+      target.value = ''
       notify('已载入，请点击应用 CSS')
     })
-  document.addEventListener('keydown', (e) => {
+  listen(root, 'keydown', (e) => {
     if ($('#reader').hidden || $('#sheet').open || e.target.matches('input,textarea')) return
     if (e.key === 'ArrowLeft') run(() => turn(-1))
     if (e.key === 'ArrowRight') run(() => turn(1))
     if (e.key === 'Escape') toggleChrome(false)
   })
-  document.addEventListener('visibilitychange', () => {
+  listen(document, 'visibilitychange', () => {
     if (document.visibilityState !== 'hidden') return
     clearTimeout(saveTimer)
     run(recordPosition)
@@ -3056,17 +3027,16 @@
   })
   for (const element of [$('#readingViewport'), $('#readerHeader'), $('.reader-bottom')])
     readerSizeObserver.observe(element)
-  Promise.resolve()
+  const ready = Promise.resolve()
     .then(async () => {
-      if (!api) throw Error('请将读了么安装包导入资源库的“扩展”，不能作为普通网页单独打开')
-      await api.ready()
-      if (!api.resources.readChat)
-        throw Error('资源库尚未支持聊天记录接口，请先使用本分支构建的测试版本')
       const capabilities = await api.capabilities()
+      if (disposed) return
       runtime = capabilities.runtime || {}
-      document.documentElement.classList.toggle('builtin-shell', runtime.builtinReader === true)
+      surface.classList.toggle('builtin-shell', runtime.builtinReader === true)
       $('#readerFullscreen').hidden = runtime.builtinReader === true
-      const savedPrefs = (await api.storage.get('preferences-v1')) || {}
+      const savedData = await api.storage.getMany(['preferences-v1', 'reader-index-v1'])
+      if (disposed) return
+      const savedPrefs = savedData['preferences-v1'] || {}
       defaultPrefs = {
         ...defaultPrefs,
         ...savedPrefs,
@@ -3078,8 +3048,8 @@
       }
       delete defaultPrefs.interactive
       prefs = { ...defaultPrefs }
-      indexState = (await api.storage.get('reader-index-v1')) || {}
-      bodyStyles = [...document.querySelectorAll('style')].map((s) => s.textContent).join('\n')
+      indexState = savedData['reader-index-v1'] || {}
+      bodyStyles = [...root.querySelectorAll('style')].map((s) => s.textContent).join('\n')
       const contentRules = (rules) =>
         [...rules].flatMap((rule) => {
           if (
@@ -3098,25 +3068,68 @@
           return []
         })
       defaultContentStyles =
-        [...document.styleSheets].flatMap((sheet) => contentRules(sheet.cssRules)).join('\n') +
+        [...root.querySelectorAll('style')]
+          .map((style) => style.sheet)
+          .filter(Boolean)
+          .flatMap((sheet) => contentRules(sheet.cssRules))
+          .join('\n') +
         '\n' +
         readingBaseCss
       applyShellCss(runtime.readerUiCss)
       applyPrefs()
       await refresh(false)
+      if (disposed) return
       const resume = chats.find((item) => item.id === indexState.lastChat)
       if (indexState.resumeReading && resume && boundRole(resume)) await openChat(resume.id)
       else await renderLibrary()
     })
     .catch((error) => {
+      if (disposed) return
       loading(error.message)
       notify(error.message, true)
     })
     .finally(async () => {
+      if (disposed) return
       starting = false
-      document.documentElement.removeAttribute('data-reader-starting')
+      surface.removeAttribute('data-reader-starting')
       await syncNavigation()
       // Bridge connection alone does not mean the initial page and appearance are ready.
       await api?.ui?.setLoading?.('')
     })
-})()
+  return {
+    ready,
+    appearance(css) {
+      if (!disposed) applyShellCss(css)
+    },
+    action(action) {
+      if (disposed) return
+      if (action === 'back') run(navigateBack)
+      if (action === 'search') $('#searchToggle').click()
+      if (action === 'cover') $('#characterCover').click()
+    },
+    async dispose() {
+      if (disposed) return
+      disposed = true
+      lifecycle.abort()
+      api.dispose?.()
+      version++
+      readVersion++
+      searchVersion++
+      clearTimeout(saveTimer)
+      clearTimeout(toastTimer)
+      clearTimeout(holdTimer)
+      readerSizeObserver.disconnect()
+      avatarObserver.disconnect()
+      const saved = recordPosition().catch(() => {})
+      fontKey = ''
+      clearPanelFrames()
+      pageData = null
+      chat = null
+      if ($('#sheet').open) $('#sheet').close()
+      readerFontStyle.remove()
+      avatarCache.clear()
+      stateCache.clear()
+      await saved
+    },
+  }
+}

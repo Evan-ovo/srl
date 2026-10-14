@@ -1,5 +1,10 @@
 import type { CustomUiView } from '../types/UiCustomization'
 
+/** Identifies compiler inputs; activation and legacy network flags do not alter compilation. */
+export function customUiSourceKey(view: CustomUiView): string {
+  return JSON.stringify([view.entryPath, view.files])
+}
+
 export async function compileCustomUiView(
   view: CustomUiView,
   engine?: import('./FrontendWorkshopBrowserSourceCompilerService').FrontendWorkshopBrowserBuildEngine,

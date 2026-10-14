@@ -9,6 +9,8 @@ import { startAuditPreview } from './AuditPreviewServer.mjs'
 import { createAuditApiFixture } from './AuditEnvironment.mjs'
 
 export const AUDIT_SUITES = {
+  'safe-area-overlays': 'scripts/SafeAreaOverlaysAudit.mjs',
+  startup: 'scripts/StartupLoadingAudit.mjs',
   'installable-appearance': 'scripts/InstallableAppearanceAudit.mjs',
   'discord-markdown': 'scripts/DiscordMarkdownLayoutAudit.mjs',
   'discord-handoff': 'scripts/DiscordHandoffPageAudit.mjs',
@@ -31,11 +33,13 @@ export const AUDIT_SUITES = {
   'relay-settings': 'scripts/RelayWorkerSettingsAudit.mjs',
   'tag-version': 'scripts/TagVersionPerformanceAudit.mjs',
   'reader-scripts': 'scripts/ChatReaderScriptsAudit.mjs',
-  'reader-startup': 'scripts/ChatReaderStartupAudit.mjs',
+  'reader-startup': 'scripts/ChatReaderAudit.mjs',
+  'reader-native': 'scripts/ChatReaderAudit.mjs',
   'app-entry': 'scripts/AppEntryAudit.mjs',
   'chat-script-transfer': 'scripts/ChatScriptTransferAudit.mjs',
   'preview-loading': 'scripts/GreetingPreviewLoadingAudit.mjs',
   'assistant-workflows': 'scripts/ProductAssistantWorkflowAudit.mjs',
+  'assistant-tasks': 'scripts/ProductAssistantTaskAudit.mjs',
   'tavern-live': 'scripts/TavernLiveTransferAudit.mjs',
 }
 
@@ -167,23 +171,29 @@ export async function runIsolatedAudit(options, validation) {
   try {
     if (
       [
+        'safe-area-overlays',
         'discord-markdown',
         'discord-handoff',
         'discord-inbox',
         'discord-setup',
         'preview-loading',
+        'startup',
       ].includes(options.suite)
     ) {
       phase =
-        options.suite === 'discord-markdown'
-          ? 'Discord 帖子 Markdown 排版隔离浏览器审计'
-          : options.suite === 'discord-setup'
-            ? 'Discord 网页协助组件隔离浏览器审计'
-            : options.suite === 'preview-loading'
-              ? '开场白渐进加载组件隔离浏览器审计'
-              : options.suite === 'discord-inbox'
-                ? '收件箱组件隔离浏览器审计'
-                : 'Worker 接收页隔离浏览器审计'
+        options.suite === 'safe-area-overlays'
+          ? '独立弹层安全区组件隔离浏览器审计'
+          : options.suite === 'startup'
+            ? '启动会话与返回隔离浏览器审计'
+            : options.suite === 'discord-markdown'
+              ? 'Discord 帖子 Markdown 排版隔离浏览器审计'
+              : options.suite === 'discord-setup'
+                ? 'Discord 网页协助组件隔离浏览器审计'
+                : options.suite === 'preview-loading'
+                  ? '开场白渐进加载组件隔离浏览器审计'
+                  : options.suite === 'discord-inbox'
+                    ? '收件箱组件隔离浏览器审计'
+                    : 'Worker 接收页隔离浏览器审计'
       await runAuditCommand(AUDIT_SUITES[options.suite], [], {
         ...process.env,
         SRL_AUDIT_MODE: 'fixture',
@@ -191,6 +201,8 @@ export async function runIsolatedAudit(options, validation) {
         SRL_AUDIT_ENGINE: options.engine,
         SRL_AUDIT_OUTPUT_DIR: resolve(output, 'results'),
         SRL_PREVIEW_URL: `http://127.0.0.1:${options.port}`,
+        SRL_BOOT_AUDIT_PORT: String(options.port),
+        SRL_AUDIT_DIST: options.dist,
       })
       result.steps.push(phase)
       result.status = 'passed'

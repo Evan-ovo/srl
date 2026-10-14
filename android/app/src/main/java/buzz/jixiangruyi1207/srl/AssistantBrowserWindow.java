@@ -30,6 +30,11 @@ import org.json.JSONObject;
 /** Dedicated browser dialog: external pages never receive a JavascriptInterface or SRL assets. */
 final class AssistantBrowserWindow {
     interface Actions { void emit(JSObject event); }
+    String taskRunId = "";
+    boolean taskFinished;
+    interface Upload { boolean choose(WebView view, android.webkit.ValueCallback<android.net.Uri[]> callback, WebChromeClient.FileChooserParams params); }
+    interface Download { void request(String url, String userAgent, String disposition, String mime); }
+    Upload upload; Download download;
     private final Activity activity;
     private final Actions actions;
     private final WebView appWeb;
@@ -41,7 +46,7 @@ final class AssistantBrowserWindow {
     private boolean drawingPreview;
     private Dialog dialog;
     WebView web;
-    private final java.util.Deque<WebView> parentWindows = new java.util.ArrayDeque<>();
+    private final java.util.Map<WebView, WebView> parentWindows = new java.util.IdentityHashMap<>();
     private final java.util.Map<Integer, WebView> tabs = new java.util.LinkedHashMap<>();
     private final java.util.Map<WebView, Integer> tabIds = new java.util.IdentityHashMap<>();
     private int nextTabId = 1;
@@ -50,7 +55,7 @@ final class AssistantBrowserWindow {
     private TextView instruction;
     private TextView address;
     private TextView heading, status, failureText, failureTitle;
-    private Button previousPage;
+    private Button previousPage, loginMethod;
     private android.window.OnBackInvokedCallback systemBack;
     private final java.util.Set<Button> quietButtons = new java.util.HashSet<>();
     private LinearLayout failure;
@@ -69,7 +74,7 @@ final class AssistantBrowserWindow {
     boolean generalMode;
     private TextView chatTranscript;
     private String replyText = "", agentPhase = "";
-    private String conversationId = "";
+    String conversationId = "";
     String installationApplicationId = "", installationStartedApp = "";
     boolean installationCompleted;
     private boolean closed = true;
@@ -81,7 +86,7 @@ final class AssistantBrowserWindow {
     int documentId;
     String agentRunId = "";
     private String readyKey = "";
-    private String verificationUrl, verificationStep, verificationRun;
+    private String verificationUrl, verificationStep, verificationRun, externalVerificationDestination;
     private int verificationDocument;
     void agentRun(String id) {
         String next = "agent".equals(mode) && id != null && id.matches("[a-zA-Z0-9-]{1,60}") ? id : "";
@@ -103,6 +108,10 @@ final class AssistantBrowserWindow {
     AssistantBrowserWindow(Activity activity, WebView appWeb, Actions actions) { this.activity = activity; this.appWeb = appWeb; this.actions = actions; }
     private int dp(int value) { return Math.round(value * activity.getResources().getDisplayMetrics().density); }
     void open(String url, String newStep, String title, String hint, JSONArray newSteps, String newTemplate, boolean choose, boolean dark, boolean general) {
+        open(url, newStep, title, hint, newSteps, newTemplate, choose, dark, general, false);
+    }
+    void open(String url, String newStep, String title, String hint, JSONArray newSteps, String newTemplate, boolean choose, boolean dark, boolean general, boolean foreground) {
+        if (foreground) { clearChatPresentation(); suspended = false; }
         darkTheme = dark;
         generalMode = general;
         if (dialog == null) create();
@@ -157,13 +166,15 @@ final class AssistantBrowserWindow {
         LinearLayout header = new LinearLayout(activity); header.setGravity(android.view.Gravity.CENTER_VERTICAL);
         Button back = button(header, "‹", this::back);
         quietButtons.add(back);
-        back.setContentDescription("返回助手"); back.setTextSize(26);
+        back.setContentDescription("退出网页协助"); back.setTextSize(26);
         heading = new TextView(activity); heading.setTextSize(18); heading.setTypeface(null, android.graphics.Typeface.BOLD);
         heading.setSingleLine(true); heading.setEllipsize(android.text.TextUtils.TruncateAt.END);
         heading.setPadding(dp(8), 0, dp(8), 0); header.addView(heading, new LinearLayout.LayoutParams(0, dp(44), 1));
         heading.setGravity(android.view.Gravity.CENTER_VERTICAL);
         previousPage = button(header, "上一页", this::goBack);
         previousPage.setContentDescription("返回上一网页"); quietButtons.add(previousPage);
+        loginMethod = button(header, "系统浏览器", this::chooseLoginMethod);
+        loginMethod.setVisibility(android.view.View.GONE); quietButtons.add(loginMethod);
         root.addView(header);
         address = new TextView(activity); address.setTextSize(12); address.setSingleLine(true); address.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE); root.addView(address);
         address.setOnClickListener(view -> showDetails());
@@ -258,7 +269,12 @@ final class AssistantBrowserWindow {
                 if (view == web && request.isForMainFrame()) loadFailed(request.getUrl().toString(), "网站返回 HTTP " + response.getStatusCode());
             }
         });
+        created.setDownloadListener((url, agent, disposition, mime, bytes) -> { if (created == web && active() && download != null) download.request(url, agent, disposition, mime); });
         created.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onShowFileChooser(WebView view, android.webkit.ValueCallback<android.net.Uri[]> callback, FileChooserParams params) {
+                if (view == web && active() && upload != null) return upload.choose(view, callback, params);
+                callback.onReceiveValue(null); return true;
+            }
             @Override public boolean onConsoleMessage(android.webkit.ConsoleMessage message) {
                 if (created != web) return false;
                 String text = message.message();
@@ -269,18 +285,18 @@ final class AssistantBrowserWindow {
             @Override public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
                 if (!isUserGesture || view != web || !active()) return false;
                 WebView popup = createWebView();
-                parentWindows.push(web); web.setVisibility(android.view.View.GONE);
+                parentWindows.put(popup, web); web.setVisibility(android.view.View.GONE);
                 web = popup; documentId++; loading = true; failed = false; failedUrl = null; readyKey = ""; setPaused(true);
                 address.setText("新窗口"); failure.setVisibility(android.view.View.GONE);
-                root.addView(popup, root.indexOfChild(parentWindows.peek()) + 1, new LinearLayout.LayoutParams(-1, 0, 1));
+                root.addView(popup, root.indexOfChild(parentWindows.get(popup)) + 1, new LinearLayout.LayoutParams(-1, 0, 1));
                 ((WebView.WebViewTransport) resultMsg.obj).setWebView(popup); resultMsg.sendToTarget(); return true;
             }
-            @Override public void onCloseWindow(WebView window) { if (window == web && !parentWindows.isEmpty()) returnToParentWindow(); }
+            @Override public void onCloseWindow(WebView window) { if (window == web && parentWindows.containsKey(web)) returnToParentWindow(); }
         });
         return created;
     }
     private void returnToParentWindow() {
-        WebView popup = web; web = parentWindows.pop(); root.removeView(popup); popup.destroy();
+        WebView popup = web; WebView parent = parentWindows.remove(popup); if (parent == null || !tabs.containsValue(parent)) return; web = parent; root.removeView(popup); popup.destroy();
         Integer removedId = tabIds.remove(popup); if (removedId != null) tabs.remove(removedId);
         web.setVisibility(android.view.View.VISIBLE); documentId++; readyKey = ""; failed = false; failedUrl = null;
         loadingWindows.remove(popup); loading = loadingWindows.contains(web); failure.setVisibility(android.view.View.GONE);
@@ -291,7 +307,7 @@ final class AssistantBrowserWindow {
     boolean clickPublicTarget(JSONObject point, int expectedDocument, String expectedRun) {
         boolean publicSecret = AssistantBrowserPolicy.secretPublicControlsAllowed(mode, agentRunId, step, web.getUrl(), secretScope, secretStage);
         if (!active() || paused && !publicSecret || loading || failed || documentId != expectedDocument || !expectedRun.equals(agentRunId)
-            || !AssistantBrowserPolicy.blocksUserInput(mode, agentRunId, paused && !publicSecret, loading, failed, step, web.getUrl())) return false;
+            || !(generalMode ? blocksUserInput(web.getUrl()) : AssistantBrowserPolicy.blocksUserInput(mode, agentRunId, paused && !publicSecret, loading, failed, step, web.getUrl()))) return false;
         double x = point.optDouble("x", Double.NaN) * web.getScale(), y = point.optDouble("y", Double.NaN) * web.getScale();
         if (!Double.isFinite(x) || !Double.isFinite(y) || x < 0 || y < 0 || x >= web.getWidth() || y >= web.getHeight()) return false;
         WebView target = web; long now = android.os.SystemClock.uptimeMillis();
@@ -301,15 +317,59 @@ final class AssistantBrowserWindow {
         try { boolean started = target.dispatchTouchEvent(down); boolean ended = target.dispatchTouchEvent(up); return started && ended; }
         finally { dispatchingAgentTouch = false; down.recycle(); up.recycle(); }
     }
+    void dispatchChatInput(java.util.function.Consumer<java.util.function.Consumer<Boolean>> action, java.util.function.Consumer<Boolean> done) {
+        WebView target = web;
+        if (!active()) { done.accept(false); return; }
+        if (chatMode.isEmpty() || appWeb == null) {
+            if (!target.requestFocus()) { done.accept(false); return; }
+            action.accept(dispatched -> target.evaluateJavascript("void 0", consumed -> done.accept(dispatched))); return;
+        }
+        android.view.View previous = activity.getCurrentFocus();
+        String run = agentRunId;
+        int document = documentId;
+        String key = JSONObject.quote("__srlChatInput-" + java.util.UUID.randomUUID());
+        // Capture only a closure over the SRL chat textarea's selection, never its value.
+        String capture = "(()=>{const e=document.activeElement,chat=e?.matches('.chat-composer textarea'),s=chat?e.selectionStart:null,t=chat?e.selectionEnd:null,d=chat?e.selectionDirection:null;"
+            + "window[" + key + "]=restore=>{delete window[" + key + "];if(restore&&e?.isConnected&&document.activeElement===e&&e.matches('.chat-composer textarea')&&typeof s==='number')e.setSelectionRange(s,t,d)};return true})()";
+        appWeb.evaluateJavascript(capture, ignored -> {
+            if (!active() || web != target || document != documentId || !run.equals(agentRunId)) {
+                appWeb.evaluateJavascript("window[" + key + "]?.(false)", cleaned -> done.accept(false)); return;
+            }
+            if (!target.requestFocus()) { appWeb.evaluateJavascript("window[" + key + "]?.(false)", cleaned -> done.accept(false)); return; }
+            action.accept(dispatched -> {
+                // Wait for renderer consumption: dispatch returning does not mean its focus changes finished.
+                target.evaluateJavascript("void 0", consumed -> {
+                    boolean restore = active() && !chatMode.isEmpty() && web == target && target.hasFocus()
+                        && previous != null && previous != target && previous.isAttachedToWindow();
+                    if (restore) previous.requestFocus();
+                    appWeb.evaluateJavascript("window[" + key + "]?.(" + restore + ")", restored -> done.accept(dispatched));
+                });
+            });
+        });
+    }
     private void back() {
         agentRun(""); close(); actions.emit(new JSObject().put("action", "return"));
     }
-    boolean goBack() {
+    boolean pressPublicKey(String key, int document, String run) {
+        if (!generalMode || !active() || paused || loading || failed || document != documentId || !run.equals(agentRunId)) return false;
+        java.util.Map<String, Integer> keys = java.util.Map.ofEntries(
+            java.util.Map.entry("Tab", android.view.KeyEvent.KEYCODE_TAB), java.util.Map.entry("Escape", android.view.KeyEvent.KEYCODE_ESCAPE),
+            java.util.Map.entry("Enter", android.view.KeyEvent.KEYCODE_ENTER), java.util.Map.entry("ArrowUp", android.view.KeyEvent.KEYCODE_DPAD_UP),
+            java.util.Map.entry("ArrowDown", android.view.KeyEvent.KEYCODE_DPAD_DOWN), java.util.Map.entry("ArrowLeft", android.view.KeyEvent.KEYCODE_DPAD_LEFT),
+            java.util.Map.entry("ArrowRight", android.view.KeyEvent.KEYCODE_DPAD_RIGHT), java.util.Map.entry("Home", android.view.KeyEvent.KEYCODE_MOVE_HOME),
+            java.util.Map.entry("End", android.view.KeyEvent.KEYCODE_MOVE_END), java.util.Map.entry("Backspace", android.view.KeyEvent.KEYCODE_DEL),
+            java.util.Map.entry("Delete", android.view.KeyEvent.KEYCODE_FORWARD_DEL));
+        Integer code = keys.get(key); if (code == null) return false;
+        web.requestFocus(); web.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, code));
+        web.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, code)); return true;
+    }
+    boolean goBack() { return goBack(false); }
+    boolean goBack(boolean agentAction) {
         if (web != null && web.canGoBack()) {
-            if (!generalMode) { setPaused(true); agentRun(""); actions.emit(new JSObject().put("action", "agent-pause")); }
+            if (!agentAction) { setPaused(true); agentRun(""); actions.emit(new JSObject().put("action", "agent-pause")); }
             web.stopLoading(); web.goBack();
             return true;
-        } else if (!parentWindows.isEmpty()) {
+        } else if (parentWindows.containsKey(web)) {
             if (!generalMode) { setPaused(true); agentRun(""); actions.emit(new JSObject().put("action", "agent-pause")); }
             returnToParentWindow();
             return true;
@@ -340,7 +400,7 @@ final class AssistantBrowserWindow {
         verificationUrl = null;
         if (!active() || suspended || !dialog.isShowing() || failed || loading
             || !(generalMode ? AssistantBrowserPolicy.browseAllowed(web.getUrl()) : AssistantBrowserPolicy.allowed(web.getUrl()))
-            || !AssistantBrowserPolicy.authentication(web.getUrl())) return;
+            || !(AssistantBrowserPolicy.authentication(web.getUrl()) || externalVerificationDestination != null)) return;
         verificationUrl = web.getUrl(); verificationDocument = documentId;
         verificationStep = step; verificationRun = agentRunId;
     }
@@ -350,15 +410,17 @@ final class AssistantBrowserWindow {
     }
     void foreground() {
         String url = verificationUrl, expectedStep = verificationStep, run = verificationRun;
+        String destination = externalVerificationDestination;
         int document = verificationDocument;
-        verificationUrl = null;
+        verificationUrl = null; externalVerificationDestination = null;
         if (url == null || !sameVerification(url, document, expectedStep, run)) return;
         new AlertDialog.Builder(themedContext(), dialogTheme()).setTitle("登录验证完成了吗？")
             .setMessage("如果已在邮箱或系统浏览器完成验证，继续后会重新检查这里的登录状态。登录状态仍以当前网页为准。")
             .setPositiveButton("已完成，继续", (ignored, which) -> {
                 if (!sameVerification(url, document, expectedStep, run)) return;
                 loading = true; setPaused(true); readyKey = "";
-                web.reload(); actions.emit(new JSObject().put("action", "agent-resume"));
+                if (destination != null) web.loadUrl(destination); else web.reload();
+                actions.emit(new JSObject().put("action", "agent-resume"));
             }).setNegativeButton("尚未完成", null).show();
     }
     private Button button(LinearLayout row, String title, Runnable action) {
@@ -376,12 +438,12 @@ final class AssistantBrowserWindow {
         if (status == null) return;
         boolean hasPreviousPage = web.canGoBack() || parentWindows.containsKey(web);
         previousPage.setEnabled(hasPreviousPage); previousPage.setAlpha(hasPreviousPage ? 1f : .4f);
+        loginMethod.setVisibility(AssistantBrowserPolicy.authentication(web.getUrl()) ? android.view.View.VISIBLE : android.view.View.GONE);
+        loginMethod.setEnabled(!loading && !failed);
         boolean working = !failed && !loading && !paused && !agentRunId.isEmpty() && !userOnly(web.getUrl());
         status.setTypeface(null, working ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
         status.setTextColor(Color.parseColor(working ? darkTheme ? "#92d7d3" : "#1d707b" : darkTheme ? "#b5c8cc" : "#59727c"));
-        status.setText(failed ? "网页加载失败 · " + (!agentRunId.isEmpty() && !userOnly(web.getUrl()) ? "助手可继续" : "可重试或返回") : loading ? "正在加载网页…" : userOnly(web.getUrl()) ? (generalMode ? "请你完成登录或私密步骤，再点我继续" : AssistantBrowserPolicy.handoffReason(step, web.getUrl()) + " · 点桌宠查看") : paused || agentRunId.isEmpty() && "agent".equals(mode) ? "已暂停 · 点桌宠查看或继续
-" + agentPhase : !agentRunId.isEmpty() ? "小助手操作中 · 点桌宠查看或暂停
-" + agentPhase : "点桌宠继续当前步骤");
+        status.setText(taskFinished ? "本次网页任务已完成 · 可查看网页和对话" : failed ? "网页加载失败 · " + (!agentRunId.isEmpty() && !userOnly(web.getUrl()) ? "助手可继续" : "可重试或返回") : loading ? "正在加载网页…" : userOnly(web.getUrl()) ? (generalMode ? "请你完成登录或私密步骤，再点我继续" : AssistantBrowserPolicy.handoffReason(step, web.getUrl()) + " · 点桌宠查看") : paused || agentRunId.isEmpty() && "agent".equals(mode) ? "已暂停 · 点桌宠查看或继续\n" + agentPhase : !agentRunId.isEmpty() ? "小助手操作中 · 点桌宠查看或暂停\n" + agentPhase : "点桌宠继续当前步骤");
         progress.setVisibility((loading || !agentRunId.isEmpty() && !paused) && !failed ? android.view.View.VISIBLE : android.view.View.INVISIBLE);
         if (preview != null) preview.invalidate();
     }
@@ -401,6 +463,19 @@ final class AssistantBrowserWindow {
         text.setTextColor(Color.parseColor(darkTheme ? "#b5c8cc" : "#59727c"));
         ScrollView scroll = new ScrollView(themedContext()); scroll.addView(text);
         new AlertDialog.Builder(themedContext(), dialogTheme()).setTitle(stepTitle).setView(scroll).setPositiveButton("知道了", null).show();
+    }
+    private void chooseLoginMethod() {
+        String current = web.getUrl();
+        if (!AssistantBrowserPolicy.browseAllowed(current)) return;
+        new AlertDialog.Builder(themedContext(), dialogTheme()).setTitle("在系统浏览器继续")
+            .setMessage("登录、验证码或授权可在系统浏览器完成；返回后按当前网页核验。网页登录状态不会转交助手。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("打开系统浏览器", (ignored, which) -> {
+                if (!current.equals(web.getUrl()) || loading || failed) return;
+                externalVerificationDestination = step.startsWith("cf-") ? "https://dash.cloudflare.com/" : null;
+                try { activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(current))); }
+                catch (android.content.ActivityNotFoundException error) { externalVerificationDestination = null; message("没有可用的系统浏览器。"); }
+            }).show();
     }
     private int dialogTheme() { return darkTheme ? R.style.DiscordSetupDialogDark : R.style.DiscordSetupDialogLight; }
     private android.content.Context themedContext() { return new android.view.ContextThemeWrapper(activity, dialogTheme()); }
@@ -436,7 +511,7 @@ final class AssistantBrowserWindow {
     }
     void controls() {
         java.util.ArrayList<String> labels = new java.util.ArrayList<>();
-        labels.add("填好了，继续"); labels.add("切换步骤");
+        labels.add("填好了，继续"); if (!generalMode) labels.add("切换步骤");
         String url = web == null ? null : web.getUrl();
         boolean botPage = url != null && url.matches("https://discord.com/developers/applications/[0-9]{17,20}/bot");
         if (botPage) labels.add("加密保存当前 Bot Token");
@@ -451,6 +526,7 @@ final class AssistantBrowserWindow {
             }).setNegativeButton("关闭菜单", null).show();
     }
     private void continuePage() {
+        if (generalMode) { actions.emit(new JSObject().put("action", "agent-resume")); return; }
         if (loading || failed) { message("网页尚未加载成功，请先检查网络或重试。"); return; }
         boolean secretPage = "cf-secret".equals(step) && AssistantBrowserPolicy.secretScope(web.getUrl()) != null;
         if (secretPage && agentRunId.isEmpty()) {
@@ -661,10 +737,10 @@ final class AssistantBrowserWindow {
     void restore(boolean resume) {
         if (!suspended || dialog == null || web == null) return;
         suspended = false; dialog.show();
-        setPaused(!(resume && resumeAllowed && !loading && suspendedDocument == documentId && suspendedUrl != null && suspendedUrl.equals(web.getUrl()) && !AssistantBrowserPolicy.userOnly(step, web.getUrl())));
+        setPaused(!(resume && resumeAllowed && !loading && suspendedDocument == documentId && suspendedUrl != null && suspendedUrl.equals(web.getUrl()) && !userOnly(web.getUrl())));
         actions.emit(new JSObject().put("action", "visibility").put("visible", true));
         pageReady();
     }
-    void close() { closed = true; setPaused(true); clearChatPresentation(); if (dialog != null) dialog.hide(); actions.emit(new JSObject().put("action", "visibility").put("visible", false)); }
-    void destroy() { clearChatPresentation(); if (pet != null) pet.destroy(); if (dialog != null) { if (android.os.Build.VERSION.SDK_INT >= 33 && systemBack != null) dialog.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(systemBack); dialog.dismiss(); } if (web != null) { web.stopLoading(); web.destroy(); web = null; } }
+    void close() { agentRun(""); closed = true; setPaused(true); clearChatPresentation(); if (dialog != null) dialog.hide(); actions.emit(new JSObject().put("action", "visibility").put("visible", false)); }
+    void destroy() { clearChatPresentation(); if (pet != null) pet.destroy(); if (dialog != null) { if (android.os.Build.VERSION.SDK_INT >= 33 && systemBack != null) dialog.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(systemBack); dialog.dismiss(); } for (WebView tab : tabs.values()) { tab.stopLoading(); tab.destroy(); } tabs.clear(); tabIds.clear(); parentWindows.clear(); loadingWindows.clear(); web = null; }
 }

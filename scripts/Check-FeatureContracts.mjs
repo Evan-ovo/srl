@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { fileURLToPath, URL } from 'node:url'
+import { fileURLToPath, pathToFileURL, URL } from 'node:url'
+import { createRequire } from 'node:module'
 import { Buffer } from 'node:buffer'
 import process from 'node:process'
 import console from 'node:console'
@@ -123,16 +124,10 @@ export function validateFeatureContracts(snapshot, contracts, exists = () => tru
     if (app.visible) {
       const scopes = snapshot.appearance.filter((scope) => scope.appId === app.id)
       check(scopes.length === 1, `${app.id} 必须有唯一动态外观范围`)
-      if (contract.starter === 'available')
-        check(
-          scopes.length === 1 && snapshot.starterKeys.includes(scopes[0].value),
-          `${app.id} 外观示例来源漏接`,
-        )
-      else
-        check(
-          contract.starter === 'none' && Boolean(contract.starterReason?.trim()),
-          `${app.id} 未声明外观示例或缺省原因`,
-        )
+      check(
+        contract.cssReference === 'available' && snapshot.referenceKeys.includes(app.id),
+        `${app.id} CSS接口来源漏接`,
+      )
     }
   }
   const official = [...snapshot.officialIds].sort()
@@ -155,6 +150,7 @@ export function validateFeatureContracts(snapshot, contracts, exists = () => tru
 }
 
 export async function inspectFeatureContracts(root) {
+  const require = createRequire(import.meta.url)
   const compiled = await build({
     stdin: {
       contents: `export { FEATURE_APP_REGISTRY as apps } from './src/core/FeatureAppRegistry.ts';
@@ -162,7 +158,8 @@ export async function inspectFeatureContracts(root) {
         export { RESOURCE_TYPE as resourceTypes } from './src/types/Resource.ts';
         export { BACKUP_SCOPE_REGISTRY as backupScopes, toArchivePortableSelection as toArchive, toCloudContentSelection as toCloud } from './src/services/BackupScopeRegistry.ts';
         export { OFFICIAL_APP_IDS as officialIds } from './src/types/OfficialApp.ts';
-        export { OFFICIAL_APP_CONTENT_REVISIONS as revisions } from './src/core/OfficialAppContentRevision.ts';`,
+        export { OFFICIAL_APP_CONTENT_REVISIONS as revisions } from './src/core/OfficialAppContentRevision.ts';
+        export { createAppearanceReferenceCatalog } from './scripts/AppearanceReferenceCatalog.ts';`,
       resolveDir: root,
     },
     bundle: true,
@@ -170,6 +167,22 @@ export async function inspectFeatureContracts(root) {
     format: 'esm',
     write: false,
     logLevel: 'silent',
+    // Keep compiler packages at their installed Node entry; bundling SFC's optional
+    // template-engine adapters would require unrelated engines and duplicate compiler memory.
+    plugins: [
+      {
+        name: 'feature-contract-compilers',
+        setup(plugin) {
+          plugin.onResolve(
+            { filter: /^(?:@vue\/compiler-sfc|postcss|typescript)$/ },
+            ({ path }) => ({
+              path: pathToFileURL(require.resolve(path)).href,
+              external: true,
+            }),
+          )
+        },
+      },
+    ],
   })
   const metadata = await import(
     `data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`
@@ -179,7 +192,9 @@ export async function inspectFeatureContracts(root) {
   const snapshot = {
     ...metadata,
     appearance: metadata.appearanceScopes(),
-    starterKeys: declarationKeys(read('vite.config.ts'), 'appearanceStarterCssSources'),
+    referenceKeys: Object.entries(metadata.createAppearanceReferenceCatalog(root).scopes)
+      .filter(([, sources]) => sources.length > 0)
+      .map(([id]) => id),
     packageIds: declarationKeys(read('scripts/OfficialAppPackages.ts'), 'entries'),
     cleanupIds: cleanupAppIds(read('src/storage/OfficialAppDataStorage.ts')),
   }

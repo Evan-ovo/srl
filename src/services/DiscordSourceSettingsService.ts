@@ -185,6 +185,7 @@ export async function replaceDiscordSourceConnectionSettings(
   signal?: AbortSignal,
   credentialStore: LocalCredentialRepository = localCredentialStore,
   databaseChanged = false,
+  restoreInbox = false,
 ): Promise<DiscordSourceConnectionSettings | undefined> {
   return withSettingsWrite(async () => {
     await initializeStoredCredentials(credentialStore)
@@ -194,7 +195,14 @@ export async function replaceDiscordSourceConnectionSettings(
     const configured = Boolean(
       previous.applicationId || previous.publicKey || previous.botToken || previous.workerBaseUrl,
     )
-    if (configured && (databaseChanged || connectionIdentityChanged(previous, next))) {
+    if (
+      configured &&
+      (databaseChanged ||
+        connectionIdentityChanged(previous, next) ||
+        (restoreInbox &&
+          (previous.inboxLibraryId !== next.inboxLibraryId ||
+            previous.inboxSecret !== next.inboxSecret)))
+    ) {
       if (!(await preserve({ ...previous }))) return undefined
       signal?.throwIfAborted()
       const current = loadDiscordSourceConnectionSettings()
@@ -212,6 +220,7 @@ export async function replaceDiscordSourceConnectionSettings(
         credentialStore,
         true,
         databaseChanged,
+        restoreInbox,
       )
     } catch (error) {
       // Credentials and ordinary settings cannot share a transaction. Restore the old target.
@@ -237,6 +246,7 @@ async function persistDiscordSourceConnectionSettings(
   credentialStore: LocalCredentialRepository,
   preservedSwitch = false,
   databaseChanged = false,
+  restoreInbox = false,
 ): Promise<DiscordSourceConnectionSettings> {
   const previous = currentSettings ?? readStoredSettings()
   const sameInboxOwner =
@@ -250,11 +260,19 @@ async function persistDiscordSourceConnectionSettings(
   }
   const normalized = normalizeSettings({
     ...value,
-    inboxLibraryId: sameInboxOwner ? previous.inboxLibraryId : undefined,
-    inboxName: sameInboxOwner ? previous.inboxName : undefined,
-    inboxSecret: sameInboxOwner ? previous.inboxSecret : undefined,
-    inboxPairCode: sameInboxOwner ? previous.inboxPairCode : undefined,
-    inboxPairExpiresAt: sameInboxOwner ? previous.inboxPairExpiresAt : undefined,
+    inboxLibraryId: restoreInbox
+      ? value.inboxLibraryId
+      : sameInboxOwner
+        ? previous.inboxLibraryId
+        : undefined,
+    inboxName: restoreInbox ? value.inboxName : sameInboxOwner ? previous.inboxName : undefined,
+    inboxSecret: restoreInbox
+      ? value.inboxSecret
+      : sameInboxOwner
+        ? previous.inboxSecret
+        : undefined,
+    inboxPairCode: !restoreInbox && sameInboxOwner ? previous.inboxPairCode : undefined,
+    inboxPairExpiresAt: !restoreInbox && sameInboxOwner ? previous.inboxPairExpiresAt : undefined,
   })
   const changedIdentity = databaseChanged || connectionIdentityChanged(previous, normalized)
   if (!changedIdentity) {
@@ -272,7 +290,7 @@ async function persistDiscordSourceConnectionSettings(
   } else {
     await credentialStore.clear(CREDENTIAL_IDENTIFIER)
   }
-  if (!sameInboxOwner || normalized.credentialPersistence === 'session') {
+  if (!normalized.inboxSecret || normalized.credentialPersistence === 'session') {
     await credentialStore.clear(INBOX_CREDENTIAL_IDENTIFIER)
   } else if (normalized.inboxSecret) {
     await credentialStore.save(INBOX_CREDENTIAL_IDENTIFIER, normalized.inboxSecret)

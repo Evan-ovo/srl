@@ -67,6 +67,7 @@ defineExpose({ handleBack })
 <template>
   <section
     class="frontend-workshop-source-components mobile-dialog-viewport"
+    data-srl-controls
     role="dialog"
     aria-modal="true"
   >

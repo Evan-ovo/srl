@@ -125,6 +125,11 @@ vi.mock('../composables/UseConfirmDialog', () => ({
   useConfirmDialogState: () => ({ activeDialog: { value: undefined } }),
 }))
 vi.mock('../core/AppContainer', () => ({
+  resourceService: {
+    get: vi.fn(),
+    getSummary: vi.fn(),
+    listResourceListSummaries: vi.fn(async () => []),
+  },
   discordSetupService: discordSetup,
   productAssistantWorkspaceService: workspace,
   externalAppService: appOwner,
@@ -168,6 +173,40 @@ async function send(w: ReturnType<typeof render>, text = '卡片改浅紫') {
   await flushPromises()
 }
 describe('ProductAssistant chat', () => {
+  it('keeps a general task in the existing full chat with one webpage preview instead of a second pet window', async () => {
+    workspace.initialize.mockResolvedValueOnce({
+      id: 'general-chat',
+      title: '表单任务',
+      history: [],
+      input: '',
+      images: [],
+      updatedAt: 1,
+    })
+    vi.spyOn(nativeDiscordBrowser, 'hasDiscordSetupBrowser').mockReturnValue(true)
+    Object.assign(nativeDiscordBrowser.discordSetupSession, {
+      purpose: 'general',
+      active: true,
+      webStepActive: true,
+      assistantConversationId: 'general-chat',
+      browserVisible: false,
+    })
+    const wrapper = mount(ProductAssistant, {
+      props: { getContext: () => context, execute: vi.fn() },
+    })
+    try {
+      await flushPromises()
+      expect(wrapper.findAll('.assistant-browser-task-preview')).toHaveLength(1)
+      expect(wrapper.find('.assistant-return-browser').exists()).toBe(false)
+      expect(workspace.continueDiscordSetupConversation).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      Object.assign(nativeDiscordBrowser.discordSetupSession, {
+        purpose: 'discord-setup',
+        active: false,
+        webStepActive: false,
+      })
+    }
+  })
   it('executes queued webpage work in the retained hidden task chat without opening it or aborting when expanded', async () => {
     const value = {
       id: 'background-task',
@@ -1034,6 +1073,49 @@ describe('ProductAssistant chat', () => {
       )
       expect(run).not.toHaveBeenCalled()
       expect(w.findAll('[data-turn-id]')).toHaveLength(0)
+    } finally {
+      w.unmount()
+      run.mockRestore()
+    }
+  })
+  it('uses a reactive saved skill row without cloning a Vue proxy or starting a model request', async () => {
+    const run = vi.spyOn(ProductAssistantService.prototype, 'reply')
+    workspace.templates.mockResolvedValue([
+      {
+        id: 'skill',
+        name: '定位保存',
+        description: '先取证再复验',
+        mode: 'features',
+        steps: ['核对入口'],
+        capabilities: ['history'],
+        version: 2,
+      },
+    ])
+    const w = render()
+    try {
+      await flushPromises()
+      await w.get('[aria-label="聊天设置"]').trigger('click')
+      await w
+        .findAll('button')
+        .find((button) => button.text() === '任务模板›')!
+        .trigger('click')
+      await flushPromises()
+      await w.get('[aria-label="使用模板 定位保存"]').trigger('click')
+      await flushPromises()
+      expect(w.find('.chat-composer .assistant-task-context').exists()).toBe(false)
+      expect(w.find('[aria-label="退出技能 定位保存"]').exists()).toBe(false)
+      await w.get('[aria-label="聊天设置"]').trigger('click')
+      await flushPromises()
+      expect(w.find('[aria-label="退出技能 定位保存"]').exists()).toBe(true)
+      expect(w.get('[aria-label="发送消息"]').element).toHaveProperty(
+        'value',
+        '使用技能“定位保存”：先取证再复验',
+      )
+      expect(workspace.save.mock.calls.at(-1)?.[0].taskSkill).toMatchObject({
+        id: 'skill',
+        version: 2,
+      })
+      expect(run).not.toHaveBeenCalled()
     } finally {
       w.unmount()
       run.mockRestore()

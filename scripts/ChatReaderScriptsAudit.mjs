@@ -1,3 +1,4 @@
+import { importReaderFixtureFiles } from './ChatReaderAuditSupport.mjs'
 /* global document, window, requestAnimationFrame */
 import assert from 'node:assert/strict'
 import console from 'node:console'
@@ -94,7 +95,7 @@ try {
     (el) => el.tap(),
   )
   await page.goto(environment.baseUrl)
-  await page.getByLabel('选择单个资源文件，可多选').setInputFiles([
+  await importReaderFixtureFiles(page, [
     {
       name: '阅读脚本测试角色.json',
       mimeType: 'application/json',
@@ -121,7 +122,7 @@ try {
   const grant = page.getByRole('button', { name: '以后允许此权限', exact: true })
   await page.addLocatorHandler(grant, (el) => el.tap())
   await page.locator('.feature-app--reader').tap()
-  const app = page.frameLocator('.external-app-host__frame')
+  const app = page.locator('.chat-reader-app__view')
   await app.locator('[data-role="unbound"]').tap()
   await app.locator('[data-chat]').tap()
   await app
@@ -203,11 +204,11 @@ try {
       })
     await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     await touch.detach()
-    const readerFrame = await (
-      await page.locator('.external-app-host__frame').elementHandle()
-    ).contentFrame()
+    const readerFrame = page
     await readerFrame.waitForFunction(
-      (before) => document.querySelector('#sheet').scrollTop > before,
+      (before) =>
+        document.querySelector('.chat-reader-app__view').shadowRoot.querySelector('#sheet')
+          .scrollTop > before,
       before,
     )
   }
@@ -550,7 +551,7 @@ try {
         headers: { 'access-control-allow-origin': '*' },
       }),
     )
-    await page.getByLabel('选择单个资源文件，可多选').setInputFiles({
+    await importReaderFixtureFiles(page, {
       name: '真实柏柏脚本.json',
       mimeType: 'application/json',
       buffer: Buffer.from(

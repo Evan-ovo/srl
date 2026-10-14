@@ -217,7 +217,7 @@ async function importReceived() {
 </script>
 
 <template>
-  <details class="tavern-parcel">
+  <details class="tavern-parcel" data-srl-controls>
     <summary>
       <span><strong>加密暂存</strong><small>两端不方便同时在线时使用</small></span
       ><span class="tavern-parcel__chevron" aria-hidden="true">⌄</span>

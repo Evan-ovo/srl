@@ -1,6 +1,6 @@
 /* 资源详情、角色卡与开场白预览 */
 .resource-detail-overlay {
-  z-index: 24;
+  z-index: var(--layer-resource-detail);
 }
 
 .resource-detail__header {

@@ -41,6 +41,57 @@ function validate(value: unknown, expectedApplicationId?: string) {
   return receipt
 }
 describe('bundled external-page executor', () => {
+  it('understands general titles, body, forms, links, regions and slices without reading password values', () => {
+    const f = page(
+      '<title>资料查询</title><main><h1>结果</h1><p>提交已成功</p><section aria-label="详细资料"><p>' +
+        'abcdef '.repeat(900) +
+        '</p></section><form aria-label="查询"><label for="name">姓名</label><input id="name"><button>提交</button></form><a href="https://example.org/file.json" download>下载文件</a></main>',
+      'https://example.org/form',
+    )
+    const snapshot = f.run('inspect', { general: true, query: '提交已成功' })
+    expect(snapshot).toMatchObject({ title: '资料查询', pageAccess: 'public', searchMatched: true })
+    expect(snapshot.text).toContain('提交已成功')
+    expect(snapshot.regions).toBeDefined()
+    expect(snapshot.forms).toBeDefined()
+    expect(snapshot.links).toBeDefined()
+    const first = f.run('read-page', { general: true, offset: 0, limit: 400 })
+    expect(first.nextOffset).toBe(400)
+    const next = f.run('read-page', { general: true, offset: first.nextOffset, limit: 400 })
+    expect(next.text).not.toBe(first.text)
+    f.dom.window.close()
+  })
+  it('supports user-selected file uploads and returns a native key action rather than a fake default event', () => {
+    const f = page(
+      '<label for="file">附件</label><input id="file" type="file"><label for="name">姓名</label><input id="name">',
+      'https://example.org/form',
+    )
+    const snapshot = f.run('inspect', { general: true })
+    const controls = snapshot.controls as Array<{ target: string; label: string }>
+    const file = controls.find((control) => control.label === '附件')!,
+      name = controls.find((control) => control.label === '姓名')!
+    expect(f.run('upload', { general: true, ...file })).toMatchObject({
+      ok: true,
+      clickPoint: expect.any(Object),
+    })
+    expect(f.run('press', { general: true, nativeKey: true, key: 'Tab', ...name })).toMatchObject({
+      ok: true,
+      keyDispatch: true,
+    })
+    f.dom.window.close()
+  })
+  it('fills a normal general text area while retaining the Discord Wrangler-only path', () => {
+    const f = page(
+      '<label for="description">介绍</label><textarea id="description" name="content"></textarea>',
+      'https://example.org/form',
+    )
+    const snapshot = f.run('inspect', { general: true })
+    const control = (snapshot.controls as Array<{ target: string; label: string }>)[0]!
+    expect(f.run('fill', { general: true, ...control, value: 'ordinary text' })).toMatchObject({
+      ok: true,
+      filled: true,
+    })
+    f.dom.window.close()
+  })
   it('reports same-App authorization success without inspecting password or other field values', () => {
     const f = page(
       '<h1>成功！</h1><p>已获得授权并添加至您的 APP！</p><p>您现在可以关闭此窗口或标签页。</p><input type="hidden">',
@@ -2484,10 +2535,10 @@ describe('bundled external-page executor', () => {
         value.d1_databases[0].binding = 'OTHER'
       },
       (value: ReturnType<typeof filled>) => {
-        value.main = 'other.ts'
+        value.main = '../other.ts'
       },
       (value: ReturnType<typeof filled>) => {
-        value.vars.HANDOFF_TTL_SECONDS = '999'
+        value.vars.HANDOFF_TTL_SECONDS = '-999'
       },
     ]) {
       const value = filled()
@@ -2674,4 +2725,119 @@ describe('interaction configuration conflict', () => {
     expect(f.run('fill-endpoint', payload)).toMatchObject({ ok: true, filled: true })
     f.dom.window.close()
   })
+})
+
+// Actual saved configurations and owner repositories are equivalent paths, not tutorial exceptions.
+describe('goal-based configuration and repository evidence', () => {
+  it('accepts JSONC, custom names/date/entrypoint, extra bindings and an adjusted public TTL', () => {
+    const value = filled()
+    value.name = 'my-existing-worker'
+    value.main = 'dist/worker.js'
+    value.compatibility_date = '2026-10-01'
+    value.d1_databases[0].database_name = 'existing-db'
+    value.d1_databases.unshift({ binding: 'ANOTHER_DB', database_name: 'other' })
+    value.vars.EXTRA_LABEL = 'public-option'
+    value.vars.HANDOFF_TTL_SECONDS = '2400'
+    value.observability = { enabled: true }
+    const jsonc = '/* current config */' + JSON.stringify(value).replace(/}$/, ',}')
+    expect(validate(jsonc)).toMatchObject({ ok: true, errors: [] })
+  })
+  it('does not expose maintainer source ownership as a browser repository kind', () => {
+    const f = page(
+      '<meta name="user-login" content="account"><button>release</button><a href="/account/worker/commit/' +
+        'a'.repeat(40) +
+        '">commit</a>',
+      'https://github.com/account/worker',
+    )
+    expect(f.run('inspect').repository).toBeUndefined()
+    f.dom.window.close()
+  })
+  it('validates an already saved JSONC on the actual branch without opening the editor', () => {
+    const repo = 'test-user/renamed-bridge',
+      branch = 'release/stable',
+      value = filled()
+    const f = page(
+      '<textarea id="read-only-cursor-text-area"></textarea><a href="/' +
+        repo +
+        '/commit/' +
+        'b'.repeat(40) +
+        '">saved</a>',
+      'https://github.com/' + repo + '/blob/' + branch + '/wrangler.json',
+    )
+    f.document.querySelector('textarea')!.value = '// kept settings\n' + JSON.stringify(value)
+    const options = {
+      autonomous: true,
+      expectedFork: repo,
+      expectedBranch: branch,
+      expectedFile: 'wrangler.json',
+      expectedApplicationId: value.vars.DISCORD_APPLICATION_ID,
+      expectedPublicKey: value.vars.DISCORD_PUBLIC_KEY,
+      expectedDatabaseId: value.d1_databases[0].database_id,
+    }
+    expect(f.run('validate', options).ok).toBe(true)
+    expect(f.run('verify-step', { ...options, step: 'github-save' })).toMatchObject({
+      verified: true,
+      revision: 'b'.repeat(40),
+    })
+    expect(
+      f.run('verify-step', { ...options, expectedBranch: 'main', step: 'github-save' }).ok,
+    ).toBe(false)
+    f.dom.window.close()
+  })
+  it('preserves legitimate configuration, confirms parameter conflicts and rejects a changed editor after consent', () => {
+    const f = page('<textarea name="content"></textarea>')
+    const original = filled(),
+      target = filled()
+    original.name = 'my-worker'
+    original.vars.EXTRA_LABEL = 'keep'
+    original.vars.DISCORD_APPLICATION_ID = '2234567890123456789'
+    const edit = f.document.querySelector('textarea')!
+    edit.value = JSON.stringify(original)
+    const payload = {
+      template: JSON.stringify(target),
+      preserveConfiguration: true,
+      validateTemplate: true,
+    }
+    const conflict = f.run('template', payload)
+    expect(conflict).toMatchObject({ ok: false, configurationConflict: true })
+    expect(JSON.parse(edit.value).vars.DISCORD_APPLICATION_ID).toBe(
+      original.vars.DISCORD_APPLICATION_ID,
+    )
+    edit.value = edit.value.replace('my-worker', 'a-new-edit')
+    const changed = f.run('template', {
+      ...payload,
+      configurationConfirmation: conflict.configurationConfirmation,
+    })
+    expect(changed.ok).toBe(false)
+    expect(
+      f.run('template', {
+        ...payload,
+        configurationConfirmation: changed.configurationConfirmation,
+      }),
+    ).toMatchObject({ ok: true, written: true })
+    expect(JSON.parse(edit.value)).toMatchObject({
+      name: 'a-new-edit',
+      vars: { EXTRA_LABEL: 'keep', DISCORD_APPLICATION_ID: target.vars.DISCORD_APPLICATION_ID },
+    })
+    f.dom.window.close()
+  })
+})
+
+it('requires a separate full-replacement decision for a damaged configuration', () => {
+  const f = page('<textarea name="content"></textarea>')
+  const edit = f.document.querySelector('textarea')!
+  edit.value = '{ malformed draft'
+  const payload = {
+    template: JSON.stringify(filled()),
+    preserveConfiguration: true,
+    validateTemplate: true,
+  }
+  const first = f.run('template', payload)
+  expect(first).toMatchObject({ ok: false, configurationConflict: true, replacementRequired: true })
+  expect(edit.value).toBe('{ malformed draft')
+  expect(
+    f.run('template', { ...payload, configurationConfirmation: first.configurationConfirmation }),
+  ).toMatchObject({ ok: true, written: true })
+  expect(JSON.parse(edit.value).vars.DISCORD_APPLICATION_ID).toBe('1234567890123456789')
+  f.dom.window.close()
 })

@@ -66,6 +66,10 @@ const meanings: Record<string, string> = {
   '--dialog-border': '公共弹窗边框颜色',
   '--dialog-radius': '公共弹窗圆角',
   '--dialog-shadow': '公共弹窗阴影',
+  '--layer-resource-detail': '资源详情层级；子编辑器、对话框与普通图片查看器按此层派生',
+  '--layer-resource-editor': '资源详情内个人资源编辑和版本对比的层级，默认高于详情一层',
+  '--layer-resource-dialog': '资源详情内图库对话框的层级，默认高于详情六层',
+  '--layer-resource-viewer': '资源详情内普通图片查看器的层级，默认高于详情八层',
   '--notice-background': '通知与任务浮层背景',
   '--notice-border': '通知与任务浮层边框',
   '--notice-radius': '通知与任务浮层圆角',
@@ -284,7 +288,7 @@ export function createReferenceChapters(catalog: ReferenceCatalog): ReferenceCha
   })
 }
 
-export const CSS_REFERENCE_INTRO = `全局用 :root；APP 局部用 :scope，未改属性沿用全局。启动加载页 #srl-boot、本机准备页 #srl-native-preparation、系统迁移提示 .srl-native-migration-notice 使用全局 CSS；--boot-* 可单独改启动页。启动读取已保存的应用样式，试用未确认时恢复上一版，安全模式不应用自定义 CSS。CSS试用/启动恢复/Vue恢复提示位于受保护的 Shadow DOM，只能通过 --recovery-*、公共按钮与颜色变量改外观；普通选择器不能穿透保护层改内部布局。公共弹窗与通知需改全局。以下变量与选择器来自源码或已安装 APP 的实际 CSS；更具体的定义可能覆盖局部变量。带 .appearance-action-face 的按钮只给内层画背景和边框，外层 .appearance-action-hit 保持透明。Vue 的 :deep() / :global() 需转成普通 CSS 选择器。宿主 CSS 不能直接改独立 iframe、图片或作者作品内容。`
+export const CSS_REFERENCE_INTRO = `全局用 :root；APP 局部用 :scope，未改属性沿用全局。启动加载页 #srl-boot、本机准备页 #srl-native-preparation、系统迁移提示 .srl-native-migration-notice 使用全局 CSS；--boot-* 可单独改启动页。启动读取已保存的应用样式，试用未确认时恢复上一版，安全模式不应用自定义 CSS。CSS试用/启动恢复/Vue恢复提示位于受保护的 Shadow DOM，只能通过 --recovery-*、公共按钮与颜色变量改外观；普通选择器不能穿透保护层改内部布局。公共弹窗与通知需改全局。以下变量与选择器来自源码或已安装 APP 的实际 CSS；更具体的定义可能覆盖局部变量。带 .appearance-action-face 的按钮只给内层画背景和边框，外层 .appearance-action-hit 保持透明。 data-srl-controls 区域的普通按钮、文本输入、下拉框和文本域共用公共材质；返回键、页头动作、滑杆、色盘、复选框及开关不按普通文本控件处理。data-srl-dialog 标记公共弹窗材质；这些标记不控制卡片方向、尺寸或页面布局。Vue 的 :deep() / :global() 需转成普通 CSS 选择器。宿主 CSS 不能直接改独立 iframe、图片或作者作品内容。`
 export const CARD_REFERENCE = `卡片横竖方向只在手机宽度不超过 860px 生效。data-mobile-card-orientation：portrait / landscape / mixed；data-resource-card-height：natural / uniform / fixed。不要无条件写死 height、min-height、aspect-ratio 或加 !important，否则会覆盖系统切换。固定正文可按模式设置 --resource-card-fixed-body-length。`
 export function vueReferenceExample(chapter: ReferenceChapter): string {
   const title = JSON.stringify(chapter.scope.title).replaceAll('<', '\\u003c')

@@ -58,6 +58,7 @@ describe('current-view screenshot', () => {
       document.body.innerHTML =
         '<main class="feature-hub" data-feature-page="assistant"><div class="product-assistant"><header>蒜惹菈</header><article class="chat-message"><div class="chat-bubble"><p>HIDDEN_CHAT</p><button class="chat-image"><img src="data:image/png;base64,PRIVATE"></button></div></article><dialog class="chat-reasoning-viewer" open><pre>PRIVATE_REASONING</pre></dialog><textarea>PRIVATE_INPUT</textarea></div></main>'
       const chatScope = {
+        // Skill selection and selected source content are local chat data as well.
         value: 'app:assistant' as const,
         title: '蒜惹菈',
         selector: '.feature-hub[data-feature-page="assistant"]',
@@ -65,6 +66,9 @@ describe('current-view screenshot', () => {
         hint: '',
       }
       render.mockImplementation(async (node: HTMLElement) => {
+        for (const selector of ['.assistant-resource-citations', '.assistant-task-context'])
+          expect(node.querySelector<HTMLElement>(selector)?.style.visibility).toBe('hidden')
+        expect(node.querySelector('.assistant-reference-dialog')).toBeNull()
         expect(node.querySelector('.product-assistant')).not.toBeNull()
         expect(node.querySelector('.chat-reasoning-viewer')).toBeNull()
         expect(node.querySelector<HTMLElement>('.chat-bubble > p')!.style.visibility).toBe('hidden')
@@ -72,7 +76,16 @@ describe('current-view screenshot', () => {
         expect(node.querySelector('textarea')!.value).toBe('')
         return 'data:image/jpeg;base64,SHOT'
       })
+      document
+        .querySelector('.product-assistant')!
+        .insertAdjacentHTML(
+          'beforeend',
+          '<div class="assistant-resource-citations">PRIVATE_SOURCE</div><div class="assistant-task-context">PRIVATE_SKILL</div><dialog class="assistant-reference-dialog" data-sensitive open>RAW_RESOURCE</dialog>',
+        )
       await captureAssistantPage(chatScope, new AbortController().signal, currentView)
+      expect(
+        document.querySelector<HTMLElement>('.assistant-resource-citations')?.style.visibility,
+      ).toBe('')
       expect(document.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('PRIVATE_INPUT')
       expect(document.querySelector<HTMLElement>('.chat-bubble > p')!.style.visibility).toBe('')
       expect(document.querySelectorAll('.feature-hub')).toHaveLength(1)

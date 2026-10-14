@@ -6,11 +6,6 @@ declare module 'virtual:srl-preview-vendor-globals-source' {
   export default source
 }
 
-declare module 'virtual:srl-appearance-starter-css-source' {
-  const source: Record<string, string>
-  export default source
-}
-
 declare module 'virtual:srl-appearance-reference' {
   const catalog: import('./types/AppearanceReference').ReferenceCatalog
   export default catalog

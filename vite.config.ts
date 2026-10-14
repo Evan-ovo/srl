@@ -6,7 +6,7 @@ declare const caches: {
     delete(request: Request): Promise<boolean>
   }>
 }
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { buildDiscordManualWorkerSource } from './scripts/DiscordManualWorkerSource.ts'
 import { officialAppPackagesPlugin } from './scripts/OfficialAppPackages.js'
@@ -22,90 +22,7 @@ import buildInfo from './build-info.json' with { type: 'json' }
 
 const previewVendorGlobalsSourceId = 'virtual:srl-preview-vendor-globals-source'
 const resolvedPreviewVendorGlobalsSourceId = `\0${previewVendorGlobalsSourceId}`
-const appearanceStarterCssSourceId = 'virtual:srl-appearance-starter-css-source'
-const resolvedAppearanceStarterCssSourceId = `\0${appearanceStarterCssSourceId}`
 const startupPrecache = new Map<string, { url: string; revision: null; size: number }>()
-
-interface AppearanceStarterCssSource {
-  file: string
-  selectorHint?: RegExp
-}
-
-const appearanceStarterCssSources: Record<string, AppearanceStarterCssSource[]> = {
-  library: [
-    { file: 'AppShell.css', selectorHint: /\.(library|resource)-/u },
-    { file: 'ResourceList.css', selectorHint: /\.resource-/u },
-    { file: 'LayoutAndResponsive.css', selectorHint: /\.resource-/u },
-  ],
-  details: [{ file: 'ResourceDetails.css', selectorHint: /\.resource-detail/u }],
-  features: [{ file: 'FeatureDesktop.css', selectorHint: /\.feature-/u }],
-  draw: [{ file: 'FeatureDesktop.css', selectorHint: /\.(draw|gallery-reveal)/u }],
-  cabinet: [
-    {
-      file: 'FolderLibrary.css',
-      selectorHint: /\.(folder-library|visual-folder|cabinet-resource)/u,
-    },
-  ],
-  appearance: [{ file: 'AppearanceStudio.css', selectorHint: /\.(appearance|layout-settings)-/u }],
-  cloud: [{ file: 'CloudBackup.css', selectorHint: /\.cloud-/u }],
-  bridge: [{ file: 'TavernBridgeCenter.css', selectorHint: /\.tavern-bridge/u }],
-  stitch: [{ file: 'PresetStitcherApp.css', selectorHint: /\.stitch/u }],
-  frontend: [
-    { file: 'FrontendWorkshopBase.css', selectorHint: /\.frontend-workshop/u },
-    { file: 'FrontendWorkshopDelivery.css', selectorHint: /\.frontend-workshop/u },
-    { file: 'FrontendWorkshopResponsive.css', selectorHint: /\.frontend-workshop/u },
-  ],
-  persona: [{ file: 'UserPersonaApp.css', selectorHint: /\.persona-app/u }],
-  'app:imageGeneration': [
-    { file: 'ImageGenerationApp.css', selectorHint: /\.image-generation-app/u },
-  ],
-  'app:imageAlbum': [{ file: 'GeneratedImageAlbumApp.css', selectorHint: /\.generated-album/u }],
-  'app:extensions': [{ file: 'ExternalAppManager.css', selectorHint: /\.external-app-manager/u }],
-  settings: [
-    { file: 'AppearanceStudio.css', selectorHint: /\.(appearance|settings|layout-settings)-/u },
-    { file: 'LayoutAndResponsive.css', selectorHint: /\.layout-settings/u },
-  ],
-}
-
-function extractAppearanceStarterRules(css: string, selectorHint?: RegExp, limit = 40): string[] {
-  const rules: string[] = []
-  const source = css.replace(/\/\*[\s\S]*?\*\//gu, '')
-  for (const match of source.matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
-    const header = match[1]?.trim() ?? ''
-    if (header.startsWith('@') || header.includes('@') || header.includes(':root')) continue
-    if (!/\.[a-zA-Z_][\w-]*/u.test(header)) continue
-    if (selectorHint && !selectorHint.test(header)) continue
-    rules.push(`${header} {\n${match[2]?.trim() ?? ''}\n}`)
-    if (rules.length >= limit) break
-  }
-  return rules
-}
-
-function appearanceStarterCssSourcePlugin(): Plugin {
-  return {
-    name: 'srl-appearance-starter-css-source',
-    resolveId(id) {
-      return id === appearanceStarterCssSourceId ? resolvedAppearanceStarterCssSourceId : undefined
-    },
-    load(id) {
-      if (id !== resolvedAppearanceStarterCssSourceId) return undefined
-      const root = join(process.cwd(), 'src', 'styles')
-      return `export default ${JSON.stringify(
-        Object.fromEntries(
-          Object.entries(appearanceStarterCssSources).map(([scope, sources]) => [
-            scope,
-            sources
-              .flatMap(({ file, selectorHint }) =>
-                extractAppearanceStarterRules(readFileSync(join(root, file), 'utf8'), selectorHint),
-              )
-              .slice(0, 80)
-              .join('\n\n'),
-          ]),
-        ),
-      )}`
-    },
-  }
-}
 
 function previewVendorGlobalsSourcePlugin(): Plugin {
   return {
@@ -275,7 +192,6 @@ export default defineConfig({
         },
       },
     },
-    appearanceStarterCssSourcePlugin(),
     appearanceReferencePlugin(),
     // SRL-PUBLIC-SYNC: BEGIN REPLACE id=official-app-package-build
     officialAppPackagesPlugin(buildInfo.buildId),

@@ -45,6 +45,11 @@ class AppearanceTransactionManager {
   private rollbackActive?: () => void
   private keepActive?: () => void
   private undoConfirmed?: () => void
+  private pendingViewTrial = false
+
+  hasPendingViewTrial(): boolean {
+    return this.pendingViewTrial
+  }
 
   keep(): void {
     this.keepActive?.()
@@ -111,6 +116,7 @@ class AppearanceTransactionManager {
       localStorage.removeItem(PENDING_APPEARANCE_KEY)
       this.rollbackActive = undefined
       this.keepActive = undefined
+      this.pendingViewTrial = false
       if (keep) {
         localStorage.setItem(LAST_GOOD_APPEARANCE_KEY, options.nextCss)
         this.undoConfirmed = () => {
@@ -133,6 +139,7 @@ class AppearanceTransactionManager {
     root.querySelector('[data-rollback]')?.addEventListener('click', () => finish(false))
     this.rollbackActive = () => finish(false)
     this.keepActive = () => finish(true)
+    this.pendingViewTrial = options.previousViews !== undefined && !options.autoKeep
   }
 
   clear(css: string, apply: (value: string) => void, persist: (value: string) => void): void {

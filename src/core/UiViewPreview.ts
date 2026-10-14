@@ -2,6 +2,29 @@ import { appearanceScopes } from './AppearanceScopes'
 import type { CustomCssScope } from '../types/BrowserPreferences'
 import type { UiViewAction, UiViewSnapshot } from '../types/UiCustomization'
 import { createUiDomSession, UI_PRIVATE_SELECTOR } from '../services/UiViewDom'
+import { sanitizeCssForPreview } from '../utils/PreviewSafety'
+
+/** The live view and read-only preview consume the same loaded theme/APP styles. Never sent to AI. */
+export function readUiViewPreviewCss(allowRemoteResources: boolean): string {
+  const values: string[] = []
+  for (const sheet of [...document.styleSheets]) {
+    try {
+      values.push([...sheet.cssRules].map((rule) => rule.cssText).join('\n'))
+    } catch {
+      /* Cross-origin styles cannot be read by the host. */
+    }
+  }
+  const computed = getComputedStyle(document.documentElement)
+  const tokens = Array.from(computed)
+    .filter((property) => property.startsWith('--'))
+    .map((property) => `${property}:${computed.getPropertyValue(property)}`)
+    .join(';')
+  return sanitizeCssForPreview(`${values.join('\n')}\n:root{${tokens}}`, {
+    allowExternalResources: allowRemoteResources,
+    allowLocalResources: true,
+    preserveLength: true,
+  })
+}
 
 /** Editor-only snapshots never enter a theme, backup or live action session. */
 export function readUiViewPreview(scope: CustomCssScope, title: string, capture = true) {

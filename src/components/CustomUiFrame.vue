@@ -7,7 +7,7 @@ import type {
   UiViewSnapshot,
   UiNativePlacement,
 } from '../types/UiCustomization'
-import { compileCustomUiView } from '../services/UiCustomizationService'
+import { compileCustomUiView, customUiSourceKey } from '../services/UiCustomizationService'
 import { createUiViewDocument } from '../services/UiViewRuntime'
 
 const props = defineProps<{
@@ -15,6 +15,7 @@ const props = defineProps<{
   snapshot: UiViewSnapshot
   css?: string
   invoke?: (action: UiViewAction) => void | Promise<void>
+  prepared?: { key: string; source: string }
 }>()
 const emit = defineEmits<{
   ready: []
@@ -30,12 +31,14 @@ let generation = 0
 let nonce = ''
 let lastSequence = 0
 let disposed = false
+let rendered = false
 
 function release() {
   port?.close()
   port = undefined
   lastSequence = 0
   nonce = ''
+  rendered = false
   if (documentUrl.value) URL.revokeObjectURL(documentUrl.value)
   documentUrl.value = ''
 }
@@ -47,13 +50,20 @@ function fail(message: string) {
 const post = (type: string, value: Record<string, unknown>) =>
   port?.postMessage({ type, nonce, ...value })
 watch(
-  [() => JSON.stringify(props.view), () => previewPolicy.value.allowRemoteResources],
+  [
+    () => JSON.stringify(props.view),
+    () => props.prepared,
+    () => previewPolicy.value.allowRemoteResources,
+  ],
   async () => {
     const version = ++generation
     release()
     error.value = ''
     try {
-      const source = await compileCustomUiView(props.view)
+      const source =
+        props.prepared && props.prepared.key === customUiSourceKey(props.view)
+          ? props.prepared.source
+          : await compileCustomUiView(props.view)
       if (disposed || version !== generation) return
       documentUrl.value = URL.createObjectURL(
         new Blob([createUiViewDocument(source, previewPolicy.value.allowRemoteResources)], {
@@ -93,6 +103,8 @@ function connect(event: MessageEvent) {
     if (data.type === 'ready') {
       post('styles', { css: props.css || '' })
       post('state', { state: props.snapshot })
+    } else if (data.type === 'rendered' && !rendered) {
+      rendered = true
       emit('ready')
     } else if (data.type === 'native' && Array.isArray(data.regions)) emit('native', data.regions)
     else if (data.type === 'error') fail('自定义界面运行失败，原界面仍保留')

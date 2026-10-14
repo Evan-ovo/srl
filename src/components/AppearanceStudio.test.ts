@@ -295,7 +295,12 @@ describe('AppearanceStudio AI CSS owner', () => {
   })
   it('routes actual trial CSS through the existing event and protects unrelated CSS and stale proposals', async () => {
     const { wrapper, child, proposal, storage, preset, request, signal } = await setup()
-    expect((await child.props('execute')(proposal, request, signal)).status).toContain('已应用')
+    const evidence = await child.props('execute')(proposal, request, signal)
+    expect(evidence.status).toContain('已应用')
+    expect(evidence.data!.verification).toMatchObject({
+      available: false,
+      visualReview: '未视觉核验',
+    })
     const css = wrapper.emitted('save-assistant-css')![0]![0] as string
     expect(css).toContain('@scope (.library)')
     expect(css).toContain('background:purple')
@@ -474,7 +479,10 @@ describe('AppearanceStudio AI CSS owner', () => {
       signal,
     )
     expect(JSON.stringify(value)).toContain('resource-card')
-    expect(JSON.stringify(value)).not.toMatch(/PRIVATE|private-id|auth-portal|login-details|input/u)
+    expect(JSON.stringify(value)).not.toMatch(/PRIVATE|private-id|auth-portal|login-details/u)
+    expect(value.data!.nodes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ tag: 'input', control: 'text' })]),
+    )
     root.remove()
     wrapper.unmount()
   })

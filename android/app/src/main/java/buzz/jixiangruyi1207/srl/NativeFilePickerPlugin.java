@@ -21,6 +21,29 @@ import java.io.InputStream;
 /** Images use Android Photo Picker on API 33+; older Android falls back to read-only SAF. */
 @CapacitorPlugin(name = "NativeFilePicker")
 public class NativeFilePickerPlugin extends Plugin {
+    /** Same SAF owner for webpage uploads; the chosen URI never enters model/chat data. */
+    static Intent browserFileIntent(String[] types, boolean multiple) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+        java.util.ArrayList<String> accepted = new java.util.ArrayList<>();
+        if (types != null) for (String type : types) if (type != null && type.matches("[A-Za-z0-9!#$&^_.+*-]+/[A-Za-z0-9!#$&^_.+*-]+")) accepted.add(type);
+        if (!accepted.isEmpty()) intent.putExtra(Intent.EXTRA_MIME_TYPES, accepted.toArray(new String[0]));
+        return intent;
+    }
+    static Uri[] browserSelectedFiles(Intent data) {
+        java.util.ArrayList<Uri> files = new java.util.ArrayList<>();
+        if (data != null && data.getClipData() != null) for (int i = 0; i < data.getClipData().getItemCount(); i++) files.add(data.getClipData().getItemAt(i).getUri());
+        else if (data != null && data.getData() != null) files.add(data.getData());
+        for (Uri uri : files) if (uri == null || !"content".equals(uri.getScheme())) return null;
+        return files.isEmpty() ? null : files.toArray(new Uri[0]);
+    }
+    static androidx.activity.result.ActivityResultLauncher<Intent> registerBrowserPicker(
+            androidx.activity.ComponentActivity activity, java.util.function.Consumer<Uri[]> selected) {
+        return activity.getActivityResultRegistry().register("srl-assistant-browser-upload",
+            new androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+            result -> selected.accept(result.getResultCode() == Activity.RESULT_OK ? browserSelectedFiles(result.getData()) : null));
+    }
     private static final long MAX_IMAGE_BYTES = 64L * 1024L * 1024L;
     private static final long RETENTION_MS = 24L * 60L * 60L * 1000L;
 

@@ -23,7 +23,9 @@ describe('源码接口教程', () => {
     expect(
       catalog.scopes.frontendWorkshop!.some((path) => path.includes('FrontendWorkshopSource')),
     ).toBe(true)
-    expect(catalog.scopes.chatReader!.some((path) => path.includes('reader.css'))).toBe(true)
+    expect(
+      catalog.scopes.chatReader!.some((path) => path.includes('src/reader/ChatReader.css')),
+    ).toBe(true)
     const chapters = createReferenceChapters(catalog)
     expect(
       chapters

@@ -116,6 +116,13 @@ watch(
 )
 watch(assistantVisible, (visible) => emit('assistant-visibility', visible), { immediate: true })
 watch(assistantBusy, (busy) => emit('assistant-activity', busy), { immediate: true })
+function forwardAssistantAppearance(
+  value: string,
+  options?: import('../types/UiCustomization').UiApplyOptions,
+) {
+  if (options) emit('save-assistant-css', value, options)
+  else emit('save-assistant-css', value)
+}
 </script>
 
 <template>
@@ -348,7 +355,7 @@ watch(assistantBusy, (busy) => emit('assistant-activity', busy), { immediate: tr
       @update:no-image-resource-cover-mode="emit('update:noImageResourceCoverMode', $event)"
       @update:ui-font-scale="emit('update:uiFontScale', $event)"
       @save-css="saveAppearance"
-      @save-assistant-css="emit('save-assistant-css', $event)"
+      @save-assistant-css="forwardAssistantAppearance"
       @assistant-visibility="setAssistantVisible($event, assistantPage)"
       @assistant-activity="setAssistantActivity($event, assistantPage)"
     />

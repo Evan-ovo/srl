@@ -1,4 +1,4 @@
-:root {
+:host {
   --reader-safe-top: env(safe-area-inset-top, 0px);
   --reader-safe-bottom: env(safe-area-inset-bottom, 0px);
   --paper: #f6f3ec;
@@ -24,10 +24,10 @@
 * {
   box-sizing: border-box;
 }
-html[data-reader-starting] body {
+.chat-reader-surface[data-reader-starting] {
   visibility: hidden;
 }
-body {
+.chat-reader-surface {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
@@ -98,7 +98,7 @@ svg {
 .library {
   position: relative;
   isolation: isolate;
-  min-height: 100dvh;
+  min-height: 100%;
   max-width: 820px;
   margin: 0 auto;
   padding: 0 34px 48px;
@@ -409,7 +409,7 @@ svg {
   line-height: 1.8;
 }
 #reader {
-  position: fixed;
+  position: absolute;
   inset: 0;
   background: var(--paper);
   z-index: 3;
@@ -1442,4 +1442,15 @@ button {
 .reader-rule-group-body {
   padding: 0 14px 14px;
   border-top: 1px solid var(--line);
+}
+
+:host {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+.chat-reader-surface {
+  position: relative;
+  height: 100%;
+  overflow: auto;
 }

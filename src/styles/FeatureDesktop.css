@@ -1988,9 +1988,6 @@ body.draw-reveal-open {
 .feature-hub[data-feature-page='home'] .feature-app {
   min-width: 0;
   min-height: 8.5rem;
-}
-
-.feature-hub[data-feature-page='home'] .feature-app {
   gap: 0.25rem;
   padding: 0.35rem 0.1rem;
 }

@@ -769,6 +769,7 @@ onUnmounted(() => {
     <section
       v-if="sourcePreviewOpen && (sourceDocument || sourceLookupState === 'error')"
       class="frontend-workshop-source-session__preview"
+      data-srl-controls
       role="dialog"
       aria-modal="true"
       aria-label="源码运行预览"

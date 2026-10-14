@@ -111,6 +111,8 @@ export function useProductAssistantContext(options: {
         .flatMap((turn) => turn.designReferences ?? [])
         .map(({ id }) => id),
       'custom-tools-v1',
+      request.taskSkill ? [request.taskSkill.id, request.taskSkill.version] : null,
+      request.referenceResources?.map((item) => [item.id, item.contentHash]),
     ])
     const previous = await reviewedSummary(request)
     const prepared = withAssistantSummary(request, previous)
@@ -141,6 +143,9 @@ export function useProductAssistantContext(options: {
           (turn) => turn.role === 'user' && !turn.contextExcluded && turn.designReferences?.length,
         )
           ? '附加的 JSON 设计参考会作为风格数据发送给当前模型，不会执行文件内容。'
+          : '',
+        request.referenceResources?.length
+          ? `选定的${request.referenceResources.length}份资料：仅名称和按需检索片段会发送给该模型，不执行资料代码。`
           : '',
       ]
         .filter(Boolean)

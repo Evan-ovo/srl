@@ -31,6 +31,7 @@ function setCollapsed(value: boolean): void {
 <template>
   <aside
     class="frontend-workbench__tool-rail is-left"
+    data-srl-controls
     :class="{ 'is-collapsed': collapsed }"
     aria-label="快捷工具"
   >

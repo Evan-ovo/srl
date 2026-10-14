@@ -23,6 +23,17 @@ vi.mock('./LocalCredentialStore', () => ({
 }))
 vi.mock('../core/LibraryContainer', () => ({
   resourceService: {
+    listResourceListSummaries: async () =>
+      [...state.documents].map(([id, doc]) => ({
+        id,
+        name: doc.name,
+        type: 'secret',
+        updatedAt: 1,
+      })),
+    getResourceListSummary: async (id: string) =>
+      state.documents.has(id)
+        ? { id, type: 'secret', name: state.documents.get(id)!.name }
+        : undefined,
     get: async (id: string) => (state.documents.has(id) ? { id, type: 'secret' } : undefined),
   },
 }))
@@ -49,6 +60,37 @@ beforeEach(() => {
 })
 describe('deployment parameters reuse personal secret resources', () => {
   const token = `${'A'.repeat(24)}.${'B'.repeat(6)}.${'C'.repeat(32)}`
+  it('finds saved cards using only summaries and decrypts one selected snapshot locally', async () => {
+    await secretResourceService.setPassword('test-password')
+    const value = {
+      applicationId: '1234567890123456789',
+      publicKey: 'a'.repeat(64),
+      workerBaseUrl: 'https://old.example.workers.dev',
+      botToken: token,
+      inboxLibraryId: 'old-inbox-123',
+      inboxSecret: 'old-inbox-secret',
+      inboxName: '原收件箱',
+    }
+    const id = await owner.backupConnection!(value)
+    const list = await owner.listSavedConnections!('旧连接')
+    expect(list.cards).toHaveLength(1)
+    expect(JSON.stringify(list)).not.toContain(token)
+    expect(JSON.stringify(list)).not.toContain(value.inboxSecret)
+    expect(await owner.savedConnectionName!(id)).toContain('旧连接')
+    expect(await owner.readSavedConnection!(id)).toMatchObject(value)
+    secretResourceService.lock()
+    await expect(owner.readSavedConnection!(id)).rejects.toThrow('未解锁')
+  })
+  it('rejects incomplete selected deployment cards without inventing a Token or picking another card', async () => {
+    await secretResourceService.setPassword('test-password')
+    const id = await owner.save({
+      applicationId: '1234567890123456789',
+      publicKey: 'a'.repeat(64),
+      workerUrl: 'https://old.example.workers.dev',
+    })
+    await expect(owner.readSavedConnection!(id)).rejects.toThrow('缺少有效')
+    expect(state.documents.size).toBe(1)
+  })
   function transport(publicKey: string, value = token) {
     const key = crypto.getRandomValues(new Uint8Array(32)),
       iv = crypto.getRandomValues(new Uint8Array(12))

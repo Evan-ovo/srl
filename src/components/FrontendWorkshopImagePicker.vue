@@ -201,6 +201,7 @@ onUnmounted(() => {
 <template>
   <section
     class="frontend-image-picker mobile-dialog-viewport"
+    data-srl-controls
     role="dialog"
     aria-modal="true"
     aria-label="图片素材"

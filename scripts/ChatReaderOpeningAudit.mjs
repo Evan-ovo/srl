@@ -1,3 +1,4 @@
+import { importReaderFixtureFiles } from './ChatReaderAuditSupport.mjs'
 /* global requestAnimationFrame, document */
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
@@ -6,7 +7,7 @@ import { resolve } from 'node:path'
 /** Reproduce a tall HTML-only opening with a Tavern avatar/header and a slow author stylesheet. */
 export async function auditReaderOpening({ page, app, out }) {
   await page.reload()
-  await page.getByLabel('批量选择资源文件或备份包').setInputFiles({
+  await importReaderFixtureFiles(page, {
     name: '长开场分页.jsonl',
     mimeType: 'application/x-ndjson',
     buffer: Buffer.from(
@@ -155,15 +156,14 @@ export async function auditReaderOpening({ page, app, out }) {
     )
     await app.locator('[data-jump="1"]').tap()
     await Promise.all(requests)
-    const reader = await (
-      await page.locator('.external-app-host__frame').elementHandle()
-    ).contentFrame()
+    const reader = page
     for (let index = 0; index < 2; index++) {
       releases[index]()
       await reader.waitForFunction(
         (index) =>
           document
-            .querySelector('#readingFlow')
+            .querySelector('.chat-reader-app__view')
+            .shadowRoot.querySelector('#readingFlow')
             .shadowRoot.querySelector('[data-chat-frontend="' + index + '"]')
             .getBoundingClientRect().height >= 500,
         index,

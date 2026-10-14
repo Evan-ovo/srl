@@ -1,8 +1,11 @@
-.recycle-bin-overlay {
+:root body .editor-overlay.recycle-bin-overlay {
   z-index: 82;
-  padding: max(0.75rem, var(--safe-top)) max(0.75rem, var(--safe-right))
-    max(0.75rem, var(--safe-bottom)) max(0.75rem, var(--safe-left));
-  background: var(--overlay-background);
+  inset: var(--visual-viewport-offset-top) 0 auto;
+  height: var(--visual-viewport-height);
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  background: var(--dialog-background);
 }
 
 .recycle-bin-sheet .sr-only {
@@ -17,13 +20,18 @@
   border: 0;
 }
 
-.recycle-bin-sheet {
+.recycle-bin-overlay .recycle-bin-sheet {
   display: flex;
   flex-direction: column;
-  width: min(100%, 52rem);
-  max-height: min(48rem, calc(var(--app-viewport-height) - 1.5rem));
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  /* The overlay owns all four insets; generic mobile editor padding must not add them again. */
+  padding: clamp(1.25rem, 4vw, 1.75rem);
   overflow: hidden;
-  border-color: var(--dialog-border, var(--color-line-strong));
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   background: var(--dialog-background);
 }
 
@@ -246,15 +254,8 @@
 }
 
 @media (max-width: 640px) {
-  .recycle-bin-overlay {
-    align-items: stretch;
-    padding: 0;
-  }
-
-  .recycle-bin-sheet {
-    width: 100%;
-    max-height: var(--app-viewport-height);
-    border: 1px solid var(--dialog-border, var(--glass-border));
+  .recycle-bin-overlay .recycle-bin-sheet {
+    padding: 1.25rem var(--mobile-gutter);
   }
 
   .recycle-bin-summary {

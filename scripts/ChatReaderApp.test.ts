@@ -2,9 +2,18 @@ import { readFileSync } from 'node:fs'
 import { JSDOM } from 'jsdom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const root = new URL('../extensions/duleme/', import.meta.url)
-const html = readFileSync(new URL('index.html', root), 'utf8')
-const source = readFileSync(new URL('app.js', root), 'utf8')
+const root = new URL('../src/reader/', import.meta.url)
+const html =
+  '<!doctype html><html><head><style>' +
+  readFileSync(new URL('ChatReader.css', root), 'utf8') +
+  '</style></head><body>' +
+  readFileSync(new URL('ChatReader.html', root), 'utf8') +
+  '</body></html>'
+const source =
+  readFileSync(new URL('ChatReaderView.js', root), 'utf8').replace(
+    'export function mountChatReader',
+    'function mountChatReader',
+  ) + '\nmountChatReader(document.body, window.srlApp)'
 const windows: JSDOM[] = []
 afterEach(() => windows.splice(0).forEach((dom) => dom.window.close()))
 
@@ -31,6 +40,8 @@ async function reader(
     },
   })
   window.scrollTo = () => {}
+  document.body.scrollTo = () => {}
+  document.body.setAttribute('data-reader-starting', '')
   window.HTMLElement.prototype.scrollIntoView = () => {}
   window.HTMLDialogElement.prototype.showModal = function () {
     this.open = true
@@ -160,6 +171,8 @@ async function reader(
       capabilities: async () => ({ runtime: { network: true, builtinReader } }),
       storage: {
         get: async (key: string) => structuredClone(saved.get(key)),
+        getMany: async (keys: string[]) =>
+          Object.fromEntries(keys.map((key) => [key, structuredClone(saved.get(key))])),
         set: async (key: string, value: unknown) => {
           if (key === 'reader-index-v1') indexWrites.push(value as { resumeReading?: boolean })
           saved.set(key, structuredClone(value))
@@ -170,6 +183,20 @@ async function reader(
         readChat,
         thumbnail,
         list: listResources,
+        summaries: async (types: string[], ids?: string[]) =>
+          (await listResources({ types, ids, offset: 0, limit: 10000 })).items,
+        directory: async () => {
+          const chats = (await listResources({ types: ['chat'], offset: 0, limit: 10000 })).items
+          const ids = [
+            ...new Set(
+              chats.flatMap((c) => ('relatedResourceIds' in c ? c.relatedResourceIds : [])),
+            ),
+          ] as string[]
+          const characters = (
+            await listResources({ types: ['characterCard'], ids, offset: 0, limit: 10000 })
+          ).items
+          return { chats, characters }
+        },
       },
     },
   })
@@ -196,7 +223,7 @@ async function reader(
     )
   else
     await vi.waitFor(() =>
-      expect(document.querySelector('#readerSubtitle')?.textContent).toBeTruthy(),
+      expect(document.querySelector('#readerSubtitle')?.textContent).toMatch(/阅读|打码/),
     )
   const shadow = document.querySelector('#readingFlow')!.shadowRoot!
   const waitUntilReady = async () => {
@@ -236,15 +263,13 @@ describe('reader controls and identity display boundaries', () => {
     expect(app.listResources).toHaveBeenNthCalledWith(1, {
       types: ['chat'],
       offset: 0,
-      limit: 50,
-      snapshot: true,
+      limit: 10000,
     })
     expect(app.listResources).toHaveBeenNthCalledWith(2, {
-      snapshot: true,
       types: ['characterCard'],
       ids: ['role'],
       offset: 0,
-      limit: 50,
+      limit: 10000,
     })
     await app.click('#readerBack')
     await app.click('[data-note="chat"]')
@@ -424,11 +449,11 @@ describe('reader controls and identity display boundaries', () => {
       ['chat:chat', { position: { floor: 7, ratio: 0.4 } }],
     ])
     const app = await reader({}, saved, true, false, [], 0, true)
-    expect(app.document.documentElement.hasAttribute('data-reader-starting')).toBe(true)
-    expect(app.document.documentElement.classList.contains('builtin-shell')).toBe(true)
-    expect(app.document.documentElement.style.getPropertyValue('--font')).toBe('27px')
-    expect(app.document.documentElement.style.getPropertyValue('--leading')).toBe('2.3')
-    expect(app.document.documentElement.style.colorScheme).toBe('dark')
+    expect(app.document.body.hasAttribute('data-reader-starting')).toBe(true)
+    expect(app.document.body.classList.contains('builtin-shell')).toBe(true)
+    expect(app.document.body.style.getPropertyValue('--font')).toBe('27px')
+    expect(app.document.body.style.getPropertyValue('--leading')).toBe('2.3')
+    expect(app.document.body.style.colorScheme).toBe('dark')
     expect(app.document.querySelector('[data-role]')).toBeNull()
     expect(app.thumbnail).toHaveBeenCalledExactlyOnceWith('role')
     expect(app.setReaderNavigation.mock.calls.every(([state]) => state.page === 'reader')).toBe(
@@ -438,7 +463,7 @@ describe('reader controls and identity display boundaries', () => {
     app.releaseFirstRead()
     await app.waitUntilReady()
     await vi.waitFor(() => expect(app.setLoading).toHaveBeenCalledExactlyOnceWith(''))
-    expect(app.document.documentElement.hasAttribute('data-reader-starting')).toBe(false)
+    expect(app.document.body.hasAttribute('data-reader-starting')).toBe(false)
     expect(app.shadow.querySelector('[data-floor="7"]')).not.toBeNull()
   })
 
@@ -448,7 +473,7 @@ describe('reader controls and identity display boundaries', () => {
     ])
     const app = await reader({}, saved, false, true, [], 0, true)
     await vi.waitFor(() => expect(app.setLoading).toHaveBeenCalledExactlyOnceWith(''))
-    expect(app.document.documentElement.hasAttribute('data-reader-starting')).toBe(false)
+    expect(app.document.body.hasAttribute('data-reader-starting')).toBe(false)
     expect(app.document.querySelector('#toast')?.textContent).toContain('读取夹具暂时失败')
   })
 
@@ -512,7 +537,9 @@ describe('reader controls and identity display boundaries', () => {
     await vi.waitFor(() =>
       expect(app.readChat).toHaveBeenCalledWith(expect.objectContaining({ limit: 5 })),
     )
-    expect(app.document.querySelector('#prevPage')?.hasAttribute('hidden')).toBe(true)
+    await vi.waitFor(() =>
+      expect(app.document.querySelector('#prevPage')?.hasAttribute('hidden')).toBe(true),
+    )
     expect(app.shadow.querySelectorAll('[data-floor]')).toHaveLength(5)
 
     const viewport = app.document.querySelector('#readingViewport')!

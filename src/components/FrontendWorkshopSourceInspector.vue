@@ -559,7 +559,12 @@ defineExpose({ applyCanvasGesture })
         <small>拖动调大小 · 点按收起</small>
       </template>
     </button>
-    <div v-show="!collapsed" id="source-inspector-body" class="source-inspector-body">
+    <div
+      v-show="!collapsed"
+      id="source-inspector-body"
+      class="source-inspector-body"
+      data-srl-controls
+    >
       <div v-if="status || writeStatus" class="source-inspector-feedback" role="status">
         <span>{{ status || writeStatus }}</span>
         <button type="button" aria-label="关闭操作提示" @click="dismissStatus">×</button>
@@ -638,7 +643,7 @@ defineExpose({ applyCanvasGesture })
           </button>
           <small v-if="!canSaveAsComponent">请从元素列表选择能够准确定位的源码元素。</small>
         </form>
-        <nav class="source-inspector-tabs" aria-label="手动属性">
+        <nav class="source-inspector-tabs" data-srl-controls aria-label="手动属性">
           <button
             v-for="tab in [
               { id: 'content', label: '内容' },

@@ -89,7 +89,7 @@ async function save() {
 </script>
 
 <template>
-  <section v-if="greetings.length" class="fw-greeting-strip">
+  <section v-if="greetings.length" class="fw-greeting-strip" data-srl-controls>
     <nav aria-label="开场白列表">
       <button
         v-for="(_, index) in greetings.length + 1"

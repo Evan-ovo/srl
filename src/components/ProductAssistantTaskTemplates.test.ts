@@ -18,6 +18,32 @@ function setup() {
   return { template, workspace, w }
 }
 describe('task templates', () => {
+  it('edits a reusable skill with version and scoped capabilities', async () => {
+    const { w, workspace } = setup()
+    try {
+      await flushPromises()
+      await w.vm.newTemplate()
+      await flushPromises()
+      await w.get('[aria-label="模板名称"]').setValue('定位保存失败')
+      await w.get('[aria-label="模板操作步骤"]').setValue('核对入口\n原操作复验')
+      await w.get('input[type="checkbox"]').setValue(true)
+      await w.get('[aria-label="技能适用场景"]').setValue('保存报错时定位原因')
+      await w.get('[aria-label="技能工作模式"]').setValue('features')
+      await w.get('input[value="history"]').setValue(true)
+      await w.get('form').trigger('submit')
+      await flushPromises()
+      expect(workspace.saveTemplate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: '定位保存失败',
+          description: '保存报错时定位原因',
+          mode: 'features',
+          capabilities: ['history'],
+        }),
+      )
+    } finally {
+      w.unmount()
+    }
+  })
   it('uses a saved template only through an event and edits it without changing the original', async () => {
     const { w, template, workspace } = setup()
     try {

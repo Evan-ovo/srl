@@ -1,7 +1,10 @@
 .relay-worker-guide {
   position: fixed;
   z-index: 1250;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top) 0 auto;
+  height: var(--visual-viewport-height);
+  box-sizing: border-box;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;

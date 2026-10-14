@@ -536,8 +536,8 @@ async function transfer(kind: ReferenceExportKind, copy = false) {
                     作用范围：<code>{{ chapter.scope.selector }}</code>
                   </p>
                   <p v-if="chapter.scope.appId === 'chatReader'">
-                    阅读正文在独立阅读器中，宿主选择器不能跨
-                    iframe。正文请使用阅读器的外观设置；reader.css 中的变量属于阅读器内部。
+                    读了么使用宿主内置界面，正文样式由 Shadow DOM
+                    隔离。正文请使用阅读器的外观设置；ChatReader.css 中的变量属于阅读器内部。
                   </p>
                   <p v-if="mode === 'app' || chapter.scope.value === 'all'">
                     {{ CSS_REFERENCE_INTRO }}

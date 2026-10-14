@@ -35,8 +35,109 @@ import org.junit.runner.RunWith;
 /** Local HTML only, run on an explicitly selected isolated emulator; never logs into a site. */
 @RunWith(AndroidJUnit4.class)
 public class AssistantBrowserWindowTest {
+    @Test public void cancelledChatInputDoesNotDispatchOrRestoreAnOldRun() throws Exception {
+        AssistantBrowserWindow[] window = new AssistantBrowserWindow[1];
+        AtomicInteger dispatched = new AtomicInteger(); CountDownLatch rejected = new CountDownLatch(1);
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                window[0] = new AssistantBrowserWindow(activity, activity.getBridge().getWebView(), event -> {});
+                window[0].conversation("cancel-native-chat"); window[0].agentRun("old-focus-run");
+                window[0].open(null, "github-fork", "配置网页", "", new JSONArray(), "", false, false, false);
+                assertTrue(window[0].chatPresentation("compact", "cancel-native-chat", null));
+                window[0].dispatchChatInput(completed -> { dispatched.incrementAndGet(); completed.accept(true); }, accepted -> { assertFalse(accepted); rejected.countDown(); });
+                window[0].agentRun("new-focus-run");
+            });
+            assertTrue(rejected.await(5, TimeUnit.SECONDS)); assertEquals(0, dispatched.get());
+            scenario.onActivity(activity -> { assertEquals("new-focus-run", window[0].agentRunId); window[0].destroy(); });
+        }
+    }
+    @Test public void explicitContinueRestoresChatOrSuspendedPageWithoutReloading() throws Exception {
+        AssistantBrowserWindow[] window = new AssistantBrowserWindow[1];
+        CountDownLatch loaded = new CountDownLatch(1);
+        AtomicInteger documents = new AtomicInteger();
+        AtomicInteger chatRequests = new AtomicInteger();
+        String url = "https://github.com/example/repo";
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                window[0] = new AssistantBrowserWindow(activity, activity.getBridge().getWebView(), event -> {
+                    if ("quick-chat".equals(event.optString("action"))) chatRequests.incrementAndGet();
+                });
+                window[0].conversation("resume-native-chat"); window[0].agentRun("resume-native-run");
+                window[0].open(null, "github-fork", "配置网页", "", new JSONArray(), "", false, false, false);
+                WebViewClient client = window[0].web.getWebViewClient();
+                window[0].web.setWebViewClient(new WebViewClient() {
+                    @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) { return fixtureHtml("<body>已打开的配置表单</body>"); }
+                    @Override public void onPageStarted(WebView v, String target, Bitmap icon) { documents.incrementAndGet(); client.onPageStarted(v, target, icon); }
+                    @Override public void onPageFinished(WebView v, String target) { client.onPageFinished(v, target); loaded.countDown(); }
+                });
+                window[0].web.loadUrl(url);
+            });
+            assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+            onView(withContentDescription("蒜惹菈，点击对话，拖动移动")).perform(click());
+            scenario.onActivity(activity -> {
+                assertEquals(1, chatRequests.get());
+                assertTrue("pet click waits for the shared chat before hiding the browser", browserDialog(window[0]).isShowing());
+                WebView original = window[0].web;
+                int document = window[0].documentId, requests = documents.get();
+                assertTrue(window[0].chatPresentation("compact", "resume-native-chat", null));
+                window[0].open(null, "github-save", "下一配置步骤", "", new JSONArray(), "", false, false, false);
+                assertFalse(browserDialog(window[0]).isShowing());
+                window[0].open(null, "github-save", "继续配置", "", new JSONArray(), "", false, false, false, true);
+                assertTrue(browserDialog(window[0]).isShowing());
+                assertSame(original, window[0].web); assertEquals(document, window[0].documentId);
+                assertEquals(url, original.getUrl()); assertEquals(requests, documents.get());
+                assertTrue(window[0].suspend());
+                window[0].open(null, "github-save", "继续配置", "", new JSONArray(), "", false, false, false, true);
+                assertTrue(browserDialog(window[0]).isShowing());
+                assertFalse(window[0].paused); assertEquals("resume-native-run", window[0].agentRunId);
+                window[0].restore(false);
+                assertFalse("late restoration cannot undo explicit continuation", window[0].paused);
+                assertSame(original, window[0].web); assertEquals(document, window[0].documentId);
+                assertEquals(requests, documents.get()); window[0].destroy();
+            });
+        }
+    }
+    private static Dialog browserDialog(AssistantBrowserWindow window) {
+        try {
+            java.lang.reflect.Field field = AssistantBrowserWindow.class.getDeclaredField("dialog");
+            field.setAccessible(true); return (Dialog) field.get(window);
+        } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+    }
+    @org.junit.Test public void generalTaskUsesTrustedClickAndNativeKeyboardOnItsOwnWebView() throws Exception {
+        AssistantBrowserWindow[] window = new AssistantBrowserWindow[1]; CountDownLatch loaded = new CountDownLatch(1);
+        String html = "<meta name='viewport' content='width=device-width,initial-scale=1'><button style='width:200px;height:60px' onclick='document.body.dataset.clicked=event.isTrusted'>普通表单</button><input id='field'><script>document.querySelector('input').onkeydown=e=>{document.body.dataset.key=e.key;document.body.dataset.trusted=e.isTrusted}</script>";
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                window[0] = new AssistantBrowserWindow(activity, event -> {});
+                window[0].open(null, "browser-general", "网页任务", "原生通用执行器", new JSONArray(), "", false, false, true);
+                WebView view = window[0].web; WebViewClient original = view.getWebViewClient();
+                view.setWebViewClient(new WebViewClient() {
+                    @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest request) { return fixtureHtml(html); }
+                    @Override public void onPageStarted(WebView v, String url, Bitmap icon) { original.onPageStarted(v,url,icon); }
+                    @Override public void onPageFinished(WebView v, String url) { original.onPageFinished(v,url); loaded.countDown(); }
+                });
+                window[0].agentRun("general-native-run"); view.loadUrl("https://example.org/form");
+            });
+            assertTrue(loaded.await(15, TimeUnit.SECONDS));
+            CountDownLatch click = new CountDownLatch(1);
+            scenario.onActivity(activity -> window[0].web.evaluateJavascript("(()=>{const r=document.querySelector('button').getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2})})()", raw -> {
+                try { assertTrue(window[0].clickPublicTarget(new JSONObject(new org.json.JSONTokener(raw).nextValue().toString()), window[0].documentId, "general-native-run")); click.countDown(); }
+                catch (Exception e) { throw new AssertionError(e); }
+            }));
+            assertTrue(click.await(5, TimeUnit.SECONDS));
+            CountDownLatch focus = new CountDownLatch(1);
+            scenario.onActivity(activity -> window[0].dispatchChatInput(completed -> window[0].web.evaluateJavascript("document.querySelector('input').focus()", raw -> completed.accept(window[0].pressPublicKey("Enter", window[0].documentId, "general-native-run"))), accepted -> { assertTrue(accepted); focus.countDown(); }));
+            assertTrue(focus.await(5, TimeUnit.SECONDS));
+            CountDownLatch checked = new CountDownLatch(1);
+            scenario.onActivity(activity -> window[0].web.evaluateJavascript("JSON.stringify([document.body.dataset.clicked,document.body.dataset.key,document.body.dataset.trusted])", raw -> { try { JSONArray values = new JSONArray(new org.json.JSONTokener(raw).nextValue().toString()); assertEquals("true", values.getString(0)); assertEquals("Enter", values.getString(1)); assertEquals("true", values.getString(2)); checked.countDown(); } catch (Exception e) { throw new AssertionError(e); } }));
+            assertTrue(checked.await(5, TimeUnit.SECONDS));
+            scenario.onActivity(activity -> { window[0].close(); assertFalse(window[0].pressPublicKey("Enter", window[0].documentId, "general-native-run")); window[0].destroy(); assertEquals(0, window[0].tabSnapshot().length()); });
+        }
+    }
     @Test public void sharedChatRetainsThePageAndAgentUntilPreviewReturns() throws Exception {
         AssistantBrowserWindow[] window = new AssistantBrowserWindow[1]; WebView[] original = new WebView[1];
+        WebView[] chatWeb = new WebView[1];
         int[] document = new int[1];
         int[] viewport = new int[2];
         CountDownLatch loaded = new CountDownLatch(1);
@@ -44,7 +145,8 @@ public class AssistantBrowserWindowTest {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             scenario.onActivity(activity -> {
                 WebView app = activity.getBridge().getWebView();
-                app.loadDataWithBaseURL("https://localhost/", "<body style='background:#f2f9fa'><h1>蒜惹菈完整对话</h1><p>保留同一份聊天记录</p></body>", "text/html", "UTF-8", null);
+                chatWeb[0] = app;
+                app.loadDataWithBaseURL("https://localhost/", "<body style='background:#f2f9fa'><h1>蒜惹菈完整对话</h1><p>保留同一份聊天记录</p><form class='chat-composer'><textarea id='draft'>用户尚未发送的消息</textarea></form></body>", "text/html", "UTF-8", null);
                 window[0] = new AssistantBrowserWindow(activity, app, event -> {});
                 window[0].conversation("chat-native-test");
                 window[0].open(null, "cf-deploy", "配置 Worker", "本地回归", new JSONArray(), "", false, false, false);
@@ -80,14 +182,32 @@ public class AssistantBrowserWindowTest {
                 assertSame(original[0], window[0].web); assertEquals(document[0], window[0].documentId);
                 assertFalse(window[0].paused); assertEquals("chat-native-run", window[0].agentRunId);
             });
+            CountDownLatch focused = new CountDownLatch(1);
+            scenario.onActivity(activity -> {
+                chatWeb[0].requestFocus();
+                chatWeb[0].evaluateJavascript("document.querySelector('#draft').focus();document.querySelector('#draft').setSelectionRange(2,4)", raw -> focused.countDown());
+            });
+            assertTrue(focused.await(5, TimeUnit.SECONDS));
             CountDownLatch acted = new CountDownLatch(1);
             scenario.onActivity(activity -> original[0].evaluateJavascript("(()=>{const r=document.querySelector('button').getBoundingClientRect();return JSON.stringify({x:r.left+r.width/2,y:r.top+r.height/2})})()", raw -> {
-                try { JSONObject anchor = new JSONObject(new org.json.JSONTokener(raw).nextValue().toString()); assertTrue(window[0].clickPublicTarget(anchor, document[0], "chat-native-run")); acted.countDown(); } catch (org.json.JSONException error) { throw new AssertionError(error); }
+                try { JSONObject anchor = new JSONObject(new org.json.JSONTokener(raw).nextValue().toString()); window[0].dispatchChatInput(completed -> completed.accept(window[0].clickPublicTarget(anchor, document[0], "chat-native-run")), accepted -> { assertTrue(accepted); acted.countDown(); }); } catch (org.json.JSONException error) { throw new AssertionError(error); }
             }));
             assertTrue(acted.await(5, TimeUnit.SECONDS));
             CountDownLatch checked = new CountDownLatch(1);
-            scenario.onActivity(activity -> original[0].evaluateJavascript("document.body.dataset.clicked", raw -> { assertEquals("\"true\"", raw); checked.countDown(); }));
+            String[] clickResult = new String[1];
+            scenario.onActivity(activity -> original[0].evaluateJavascript("document.body.dataset.clicked", raw -> { clickResult[0] = raw; checked.countDown(); }));
             assertTrue(checked.await(5, TimeUnit.SECONDS));
+            assertEquals("\"true\"", clickResult[0]);
+            CountDownLatch draftChecked = new CountDownLatch(1);
+            String[] draftResult = new String[1];
+            scenario.onActivity(activity -> {
+                assertTrue("background action must return the chat input focus", chatWeb[0].hasFocus());
+                chatWeb[0].evaluateJavascript("JSON.stringify([document.activeElement.id,document.querySelector('#draft').value,document.querySelector('#draft').selectionStart,document.querySelector('#draft').selectionEnd])", raw -> { draftResult[0] = raw; draftChecked.countDown(); });
+            });
+            assertTrue(draftChecked.await(5, TimeUnit.SECONDS));
+            JSONArray draft = new JSONArray(new org.json.JSONTokener(draftResult[0]).nextValue().toString());
+            assertEquals("draft", draft.getString(0)); assertEquals("用户尚未发送的消息", draft.getString(1));
+            assertEquals(2, draft.getInt(2)); assertEquals(4, draft.getInt(3));
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             int[] previewBounds = new int[4];
             scenario.onActivity(activity -> {

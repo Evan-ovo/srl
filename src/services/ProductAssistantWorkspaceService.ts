@@ -17,6 +17,9 @@ import {
   MAX_ASSISTANT_TOOL_CALL_LIMIT,
 } from './ProductAssistantTools'
 import { taskCenter } from '../core/TaskCenter'
+import { normalizeAssistantTaskTemplate } from './ProductAssistantTask'
+import type { AssistantCapability } from './ProductAssistantTools'
+import type { AssistantReferenceResource } from './ProductAssistantReferences'
 
 export interface AssistantHistoryRecoveryResult {
   scanned: number
@@ -83,6 +86,8 @@ export interface AssistantConversation {
   projectId?: string
   projectVersion?: number
   contextSummary?: AssistantContextSummary
+  taskSkill?: AssistantTaskTemplate
+  referenceResources?: AssistantReferenceResource[]
 }
 export interface AssistantProjectReference {
   projectId: string
@@ -101,6 +106,10 @@ export interface AssistantTaskTemplate {
   id: string
   name: string
   steps: string[]
+  description?: string
+  mode?: AssistantMode
+  capabilities?: AssistantCapability[]
+  version?: number
 }
 export type AssistantConversationChangeListener = (
   conversation: AssistantConversation,
@@ -574,17 +583,7 @@ export class ProductAssistantWorkspaceService {
     return this.storage.templates()
   }
   async saveTemplate(value: AssistantTaskTemplate): Promise<void> {
-    const next = { id: value.id, name: value.name.trim(), steps: value.steps.map((s) => s.trim()) }
-    if (
-      !next.id ||
-      !next.name ||
-      next.name.length > 60 ||
-      !next.steps.length ||
-      next.steps.length > 20 ||
-      next.steps.some((s) => !s || s.length > 2000) ||
-      this.templateText(next).length > 8000
-    )
-      throw new Error('模板需有名称和 1–20 个步骤，总内容不超过 8000 字')
+    const next = normalizeAssistantTaskTemplate(value)
     await this.storage.putTemplate(next)
   }
   removeTemplate(id: string): Promise<void> {

@@ -18,6 +18,7 @@ export interface ExternalAppStorageAdapter {
   delete(id: string): Promise<void>
   clearData(appId: string): Promise<void>
   getData(appId: string, key: string): Promise<ExternalAppDataRecord | undefined>
+  getDataMany?(appId: string, keys: string[]): Promise<Array<ExternalAppDataRecord | undefined>>
   listData(appId: string): Promise<ExternalAppDataRecord[]>
   listDataAppIds?(): Promise<string[]>
   setData(record: ExternalAppDataRecord): Promise<void>

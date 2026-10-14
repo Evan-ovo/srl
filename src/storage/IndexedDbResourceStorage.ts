@@ -105,6 +105,13 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     await this.database.settings.delete(VERSION_MATCH_FINGERPRINT_CACHE_SETTING_ID)
   }
 
+  async getThumbnail(id: string): Promise<Blob | undefined> {
+    const summary = await this.getSummary(id)
+    if (summary?.thumbnailAssetId) return this.assets.getBlob(summary.thumbnailAssetId)
+    // Legacy embedded/encrypted records retain their established hydration route.
+    return (await this.get(id))?.thumbnailBlob
+  }
+
   repairThumbnailAssets(): Promise<number> {
     return repairThumbnailAssets(this.thumbnailContext())
   }

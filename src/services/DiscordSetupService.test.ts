@@ -2050,6 +2050,12 @@ describe('APK Discord setup workflow', () => {
     const tool = getAssistantRequestTools({
       canConfigureDiscordBrowser: true,
       mode: 'auto',
+      capabilities: ['discord'],
+      presetId: '',
+      appliedCss: '',
+      scopes: [],
+      css: {},
+      currentScope: '',
     } as Parameters<typeof getAssistantRequestTools>[0]).find(
       (item) => item.name === 'configure_discord_browser',
     )!
@@ -3936,7 +3942,11 @@ describe('APK Discord setup workflow', () => {
       getAssistantRequestTools(context).some((tool) => tool.name === 'configure_discord_browser'),
     ).toBe(false)
     expect(
-      getAssistantRequestTools({ ...context, canConfigureDiscordBrowser: true }).some(
+      getAssistantRequestTools({
+        ...context,
+        canConfigureDiscordBrowser: true,
+        capabilities: ['discord'],
+      }).some(
         (tool) => tool.name === 'configure_discord_browser',
       ),
     ).toBe(true)
@@ -3944,6 +3954,7 @@ describe('APK Discord setup workflow', () => {
       getAssistantRequestTools({
         ...context,
         canConfigureDiscordBrowser: true,
+        capabilities: ['discord'],
         toolCallingEnabled: false,
       }),
     ).toEqual([])

@@ -201,6 +201,7 @@ onBeforeUnmount(cancelVersionLongPress)
   <section
     v-show="!transferOpen"
     class="persona-app"
+    data-srl-controls
     :data-page="page"
     aria-labelledby="persona-app-title"
     :aria-busy="busy"
@@ -298,6 +299,8 @@ onBeforeUnmount(cancelVersionLongPress)
       >
         <form
           class="persona-app__rename-dialog"
+          data-srl-controls
+          data-srl-dialog
           role="dialog"
           aria-modal="true"
           aria-labelledby="persona-version-rename-title"

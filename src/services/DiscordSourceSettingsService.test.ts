@@ -21,6 +21,87 @@ class MemoryCredentialStore implements LocalCredentialRepository {
 }
 
 describe('DiscordSourceSettingsService', () => {
+  it('restores a selected old pairing through the same protected credentials writer after backing up the current target', async () => {
+    const store = new MemoryCredentialStore()
+    const service = await import('./DiscordSourceSettingsService')
+    const current = {
+      applicationId: 'new-app',
+      publicKey: 'new-key',
+      botToken: 'new-token',
+      workerBaseUrl: 'https://new.workers.dev',
+      credentialPersistence: 'local' as const,
+    }
+    await service.saveDiscordSourceConnectionSettings(current, store)
+    await service.saveDiscordInboxPairing(
+      {
+        libraryId: 'new-library',
+        secret: 'new-inbox',
+        name: '新',
+        code: 'expired-code',
+        expiresAt: 1,
+      },
+      store,
+    )
+    const backup = vi.fn(async () => true)
+    const previous = {
+      applicationId: 'old-app',
+      publicKey: 'old-key',
+      botToken: 'old-token',
+      workerBaseUrl: 'https://old.workers.dev',
+      inboxLibraryId: 'old-library',
+      inboxSecret: 'old-inbox',
+      inboxName: '旧',
+      credentialPersistence: 'local' as const,
+    }
+    await service.replaceDiscordSourceConnectionSettings(
+      previous,
+      backup,
+      undefined,
+      store,
+      false,
+      true,
+    )
+    expect(backup).toHaveBeenCalledWith(
+      expect.objectContaining({ botToken: 'new-token', inboxSecret: 'new-inbox' }),
+    )
+    expect(service.loadDiscordSourceConnectionSettings()).toMatchObject(previous)
+    expect(store.values.get('discord-source:inbox-secret')).toBe('old-inbox')
+    expect(localStorage.getItem('srl.discord-source.connection.v1')).not.toContain('old-inbox')
+    expect(service.loadDiscordSourceConnectionSettings().inboxPairCode).toBeUndefined()
+  })
+  it('leaves current settings intact when backup is declined, even for same-Worker pairing replacement', async () => {
+    const store = new MemoryCredentialStore(),
+      service = await import('./DiscordSourceSettingsService')
+    const current = {
+      applicationId: 'app',
+      publicKey: 'key',
+      botToken: 'token',
+      workerBaseUrl: 'https://same.workers.dev',
+    }
+    await service.saveDiscordSourceConnectionSettings(current, store)
+    await service.saveDiscordInboxPairing(
+      {
+        libraryId: 'current-library',
+        secret: 'current-inbox',
+        name: '当前',
+        code: '',
+        expiresAt: 1,
+      },
+      store,
+    )
+    const backup = vi.fn(async () => false)
+    const result = await service.replaceDiscordSourceConnectionSettings(
+      { ...current, inboxLibraryId: 'older-library', inboxSecret: 'older-inbox' },
+      backup,
+      undefined,
+      store,
+      false,
+      true,
+    )
+    expect(result).toBeUndefined()
+    expect(backup).toHaveBeenCalledOnce()
+    expect(service.loadDiscordSourceConnectionSettings().inboxLibraryId).toBe('current-library')
+  })
   beforeEach(() => {
     localStorage.clear()
     vi.resetModules()

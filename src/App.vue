@@ -355,7 +355,9 @@ const assistantHubRetained = ref(false)
 const assistantFeatureHubProps = computed(() => ({
   navigateLibrary: navigateAssistantLibrary,
   assistantDestination: assistantDestination.value,
-  sharedAssistantChat: Boolean(assistantPreferences.value.desktopPet) || discordSetupSession.active,
+  sharedAssistantChat:
+    Boolean(assistantPreferences.value.desktopPet) ||
+    (discordSetupSession.active && discordSetupSession.purpose !== 'general'),
 }))
 const assistantFeatureHubListeners = computed(() => ({
   'assistant-destination-consumed': () => (assistantDestination.value = undefined),
@@ -363,8 +365,14 @@ const assistantFeatureHubListeners = computed(() => ({
   'assistant-activity': (value: boolean) => (assistantBusy.value = value),
   'assistant-retained': () => (assistantHubRetained.value = true),
   'open-assistant-chat': () => (assistantPetChatRequest.value += 1),
-  'save-assistant-css': (value: string) => saveCustomUiCss(value, { assistant: true }),
+  'save-assistant-css': saveAssistantAppearance,
 }))
+function saveAssistantAppearance(
+  value: string,
+  options?: import('./types/UiCustomization').UiApplyOptions,
+) {
+  saveCustomUiCss(value, { ...options, assistant: true })
+}
 
 watch(
   [
@@ -1213,7 +1221,10 @@ const isBatchBarVisible = computed(
 
     <ProductAssistantGuidance />
     <ProductAssistantPet
-      v-if="assistantPreferences.desktopPet || discordSetupSession.active"
+      v-if="
+        assistantPreferences.desktopPet ||
+        (discordSetupSession.active && discordSetupSession.purpose !== 'general')
+      "
       :open-chat-request="assistantPetChatRequest"
       :assistant-busy="assistantBusy"
       :hidden="fullAssistantVisible"
@@ -1227,7 +1238,7 @@ const isBatchBarVisible = computed(
       :custom-css="customUiCss"
       :navigate="navigatePetDestination"
       @activity="assistantBusy = $event"
-      @save-assistant-css="saveCustomUiCss($event, { assistant: true })"
+      @save-assistant-css="saveAssistantAppearance"
     />
 
     <nav v-if="!isFeatureAppActive" class="mobile-bottom-nav" aria-label="移动端主要操作">

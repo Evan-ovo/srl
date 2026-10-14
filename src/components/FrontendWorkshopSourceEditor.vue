@@ -301,6 +301,7 @@ watch(
 <template>
   <section
     class="frontend-workshop-source-editor mobile-dialog-viewport"
+    data-srl-controls
     role="dialog"
     aria-modal="true"
     aria-label="源码编辑"

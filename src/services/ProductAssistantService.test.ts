@@ -9,6 +9,39 @@ import { taskCenter } from '../core/TaskCenter'
 import { noticeCenter } from '../core/NoticeCenter'
 import { DEFAULT_MAIN_API_CONFIG, MainApiService } from './MainApiService'
 import { estimateAssistantInput } from './ProductAssistantContext'
+vi.mock('virtual:srl-appearance-reference', () => ({
+  default: {
+    version: 'test-host',
+    fingerprint: 'test-source',
+    scopes: { library: ['fixture.css:1'] },
+    sources: [
+      {
+        path: 'fixture.css:1',
+        rules: [
+          {
+            selector: '.resource-card',
+            conditions: '@media (max-width: 860px)',
+            declarations: { color: 'var(--color-accent)' },
+          },
+        ],
+      },
+    ],
+  },
+}))
+vi.mock('./AppearanceReferenceService', async (original) => {
+  const actual = await original<typeof import('./AppearanceReferenceService')>()
+  return {
+    ...actual,
+    createInstalledAppearanceReferenceReader: async (
+      catalog: Parameters<typeof actual.createAppearanceReferenceReader>[0],
+    ) =>
+      actual.createAppearanceReferenceReader(
+        catalog,
+        async () => [],
+        async () => '',
+      ),
+  }
+})
 import {
   buildAssistantMessages,
   parseAssistantPetSummary,
@@ -43,6 +76,320 @@ const result = (value: unknown, finishReason = 'stop') => ({
 })
 
 describe('mode loading and recalled context', () => {
+  it('美化默认只提供外观必要工具，不注入网页/功能/制作提示', () => {
+    const current = {
+      ...request,
+      canCustomizeVue: true,
+      canUseNetwork: true,
+      canSearchWeb: true,
+      canUseBrowser: true,
+      canRunPageScripts: true,
+      canConfigureDiscordBrowser: true,
+      canControlPet: true,
+      canCaptureCurrent: true,
+    }
+    expect(
+      getAssistantRequestTools(current)
+        .map(({ name }) => name)
+        .sort(),
+    ).toEqual(
+      [
+        'apply_preset',
+        'capture_current_ui',
+        'capture_ui',
+        'get_navigation_targets',
+        'get_ui_regions',
+        'inspect_ui',
+        'list_presets',
+        'open_feature',
+        'read_css',
+        'read_global_css',
+        'read_vue',
+        'save_as_new_preset',
+        'save_preset',
+        'select_mode',
+        'undo_css',
+        'update_css',
+        'update_global_css',
+      ].sort(),
+    )
+    const prompt = String(buildAssistantMessages(current)[0]!.content)
+    expect(prompt).toContain('优先CSS')
+    expect(prompt).toContain('现有元素的排版位置')
+    expect(prompt).toContain('不为普通排版或CSS暂未生效改写Vue')
+    expect(prompt).not.toMatch(/Cloudflare|网页代理|页面脚本权限|制作模式只改|桌宠表情/u)
+    expect(prompt).not.toContain('GitHub读取失败')
+    expect(estimateAssistantInput(current)).toBeLessThan(3300)
+  })
+  it('Vue入口先核对同一区域CSS，未核对不会读取源码或加载写入工具', async () => {
+    const current = { ...request, canCustomizeVue: true }
+    const vueCall = {
+      id: 'vue',
+      name: 'read_vue',
+      arguments: JSON.stringify({
+        scope: 'library',
+        reason: '修改标题真实文字',
+      }),
+    }
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce({ ...result('', 'tool_calls'), toolCalls: [vueCall] })
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          { id: 'other-css', name: 'read_css', arguments: '{"scope":"cabinet"}' },
+          { ...vueCall, id: 'other-vue' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          { id: 'css', name: 'read_css', arguments: '{"scope":"library"}' },
+          { ...vueCall, id: 'verified-vue' },
+        ],
+      })
+      .mockResolvedValueOnce(result('已核对CSS，需改标题源码'))
+    const execute = vi.fn().mockResolvedValue({
+      text: '读取',
+      data: {
+        revision: 'r1',
+        path: 'View.vue',
+        files: [{ path: 'View.vue' }],
+      },
+    })
+    await new ProductAssistantService({ completeWithUsage }).reply(
+      current,
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute },
+    )
+    expect(execute).toHaveBeenCalledOnce()
+    expect(execute.mock.calls[0]![0]).toMatchObject({ action: 'vue', operation: 'read' })
+    const submitted = completeWithUsage.mock.calls.map((call) =>
+      call[2].tools.map(({ name }: { name: string }) => name),
+    )
+    expect(submitted.slice(0, 3).every((names) => !names.includes('update_vue'))).toBe(true)
+    expect(submitted[3]).toContain('update_vue')
+    expect(JSON.stringify(completeWithUsage.mock.calls[1]![0])).toContain('请先read_css')
+  })
+  it('does not carry Discord scheduling notices or tutorial constraints into an active general browser task', () => {
+    const messages = buildAssistantMessages({
+      ...request,
+      mode: 'features',
+      activeBrowserPurpose: 'general',
+      history: [
+        { role: 'user', status: 'discord-setup-internal', text: 'OLD_DISCORD_SCHEDULE' },
+        { role: 'user', text: '帮我填写这个普通网站的表单' },
+      ],
+    })
+    expect(String(messages[0]!.content)).not.toContain('网页代理任务：')
+    expect(JSON.stringify(messages)).not.toContain('OLD_DISCORD_SCHEDULE')
+    expect(JSON.stringify(messages)).toContain('帮我填写这个普通网站的表单')
+  })
+  it('Vue只在明确读取后加载工具；写旧文件需读，源码上下文不隐式上传', async () => {
+    const current: AssistantRequest = {
+      ...request,
+      canCustomizeVue: true,
+      uiViews: {
+        cabinet: {
+          entryPath: 'Other.vue',
+          files: [{ path: 'Other.vue', contents: 'PRIVATE_UNRELATED_VUE' }],
+          enabled: false,
+          allowNetwork: false,
+        },
+      },
+    }
+    expect(getAssistantRequestTools(current).map((tool) => tool.name)).toContain('read_vue')
+    expect(getAssistantRequestTools(current).map((tool) => tool.name)).not.toContain('update_vue')
+    expect(JSON.stringify(buildAssistantMessages(current))).not.toContain('PRIVATE_UNRELATED_VUE')
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          { id: 'css', name: 'read_css', arguments: '{"scope":"library"}' },
+          {
+            id: 'read',
+            name: 'read_vue',
+            arguments: '{"scope":"library","reason":"修改标题真实文字"}',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          {
+            id: 'unread',
+            name: 'update_vue',
+            arguments: JSON.stringify({ scope: 'library', path: 'Page.js', code: 'new-helper' }),
+          },
+          {
+            id: 'write',
+            name: 'update_vue',
+            arguments: JSON.stringify({
+              scope: 'library',
+              path: 'View.vue',
+              code: '<template>新界面</template>',
+            }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce(result('草稿已改，尚未应用'))
+    const execute = vi.fn(async (command) =>
+      command.operation === 'read'
+        ? {
+            text: '读取',
+            data: {
+              revision: 'r1',
+              path: 'View.vue',
+              entry: 'View.vue',
+              code: 'ENTRY_CODE_ONLY',
+              files: [{ path: 'View.vue' }, { path: 'Page.js' }],
+            },
+          }
+        : { text: '修改', data: { revision: 'r2', applied: false } },
+    )
+    await new ProductAssistantService({ completeWithUsage }).reply(
+      current,
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute },
+    )
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(execute.mock.calls[1]![0]).toMatchObject({
+      action: 'vue',
+      operation: 'write',
+      path: 'View.vue',
+      revision: 'r1',
+    })
+    expect(
+      completeWithUsage.mock.calls[1]![2].tools.map((tool: { name: string }) => tool.name),
+    ).toEqual(expect.arrayContaining(['update_vue', 'preview_vue', 'apply_vue']))
+    expect(JSON.stringify(completeWithUsage.mock.calls[2]![0])).toContain(
+      '修改已有文件前必须read_vue',
+    )
+    expect(JSON.stringify(completeWithUsage.mock.calls[2]![0])).not.toContain(
+      'PRIVATE_UNRELATED_VUE',
+    )
+  })
+  it('取消Vue预览封口本轮，批次里的应用不会继续执行或请求模型重开', async () => {
+    const current = { ...request, canCustomizeVue: true }
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          { id: 'css', name: 'read_css', arguments: '{"scope":"library"}' },
+          {
+            id: 'read',
+            name: 'read_vue',
+            arguments: '{"scope":"library","reason":"新增菜单交互"}',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          { id: 'preview', name: 'preview_vue', arguments: '{"scope":"library"}' },
+          { id: 'apply', name: 'apply_vue', arguments: '{"scope":"library"}' },
+        ],
+      })
+    const execute = vi.fn(async (command) =>
+      command.operation === 'read'
+        ? {
+            text: '读取',
+            data: { revision: 'r1', path: 'View.vue', files: [{ path: 'View.vue' }] },
+          }
+        : { text: '取消预览', ok: false, cancelled: true },
+    )
+    const output = await new ProductAssistantService({ completeWithUsage }).reply(
+      current,
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute },
+    )
+    expect(execute.mock.calls.map(([command]) => command.operation)).toEqual(['read', 'preview'])
+    expect(completeWithUsage).toHaveBeenCalledTimes(2)
+    expect(output.text).toContain('未继续执行')
+  })
+  it('keeps appearance isolated even with every unrelated capability enabled, and switches explicitly for a browser task', async () => {
+    const current = {
+      ...request,
+      canUseNetwork: true,
+      canSearchWeb: true,
+      canRunPageScripts: true,
+      canConfigureDiscordBrowser: true,
+      canUseBrowser: true,
+    }
+    const names = getAssistantRequestTools(current).map((tool) => tool.name)
+    expect(names).not.toEqual(expect.arrayContaining(['browser']))
+    for (const name of [
+      'browser',
+      'configure_discord_browser',
+      'read_webpage',
+      'search_web',
+      'run_page_script',
+      'write_app_file',
+    ])
+      expect(names).not.toContain(name)
+    expect(names).toContain('select_mode')
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          {
+            id: 'switch',
+            name: 'select_mode',
+            arguments: '{"mode":"features","capability":"browser"}',
+          },
+        ],
+      })
+      .mockResolvedValueOnce(result('已切换功能任务'))
+    const execute = vi.fn()
+    await new ProductAssistantService({ completeWithUsage }).reply(
+      current,
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute },
+    )
+    expect(
+      completeWithUsage.mock.calls[1]![2].tools.map((tool: { name: string }) => tool.name),
+    ).toContain('browser')
+    expect(
+      completeWithUsage.mock.calls[1]![2].tools.map((tool: { name: string }) => tool.name),
+    ).not.toContain('update_css')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('does not revive excluded or old browser-task instructions in the appearance prompt', () => {
+    const current = {
+      ...request,
+      history: [
+        { role: 'user' as const, text: '旧网页任务', status: 'discord-setup-internal' },
+        { role: 'user' as const, text: '现在改外观' },
+      ],
+    }
+    expect(String(buildAssistantMessages(current)[0]!.content)).not.toContain('网页代理任务：')
+    expect(
+      String(buildAssistantMessages({ ...current, mode: 'features', contextStart: 1 })[0]!.content),
+    ).not.toContain('网页代理任务：')
+    expect(
+      String(buildAssistantMessages({ ...current, mode: 'features' })[0]!.content),
+    ).not.toContain('网页代理任务：')
+    expect(JSON.stringify(buildAssistantMessages({ ...current, mode: 'features' }))).not.toContain(
+      '旧网页任务',
+    )
+    expect(
+      String(
+        buildAssistantMessages({
+          ...current,
+          mode: 'features',
+          activeBrowserPurpose: 'discord-setup',
+        })[0]!.content,
+      ),
+    ).toContain('网页代理任务：')
+  })
   it.each(['auto', 'features', 'appearance', 'creation'] as const)(
     'keeps the default %s request focused without loading other mode prompts',
     (mode) => {
@@ -56,6 +403,7 @@ describe('mode loading and recalled context', () => {
       ...request,
       mode: 'features' as const,
       canConfigureDiscordBrowser: true,
+      activeBrowserPurpose: 'discord-setup' as const,
       history: [{ role: 'user' as const, text: '继续', status: 'discord-setup-internal' }],
     }
     expect(estimateAssistantInput(task)).toBeLessThan(5600)
@@ -71,7 +419,7 @@ describe('mode loading and recalled context', () => {
   it('keeps browser permissions conditional and tool guidance compact', () => {
     const prompt = String(buildAssistantMessages(request)[0]!.content)
     expect(prompt).not.toContain('登录、账号认证、后台权限、凭据获取不在操作范围')
-    expect(prompt).toContain('网页代理')
+    expect(prompt).not.toContain('网页代理')
     expect(
       PRODUCT_ASSISTANT_TOOLS.find((tool) => tool.name === 'configure_discord_browser')!.description
         .length,
@@ -80,6 +428,8 @@ describe('mode loading and recalled context', () => {
   it('prioritizes user corrections over internal scheduling only in a Discord task conversation', () => {
     const task = {
       ...request,
+      mode: 'features' as const,
+      activeBrowserPurpose: 'discord-setup' as const,
       history: [
         { role: 'user' as const, text: '网页已加载', status: 'discord-setup-internal' },
         { role: 'user' as const, text: '这个名称被网站拒绝了，先改名字' },
@@ -148,7 +498,13 @@ describe('mode loading and recalled context', () => {
   it.each(['｜DSML｜', '｜｜DSML｜｜ '])(
     'executes recovered %s browser calls and continues with the real receipt',
     async (marker) => {
-      const current = { ...request, canConfigureDiscordBrowser: true, petSummaryEnabled: true }
+      const current = {
+        capabilities: ['discord'] as const,
+        ...request,
+        mode: 'features' as const,
+        canConfigureDiscordBrowser: true,
+        petSummaryEnabled: true,
+      }
       const fetcher = vi
         .fn()
         .mockResolvedValueOnce(
@@ -278,7 +634,7 @@ describe('mode loading and recalled context', () => {
     const service = new ProductAssistantService({ completeWithUsage })
     for (const mode of ['auto', 'appearance', 'features', 'creation'] as const) {
       for (const canUseNetwork of [false, true]) {
-        const current = { ...request, mode, canUseNetwork }
+        const current = { ...request, mode, canUseNetwork, capabilities: ['source'] as const }
         await service.reply(current, DEFAULT_MAIN_API_CONFIG, signal(), {
           getContext: () => current,
           execute,
@@ -309,7 +665,11 @@ describe('mode loading and recalled context', () => {
         .mockResolvedValueOnce({
           ...result('', 'tool_calls'),
           toolCalls: [
-            { id: 'bridge-help', name: 'get_feature_help', arguments: '{"query":"酒馆互传"}' },
+            {
+              id: 'bridge-help',
+              name: 'get_feature_help',
+              arguments: '{"query":"酒馆互传","detail":"source"}',
+            },
           ],
         })
         .mockResolvedValueOnce(result('已找到入口文件。'))
@@ -372,9 +732,8 @@ describe('mode loading and recalled context', () => {
     )
     const value = JSON.parse(receipt.content)
     expect(value.guides[0].id).toBe('discord-posts')
-    expect(value.sourceRepositories.map(({ url }: { url: string }) => url)).toContain(
-      'https://github.com/jixiangruyi117/SRL-Discord-Bridge',
-    )
+    expect(value.sourceRepositories).toBeUndefined()
+    expect(value.guides[0].owners).toBeUndefined()
     expect(value.guides[0].steps.join()).toContain('保存帖子到SRL（云端暂存）')
     expect(value.guides[0].steps.join()).toContain('关联所选资源')
     expect(value.help[0]).toContain('功能 → 收件箱 → 连接设置')
@@ -406,21 +765,21 @@ describe('mode loading and recalled context', () => {
         const tools = options.tools as typeof PRODUCT_ASSISTANT_TOOLS
         const names = tools.map((tool) => tool.name)
         expect(names.includes('capture_ui')).toBe(enabled && mode === 'appearance')
-        for (const name of ['capture_current_ui', 'read_webpage', 'search_web'])
-          expect(names.includes(name)).toBe(enabled)
+        expect(names.includes('capture_current_ui')).toBe(enabled)
+        for (const name of ['read_webpage', 'search_web']) expect(names.includes(name)).toBe(false)
         const currentCapture = tools.find((tool) => tool.name === 'capture_current_ui')
         if (enabled) {
           expect(currentCapture?.description).toContain('遮蔽正文/图片/输入')
           if (mode === 'appearance')
             expect(tools.find((tool) => tool.name === 'capture_ui')?.description).toContain('本机')
-          expect(tools.find((tool) => tool.name === 'search_web')?.description).toContain('来源')
         }
-        expect(tools.find((tool) => tool.name === 'search_conversation')?.description).toContain(
-          '摘要',
-        )
-        expect(tools.find((tool) => tool.name === 'read_conversation')?.description).toContain(
-          '手动排除',
-        )
+        if (mode !== 'appearance') {
+          expect(names).not.toContain('search_conversation')
+          expect(names).not.toContain('read_conversation')
+        } else {
+          expect(names).not.toContain('search_conversation')
+          expect(names).not.toContain('read_conversation')
+        }
       }
       expect(completeWithUsage).toHaveBeenCalledTimes(2)
     },
@@ -460,25 +819,39 @@ describe('mode loading and recalled context', () => {
     expect(names).not.toContain('capture_current_ui')
     expect(names).toContain('get_navigation_targets')
   })
-  it('exposes the general browser tool only on a browser-capable device in every work mode', () => {
-    for (const mode of ['auto', 'appearance', 'features', 'creation'] as const) {
-      expect(getAssistantRequestTools({ ...request, mode }).map((tool) => tool.name)).not.toContain(
-        'browser',
-      )
-      const browser = getAssistantRequestTools({ ...request, mode, canUseBrowser: true })
-      expect(browser.map((tool) => tool.name)).toContain('browser')
-      expect(browser.find((tool) => tool.name === 'browser')!.parameters.required).toEqual([
-        'operation',
-      ])
-    }
-  })
   it('exposes page scripts only after explicit permission is enabled', () => {
     expect(getAssistantRequestTools(request).map((tool) => tool.name)).not.toContain(
       'run_page_script',
     )
     expect(
-      getAssistantRequestTools({ ...request, canRunPageScripts: true }).map((tool) => tool.name),
+      getAssistantRequestTools({
+        capabilities: ['script'] as const,
+        ...request,
+        mode: 'features' as const,
+        canRunPageScripts: true,
+      }).map((tool) => tool.name),
     ).toContain('run_page_script')
+  })
+  it('exposes the general browser tool only on a browser-capable device in every work mode', () => {
+    for (const mode of ['auto', 'appearance', 'features', 'creation'] as const) {
+      expect(getAssistantRequestTools({ ...request, mode }).map((tool) => tool.name)).not.toContain(
+        'browser',
+      )
+      const browser = getAssistantRequestTools({
+        ...request,
+        mode,
+        canUseBrowser: true,
+        capabilities: ['browser'],
+      })
+      if (mode === 'appearance') {
+        expect(browser.map((tool) => tool.name)).not.toContain('browser')
+        continue
+      }
+      expect(browser.map((tool) => tool.name)).toContain('browser')
+      expect(browser.find((tool) => tool.name === 'browser')!.parameters.required).toEqual([
+        'operation',
+      ])
+    }
   })
   it.each(['auto', 'appearance', 'features', 'creation'] as const)(
     'disables all tools in %s and stops unexpected provider calls without a second request',
@@ -547,7 +920,12 @@ describe('mode loading and recalled context', () => {
     arguments: JSON.stringify(args),
   })
   it('runs a page script only when the saved preference grants permission', async () => {
-    const current = { ...request, canRunPageScripts: true }
+    const current = {
+      capabilities: ['script'] as const,
+      ...request,
+      mode: 'features' as const,
+      canRunPageScripts: true,
+    }
     const completeWithUsage = vi
       .fn()
       .mockResolvedValueOnce({
@@ -575,7 +953,12 @@ describe('mode loading and recalled context', () => {
     expect(JSON.stringify(completeWithUsage.mock.calls[1]![0])).toContain('result')
   })
   it('keeps the browser tool available when its owner reports a user handoff', async () => {
-    const current = { ...request, canConfigureDiscordBrowser: true }
+    const current = {
+      capabilities: ['discord'] as const,
+      ...request,
+      mode: 'features' as const,
+      canConfigureDiscordBrowser: true,
+    }
     const completeWithUsage = vi
       .fn()
       .mockResolvedValueOnce({
@@ -610,10 +993,15 @@ describe('mode loading and recalled context', () => {
       ),
     ).toBe(true)
   })
-  it.each(['auto', 'appearance', 'features', 'creation'] as const)(
+  it.each(['auto', 'features', 'creation'] as const)(
     'retains setup status across a handoff in %s mode without asking to switch modes',
     async (mode) => {
-      const current = { ...request, mode, canConfigureDiscordBrowser: true }
+      const current = {
+        capabilities: ['discord'] as const,
+        ...request,
+        mode,
+        canConfigureDiscordBrowser: true,
+      }
       const completeWithUsage = vi
         .fn()
         .mockResolvedValueOnce({
@@ -640,7 +1028,12 @@ describe('mode loading and recalled context', () => {
     },
   )
   it('ends the ordinary chat turn when the owner hands configuration to the independent agent chat', async () => {
-    const current = { ...request, canConfigureDiscordBrowser: true }
+    const current = {
+      capabilities: ['discord'] as const,
+      ...request,
+      mode: 'features' as const,
+      canConfigureDiscordBrowser: true,
+    }
     const completeWithUsage = vi.fn().mockResolvedValueOnce({
       ...result('', 'tool_calls'),
       toolCalls: [
@@ -708,7 +1101,9 @@ describe('mode loading and recalled context', () => {
       { id: 'new', role: 'user', text: '回看摘要关键词' },
     ]
     const current = {
+      capabilities: ['history'] as const,
       ...request,
+      mode: 'auto' as const,
       history,
       contextStart: 2,
       contextSummary: '关键词：紫色，消息ID：old',
@@ -747,6 +1142,7 @@ describe('mode loading and recalled context', () => {
     expect(toolResults[2].ok).toBe(false)
   })
   it('continues with a large tool result without imposing an assistant input cap', async () => {
+    const current = { capabilities: ['memory'] as const, ...request, mode: 'auto' as const }
     const completeWithUsage = vi
       .fn()
       .mockResolvedValueOnce({
@@ -756,10 +1152,10 @@ describe('mode loading and recalled context', () => {
       .mockResolvedValueOnce(result('已完成'))
     const execute = vi.fn().mockResolvedValue({ text: '结果'.repeat(10000), ok: true })
     const output = await new ProductAssistantService({ completeWithUsage }).reply(
-      request,
+      current,
       DEFAULT_MAIN_API_CONFIG,
       signal(),
-      { getContext: () => request, execute },
+      { getContext: () => current, execute },
     )
     expect(completeWithUsage).toHaveBeenCalledTimes(2)
     expect(execute).toHaveBeenCalledOnce()
@@ -796,7 +1192,13 @@ describe('mode loading and recalled context', () => {
       role: 'user',
       text: `原文 ${index}`,
     }))
-    const current = { ...request, history, toolCallLimit: 16 }
+    const current = {
+      capabilities: ['history'] as const,
+      ...request,
+      mode: 'auto' as const,
+      history,
+      toolCallLimit: 16,
+    }
     const completeWithUsage = vi
       .fn()
       .mockResolvedValueOnce({
@@ -823,14 +1225,21 @@ describe('mode loading and recalled context', () => {
       false,
     )
     expect(
-      getAssistantRequestTools({ ...request, canUseNetwork: true }).some(
-        (tool) => tool.name === 'search_web',
-      ),
+      getAssistantRequestTools({
+        capabilities: ['source'] as const,
+        ...request,
+        mode: 'features' as const,
+        canUseNetwork: true,
+      }).some((tool) => tool.name === 'search_web'),
     ).toBe(false)
     expect(
-      getAssistantRequestTools({ ...request, canUseNetwork: true, canSearchWeb: true }).some(
-        (tool) => tool.name === 'search_web',
-      ),
+      getAssistantRequestTools({
+        capabilities: ['source'] as const,
+        ...request,
+        mode: 'features' as const,
+        canUseNetwork: true,
+        canSearchWeb: true,
+      }).some((tool) => tool.name === 'search_web'),
     ).toBe(true)
   })
 })
@@ -927,7 +1336,12 @@ describe('ProductAssistantService', () => {
   })
   it('advertises expression control only when allowed and rechecks the current flag before execution', async () => {
     for (const allowed of [false, true]) {
-      const current = { ...request, canControlPet: allowed }
+      const current = {
+        capabilities: ['pet'] as const,
+        ...request,
+        mode: 'auto' as const,
+        canControlPet: allowed,
+      }
       const owner = { ...host(), getContext: () => current }
       const completeWithUsage = vi
         .fn()
@@ -948,13 +1362,16 @@ describe('ProductAssistantService', () => {
       ).toBe(allowed)
       expect(owner.execute).toHaveBeenCalledTimes(allowed ? 1 : 0)
     }
-    const owner = { ...host(), getContext: () => ({ ...request, canControlPet: false }) }
+    const owner = {
+      ...host(),
+      getContext: () => ({ capabilities: ['pet'] as const, ...request, canControlPet: false }),
+    }
     const completeWithUsage = vi
       .fn()
       .mockResolvedValueOnce(tools(call('set_pet_expression', { expression: 'drool' })))
       .mockResolvedValueOnce(result('已关闭'))
     await new ProductAssistantService({ completeWithUsage } as never).reply(
-      { ...request, canControlPet: true },
+      { capabilities: ['pet'] as const, ...request, mode: 'auto', canControlPet: true },
       DEFAULT_MAIN_API_CONFIG,
       signal(),
       owner,
@@ -966,7 +1383,7 @@ describe('ProductAssistantService', () => {
       { expression: '../login' },
       { expression: 'curious', message: '啊'.repeat(33) },
     ]) {
-      const current = { ...request, canControlPet: true }
+      const current = { ...request, mode: 'auto' as const, canControlPet: true }
       const owner = { ...host(), getContext: () => current }
       const completeWithUsage = vi
         .fn()
@@ -1342,7 +1759,7 @@ describe('ProductAssistantService', () => {
       )
       .mockResolvedValueOnce(result('工具执行完成，结果留在本机。'))
     const response = await new ProductAssistantService({ completeWithUsage }).reply(
-      { ...request, mode: 'creation' },
+      { capabilities: ['custom-tools'] as const, ...request, mode: 'creation' },
       DEFAULT_MAIN_API_CONFIG,
       signal(),
       executor,
@@ -1361,6 +1778,7 @@ describe('ProductAssistantService', () => {
     expect(
       JSON.stringify(
         buildAssistantMessages({
+          capabilities: ['custom-tools'] as const,
           ...request,
           history: [{ role: 'assistant', text: response.text, toolResults: response.toolResults }],
         }),
@@ -1484,7 +1902,7 @@ describe('ProductAssistantService', () => {
         message.content?.includes('await window.srlApp.ready()'),
       ),
     ).toBe(true)
-    expect(PRODUCT_ASSISTANT_TOOLS).toHaveLength(44)
+    expect(PRODUCT_ASSISTANT_TOOLS).toHaveLength(52)
   })
   it('returns verified guidance then read-only diagnostics through native tool results', async () => {
     const completeWithUsage = vi
@@ -1500,7 +1918,7 @@ describe('ProductAssistantService', () => {
       .mockResolvedValue({ text: '已检查', data: { readOnly: true, notChecked: ['原件未读取'] } })
     owner.onExecution = vi.fn()
     const response = await new ProductAssistantService({ completeWithUsage }).reply(
-      request,
+      { ...request, mode: 'features' },
       DEFAULT_MAIN_API_CONFIG,
       signal(),
       owner,
@@ -1511,12 +1929,12 @@ describe('ProductAssistantService', () => {
     )
     expect(guide.guides[0]).toMatchObject({
       id: 'import',
-      owners: expect.arrayContaining(['src/composables/UseLibraryImport.ts']),
+      steps: expect.arrayContaining([expect.stringContaining('导入')]),
     })
     expect(owner.execute).toHaveBeenCalledOnce()
     expect(owner.execute).toHaveBeenCalledWith(
       { action: 'diagnose', feature: 'import', answer: expect.any(String) },
-      request,
+      { ...request, mode: 'features' },
       expect.any(AbortSignal),
     )
     expect(owner.onExecution).not.toHaveBeenCalled()
@@ -1550,6 +1968,7 @@ describe('ProductAssistantService', () => {
     owner.execute = vi.fn().mockResolvedValue({ text: '已检查', data: { readOnly: true } })
     const current = {
       ...request,
+      mode: 'features' as const,
       recentProblem: {
         kind: 'network' as const,
         label: 'PRIVATE_LOG',
@@ -1695,6 +2114,13 @@ describe('ProductAssistantService', () => {
     expect(JSON.stringify(transcript)).toContain('color:red')
     expect(JSON.stringify(transcript)).toContain('visibleToModel')
     expect(JSON.stringify(transcript)).not.toContain('LOCAL_IMAGE_SECRET')
+    const reference = transcript.find(
+      (message: { toolCallId?: string }) => message.toolCallId === 'read',
+    )
+    expect(JSON.parse(reference.content).reference).toMatchObject({
+      version: { version: 'test-host' },
+      rules: [expect.objectContaining({ conditions: '@media (max-width: 860px)' })],
+    })
     expect(completeWithUsage.mock.calls[0]![2].tools).toEqual(getAssistantRequestTools(request))
   })
   it('reads the current global CSS before applying a global update', async () => {
@@ -2158,7 +2584,12 @@ describe('online evidence transport', () => {
     toolCalls,
   })
   it('keeps different directory queries independent and reuses normalized equivalents', async () => {
-    const current = { ...request, canUseNetwork: true }
+    const current = {
+      capabilities: ['source'] as const,
+      ...request,
+      mode: 'features' as const,
+      canUseNetwork: true,
+    }
     const execute = vi.fn().mockResolvedValue({
       data: { kind: 'directory', ref: 'main', path: 'src/services', entries: [] },
     })
@@ -2193,7 +2624,12 @@ describe('online evidence transport', () => {
     expect(JSON.parse(receipt.content)).toMatchObject({ reused: true, previousToolCallId: 'first' })
   })
   it('reuses equivalent root reads but still fetches the next page and a different branch', async () => {
-    const current = { ...request, canUseNetwork: true }
+    const current = {
+      capabilities: ['source'] as const,
+      ...request,
+      mode: 'features' as const,
+      canUseNetwork: true,
+    }
     const execute = vi.fn().mockImplementation(async (command) => ({
       text: '已读取公开资料。',
       data: {
@@ -2242,12 +2678,22 @@ describe('online evidence transport', () => {
     })
     expect(completeWithUsage.mock.lastCall![2].tools.length).toBeGreaterThan(0)
   })
-  it('ends an all-duplicate read round with one tool-free answer and refuses further calls', async () => {
-    const current = { ...request, canUseNetwork: true }
-    const execute = vi.fn().mockResolvedValue({
+  it('reuses duplicate evidence and keeps necessary new reads available until the problem is located', async () => {
+    const current = {
+      capabilities: ['source'] as const,
+      ...request,
+      mode: 'features' as const,
+      canUseNetwork: true,
+    }
+    const execute = vi.fn().mockImplementation(async ({ args }) => ({
       text: '文件已读。',
-      data: { kind: 'file', ref: 'main', path: 'src/a.ts', text: 'FULL_EVIDENCE_ONCE' },
-    })
+      data: {
+        kind: 'file',
+        ref: 'main',
+        path: args.path,
+        text: args.path === 'src/a.ts' ? 'FULL_EVIDENCE_ONCE' : 'FAILURE_ENTRY',
+      },
+    }))
     const completeWithUsage = vi
       .fn()
       .mockResolvedValueOnce(
@@ -2264,18 +2710,24 @@ describe('online evidence transport', () => {
       )
       .mockResolvedValueOnce(
         readRound(
-          readCall('stubborn', { url: 'https://github.com/example/public-repo', path: 'src/a.ts' }),
+          readCall('necessary', {
+            url: 'https://github.com/example/public-repo',
+            path: 'src/b.ts',
+          }),
         ),
       )
+      .mockResolvedValueOnce(result('补读失败入口，原因仍需复验。'))
     const service = new ProductAssistantService({ completeWithUsage })
     const response = await service.reply(current, DEFAULT_MAIN_API_CONFIG, signal(), {
       getContext: () => current,
       execute,
     })
-    expect(execute).toHaveBeenCalledTimes(1)
-    expect(completeWithUsage).toHaveBeenCalledTimes(3)
-    expect(completeWithUsage.mock.lastCall![2].tools).toEqual([])
-    expect(response.text).toContain('已停止重复读取')
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect(completeWithUsage).toHaveBeenCalledTimes(4)
+    expect(
+      completeWithUsage.mock.lastCall![2].tools.map((tool: { name: string }) => tool.name),
+    ).toContain('read_webpage')
+    expect(response.text).toContain('仍需复验')
     expect(
       JSON.stringify(completeWithUsage.mock.lastCall![0]).match(/FULL_EVIDENCE_ONCE/g),
     ).toHaveLength(1)
@@ -2290,9 +2742,10 @@ describe('online evidence transport', () => {
       getContext: () => current,
       execute,
     })
-    expect(execute).toHaveBeenCalledTimes(2)
+    expect(execute).toHaveBeenCalledTimes(3)
   })
   it('allows history lookups while they remain within the shared tool budget', async () => {
+    const current = { capabilities: ['history'] as const, ...request, mode: 'auto' as const }
     const submittedTools: string[][] = []
     const completeWithUsage = vi.fn().mockImplementation(async (_messages, _config, options) => {
       submittedTools.push(options.tools.map((tool: { name: string }) => tool.name))
@@ -2310,19 +2763,24 @@ describe('online evidence transport', () => {
         : result('我已根据目前找到的内容回答。')
     })
     await new ProductAssistantService({ completeWithUsage }).reply(
-      request,
+      current,
       DEFAULT_MAIN_API_CONFIG,
       signal(),
       {
-        getContext: () => request,
+        getContext: () => current,
         execute: vi.fn().mockResolvedValue({ text: '操作完成' }),
       },
     )
     expect(completeWithUsage).toHaveBeenCalledTimes(3)
     expect(submittedTools[2]).toContain('search_conversation')
   })
-  it('stops GitHub reads after the first failed attempt and asks for one tool-free summary', async () => {
-    const current = { ...request, canUseNetwork: true }
+  it('stops failed GitHub requests while keeping other diagnosis tools available', async () => {
+    const current = {
+      capabilities: ['source'] as const,
+      ...request,
+      mode: 'features' as const,
+      canUseNetwork: true,
+    }
     const execute = vi.fn().mockResolvedValue({ ok: false, text: 'GitHub 读取失败' })
     const completeWithUsage = vi
       .fn()
@@ -2338,12 +2796,18 @@ describe('online evidence transport', () => {
     )
     expect(execute).toHaveBeenCalledTimes(1)
     expect(completeWithUsage).toHaveBeenCalledTimes(2)
-    expect(completeWithUsage.mock.lastCall![2].tools).toEqual([])
+    const names = completeWithUsage.mock.lastCall![2].tools.map(
+      (tool: { name: string }) => tool.name,
+    )
+    expect(names).not.toContain('read_webpage')
+    expect(names).toContain('diagnose_feature')
     expect(String(completeWithUsage.mock.lastCall![0][0].content)).toContain('GitHub 读取失败')
     expect(reply.text).toContain('没有取到源码')
   })
   it('enforces the browser tool limit locally without injecting counts into any model round', async () => {
     const current: AssistantRequest = {
+      activeBrowserPurpose: 'discord-setup' as const,
+      capabilities: ['discord'] as const,
       ...request,
       mode: 'features',
       canConfigureDiscordBrowser: true,
@@ -2384,7 +2848,7 @@ describe('online evidence transport', () => {
     expect(completeWithUsage.mock.calls[2]![2].tools.length).toBeGreaterThan(0)
     const toolInstructions = JSON.stringify(completeWithUsage.mock.calls[2]![2].tools)
     expect(toolInstructions).not.toContain('宿主每轮给准确工具计数')
-    expect(toolInstructions).toContain('工具次数由程序后台管理，不向模型注入计数或上限')
+    expect(toolInstructions).not.toContain('最多 3 次工具调用')
     expect(completeWithUsage.mock.calls[3]![2].tools).toEqual([])
     expect(reply.toolBudgetExhausted).toBe(true)
   })
@@ -2392,6 +2856,8 @@ describe('online evidence transport', () => {
     'keeps the authorized browser available after GitHub API %s in a setup task',
     async (scenario) => {
       const current: AssistantRequest = {
+        activeBrowserPurpose: 'discord-setup' as const,
+        capabilities: ['discord', 'source'] as const,
         ...request,
         mode: 'features',
         canUseNetwork: true,
@@ -2437,8 +2903,9 @@ describe('online evidence transport', () => {
       expect(tools.map((tool: { name: string }) => tool.name)).toContain(
         'configure_discord_browser',
       )
-      expect(tools.map((tool: { name: string }) => tool.name)).not.toContain('read_webpage')
-      expect(tools.map((tool: { name: string }) => tool.name)).not.toContain('search_web')
+      expect(tools.map((tool: { name: string }) => tool.name).includes('read_webpage')).toBe(
+        scenario === 'repeated',
+      )
       expect(execute).toHaveBeenCalledTimes(2)
       expect(execute.mock.calls[1]![0]).toMatchObject({
         action: 'discord-setup',
@@ -2449,7 +2916,13 @@ describe('online evidence transport', () => {
     },
   )
   it('allows more than four distinct GitHub reads within the shared tool budget', async () => {
-    const current = { ...request, canUseNetwork: true, toolCallLimit: 16 }
+    const current = {
+      capabilities: ['source'] as const,
+      ...request,
+      mode: 'features' as const,
+      canUseNetwork: true,
+      toolCallLimit: 16,
+    }
     const execute = vi
       .fn()
       .mockImplementation(async ({ args }: { args: Record<string, string> }) => ({
@@ -2476,7 +2949,7 @@ describe('online evidence transport', () => {
     )
     expect(execute).toHaveBeenCalledTimes(5)
   })
-  it('stops after two failed CSS writes and requests a tool-free explanation', async () => {
+  it('stops stacking failed CSS writes but keeps inspection available for locating the problem', async () => {
     const current = { ...request, globalCss: ':root{--accent:blue}' }
     const execute = vi.fn().mockRejectedValue(new Error('样式应用失败'))
     const toolCall = (id: string, name: string, args: unknown) => ({
@@ -2507,14 +2980,24 @@ describe('online evidence transport', () => {
     )
     expect(execute).toHaveBeenCalledTimes(2)
     expect(completeWithUsage).toHaveBeenCalledTimes(4)
-    expect(completeWithUsage.mock.lastCall![2].tools).toEqual([])
+    const names = completeWithUsage.mock.lastCall![2].tools.map(
+      (tool: { name: string }) => tool.name,
+    )
+    expect(names).not.toContain('update_global_css')
+    expect(names).toContain('inspect_ui')
+    expect(names).toContain('read_global_css')
     expect(String(completeWithUsage.mock.lastCall![0][0].content)).toContain(
       '美化写入已连续失败两次',
     )
     expect(reply.text).toContain('停止重试')
   })
   it('reuses a full-file read at explicit zero while keeping positive-offset fragments distinct', async () => {
-    const current = { ...request, canUseNetwork: true }
+    const current = {
+      capabilities: ['source'] as const,
+      ...request,
+      mode: 'features' as const,
+      canUseNetwork: true,
+    }
     const execute = vi.fn().mockResolvedValue({
       data: { kind: 'file', ref: 'main', path: 'src/a.ts', text: '真实源码' },
     })
@@ -2542,7 +3025,12 @@ describe('online evidence transport', () => {
     expect(JSON.parse(zero.content)).toMatchObject({ reused: true, previousToolCallId: 'full' })
   })
   it('accepts an explicit empty GitHub root path through the actual tool parameter validator', async () => {
-    const current = { ...request, canUseNetwork: true }
+    const current = {
+      capabilities: ['source'] as const,
+      ...request,
+      mode: 'features' as const,
+      canUseNetwork: true,
+    }
     const execute = vi.fn().mockResolvedValue({
       data: { kind: 'directory', entries: [{ path: 'README.md', type: 'file' }] },
     })
@@ -2579,7 +3067,13 @@ describe('online evidence transport', () => {
   it.each(['search_web', 'read_webpage'])(
     'passes actual %s content to the next model round',
     async (name) => {
-      const current = { ...request, canUseNetwork: true, canSearchWeb: true }
+      const current = {
+        capabilities: ['source'] as const,
+        ...request,
+        mode: 'features' as const,
+        canUseNetwork: true,
+        canSearchWeb: true,
+      }
       const owner: AssistantToolHost = { getContext: () => current, execute: vi.fn() }
       owner.getContext = () => current
       owner.execute = vi.fn().mockResolvedValue({

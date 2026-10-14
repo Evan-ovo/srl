@@ -104,7 +104,7 @@ export type FeatureHubEvents = {
   'update:noImageResourceCoverMode': [value: NoImageResourceCoverMode]
   'update:uiFontScale': [value: UiFontScale]
   'save-css': [value: string, options?: import('../types/UiCustomization').UiApplyOptions]
-  'save-assistant-css': [value: string]
+  'save-assistant-css': [value: string, options?: import('../types/UiCustomization').UiApplyOptions]
   'library-changed': []
   'import-files': [files: File[], onComplete?: () => void]
   'feature-app-active': [active: boolean]

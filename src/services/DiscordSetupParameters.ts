@@ -61,6 +61,15 @@ export function checkedSetupParameters(input: DiscordSetupParameters): DiscordSe
 }
 /** This adapter uses the existing resource and encryption owners, never another credential store. */
 export interface DiscordSetupParameterResources {
+  savedConnectionName?(id: string): Promise<string>
+  listSavedConnections?(
+    query?: string,
+    offset?: number,
+  ): Promise<{
+    cards: Array<{ id: string; name: string; createdAt?: number; updatedAt?: number }>
+    nextOffset: number | null
+  }>
+  readSavedConnection?(id: string, signal?: AbortSignal): Promise<DiscordSetupConnectionBackup>
   needsUnlock?(): boolean
   prepare(signal?: AbortSignal): Promise<void>
   read(id: string): Promise<DiscordSetupParameters>
@@ -83,6 +92,130 @@ export interface DiscordSetupParameterResources {
   ): Promise<void>
 }
 export const discordSetupParameterResources: DiscordSetupParameterResources = {
+  async savedConnectionName(id) {
+    const { resourceService } = await import('../core/LibraryContainer')
+    const resource = await resourceService.getResourceListSummary(id)
+    if (!resource || resource.type !== 'secret') throw new MissingDiscordSetupCardError()
+    return resource.name
+  },
+  async listSavedConnections(query = '', offset = 0) {
+    const { resourceService } = await import('../core/LibraryContainer')
+    const cards = (await resourceService.listResourceListSummaries({ types: ['secret'] }))
+      .filter((card) => !query || card.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('密钥列表页码无效')
+    return {
+      cards: cards
+        .slice(offset, offset + 30)
+        .map(({ id, name, createdAt, updatedAt }) => ({ id, name, createdAt, updatedAt })),
+      nextOffset: cards.length > offset + 30 ? offset + 30 : null,
+    }
+  },
+  async readSavedConnection(id, signal) {
+    const { resourceService } = await import('../core/LibraryContainer')
+    const { personalResourceService } = await import('../core/PersonalResourceContainer')
+    const resource = await resourceService.get(id)
+    if (!resource || resource.type !== 'secret') throw new MissingDiscordSetupCardError()
+    const document = await personalResourceService.read(resource)
+    await this.prepare(signal)
+    signal?.throwIfAborted()
+    const revealed = await secretResourceService.reveal(document)
+    const snapshot = revealed.find((field) => field.id === 'discord-connection-snapshot')
+    let connection: DiscordSetupConnectionBackup
+    if (snapshot) {
+      if (!snapshot.private) throw new Error('完整连接备份必须保持加密')
+      try {
+        connection = JSON.parse(snapshot.value)
+      } catch {
+        throw new Error('旧连接备份格式无效，未修改设置')
+      }
+    } else {
+      const aliases: Record<string, string[]> = {
+        'discord-applicationId': [
+          'applicationid',
+          'discordapplicationid',
+          'appid',
+          '应用id',
+          '应用程序id',
+        ],
+        'discord-publicKey': ['publickey', 'discordpublickey', '公钥'],
+        'discord-workerUrl': [
+          'workerurl',
+          'workerbaseurl',
+          'worker根网址',
+          'worker网址',
+          'worker链接',
+        ],
+        'discord-bot-secret': ['bottoken', 'discordbottoken', '机器人令牌', '机器人token'],
+      }
+      const value = (id: string) => {
+        const exact = revealed.find((field) => field.id === id)
+        if (exact) {
+          if (id === 'discord-bot-secret' && !exact.private)
+            throw new Error('Bot Token 必须保存在私密字段')
+          return exact.value
+        }
+        const candidates = revealed.filter((field) =>
+          aliases[id]?.includes(field.label.replace(/[\s_-]/gu, '').toLocaleLowerCase()),
+        )
+        if (candidates.length > 1)
+          throw new Error('所选密钥卡有多个同名字段，请先在原卡中明确对应字段')
+        if (id === 'discord-bot-secret' && candidates[0] && !candidates[0].private)
+          throw new Error('Bot Token 必须保存在私密字段')
+        return candidates[0]?.value ?? ''
+      }
+
+      connection = {
+        applicationId: value('discord-applicationId'),
+        publicKey: value('discord-publicKey'),
+        workerBaseUrl: value('discord-workerUrl'),
+        botToken: value('discord-bot-secret'),
+      }
+    }
+    if (!connection || typeof connection !== 'object' || Array.isArray(connection))
+      throw new Error('旧连接备份不完整')
+    const checked = checkedSetupParameters({
+      applicationId: connection.applicationId,
+      publicKey: connection.publicKey,
+      workerUrl: connection.workerBaseUrl,
+    })
+    if (
+      !checked.applicationId ||
+      !checked.publicKey ||
+      !checked.workerUrl ||
+      typeof connection.botToken !== 'string' ||
+      !/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$/u.test(connection.botToken)
+    )
+      throw new Error('密钥卡缺少有效的 App、公钥、Token 或 Worker，未切换')
+    if (
+      (connection.inboxLibraryId || connection.inboxSecret) &&
+      (!/^[A-Za-z0-9_-]{8,100}$/u.test(connection.inboxLibraryId ?? '') ||
+        typeof connection.inboxSecret !== 'string' ||
+        !connection.inboxSecret)
+    )
+      throw new Error('备份的收件配对资料不完整')
+    const current = await resourceService.get(id)
+    if (
+      !current ||
+      JSON.stringify(await personalResourceService.read(current)) !== JSON.stringify(document)
+    )
+      throw new Error('解锁期间密钥卡已变化，未采用旧内容')
+    signal?.throwIfAborted()
+    return {
+      applicationId: checked.applicationId,
+      publicKey: checked.publicKey,
+      workerBaseUrl: checked.workerUrl,
+      botToken: connection.botToken,
+      credentialPersistence: connection.credentialPersistence === 'session' ? 'session' : 'local',
+      ...(connection.inboxLibraryId
+        ? {
+            inboxLibraryId: connection.inboxLibraryId,
+            inboxSecret: connection.inboxSecret,
+            inboxName: connection.inboxName,
+          }
+        : {}),
+    }
+  },
   needsUnlock: () => !secretResourceService.isUnlocked(),
   async backupConnection(previous, id, signal, onSaved) {
     if (!secretResourceService.isUnlocked()) throw new Error('请先解锁统一密码，再保存旧连接')

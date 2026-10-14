@@ -107,6 +107,7 @@ const {
 <template>
   <section
     class="fw-workbench"
+    data-srl-controls
     :class="{
       'is-editing': Boolean(currentProject),
       'has-source-canvas': Boolean(currentProject) && props.sourceOwnerState !== 'visual',

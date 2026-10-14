@@ -26,7 +26,7 @@ const editor = toRef(props.model, 'editor')
 
 <template>
   <PresetStitchEditorPortal :active="model.mobileEditorOverlay">
-    <div v-if="editor" class="stitch-editor" :style="model.editorOverlayStyle">
+    <div v-if="editor" class="stitch-editor" data-srl-controls :style="model.editorOverlayStyle">
       <label>
         名称<input
           v-model="editor.name"

@@ -16,7 +16,7 @@ export async function checkAssistantKnowledge(root = process.cwd(), read = readF
   if (hash(knowledge) !== manifest.knowledgeSha256)
     failures.push('ProductAssistantKnowledge.ts 的说明已变化')
   for (const item of manifest.sources) {
-    if (!/^src\/[\w/-]+\.(?:ts|vue)$/u.test(item.path) || !item.guides?.length)
+    if (!/^src\/[\w/-]+\.(?:ts|vue|js)$/u.test(item.path) || !item.guides?.length)
       throw new Error('助手知识源清单无效')
     const source = await read(resolve(root, item.path))
     if (hash(source) !== item.sha256) failures.push(`${item.path} → ${item.guides.join('、')}`)

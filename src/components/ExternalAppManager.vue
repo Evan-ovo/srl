@@ -795,6 +795,7 @@ async function clearAppData(app: InstalledExternalApp): Promise<void> {
 <template>
   <main
     class="external-app-manager"
+    data-srl-controls
     :class="{ 'external-app-manager--dragging': dragActive }"
     tabindex="0"
     @dragover="handleDragOver"
@@ -930,6 +931,8 @@ async function clearAppData(app: InstalledExternalApp): Promise<void> {
         <section
           ref="overlayPanel"
           class="external-app-manager__panel external-app-manager__preview"
+          data-srl-controls
+          data-srl-dialog
           role="dialog"
           aria-modal="true"
           aria-label="安装确认"
@@ -1194,6 +1197,8 @@ async function clearAppData(app: InstalledExternalApp): Promise<void> {
         <section
           ref="overlayPanel"
           class="external-app-manager__panel external-app-manager__action-sheet"
+          data-srl-controls
+          data-srl-dialog
           role="dialog"
           aria-modal="true"
           :aria-label="`${actionApp.manifest.name} · ${sectionTitles[actionSection]}`"

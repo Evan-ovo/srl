@@ -1,0 +1,59 @@
+<main class="library" id="library">
+  <header class="topbar">
+    <div id="brand" class="mark"></div>
+    <button class="icon" id="libraryBack" aria-label="返回角色列表" hidden></button>
+    <h1 class="serif" id="libraryTitle">读了么</h1>
+    <div class="end">
+      <button class="icon" id="searchToggle" aria-label="搜索角色"></button
+      ><button
+        class="icon"
+        id="characterCover"
+        aria-label="开启角色沉浸背景"
+        aria-pressed="false"
+      ></button>
+    </div>
+  </header>
+  <div class="search-wrap" id="librarySearchWrap" hidden>
+    <input id="librarySearch" class="searchbox" placeholder="搜索角色名称" aria-label="搜索" />
+  </div>
+  <div id="libraryContent"><p class="loading">正在读取聊天列表…</p></div>
+  <button class="footer-note" id="aboutBtn" hidden>聊天原件保存在资源库 · 关于读了么</button>
+</main>
+<section id="reader" class="reader-hide" hidden aria-label="聊天阅读器">
+  <button class="icon reader-menu" id="readerMenu" aria-label="展开阅读工具"></button>
+  <button class="reader-scripts" id="readerScripts" hidden aria-label="脚本快捷操作">脚本</button>
+  <header id="readerHeader">
+    <button class="icon" id="readerBack" aria-label="返回聊天列表"></button>
+    <div class="reader-title">
+      <strong id="readerTitle"></strong><small id="readerSubtitle"></small>
+    </div>
+    <button class="icon" id="readerFullscreen" aria-label="退出沉浸模式"></button
+    ><button class="icon" id="readerMore" aria-label="楼层操作"></button>
+  </header>
+  <div id="readingViewport" tabindex="0" aria-label="阅读正文">
+    <div id="readingPage"><article class="reading-flow" id="readingFlow"></article></div>
+  </div>
+  <button class="edge-turn prev" id="prevPage" aria-label="上一页"></button
+  ><button class="edge-turn next" id="nextPage" aria-label="下一页"></button>
+  <button class="reader-position" id="readerPosition" aria-label="阅读进度与章节目录"></button>
+  <nav class="reader-bottom" aria-label="阅读工具">
+    <button data-panel="progress"></button><button data-panel="search"></button
+    ><button data-panel="bookmarks"></button><button data-panel="display"></button
+    ><button data-panel="appearance"></button>
+  </nav>
+</section>
+<dialog id="sheet">
+  <div class="sheet-head">
+    <h3 id="sheetTitle"></h3>
+    <button class="icon" id="sheetClose" aria-label="关闭面板"></button>
+  </div>
+  <div id="sheetFeedback" class="sheet-feedback" hidden role="status" tabindex="-1"></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</dialog>
+<div id="toast" class="toast" hidden role="status"></div>
+<input type="file" id="backgroundFile" accept="image/*" hidden /><input
+  type="file"
+  id="cssFile"
+  accept=".css,.json"
+  hidden
+/>

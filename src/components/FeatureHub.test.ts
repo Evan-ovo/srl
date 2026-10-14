@@ -335,6 +335,12 @@ describe('FeatureHub', () => {
     )
     expect(wrapper.attributes('data-feature-page')).toBe('assistant')
     expect(document.body.classList.contains('feature-app-scroll-lock')).toBe(false)
+    const studio = wrapper.findComponent({ name: 'AppearanceStudio' })
+    const options = { views: {} }
+    studio.vm.$emit('save-assistant-css', '.vue-trial{}', options)
+    expect(wrapper.emitted('save-assistant-css')?.at(-1)).toEqual(['.vue-trial{}', options])
+    studio.vm.$emit('save-assistant-css', '.css-only{}')
+    expect(wrapper.emitted('save-assistant-css')?.at(-1)).toEqual(['.css-only{}'])
     await wrapper.get('.feature-app-header__back').trigger('click')
     expect(wrapper.attributes('data-feature-page')).toBe('home')
   })

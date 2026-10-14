@@ -118,7 +118,7 @@ watch(
 </script>
 
 <template>
-  <section class="tavern-bridge" aria-labelledby="tavern-bridge-title">
+  <section class="tavern-bridge" data-srl-controls aria-labelledby="tavern-bridge-title">
     <FeatureAppHeader
       title="酒馆互传"
       title-id="tavern-bridge-title"
@@ -832,6 +832,7 @@ watch(
       <dialog
         ref="transferSettingsDialog"
         class="tavern-transfer-settings"
+        data-srl-controls
         aria-labelledby="tavern-transfer-settings-title"
         @click.self="transferSettingsDialog?.close()"
         @cancel.prevent="transferSettingsDialog?.close()"

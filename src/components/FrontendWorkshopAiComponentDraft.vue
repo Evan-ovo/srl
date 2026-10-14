@@ -54,6 +54,7 @@ async function save() {
 <template>
   <details
     class="fw-ai-component-draft"
+    data-srl-controls
     @toggle="open = ($event.target as HTMLDetailsElement).open"
   >
     <summary>组件草稿 · {{ draft.name }}</summary>

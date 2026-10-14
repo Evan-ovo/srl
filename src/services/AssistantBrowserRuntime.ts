@@ -15,8 +15,11 @@ export function maskDiscordSetupSecrets(text: string): string {
 }
 /** Transient UI ownership; Cookie/editor/secret data never enters it. */
 export const assistantBrowserSession = reactive({
+  purpose: 'discord-setup' as 'discord-setup' | 'general',
+  completed: false,
   active: false,
   browserVisible: false,
+  chatPresentation: '' as '' | 'compact' | 'fullscreen',
   agentRunning: false,
   webStepActive: false,
   assistantConversationId: '',
@@ -36,6 +39,7 @@ export interface AssistantBrowserSnapshot {
   paused: boolean
   loading?: boolean
   failed?: boolean
+  downloadPending?: boolean
   moved?: boolean
   pageAccess?: 'public' | 'authentication' | 'protected' | 'external'
   chatOpen?: boolean
@@ -48,6 +52,12 @@ export interface AssistantBrowserSnapshot {
   secretSavedOnPage?: boolean
   installationCompleted?: boolean
   forkOfTarget?: boolean
+  repository?: {
+    name: string
+    kind: 'fork'
+    branch?: string
+    file?: 'wrangler.jsonc' | 'wrangler.json'
+  }
   controls?: Array<{
     target: string
     label: string
@@ -89,13 +99,29 @@ export interface AssistantBrowserEvent {
     | 'browser-pause'
     | 'browser-close'
     | 'browser-task-ready'
+    | 'download-progress'
   step?: string
+  runId?: string
+  conversationId?: string
+  paused?: boolean
+  loading?: boolean
+  bytes?: number
   workerUrl?: string
   visible?: boolean
   text?: string
   applicationId?: string
 }
 export interface AssistantBrowserRuntime {
+  currentTask?(): Promise<{
+    active: boolean
+    purpose: string
+    runId: string
+    conversationId: string
+    url: string
+    paused: boolean
+    finished: boolean
+    agentRunId?: string
+  }>
   chatPresentation?(options: {
     mode: 'compact' | 'fullscreen' | 'browser'
     conversationId: string
@@ -119,20 +145,29 @@ export interface AssistantBrowserRuntime {
     chooseStep?: boolean
     showControls?: boolean
     resumeCurrent?: boolean
+    /** Explicit user return; background agent steps must preserve the chat presentation. */
+    foreground?: boolean
     darkTheme?: boolean
     mode?: 'economy' | 'agent'
     agentRunId?: string
+    ownerTaskId?: string
     conversationId?: string
     expectedApplicationId?: string
   }): Promise<void>
-  pauseAgent(): Promise<void>
+  pauseAgent(options?: { ownerRunId?: string; finished?: boolean }): Promise<void>
   waitReady(): Promise<AssistantBrowserSnapshot>
   waitStatus(options: { documentId: number; target: string }): Promise<AssistantBrowserSnapshot>
   back(options?: { tabId?: number }): Promise<AssistantBrowserSnapshot>
-  listTabs(): Promise<{
+  listTabs(options?: { ownerRunId?: string }): Promise<{
     tabs: Array<{ tabId: number; active: boolean; url: string; title: string }>
   }>
   switchTab(options: { tabId: number }): Promise<AssistantBrowserSnapshot>
+  download?(options: {
+    documentId: number
+    tabId: number
+    target: string
+    destination: 'downloads' | 'import'
+  }): Promise<Record<string, unknown>>
   capture(options: {
     documentId: number
     tabId: number
@@ -142,7 +177,7 @@ export interface AssistantBrowserRuntime {
     tabId: number
     milliseconds: number
   }): Promise<AssistantBrowserSnapshot>
-  cancelWait(): Promise<void>
+  cancelWait(options?: { ownerRunId?: string }): Promise<void>
   inspect(options?: { metadataOnly?: boolean; query?: string }): Promise<AssistantBrowserSnapshot>
   readPage(options: {
     documentId: number
@@ -161,6 +196,8 @@ export interface AssistantBrowserRuntime {
     url?: string
     direction?: 'up' | 'down'
     template?: string
+    preserveConfiguration?: boolean
+    configurationConfirmation?: string
     expectedApplicationId?: string
     confirmedPreviousEndpoint?: string
     allowParameters?: boolean
@@ -176,11 +213,15 @@ export interface AssistantBrowserRuntime {
     expectedDatabaseId?: string
     expectedRevision?: string
     expectedFork?: string
+    expectedBranch?: string
+    expectedFile?: string
+    repositoryKind?: string
+    synchronizationAssessment?: string
     validateTemplate?: boolean
     key?: string
     tabId?: number
   }): Promise<Record<string, unknown>>
-  close(options?: { keepRunning?: boolean }): Promise<void>
+  close(options?: { keepRunning?: boolean; ownerRunId?: string }): Promise<void>
   confirmSuccess(options: { documentId: number; step: string }): Promise<{ confirmed: boolean }>
   suspend(): Promise<{ suspended: boolean }>
   restore(options: { resume: boolean }): Promise<void>

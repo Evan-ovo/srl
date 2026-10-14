@@ -96,6 +96,12 @@ export class IndexedDbExternalAppStorage implements ExternalAppStorageAdapter {
     return this.database.externalAppData.get(externalAppDataId(appId, key))
   }
 
+  async getDataMany(
+    appId: string,
+    keys: string[],
+  ): Promise<Array<ExternalAppDataRecord | undefined>> {
+    return this.database.externalAppData.bulkGet(keys.map((key) => externalAppDataId(appId, key)))
+  }
   async listData(appId: string): Promise<ExternalAppDataRecord[]> {
     return this.database.externalAppData.where('appId').equals(appId).toArray()
   }

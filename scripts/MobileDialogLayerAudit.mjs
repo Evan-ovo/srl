@@ -159,6 +159,13 @@ try {
   assert.ok(Number(stack.child) > Number(stack.parent), JSON.stringify(stack))
   assert.equal(stack.top, 'personal-editor', JSON.stringify(stack))
   assert.equal(stack.panelVisible, true)
+  const shiftedStack = await nestedPage.evaluate(() => {
+    document.documentElement.style.setProperty('--layer-resource-detail', '40')
+    return ['resource-detail', 'personal-editor'].map((id) =>
+      Number(getComputedStyle(document.getElementById(id)).zIndex),
+    )
+  })
+  assert.deepEqual(shiftedStack, [40, 41], 'child editor must follow the parent layer token')
   console.log('resource detail → embedded personal editor stacking passed')
   await nestedPage.close()
 } finally {

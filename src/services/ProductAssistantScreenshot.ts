@@ -82,7 +82,7 @@ export async function captureAssistantPage(
             child.style.setProperty('visibility', 'hidden', 'important')
       }
       for (const node of clone.querySelectorAll<HTMLElement>(
-        '.chat-history-summary,.chat-status,.chat-error,.chat-attachments',
+        '.chat-history-summary,.chat-status,.chat-error,.chat-attachments,.assistant-resource-citations,.assistant-task-context',
       ))
         node.style.setProperty('visibility', 'hidden', 'important')
     }

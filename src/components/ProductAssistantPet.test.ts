@@ -16,6 +16,13 @@ const { petWorkspace, confirmPetAssets, loadPetAssets, downloadPetAssets, releas
     downloadPetAssets: vi.fn(),
     releasePetAssets: vi.fn(),
   }))
+vi.mock('../services/AssistantBrowserTaskService', () => ({
+  assistantBrowserTaskService: {
+    returnToBrowser: vi.fn(async () => {
+      discordSetupSession.browserVisible = true
+    }),
+  },
+}))
 vi.mock('../core/AppContainer', () => ({
   productAssistantWorkspaceService: petWorkspace,
   discordSetupService: {
@@ -71,6 +78,7 @@ beforeEach(() => {
   discordSetupSession.active = false
   discordSetupSession.assistantConversationId = ''
   discordSetupSession.browserVisible = false
+  discordSetupSession.chatPresentation = ''
   discordSetupSession.webStepActive = false
   discordSetupSession.agentRunning = false
   preferences.value = {
@@ -242,12 +250,18 @@ it('mounts the task chat in the background, expands the same instance with a web
   await flushPromises()
   const studio = wrapper!.findComponent({ name: 'AppearanceStudioStub' })
   const instance = studio.vm
+  const options = { views: {} }
+  studio.vm.$emit('save-assistant-css', '.vue-trial{}', options)
+  expect(wrapper!.emitted('save-assistant-css')?.at(-1)).toEqual(['.vue-trial{}', options])
+  studio.vm.$emit('save-assistant-css', '.css-only{}')
+  expect(wrapper!.emitted('save-assistant-css')?.at(-1)).toEqual(['.css-only{}'])
   const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
   expect(dialog.open).toBe(false)
   expect(studio.attributes('background-task')).toBe('true')
   window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
   await flushPromises()
   expect(dialog.open).toBe(true)
+  expect(discordSetupSession.chatPresentation).toBe('compact')
   expect(vi.mocked(nativeDiscordSetupBrowser.chatPresentation!)).toHaveBeenLastCalledWith({
     mode: 'compact',
     conversationId: 'task-preview',
@@ -257,6 +271,7 @@ it('mounts the task chat in the background, expands the same instance with a web
   await studio.vm.$emit('expand')
   await flushPromises()
   expect(studio.vm).toBe(instance)
+  expect(discordSetupSession.chatPresentation).toBe('fullscreen')
   expect(pet.style.display).toBe('none')
   expect(vi.mocked(nativeDiscordSetupBrowser.chatPresentation!)).toHaveBeenLastCalledWith(
     expect.objectContaining({
@@ -269,6 +284,7 @@ it('mounts the task chat in the background, expands the same instance with a web
   document.querySelector<HTMLButtonElement>('.assistant-browser-preview')!.click()
   await flushPromises()
   expect(dialog.open).toBe(false)
+  expect(discordSetupSession.chatPresentation).toBe('')
   expect(discordSetupSession.browserVisible).toBe(true)
   expect(discordSetupSession.agentRunning).toBe(true)
   expect(document.documentElement.dataset.assistantBrowserChat).toBeUndefined()

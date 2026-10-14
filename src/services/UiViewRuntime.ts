@@ -125,6 +125,9 @@ function installUiViewBridge() {
             }
           }
           observeRegions()
+          requestAnimationFrame(() => {
+            if (!failed) port?.postMessage({ type: 'rendered', nonce })
+          })
         })
       } else if (data.type === 'styles') {
         const style = document.getElementById('srl-ui-host-styles')!

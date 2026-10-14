@@ -98,7 +98,13 @@ const {
 </script>
 
 <template>
-  <section class="image-generation-app" role="dialog" aria-modal="true" aria-label="AI 生图">
+  <section
+    class="image-generation-app"
+    data-srl-controls
+    role="dialog"
+    aria-modal="true"
+    aria-label="AI 生图"
+  >
     <FeatureAppHeader
       title="AI 生图"
       @back="section === 'generate' ? $emit('back') : (section = 'generate')"

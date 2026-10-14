@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { assistantBrowserTaskService } from '../services/AssistantBrowserTaskService'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { createAsyncPanel } from '../core/AsyncPanel'
 import { getAssistantNavigationTargets } from '../core/FeatureAppRegistry'
@@ -49,7 +50,7 @@ const props = defineProps<
 >()
 const emit = defineEmits<{
   activity: [value: boolean]
-  'save-assistant-css': [value: string]
+  'save-assistant-css': [value: string, options?: import('../types/UiCustomization').UiApplyOptions]
 }>()
 const AppearanceStudio = createAsyncPanel('蒜惹菈', () => import('./AppearanceStudio.vue'))
 const preferences = useProductAssistantPreferences()
@@ -80,7 +81,10 @@ watch(
   taskChat,
   (active) => {
     if (active) visited.value = true
-    else delete document.documentElement.dataset.assistantBrowserChat
+    else {
+      delete document.documentElement.dataset.assistantBrowserChat
+      discordSetupSession.chatPresentation = ''
+    }
   },
   { immediate: true },
 )
@@ -479,6 +483,7 @@ onMounted(() => {
   void initializePetAssets()
   window.addEventListener('srl:assistant-pet-assets-updated', refreshPetAssetsAfterDownload)
   window.addEventListener('srl:discord-setup-quick-chat', openTaskChat)
+  window.addEventListener('srl:assistant-browser-chat', openTaskChat)
   const saved = preferences.value.petPosition
   position.value = saved
     ? { x: saved.x * Math.max(1, innerWidth - 96), y: saved.y * Math.max(1, innerHeight - 154) }
@@ -513,9 +518,9 @@ watch(
   },
   { immediate: true },
 )
-function openTaskChat() {
+function openTaskChat(event?: Event) {
   if (!discordSetupSession.active || !discordSetupSession.assistantConversationId) return
-  expanded.value = false
+  expanded.value = event instanceof CustomEvent && event.detail?.fullscreen === true
   void showChat()
 }
 function down(event: PointerEvent) {
@@ -642,7 +647,9 @@ function close() {
 }
 async function returnToTaskBrowser() {
   try {
-    await discordSetupService.returnToBrowser()
+    await (discordSetupSession.purpose === 'general'
+      ? assistantBrowserTaskService.returnToBrowser()
+      : discordSetupService.returnToBrowser())
     close()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '暂时无法返回网页'
@@ -676,8 +683,10 @@ async function syncBrowserPresentation() {
       open.value &&
       expanded.value === fullscreen &&
       discordSetupSession.assistantConversationId === conversationId
-    )
+    ) {
       document.documentElement.dataset.assistantBrowserChat = fullscreen ? 'fullscreen' : 'compact'
+      discordSetupSession.chatPresentation = fullscreen ? 'fullscreen' : 'compact'
+    }
   } catch {
     // Older APKs keep their retained browser and the explicit return button.
   }
@@ -688,6 +697,7 @@ watch(
     if (isOpen && wasOpen) await syncBrowserPresentation()
     else {
       delete document.documentElement.dataset.assistantBrowserChat
+      if (!isOpen) discordSetupSession.chatPresentation = ''
       if (wasOpen && taskChat.value && !discordSetupSession.browserVisible)
         await returnToTaskBrowser()
     }
@@ -746,6 +756,7 @@ async function capture(signal: AbortSignal) {
 }
 onBeforeUnmount(() => {
   delete document.documentElement.dataset.assistantBrowserChat
+  discordSetupSession.chatPresentation = ''
   alive = false
   assetLoadId++
   releaseAssistantPetAssets(petAssets.value)
@@ -756,9 +767,17 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', syncVisibility)
   window.removeEventListener('srl:assistant-pet-assets-updated', refreshPetAssetsAfterDownload)
   window.removeEventListener('srl:discord-setup-quick-chat', openTaskChat)
+  window.removeEventListener('srl:assistant-browser-chat', openTaskChat)
   dialog.value?.close()
   window.removeEventListener('resize', clamp)
 })
+function forwardAssistantAppearance(
+  value: string,
+  options?: import('../types/UiCustomization').UiApplyOptions,
+) {
+  if (options) emit('save-assistant-css', value, options)
+  else emit('save-assistant-css', value)
+}
 </script>
 
 <template>
@@ -880,7 +899,7 @@ onBeforeUnmount(() => {
         @back="backFromChat"
         @expand="expand"
         @assistant-activity="assistantActivity"
-        @save-assistant-css="emit('save-assistant-css', $event)"
+        @save-assistant-css="forwardAssistantAppearance"
       >
         <template #task-preview>
           <button
@@ -893,7 +912,11 @@ onBeforeUnmount(() => {
           >
             <span>当前网页</span
             ><small>{{
-              discordSetupSession.agentRunning ? '助手继续操作中 · 点此返回' : '已暂停 · 点此返回'
+              discordSetupSession.completed
+                ? '任务已完成 · 点此查看网页'
+                : discordSetupSession.agentRunning
+                  ? '助手继续操作中 · 点此返回'
+                  : '已暂停 · 点此返回'
             }}</small>
           </button>
         </template>

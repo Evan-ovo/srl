@@ -35,6 +35,48 @@ beforeEach(() => {
   storage = new IndexedDbProductAssistantStorage(database)
 })
 
+it('persists skill versions, prevents stale overwrites, and restores skill/reference data through the existing portable state', async () => {
+  const skill = {
+    id: 'skill',
+    name: '核对保存',
+    description: '保存后原操作复验',
+    mode: 'features' as const,
+    capabilities: ['history' as const],
+    steps: ['保存', '重开核对'],
+  }
+  await storage.putTemplate(skill)
+  const first = (await storage.templates())[0]!
+  expect(first.version).toBe(1)
+  await storage.putTemplate({ ...first, steps: ['读回', '重开核对'] })
+  expect((await storage.templates())[0]?.version).toBe(2)
+  await expect(storage.putTemplate({ ...first, name: '过期修改' })).rejects.toThrow('其他窗口')
+  const record = {
+    ...chat('检查原故障'),
+    taskSkill: (await storage.templates())[0],
+    referenceResources: [{ id: 'selected-book', name: '选定世界书', contentHash: 'hash' }],
+    history: [
+      {
+        id: 'task-user',
+        role: 'user' as const,
+        text: '检查保存',
+      },
+    ],
+  }
+  await storage.save(record, true)
+  const portable = await storage.exportPortableState()
+  const name = database.name
+  database.close()
+  database = new AppDatabase(name)
+  storage = new IndexedDbProductAssistantStorage(database)
+  expect((await storage.read(record.id))?.taskSkill).toEqual(record.taskSkill)
+  await database.settings.clear()
+  await storage.importPortableState(portable)
+  const restored = await storage.read(record.id)
+  expect(restored?.referenceResources).toEqual(record.referenceResources)
+  expect(restored?.history[0]?.text).toEqual(record.history[0]!.text)
+  expect((await storage.templates())[0]?.version).toBe(2)
+})
+
 afterEach(async () => {
   await database.delete()
   await legacy?.delete()

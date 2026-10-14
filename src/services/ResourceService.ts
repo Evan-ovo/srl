@@ -221,6 +221,12 @@ export class ResourceService {
     )
   }
 
+  getThumbnail(id: string): Promise<Blob | undefined> {
+    return this.storage.getThumbnail
+      ? this.storage.getThumbnail(id)
+      : this.storage.get(id).then((resource) => resource?.thumbnailBlob)
+  }
+
   repairThumbnailAssets(): Promise<number> {
     return this.storage.repairThumbnailAssets?.() ?? Promise.resolve(0)
   }

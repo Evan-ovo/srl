@@ -175,7 +175,7 @@ function organize() {
 </script>
 <template>
   <Teleport to="body">
-    <section class="fw-layer-panel" role="dialog" aria-label="作品图层">
+    <section class="fw-layer-panel" data-srl-controls role="dialog" aria-label="作品图层">
       <header>
         <strong>图层</strong
         ><button type="button" :disabled="busy || saving" @click="organize">AI 整理图层</button>

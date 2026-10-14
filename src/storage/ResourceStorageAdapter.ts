@@ -41,6 +41,7 @@ export interface ResourceStorageAdapter {
     ownerId: string,
     includeSameType?: boolean,
   ): Promise<ResourceListSummary[]>
+  getThumbnail?(id: string): Promise<Blob | undefined>
   repairThumbnailAssets?(): Promise<number>
   getMissingPngThumbnailRepairStatus?(): Promise<MissingPngThumbnailRepairStatus>
   repairMissingPngCharacterCardThumbnails?(options?: { restart?: boolean }): Promise<number>

@@ -28,6 +28,10 @@ import { ASSISTANT_FEATURE_GUIDES } from '../core/ProductAssistantKnowledge'
 import { getAssistantVisibleScope } from '../core/ProductAssistantViewContext'
 import { captureAssistantPage } from '../services/ProductAssistantScreenshot'
 import { captureAssistantComparison } from '../services/ProductAssistantAppearanceComparison'
+import {
+  inspectAssistantAppearance,
+  verifyAssistantAppearance,
+} from '../services/ProductAssistantAppearanceInspection'
 
 import { confirmAction } from '../composables/UseConfirmDialog'
 import { usePreviewBudget } from '../composables/UsePreviewBudget'
@@ -37,6 +41,11 @@ import AppearanceOriginalCssActions from './AppearanceOriginalCssActions.vue'
 import AppearanceUiEditor from './AppearanceUiEditor.vue'
 import AppearanceCodeReference from './AppearanceCodeReference.vue'
 import { normalizeUiViews } from '../core/UiCustomization'
+import { readUiViewPreviewCss } from '../core/UiViewPreview'
+import {
+  useAssistantUiCustomization,
+  snapshotUiViews,
+} from '../composables/UseAssistantUiCustomization'
 import type { CustomUiViews, UiApplyOptions } from '../types/UiCustomization'
 import {
   BrowserStorageService,
@@ -99,7 +108,7 @@ const emit = defineEmits<{
   'update:noImageResourceCoverMode': [value: NoImageResourceCoverMode]
   'update:uiFontScale': [value: UiFontScale]
   'save-css': [value: string, options?: UiApplyOptions]
-  'save-assistant-css': [value: string]
+  'save-assistant-css': [value: string, options?: UiApplyOptions]
   'assistant-visibility': [value: boolean]
   'assistant-activity': [value: boolean]
 }>()
@@ -107,6 +116,7 @@ const emit = defineEmits<{
 const storage = new BrowserStorageService()
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-assistant-layout-state
 const ProductAssistant = createAsyncPanel('AI 助手', () => import('./OfficialAssistantGate.vue'))
+const AssistantUiPreview = createAsyncPanel('Vue预览', () => import('./AssistantUiPreview.vue'))
 const assistantOpen = ref(Boolean(props.assistantOnly))
 const assistantVisited = ref(assistantOpen.value)
 watch(
@@ -458,7 +468,7 @@ function persistPreset(candidate: CustomCssPreset, apply = true): boolean {
   return true
 }
 
-async function confirmViewScripts(views?: CustomUiViews): Promise<boolean> {
+async function confirmViewScripts(views?: CustomUiViews, signal?: AbortSignal): Promise<boolean> {
   const enabled = Object.entries(views ?? {}).filter(([, view]) => view?.enabled)
   if (!enabled.length) return true
   const current = storage.getCustomUiViews()
@@ -468,12 +478,15 @@ async function confirmViewScripts(views?: CustomUiViews): Promise<boolean> {
     )
   )
     return true
-  return confirmAction({
-    title: '应用自定义界面',
-    message: `将运行 ${enabled.length} 个界面的自定义源码。脚本可读取这些页面当前显示的非敏感内容，并调用原有界面操作；不提供数据库或凭据访问。${previewPolicy.value.allowRemoteResources ? '已允许 HTTPS 网络，源码可以发送它读取的界面内容。' : '网络访问关闭。'}可在保护提示中撤销，或点“恢复原界面”。`,
-    confirmLabel: '运行并试用',
-    danger: true,
-  })
+  return confirmAction(
+    {
+      title: '应用自定义界面',
+      message: `将运行 ${enabled.length} 个界面的自定义源码。脚本可读取这些页面当前显示的非敏感内容，并调用原有界面操作；不提供数据库或凭据访问。${previewPolicy.value.allowRemoteResources ? '已允许 HTTPS 网络，源码可以发送它读取的界面内容。' : '网络访问关闭。'}可在保护提示中撤销，或点“恢复原界面”。`,
+      confirmLabel: '运行并试用',
+      danger: true,
+    },
+    signal,
+  )
 }
 function applyPreset(preset: CustomCssPreset, css: string) {
   if (preset.views || Object.keys(storage.getCustomUiViews()).length)
@@ -495,6 +508,8 @@ function getAssistantContext(): AssistantContext {
     css: Object.fromEntries(
       activeScopes.value.map((scope) => [scope.value, draft.value.scopedCss[scope.value] ?? '']),
     ),
+    uiViews: snapshotUiViews(draft.value.views),
+    canCustomizeVue: true,
     currentScope: visible?.value ?? (props.assistantOnly ? '' : activeScope.value),
     pageContext: visible ? { title: visible.title, scope: visible.value } : undefined,
     canCaptureCurrent: Boolean(visible),
@@ -515,7 +530,117 @@ const assistantUndo = ref<{
   before: string
   after: string
   comparisonId?: string
+  beforeViews?: CustomUiViews
+  afterViews?: CustomUiViews
+  draftOnly?: boolean
+  draftAfter?: CustomCssPreset
 }>()
+const vueTools = useAssistantUiCustomization({
+  draft: () => clonePreset(draft.value),
+  scopes: () => activeScopes.value,
+  css: () => storage.getCustomUiCss(),
+  previewCss: () => readUiViewPreviewCss(previewPolicy.value.allowRemoteResources),
+  remote: () => previewPolicy.value.allowRemoteResources,
+  theme: () => props.theme,
+  active: () => props.active,
+  write: (previous, next) => {
+    if (JSON.stringify(previous) !== JSON.stringify(draft.value))
+      throw new Error('编译期间草稿已变化，未覆盖其它修改')
+    assistantUndo.value = {
+      draft: previous,
+      draftAfter: clonePreset(next),
+      draftOnly: true,
+      before: storage.getCustomUiCss(),
+      after: storage.getCustomUiCss(),
+    }
+    draft.value = next
+  },
+  apply: applyAssistantVue,
+})
+async function applyAssistantVue(
+  scope: AppearanceScope,
+  revision: string,
+  request: AssistantRequest,
+  signal: AbortSignal,
+): Promise<AssistantExecution> {
+  if (appearanceTransaction.hasPendingViewTrial())
+    throw new Error('请先保留或恢复当前Vue试用，再应用下一次修改')
+  if (request.appliedCss !== storage.getCustomUiCss())
+    throw new Error('应用CSS已变化，请重新读取；未覆盖其它修改')
+  if (
+    request.uiViews !== undefined &&
+    JSON.stringify(request.uiViews) !== JSON.stringify(draft.value.views ?? {})
+  )
+    throw new Error('Vue草稿已变化，请重新读取')
+  const current = draft.value.views?.[scope.value]
+  if (!current) throw new Error('请先写入Vue草稿')
+  const view = { ...current, enabled: true }
+  const beforeViews = storage.getCustomUiViews()
+  const nextViews = normalizeUiViews({ ...beforeViews, [scope.value]: view })
+  if (JSON.stringify(nextViews) === JSON.stringify(beforeViews))
+    return {
+      text: '该版本Vue已应用',
+      data: { revision, applied: true, reused: true, trial: false },
+    }
+  if (!(await confirmViewScripts({ [scope.value]: view }, signal)))
+    return { text: '已取消Vue试用，源码草稿保留', ok: false, cancelled: true }
+  if (signal.aborted) throw new DOMException('已停止', 'AbortError')
+  const candidate = clonePreset(draft.value)
+  candidate.views = { ...candidate.views, [scope.value]: view }
+  const previous = {
+    draft:
+      assistantUndo.value?.draftOnly &&
+      JSON.stringify(assistantUndo.value.draftAfter) === JSON.stringify(draft.value)
+        ? clonePreset(assistantUndo.value.draft)
+        : clonePreset(draft.value),
+    before: request.appliedCss,
+    after: request.appliedCss,
+    beforeViews,
+    afterViews: nextViews,
+  }
+  // The native preview must leave the top layer before showing the protected live trial.
+  vueTools.dismiss()
+  await nextTick()
+  const comparison = await captureAssistantComparison(scope, signal, async () => {
+    if (signal.aborted) throw new DOMException('已停止', 'AbortError')
+    if (
+      (await vueTools.revision(scope.value)) !== revision ||
+      storage.getCustomUiCss() !== previous.before ||
+      JSON.stringify(storage.getCustomUiViews()) !== JSON.stringify(beforeViews)
+    )
+      throw new Error('确认或截图期间外观已变化，未覆盖其它修改')
+    if (signal.aborted) throw new DOMException('已停止', 'AbortError')
+    emit('save-assistant-css', previous.after, { views: nextViews })
+    if (
+      storage.getCustomUiCss() !== previous.after ||
+      JSON.stringify(storage.getCustomUiViews()) !== JSON.stringify(nextViews)
+    )
+      throw new Error('Vue试用未能应用，草稿保留')
+    assistantUndo.value = previous
+    draft.value = candidate
+    await nextTick()
+  })
+  if (assistantUndo.value) assistantUndo.value.comparisonId = comparison.id
+  if (JSON.stringify(storage.getCustomUiViews()) !== JSON.stringify(nextViews))
+    return {
+      text: 'Vue试用已恢复，源码草稿保留',
+      ok: false,
+      cancelled: true,
+      data: { revision: await vueTools.revision(scope.value), applied: false },
+    }
+  return {
+    text: `已启用${scope.title}的Vue试用；请在保护提示中保留，不确认会自动恢复。`,
+    status: 'Vue正在试用',
+    comparison,
+    data: {
+      revision: await vueTools.revision(scope.value),
+      applied: true,
+      trial: true,
+      businessTested: false,
+      visualReviewed: false,
+    },
+  }
+}
 function saveAssistantPreset(): string {
   const isExistingPreset = presets.value.some((item) => item.id === draft.value.id)
   if (!persistPreset(clonePreset(draft.value), false)) throw new Error(copyStatus.value)
@@ -538,6 +663,7 @@ async function executeAssistantReply(
   signal: AbortSignal,
 ): Promise<AssistantExecution> {
   if (signal.aborted) throw new DOMException('已停止', 'AbortError')
+  if (reply.action === 'vue') return vueTools.execute(reply, request, signal)
   if (reply.action === 'browser') throw new Error('通用网页协助由主聊天执行器处理')
   if (reply.action === 'run-page-script') {
     if (!request.canRunPageScripts)
@@ -555,6 +681,11 @@ async function executeAssistantReply(
       throw new Error('这次美化已不是当前可撤销的修改')
     if (storage.getCustomUiCss() !== assistantUndo.value.after)
       throw new Error('样式已被其它操作修改，未覆盖新的修改')
+    if (
+      assistantUndo.value.afterViews &&
+      JSON.stringify(storage.getCustomUiViews()) !== JSON.stringify(assistantUndo.value.afterViews)
+    )
+      throw new Error('Vue试用已恢复或被其它操作修改，不能保留旧版本')
     if (reply.action === 'undo-comparison')
       return executeAssistantReply({ action: 'undo', answer: '撤销美化' }, request, signal)
     appearanceTransaction.keep()
@@ -562,6 +693,8 @@ async function executeAssistantReply(
   }
   if (
     reply.action === 'app' ||
+    reply.action === 'task-skills' ||
+    reply.action === 'resource-references' ||
     reply.action === 'online' ||
     reply.action === 'discord-setup' ||
     reply.action === 'custom-tools' ||
@@ -657,7 +790,25 @@ async function executeAssistantReply(
     const applied = storage.getCustomUiCss()
     if (applied !== previous.after && applied !== previous.before)
       throw new Error('应用样式已被其它操作修改，未覆盖新的修改')
-    if (applied === previous.after && !appearanceTransaction.undo())
+    if (
+      request.uiViews !== undefined &&
+      JSON.stringify(request.uiViews) !== JSON.stringify(draft.value.views ?? {})
+    )
+      throw new Error('Vue草稿已变化，未覆盖手动修改')
+    const views = JSON.stringify(storage.getCustomUiViews())
+    if (
+      previous.beforeViews &&
+      views !== JSON.stringify(previous.beforeViews) &&
+      views !== JSON.stringify(previous.afterViews)
+    )
+      throw new Error('Vue已被其它操作修改，未覆盖新的修改')
+    if (previous.draftOnly && JSON.stringify(previous.draftAfter) !== JSON.stringify(draft.value))
+      throw new Error('草稿已被其它操作修改，未覆盖新的修改')
+    const needsRuntimeUndo =
+      !previous.draftOnly &&
+      applied === previous.after &&
+      (!previous.afterViews || views === JSON.stringify(previous.afterViews))
+    if (needsRuntimeUndo && !appearanceTransaction.undo())
       throw new Error('回退记录已失效，请在外观中选择原预设')
     draft.value = clonePreset(previous.draft)
     activePresetId.value = draft.value.id
@@ -671,6 +822,11 @@ async function executeAssistantReply(
     }
   }
   if (request.presetId !== draft.value.id) throw new Error('当前预设已经变化，请重新说明需求')
+  if (
+    ['style', 'global-style', 'save', 'save-as-new', 'apply-preset'].includes(reply.action) &&
+    appearanceTransaction.hasPendingViewTrial()
+  )
+    throw new Error('请先在保护提示中保留或恢复Vue试用，再继续修改或保存')
   if (request.globalCss !== undefined && request.globalCss !== draft.value.globalCss)
     throw new Error('全局 CSS 草稿已变化，未覆盖手动修改')
   if (
@@ -683,6 +839,11 @@ async function executeAssistantReply(
   )
     throw new Error('应用样式已被其它操作修改，未覆盖新的修改；请重新发送需求')
   if (reply.action === 'save' || reply.action === 'save-as-new') {
+    if (
+      request.uiViews !== undefined &&
+      JSON.stringify(request.uiViews) !== JSON.stringify(draft.value.views ?? {})
+    )
+      throw new Error('Vue草稿已变化，未保存未经本轮读取的修改')
     if (JSON.stringify(request.css) !== JSON.stringify(getAssistantContext().css))
       throw new Error('CSS 草稿已变化，未保存未经本轮确认的修改')
     const text =
@@ -701,6 +862,8 @@ async function executeAssistantReply(
       draft: clonePreset(draft.value),
       before: storage.getCustomUiCss(),
       after: compiled,
+      beforeViews: storage.getCustomUiViews(),
+      afterViews: storage.getCustomUiViews(),
     }
     const comparison = await captureAssistantComparison(scope, signal, async () => {
       if (
@@ -724,6 +887,7 @@ async function executeAssistantReply(
       status: '已应用到全局样式',
       comparison,
       data: {
+        verification: verifyAssistantAppearance(scope, props.theme, reply.css, true),
         comparison: {
           id: comparison.id,
           beforeCaptured: Boolean(comparison.before),
@@ -736,43 +900,7 @@ async function executeAssistantReply(
   const scope = activeScopes.value.find((item) => item.value === reply.scope)
   if (!scope) throw new Error('该界面当前不可用，请先安装对应 APP')
   if (reply.action === 'inspect') {
-    const root = document.querySelector<HTMLElement>(scope.selector)
-    if (!root || root.closest('.auth-portal, .account-trigger, [data-srl-auth-portal]'))
-      throw new Error('该界面尚未挂载或属于账号区域，无法检查')
-    const forbidden =
-      '.auth-portal, .account-trigger, [data-srl-auth-portal], [class*="login"], [class*="credential"], input, textarea, select, iframe, script, style'
-    const elements = [root, ...root.querySelectorAll<HTMLElement>('*')]
-      .filter((element) => !element.closest(forbidden))
-      .slice(0, 64)
-    const nodes = elements.map((element) => {
-      const rect = element.getBoundingClientRect()
-      const style = getComputedStyle(element)
-      return {
-        tag: element.tagName.toLowerCase(),
-        classes: Array.from(element.classList)
-          .filter((name) => /^[a-zA-Z_][\w-]{0,80}$/u.test(name))
-          .slice(0, 8),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-        color: style.color,
-        backgroundColor: style.backgroundColor,
-        fontSize: style.fontSize,
-        borderRadius: style.borderRadius,
-        display: style.display,
-      }
-    })
-    return {
-      text: `已检查${scope.title}`,
-      data: {
-        scope: scope.value,
-        theme: props.theme,
-        viewport: { width: window.innerWidth, height: window.innerHeight },
-        nodes,
-        hint: root.getBoundingClientRect().width
-          ? '实际挂载界面'
-          : '后台隐藏界面，尺寸为零时以实际 CSS 为准',
-      },
-    }
+    return { text: `已检查${scope.title}`, data: inspectAssistantAppearance(scope, props.theme) }
   }
   if (reply.action === 'apply-preset') {
     const preset = storage.getCustomUiPresets().find((item) => item.id === reply.id)
@@ -803,6 +931,8 @@ async function executeAssistantReply(
       draft: clonePreset(draft.value),
       before: storage.getCustomUiCss(),
       after: compiled,
+      beforeViews: storage.getCustomUiViews(),
+      afterViews: storage.getCustomUiViews(),
     }
     const comparison = await captureAssistantComparison(scope, signal, async () => {
       if (
@@ -828,6 +958,7 @@ async function executeAssistantReply(
       status,
       comparison,
       data: {
+        verification: verifyAssistantAppearance(scope, props.theme, reply.css),
         comparison: {
           id: comparison.id,
           beforeCaptured: Boolean(comparison.before),
@@ -1450,6 +1581,14 @@ const previewDocument = computed(() => {
         </section>
       </div>
     </Teleport>
+    <AssistantUiPreview
+      v-if="vueTools.preview.value"
+      :preview="vueTools.preview.value"
+      @close="vueTools.close"
+      @ready="(id) => vueTools.status(id)"
+      @error="(id, message) => vueTools.status(id, message)"
+      @action="vueTools.invoke"
+    />
   </section>
 </template>
 

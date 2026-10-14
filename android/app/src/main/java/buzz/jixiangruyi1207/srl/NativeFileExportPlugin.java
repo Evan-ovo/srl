@@ -32,6 +32,63 @@ public class NativeFileExportPlugin extends Plugin {
     private static final String TREE_URI = "tree-uri";
     private static final int MAX_CHUNK_BYTES = 1024 * 1024;
     private final ConcurrentHashMap<String, PendingWrite> pendingWrites = new ConcurrentHashMap<>();
+    /** Browser downloads share the existing export destination and write/commit cleanup. */
+    JSObject downloadBrowserFile(String url, String name, String mime, String pageUrl, String userAgent,
+                                java.util.function.BooleanSupplier current, java.util.function.Consumer<okhttp3.Call> activeCall,
+                                java.util.function.LongConsumer progress) throws Exception {
+        if (!AssistantBrowserPolicy.browseAllowed(url)) throw new IllegalArgumentException("只支持 HTTPS 文件下载");
+        if (!current.getAsBoolean()) throw new java.io.IOException("网页任务已停止");
+        PendingWrite write = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+            ? createMediaStoreWrite("downloads", safeName(name), safeMimeType(mime))
+            : createDirectoryWrite(safeName(name), safeMimeType(mime));
+        boolean committed = false;
+        try {
+            String target = url;
+            boolean received = false;
+            for (int redirects = 0; redirects <= 10; redirects++) {
+                if (!current.getAsBoolean() || !AssistantBrowserPolicy.browseAllowed(target)) throw new java.io.IOException("下载任务已停止或跳转地址不可用");
+                Request.Builder request = new Request.Builder().url(target).get().header("User-Agent", userAgent);
+                // Rebuild credentials per destination; never carry an origin's Cookie across a redirect.
+                String cookie = CookieManager.getInstance().getCookie(target);
+                if (cookie != null && !cookie.isBlank()) request.header("Cookie", cookie);
+                okhttp3.Call transfer = NativeHttpClients.CLOUD.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(request.build());
+                activeCall.accept(transfer);
+                if (!current.getAsBoolean()) { transfer.cancel(); throw new java.io.IOException("网页下载已停止"); }
+                try (Response response = transfer.execute()) {
+                if (response.code() >= 300 && response.code() < 400 && response.header("Location") != null) {
+                    okhttp3.HttpUrl next = response.request().url().resolve(response.header("Location"));
+                    if (next == null) throw new java.io.IOException("下载跳转地址无效");
+                    target = next.toString(); continue;
+                }
+                if (!response.isSuccessful() || response.body() == null) throw new java.io.IOException("文件下载 HTTP " + response.code() + "；检查当前链接，不重试旧提交");
+                long expected = response.body().contentLength();
+                try (InputStream input = response.body().byteStream()) {
+                    write.bytes = copyBrowserBody(input, write.stream, expected, current, progress);
+                }
+                received = true; break;
+                }
+            }
+            if (!received) throw new java.io.IOException("文件下载跳转过多");
+            if (!current.getAsBoolean()) throw new java.io.IOException("下载提交前任务已停止");
+            commit(write); committed = true;
+            return new JSObject().put("uri", write.uri.toString()).put("bytes", write.bytes).put("name", safeName(name));
+        } finally {
+            activeCall.accept(null);
+            if (!committed) { try { write.stream.close(); } finally { getContext().getContentResolver().delete(write.uri, null, null); } }
+        }
+    }
+    static long copyBrowserBody(InputStream input, OutputStream output, long expected,
+                                java.util.function.BooleanSupplier current, java.util.function.LongConsumer progress) throws Exception {
+        byte[] buffer = new byte[128 * 1024]; long bytes = 0; int count;
+        while ((count = input.read(buffer)) != -1) {
+            if (!current.getAsBoolean()) throw new java.io.IOException("网页下载已停止");
+            if (expected >= 0 && bytes + count > expected) throw new java.io.IOException("下载文件超过声明大小");
+            output.write(buffer, 0, count); bytes += count; progress.accept(bytes);
+        }
+        if (expected >= 0 && bytes != expected) throw new java.io.IOException("下载文件不完整");
+        return bytes;
+    }
+
 
     @PluginMethod
     public void chooseDirectory(PluginCall call) {
@@ -109,11 +166,7 @@ public class NativeFileExportPlugin extends Plugin {
         try {
             PendingWrite write = pendingWrites.remove(call.getString("token"));
             if (write == null) throw new IllegalArgumentException("导出写入令牌已失效");
-            synchronized (write) { write.stream.flush(); write.stream.close(); }
-            if (write.mediaStore && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ContentValues values = new ContentValues(); values.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                getContext().getContentResolver().update(write.uri, values, null, null);
-            }
+            commit(write);
             JSObject value = new JSObject(); value.put("uri", write.uri.toString()); value.put("bytes", write.bytes); call.resolve(value);
         } catch (Exception error) { call.reject(error.getMessage(), error); }
     }
@@ -148,6 +201,13 @@ public class NativeFileExportPlugin extends Plugin {
         OutputStream stream = getContext().getContentResolver().openOutputStream(uri, "w");
         if (stream == null) { getContext().getContentResolver().delete(uri, null, null); throw new IllegalStateException("无法写入系统目录"); }
         return new PendingWrite(uri, stream, true);
+    }
+    private void commit(PendingWrite write) throws Exception {
+        synchronized (write) { write.stream.flush(); write.stream.close(); }
+        if (write.mediaStore && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentValues values = new ContentValues(); values.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            getContext().getContentResolver().update(write.uri, values, null, null);
+        }
     }
 
     private PendingWrite createDirectoryWrite(String fileName, String mimeType) throws Exception {

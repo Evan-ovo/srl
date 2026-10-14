@@ -79,7 +79,8 @@
     if (location.hostname === 'discord.com') return /^\/developers\/applications\/?$/.test(path) ? 'discord-app-list' : /\/information$/.test(path) ? 'discord-app-information' : /\/installation$/.test(path) ? 'discord-app-installation' : 'discord-other';
     if (location.hostname === 'dash.cloudflare.com') return /\/d1\//.test(path) ? 'd1-detail' : /\/workers\/services\/view\//.test(path) ? 'worker-detail' : 'cloudflare-overview';
     if (location.hostname.endsWith('.workers.dev')) return 'worker-site';
-    return repositoryAuthorization() || connectionConsent() ? 'github-app-installation' : /\/edit\/main\/wrangler\.jsonc$/.test(path) ? 'wrangler-editor' : /\/blob\/main\/wrangler\.jsonc$/.test(path) ? 'wrangler-file' : /\/fork$/.test(path) ? 'github-fork' : 'github-repository';
+    if (location.hostname !== 'github.com') return 'webpage';
+    return repositoryAuthorization() || connectionConsent() ? 'github-app-installation' : /\/edit\/.+\/wrangler\.jsonc?$/.test(path) ? 'wrangler-editor' : /\/blob\/.+\/wrangler\.jsonc?$/.test(path) ? 'wrangler-file' : /\/fork$/.test(path) ? 'github-fork' : 'github-repository';
   }
   function applicationList() {
     if (pageKind() !== 'discord-app-list') return undefined;
@@ -110,6 +111,23 @@
       } catch { /* An invalid link cannot establish repository identity. */ }
       return false;
     });
+  }
+  function repositoryIdentity() {
+    if (location.hostname !== 'github.com') return null;
+    const match = location.pathname.match(/^\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/);
+    if (!match) return null;
+    const name = match[1];
+    if (!forkRelation()) return null;
+    const identity = { name, kind: 'fork' };
+    const file = location.pathname.match(/\/(?:edit|blob)\/(.+)\/(wrangler\.jsonc?)$/);
+    try { if (file) { identity.branch = decodeURIComponent(file[1]); identity.file = file[2]; } } catch { return null; }
+    for (const node of document.querySelectorAll('script[type="application/json"][data-target="react-app.embeddedData"]')) {
+      try {
+        const layout = JSON.parse(node.textContent).payload?.codeViewLayoutRoute;
+        if (layout?.repo?.ownerLogin + '/' + layout?.repo?.name === name && typeof layout.refInfo?.name === 'string') identity.branch = layout.refInfo.name;
+      } catch { /* Unknown public schema is not identity evidence. */ }
+    }
+    return identity;
   }
   const secretLocation = () => location.hostname === 'dash.cloudflare.com' && /^\/[^/]+\/workers\/services\/view\/[^/]+(?:\/(?:production|settings)(?:\/.*)?)?$/.test(location.pathname);
   function secretValueCell(el) {
@@ -390,50 +408,78 @@
     if (view && view.state && view.dispatch) return { element: content, read: () => view.state.doc.toString(), write: value => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } }) };
     return null;
   }
+  function configuration(source) {
+    let clean = '', quoted = false, escaped = false, comment = '';
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i], next = source[i + 1];
+      if (comment === 'line') { if (char === '\n') { comment = ''; clean += char; } continue; }
+      if (comment === 'block') { if (char === '*' && next === '/') { comment = ''; i++; } continue; }
+      if (quoted) { clean += char; if (escaped) escaped = false; else if (char === '\\') escaped = true; else if (char === '"') quoted = false; continue; }
+      if (char === '"') quoted = true;
+      else if (char === '/' && (next === '/' || next === '*')) { comment = next === '/' ? 'line' : 'block'; i++; clean += ' '; continue; }
+      clean += char;
+    }
+    if (comment === 'block') throw new Error('Unclosed comment');
+    let json = ''; quoted = false; escaped = false;
+    for (let i = 0; i < clean.length; i++) {
+      const char = clean[i];
+      if (quoted) { if (escaped) escaped = false; else if (char === '\\') escaped = true; else if (char === '"') quoted = false; }
+      else if (char === '"') quoted = true;
+      else if (char === ',' && /^\s*[}\]]/.test(clean.slice(i + 1))) continue;
+      json += char;
+    }
+    return JSON.parse(json);
+  }
   function validate(source) {
     const errors = [];
-    if (typeof source !== 'string' || source.length > 16000) return result(false, { errors: ['未读到完整 Wrangler 编辑内容'] });
+    if (typeof source !== 'string' || source.length > 100000) return result(false, { errors: ['未读到完整 Wrangler 编辑内容'] });
     let value;
-    try { value = JSON.parse(source); } catch { return result(false, { errors: ['模板必须是完整 JSON，请检查逗号、引号和括号'] }); }
+    try { value = configuration(source); } catch { return result(false, { errors: ['配置必须是完整 JSON/JSONC，请检查注释、逗号、引号和括号'] }); }
     if (!value || typeof value !== 'object' || Array.isArray(value)) return result(false, { errors: ['配置根节点必须是对象'] });
-    // Never echo source, offending values, or values from unknown fields.
-    const expected = ['$schema', 'name', 'main', 'compatibility_date', 'keep_vars', 'd1_databases', 'vars'];
-    if (Object.keys(value).some(key => !expected.includes(key))) errors.push('存在模板以外的顶层字段，请恢复教程模板；秘密不能写进仓库');
-    if (value.name !== 'srl-discord-source-bridge' || value.main !== 'src/index.ts' || value.compatibility_date !== '2026-08-26' || value.keep_vars !== true || value.$schema !== 'node_modules/wrangler/config-schema.json') errors.push('固定 Worker 配置与教程模板不一致');
-    const db = Array.isArray(value.d1_databases) && value.d1_databases.length === 1 ? value.d1_databases[0] : null;
-    if (!db || Object.keys(db).some(key => !['binding', 'database_name', 'database_id', 'migrations_dir'].includes(key)) || db.binding !== 'DB' || db.database_name !== 'srl-discord-source-handoff' || db.migrations_dir !== 'migrations') errors.push('D1 必须按模板绑定 DB，保留数据库名称和 migrations_dir');
+    // Validate executable requirements, not tutorial names or harmless extra bindings. Never echo values.
+    if (typeof value.name !== 'string' || !/^[a-z0-9][a-z0-9-]*$/i.test(value.name) || typeof value.main !== 'string' || !/\.(?:[cm]?[jt]s)$/.test(value.main) || value.main.startsWith('/') || value.main.split('/').includes('..') || !/^\d{4}-\d{2}-\d{2}$/.test(value.compatibility_date || '') || !Number.isFinite(Date.parse(value.compatibility_date))) errors.push('Worker 名称、入口或兼容日期无效');
+    const bindings = Array.isArray(value.d1_databases) ? value.d1_databases.filter(row => row?.binding === 'DB') : [];
+    const db = bindings.length === 1 ? bindings[0] : null;
+    if (!db || typeof db.database_name !== 'string' || !db.database_name.trim() || db.migrations_dir !== undefined && (typeof db.migrations_dir !== 'string' || !db.migrations_dir.trim() || db.migrations_dir.startsWith('/') || db.migrations_dir.split('/').includes('..'))) errors.push('D1 需要唯一 DB 绑定及有效名称、迁移目录');
     if (!db || typeof db.database_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(db.database_id)) errors.push('D1 Database ID 必须是 UUID，不能填名称或占位符');
     const vars = value.vars;
-    if (!vars || typeof vars !== 'object' || Array.isArray(vars) || Object.keys(vars).some(key => !['DISCORD_APPLICATION_ID', 'DISCORD_PUBLIC_KEY', 'HANDOFF_TTL_SECONDS'].includes(key))) errors.push('vars 仅允许教程中的三个字段；Bot Token 必须放 Cloudflare Secret');
+    const privateField = item => item && typeof item === 'object' && Object.entries(item).some(([key, content]) => /(?:^|_)(?:bot_token|access_token|refresh_token|client_secret|password|api_key|authorization|credential)(?:$|_)/i.test(key) && /^(?:string|number)$/.test(typeof content) || privateField(content));
+    if (privateField(value) || Object.keys(vars ?? {}).some(key => /token|secret|password|credential|api[_-]?key/i.test(key))) errors.push('秘密不能写进仓库；Bot Token 必须放 Cloudflare Secret');
+    if (!vars || typeof vars !== 'object' || Array.isArray(vars)) errors.push('vars 必须是对象');
     if (!vars || typeof vars.DISCORD_APPLICATION_ID !== 'string' || !/^\d{17,20}$/.test(vars.DISCORD_APPLICATION_ID)) errors.push('Application ID 必须是 17–20 位数字字符串');
     if (!vars || typeof vars.DISCORD_PUBLIC_KEY !== 'string' || !/^[0-9a-f]{64}$/i.test(vars.DISCORD_PUBLIC_KEY)) errors.push('Public Key 必须是 64 位十六进制字符串');
-    if (!vars || vars.HANDOFF_TTL_SECONDS !== '1200') errors.push('HANDOFF_TTL_SECONDS 保持模板的字符串 1200');
+    if (vars?.HANDOFF_TTL_SECONDS !== undefined && !/^[1-9]\d*$/.test(String(vars.HANDOFF_TTL_SECONDS))) errors.push('HANDOFF_TTL_SECONDS 必须是正整数');
     return result(!errors.length, { errors, formatOnly: true });
   }
-  function githubData(fork, path) {
+  function githubData(fork, path, branch = 'main') {
     if (!fork || location.hostname !== 'github.com') return null;
     const found = [];
     for (const node of document.querySelectorAll('script[type="application/json"][data-target="react-app.embeddedData"]')) {
       try {
         const payload = JSON.parse(node.textContent).payload;
         const layout = payload?.codeViewLayoutRoute;
-        if (layout?.repo?.ownerLogin + '/' + layout?.repo?.name !== fork || layout?.refInfo?.name !== 'main' || layout.path !== path || !/^[a-f0-9]{40}$/i.test(layout.refInfo.currentOid || '')) continue;
+        if (layout?.repo?.ownerLogin + '/' + layout?.repo?.name !== fork || layout?.refInfo?.name !== branch || layout.path !== path || !/^[a-f0-9]{40}$/i.test(layout.refInfo.currentOid || '')) continue;
         found.push(payload);
       } catch { /* Page data is not executable code. Unknown schemas are not evidence. */ }
     }
     return found.length === 1 ? found[0] : null;
   }
-  function committedFile(fork) {
-    const payload = githubData(fork, 'wrangler.jsonc');
+  function committedFile(fork, branch = 'main', path = 'wrangler.jsonc') {
+    const payload = githubData(fork, path, branch);
     const layout = payload?.codeViewBlobLayoutRoute;
     const lines = payload?.['codeViewBlobLayoutRoute.StyledBlob']?.rawLines;
-    if (!layout || layout.path !== 'wrangler.jsonc' || layout.refInfo?.name !== 'main' || layout.refInfo.currentOid !== payload.codeViewLayoutRoute.refInfo.currentOid || layout.blob?.truncated !== false || layout.blob?.large !== false || layout.blob?.viewable !== true || !Array.isArray(lines) || !lines.length || lines.length > 1000 || lines.some(line => typeof line !== 'string')) return null;
+    if (!layout || layout.path !== path || layout.refInfo?.name !== branch || layout.refInfo.currentOid !== payload.codeViewLayoutRoute.refInfo.currentOid || layout.blob?.truncated !== false || layout.blob?.large !== false || layout.blob?.viewable !== true || !Array.isArray(lines) || !lines.length || lines.some(line => typeof line !== 'string')) return null;
     const source = lines.join('\n');
-    return source.length <= 16000 ? source : null;
+    return source.length <= 100000 ? source : null;
   }
-  function currentRevision(fork, path) {
+  function savedConfiguration(fork, branch, path) {
+    const content = document.querySelector('textarea#read-only-cursor-text-area,textarea[data-testid="read-only-cursor-text-area"]');
+    const lines = [...document.querySelectorAll('td.blob-code')];
+    return committedFile(fork, branch, path) ?? (content ? content.value : lines.length ? lines.map(el => el.textContent).join('\n') : null);
+  }
+  function currentRevision(fork, path, branch = 'main') {
     if (!fork || location.hostname !== 'github.com') return '';
-    const payload = githubData(fork, path);
+    const payload = githubData(fork, path, branch);
     if (payload) return payload.codeViewLayoutRoute.refInfo.currentOid.toLowerCase();
     const revisions = new Set();
     for (const el of document.querySelectorAll('a[href]')) {
@@ -535,6 +581,7 @@
       observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['hidden','class','style','aria-hidden','aria-label','title'] });
       return result(true, { observing: true });
     }
+    if (operation === 'privacy-check') return result(true, { pageAccess: login() ? 'authentication' : [...document.querySelectorAll('input,textarea,select,[contenteditable="true"]')].some(el => rendered(el) && fieldInfo(el).sensitive) ? 'protected' : 'public' });
     if (operation === 'inspect') {
       const query = typeof payload.query === 'string' ? payload.query.trim() : '';
       if (query.length > 80 || safe(query) !== query || /[\x00-\x1f]/.test(query)) return result(false, { errors: ['搜索只接受简短的页面标签或标题，不接受配置值'] });
@@ -602,6 +649,10 @@
       if (payload.general) {
         extra.title = safe(document.title || '');
         extra.pageAccess = pageAccess;
+        const main = document.querySelector('main,[role="main"],article') || document.body;
+        const content = [...main.querySelectorAll('p,li,dt,dd,h1,h2,h3,h4,td,th,pre,[role="status"],[role="alert"],output')].filter(el => rendered(el) && !secret(el) && !el.closest('input,textarea,select,[contenteditable="true"]')).map(el => safe(el.textContent)).join('\n');
+        extra.text = content.slice(0, 2400);
+        if (query && content.toLocaleLowerCase().includes(query.toLocaleLowerCase())) extra.searchMatched = true;
         const selectedRegions = [...document.querySelectorAll('main,[role="main"],article,section')].filter(eligible).slice(0, 30);
         extra.regions = selectedRegions.map(el => {
           const target = String(++sequence); el.setAttribute('data-srl-discord-control', target);
@@ -620,7 +671,12 @@
           return { target, label: safe(label(el)), url, disabled: disabled(el) };
         }).filter(item => item.label && item.url);
       }
-      return result(true, { controls, forkOfTarget, pageAccess, waitingForUser: payload.general && pageAccess !== 'public', pageKind: pageKind(), headings: headings.slice(0, 12).map(el => safe(el.textContent)), ...(applications ? { applicationList: applications } : {}), truncated: controls.length >= limit, ...(query ? { searchMatched: controls.length > 0 || headings.some(el => matchesQuery(el.textContent)) } : {}), ...extra });
+      return result(true, { controls, forkOfTarget, ...(repositoryIdentity() ? { repository: repositoryIdentity() } : {}), pageAccess, waitingForUser: payload.general && pageAccess !== 'public', pageKind: pageKind(), headings: headings.slice(0, 12).map(el => safe(el.textContent)), ...(applications ? { applicationList: applications } : {}), truncated: controls.length >= limit, ...(query ? { searchMatched: controls.length > 0 || headings.some(el => matchesQuery(el.textContent)) } : {}), ...extra });
+    }
+    if (operation === 'download-target') {
+      const el = document.querySelector('[data-srl-discord-control="' + payload.target + '"]');
+      if (!payload.general || !el?.matches('a[href]') || secret(el)) return result(false);
+      return result(true, { downloadUrl: el.href, fileName: el.getAttribute('download') || '' });
     }
     if (operation === 'read-page') {
       if (!payload.general) return result(false);
@@ -649,14 +705,12 @@
     if (operation === 'verify-step') {
       if (!payload.autonomous) return result(false);
       if (payload.step === 'github-save') {
-        if (location.hostname !== 'github.com' || !/\/blob\/main\/wrangler\.jsonc$/.test(location.pathname)) return result(false);
-        const content = document.querySelector('textarea#read-only-cursor-text-area,textarea[data-testid="read-only-cursor-text-area"]');
-        const lines = [...document.querySelectorAll('td.blob-code')];
-        const source = committedFile(payload.expectedFork) ?? (content ? content.value : lines.length ? lines.map(el => el.textContent).join('\n') : null);
+        if (location.hostname !== 'github.com' || location.pathname !== '/' + payload.expectedFork + '/blob/' + encodeURIComponent(payload.expectedBranch || 'main').replace(/%2F/gi, '/') + '/' + (payload.expectedFile || 'wrangler.jsonc')) return result(false);
+        const source = savedConfiguration(payload.expectedFork, payload.expectedBranch || 'main', payload.expectedFile || 'wrangler.jsonc');
         const check = validate(source);
         if (!check.ok) return check;
-        const vars = JSON.parse(source).vars, db = JSON.parse(source).d1_databases[0];
-        const revision = currentRevision(payload.expectedFork, 'wrangler.jsonc');
+        const parsed = configuration(source), vars = parsed.vars, db = parsed.d1_databases.find(row => row.binding === 'DB');
+        const revision = currentRevision(payload.expectedFork, payload.expectedFile || 'wrangler.jsonc', payload.expectedBranch || 'main');
         const verified = !!revision && vars.DISCORD_APPLICATION_ID === payload.expectedApplicationId && vars.DISCORD_PUBLIC_KEY === payload.expectedPublicKey && db.database_id === payload.expectedDatabaseId;
         return result(verified, { verified, ...(verified ? { revision } : {}) });
       }
@@ -675,9 +729,10 @@
       if (!el || !visible(el) || label(el) !== status.label || (!['status','alert'].includes(el.getAttribute('role')) && el.getAttribute('data-srl-discord-result') !== 'true') || el.closest('form') || secret(el)) return result(false);
       const text = el.textContent.trim();
       if (payload.step === 'github-sync') {
-        const main = [...document.querySelectorAll('button,a,[role="button"]')].some(node => visible(node) && /^(main|main branch)$/i.test(label(node).trim()));
-        const revision = currentRevision(payload.expectedFork, '');
-        const verified = main && !!revision && /(?:up to date|up-to-date|not behind|0 commits? behind|最新|已同步)/i.test(text) && !/not (?:up to date|up-to-date)|failed|conflict|失败|冲突/i.test(text);
+        const branch = payload.expectedBranch || 'main';
+        const onBranch = repositoryIdentity()?.branch === branch || [...document.querySelectorAll('button,a,[role="button"]')].some(node => visible(node) && [branch, branch + ' branch'].includes(label(node).trim()));
+        const revision = currentRevision(payload.expectedFork, '', branch);
+        const verified = onBranch && !!revision && (payload.synchronizationAssessment === 'current' || /(?:up to date|up-to-date|not behind|0 commits? behind|最新|已同步)/i.test(text)) && !/not (?:up to date|up-to-date)|[1-9]\d* commits? behind|\bbehind\b(?![\s\S]*\b0\b)|failed|conflict|pending|syncing|失败|冲突|落后|同步中/i.test(text.replace(/not behind|0 commits? behind/gi, 'current'));
         return result(verified, { verified, ...(verified ? { revision } : {}) });
       }
       if (payload.step === 'cf-deploy') {
@@ -752,9 +807,8 @@
     }
     if (operation === 'validate') {
       const edit = editor();
-      if (!edit) return result(false, { errors: ['未找到可读取完整文档的编辑器；不能用可见几行代替完整检查'] });
-      const source = edit.read(); const check = validate(source);
-      if (check.ok && payload.expectedApplicationId && JSON.parse(source).vars.DISCORD_APPLICATION_ID !== payload.expectedApplicationId) return result(false, { errors: ['Application ID 与前面选择的 Discord App 不一致'] });
+      const source = edit ? edit.read() : savedConfiguration(payload.expectedFork, payload.expectedBranch || 'main', payload.expectedFile || 'wrangler.jsonc'); const check = validate(source);
+      if (check.ok && payload.expectedApplicationId && configuration(source).vars.DISCORD_APPLICATION_ID !== payload.expectedApplicationId) return result(false, { errors: ['Application ID 与前面选择的 Discord App 不一致'] });
       return check;
     }
     if (operation === 'guide') {
@@ -836,16 +890,40 @@
     }
     if (operation === 'template') {
       const edit = editor();
-      if (!edit || typeof payload.template !== 'string' || payload.template.length > 16000) return result(false, { errors: ['未定位到可读取完整文档的编辑器；inspect 当前文件与编辑入口，在自己 Fork 定位后再填写，不让用户代粘贴'] });
-      edit.write(payload.template);
+      if (!edit || typeof payload.template !== 'string' || payload.template.length > 100000) return result(false, { errors: ['未定位到可读取完整文档的编辑器；inspect 当前文件与编辑入口，在自己 Fork 定位后再填写，不让用户代粘贴'] });
+      let written = payload.template;
+      if (payload.preserveConfiguration && edit.read().trim()) {
+        const original = edit.read(), expected = edit.element.__srlWranglerConfirmation;
+        let previous, next, replacementRequired = false, conflict = false;
+        try {
+          previous = configuration(original); next = configuration(payload.template);
+          const bindings = Array.isArray(previous.d1_databases) ? previous.d1_databases.filter(row => row?.binding === 'DB') : [];
+          if (bindings.length !== 1 || !previous.vars || typeof previous.vars !== 'object') replacementRequired = true;
+          else {
+            const db = next.d1_databases.find(row => row.binding === 'DB');
+            conflict = ['DISCORD_APPLICATION_ID','DISCORD_PUBLIC_KEY'].some(key => /^[a-f0-9]{17,64}$/i.test(previous.vars[key] || '') && previous.vars[key] !== next.vars[key]) || /^[a-f0-9-]{36}$/i.test(bindings[0].database_id || '') && bindings[0].database_id !== db.database_id;
+            bindings[0].database_id = db.database_id;
+            previous.vars = { ...previous.vars, DISCORD_APPLICATION_ID: next.vars.DISCORD_APPLICATION_ID, DISCORD_PUBLIC_KEY: next.vars.DISCORD_PUBLIC_KEY };
+            written = JSON.stringify(previous, null, 2);
+            if (!validate(written).ok) replacementRequired = true;
+          }
+        } catch { replacementRequired = true; }
+        if (replacementRequired) written = payload.template;
+        if ((conflict || replacementRequired) && (!expected || expected.id !== payload.configurationConfirmation || expected.source !== original)) {
+          const id = crypto.randomUUID(); edit.element.__srlWranglerConfirmation = { id, source: original };
+          return result(false, { configurationConflict: true, replacementRequired, configurationConfirmation: id, errors: [replacementRequired ? '已有文件格式/结构无法保留，需确认完整替换，未写入' : '已有不同 App/公钥/D1，需确认切换，未写入'] });
+        }
+      }
+      delete edit.element.__srlWranglerConfirmation;
+      edit.write(written);
       if (payload.validateTemplate) {
         const source = edit.read();
         const check = validate(source);
         if (!check.ok) return check;
-        if (source !== payload.template || payload.expectedApplicationId && JSON.parse(source).vars.DISCORD_APPLICATION_ID !== payload.expectedApplicationId) return result(false, { errors: ['写入内容与本次 App 配置不一致'] });
+        if (source !== written || payload.expectedApplicationId && configuration(source).vars.DISCORD_APPLICATION_ID !== payload.expectedApplicationId) return result(false, { errors: ['写入内容与本次 App 配置不一致'] });
         return result(true, { written: true, waitingForUser: !payload.autonomous, formatOnly: true });
       }
-      return result(edit.read() === payload.template, { written: edit.read() === payload.template, waitingForUser: edit.read() === payload.template && !payload.autonomous });
+      return result(edit.read() === written, { written: edit.read() === written, waitingForUser: edit.read() === written && !payload.autonomous });
     }
     if (operation === 'scroll') {
       if (payload.direction && !['up','down'].includes(payload.direction)) return result(false);
@@ -891,11 +969,17 @@
       const error = repositoryAuthorizationError(el, payload);
       if (error) return result(false, { errors: [error] });
     }
+    if (operation === 'upload' && payload.general && el?.matches('input[type="file"]') && !disabled(el)) {
+      el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      const rect = el.getBoundingClientRect();
+      return result(true, { clickPoint: { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 } });
+    }
     const repositoryRemoval = repositoryAuthorization() && /remove.*repository|移除.*仓库/i.test(payload.label);
     if ((publicSecretControls ? !secretPublicTarget(el) : secret(el) || fieldInfo(el).sensitive) || /reset token|discard|delete|sign in|log in|登录|永久删除|重置令牌/i.test(payload.label) || /remove/i.test(payload.label) && !repositoryRemoval || /authorize|授权/i.test(payload.label) && !appAuthorization && !consentAuthorization) return result(false, { waitingForUser: true });
     if (operation === 'press') {
       if (!payload.general || !el || secret(el) || fieldInfo(el).sensitive || disabled(el) || !['INPUT','TEXTAREA','BUTTON','A','SELECT'].includes(el.tagName)) return result(false, { errors: ['按键目标已变化或属于私密控件'] });
       el.focus({ preventScroll: true });
+      if (payload.nativeKey) return result(true, { keyDispatch: true });
       const init = { key: payload.key, bubbles: true, cancelable: true };
       el.dispatchEvent(new KeyboardEvent('keydown', init)); el.dispatchEvent(new KeyboardEvent('keyup', init));
       return result(true, { dispatched: true, verified: false });
@@ -911,7 +995,7 @@
       el.click(); return result(true, { dispatched: true, verified: false });
     }
     if (operation === 'fill' && ['INPUT', 'TEXTAREA'].includes(el.tagName) && !el.readOnly && typeof payload.value === 'string') {
-      if (el.disabled || !['text','url','search','email','number','tel', undefined].includes(el.tagName === 'INPUT' ? el.type : undefined) || payload.value.length > 4000 || el.matches('textarea[name="content"],textarea#code-editor,textarea[data-testid="code-editor"]') || el.closest('.cm-editor,.CodeMirror,.monaco-editor')) return result(false, { errors: ['只填写普通非秘密表单；Wrangler编辑沿本机模板和完整校验'] });
+      if (el.disabled || !['text','url','search','email','number','tel', undefined].includes(el.tagName === 'INPUT' ? el.type : undefined) || payload.value.length > 4000 || !payload.general && (el.matches('textarea[name="content"],textarea#code-editor,textarea[data-testid="code-editor"]') || el.closest('.cm-editor,.CodeMirror,.monaco-editor'))) return result(false, { errors: ['只填写普通非秘密表单；Wrangler编辑沿本机模板和完整校验'] });
       if (location.hostname === 'discord.com' && /interaction.*(?:endpoint|callback|address|url)|交互.*地址/i.test(currentLabel || '') && el.value.trim() && el.value.trim() !== payload.value)
         return result(false, { configurationConflict: true, previousEndpoint: el.value.trim() });
       const proto = el.tagName === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;

@@ -657,6 +657,7 @@ async function compressContext() {
             <path d="M5 4h14v16H5zM8 8h8m-8 4h8m-8 4h5" /></svg
           ><span>任务模板</span><span aria-hidden="true">›</span>
         </button>
+        <slot name="task-context" />
         <button type="button" @click="emit('archive')">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 8h16v12H4zM3 4h18v4H3zM9 12h6M12 15v3m-1.5-1.5h3" /></svg

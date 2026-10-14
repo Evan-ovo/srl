@@ -5,6 +5,15 @@ import type {
   ProductAssistantWorkspaceService,
 } from '../services/ProductAssistantWorkspaceService'
 import { chooseAction, confirmAction } from '../composables/UseConfirmDialog'
+import '../styles/ProductAssistantTask.css'
+import {
+  ASSISTANT_TASK_CAPABILITY_LABELS,
+  normalizeAssistantTaskTemplate,
+  ASSISTANT_TASK_SKILL_EXAMPLES,
+} from '../services/ProductAssistantTask'
+import { ASSISTANT_MODE_LABELS, type AssistantMode } from '../core/ProductAssistantKnowledge'
+import type { AssistantCapability } from '../services/ProductAssistantTools'
+import { downloadBlob } from '../utils/LibraryFormatting'
 const props = defineProps<{ workspace: ProductAssistantWorkspaceService }>()
 const emit = defineEmits<{ use: [value: AssistantTaskTemplate] }>()
 const rows = ref<AssistantTaskTemplate[]>([])
@@ -12,8 +21,23 @@ const editing = ref(false)
 const id = ref('')
 const name = ref('')
 const steps = ref('')
+const isSkill = ref(false)
+const description = ref('')
+const mode = ref<AssistantMode>('auto')
+const capabilities = ref<AssistantCapability[]>([])
+const version = ref<number>()
+const fileInput = ref<HTMLInputElement>()
 const baseline = ref('')
-const current = computed(() => JSON.stringify([name.value, steps.value]))
+const current = computed(() =>
+  JSON.stringify([
+    name.value,
+    steps.value,
+    isSkill.value,
+    description.value,
+    mode.value,
+    capabilities.value,
+  ]),
+)
 const changed = computed(() => editing.value && current.value !== baseline.value)
 const busy = ref(false)
 const leaving = ref(false)
@@ -31,6 +55,14 @@ async function save(): Promise<boolean> {
     await props.workspace.saveTemplate({
       id: id.value,
       name: name.value,
+      ...(isSkill.value
+        ? {
+            description: description.value,
+            mode: mode.value,
+            capabilities: capabilities.value,
+            version: version.value,
+          }
+        : {}),
       steps: steps.value
         .split('\n')
         .map((s) => s.trim())
@@ -74,12 +106,49 @@ async function edit(value?: AssistantTaskTemplate) {
   id.value = value?.id ?? crypto.randomUUID()
   name.value = value?.name ?? ''
   steps.value = value?.steps.join('\n') ?? ''
+  isSkill.value = value?.description !== undefined
+  description.value = value?.description ?? ''
+  mode.value = value?.mode ?? 'auto'
+  capabilities.value = [...(value?.capabilities ?? [])]
+  version.value = value?.version
   baseline.value = current.value
   editing.value = true
   error.value = ''
 }
 async function cancel() {
   if (await requestLeave()) editing.value = false
+}
+async function startExample(example: AssistantTaskTemplate) {
+  await edit({ ...structuredClone(example), id: crypto.randomUUID() })
+}
+async function importSkill(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  ;(event.target as HTMLInputElement).value = ''
+  if (!file || busy.value) return
+  try {
+    if (file.size > 32 * 1024) throw new Error('技能文件超过32KB；本入口只导入步骤和适用说明')
+    const data = JSON.parse(await file.text())
+    if (data.format !== 'srl-assistant-skill' || data.version !== 1)
+      throw new Error('请选择SRL技能JSON文件')
+    const skill = normalizeAssistantTaskTemplate({
+      ...data.skill,
+      id: crypto.randomUUID(),
+      version: undefined,
+    })
+    if (!skill.description) throw new Error('文件没有技能适用说明')
+    await edit(skill)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '技能导入失败'
+  }
+}
+function exportSkill(value: AssistantTaskTemplate) {
+  const { version: _version, ...skill } = normalizeAssistantTaskTemplate(value)
+  downloadBlob(
+    new Blob([JSON.stringify({ format: 'srl-assistant-skill', version: 1, skill }, null, 2)], {
+      type: 'application/json',
+    }),
+    `${value.name}.skill.json`,
+  )
 }
 async function remove(value: AssistantTaskTemplate) {
   if (
@@ -103,6 +172,13 @@ async function remove(value: AssistantTaskTemplate) {
 </script>
 <template>
   <section aria-label="常用任务模板" class="chat-workflow">
+    <input
+      ref="fileInput"
+      type="file"
+      accept=".json,application/json"
+      hidden
+      @change="importSkill"
+    />
     <form v-if="editing" class="chat-template-editor" @submit.prevent="save">
       <label
         >名称<input v-model="name" aria-label="模板名称" maxlength="60" :disabled="busy"
@@ -117,6 +193,43 @@ async function remove(value: AssistantTaskTemplate) {
           :disabled="busy"
         />
       </label>
+      <label class="assistant-task-check"
+        ><input v-model="isSkill" type="checkbox" :disabled="busy" />作为按需技能使用</label
+      >
+      <template v-if="isSkill">
+        <label
+          >适用场景<textarea
+            v-model="description"
+            aria-label="技能适用场景"
+            maxlength="300"
+            rows="2"
+            :disabled="busy"
+          />
+        </label>
+        <label
+          >工作模式<select v-model="mode" aria-label="技能工作模式" :disabled="busy">
+            <option v-for="(label, value) in ASSISTANT_MODE_LABELS" :key="value" :value="value">
+              {{ label }}
+            </option>
+          </select></label
+        >
+        <details class="assistant-task-options">
+          <summary>所需能力（仍需原设置授权）</summary>
+          <div class="assistant-task-capabilities">
+            <label
+              v-for="(label, capability) in ASSISTANT_TASK_CAPABILITY_LABELS"
+              :key="capability"
+              class="assistant-task-check"
+              ><input
+                v-model="capabilities"
+                type="checkbox"
+                :value="capability"
+                :disabled="busy"
+              />{{ label }}</label
+            >
+          </div>
+        </details>
+      </template>
       <div class="chat-workflow-actions">
         <button class="chat-workflow-primary" type="submit" :disabled="busy">
           <span>保存模板</span></button
@@ -125,6 +238,28 @@ async function remove(value: AssistantTaskTemplate) {
       </div>
     </form>
     <template v-else>
+      <details class="assistant-task-options">
+        <summary>从示例技能开始</summary>
+        <div class="assistant-task-actions">
+          <button
+            v-for="example in ASSISTANT_TASK_SKILL_EXAMPLES"
+            :key="example.id"
+            type="button"
+            :disabled="busy"
+            @click="startExample(example)"
+          >
+            {{ example.name }}
+          </button>
+        </div>
+      </details>
+      <button
+        type="button"
+        class="assistant-task-text-button"
+        :disabled="busy"
+        @click="fileInput?.click()"
+      >
+        导入技能
+      </button>
       <p v-if="!rows.length" class="chat-empty">暂无任务模板</p>
       <div class="chat-workflow-list">
         <div v-for="row in rows" :key="row.id" class="chat-template-row">
@@ -146,6 +281,9 @@ async function remove(value: AssistantTaskTemplate) {
               ></span>
             </button>
           </div>
+          <p v-if="row.description" class="assistant-task-description">
+            技能 · v{{ row.version ?? 1 }} · {{ row.description }}
+          </p>
           <div class="chat-template-tools">
             <details class="chat-template-detail">
               <summary>
@@ -158,6 +296,15 @@ async function remove(value: AssistantTaskTemplate) {
               </ol>
             </details>
             <div class="chat-workflow-actions">
+              <button
+                v-if="row.description"
+                type="button"
+                :disabled="busy"
+                :aria-label="`导出技能 ${row.name}`"
+                @click="exportSkill(row)"
+              >
+                导出
+              </button>
               <button
                 class="chat-workflow-icon-button"
                 type="button"

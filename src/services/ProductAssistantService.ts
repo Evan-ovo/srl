@@ -4,7 +4,16 @@ import {
   normalizeAssistantToolCallLimit,
   normalizeAssistantDirectoryQuery,
   readAssistantOffset,
+  ASSISTANT_CAPABILITY_TOOLS,
+  type AssistantCapability,
 } from './ProductAssistantTools'
+import { assistantDiscordGuidance } from './ProductAssistantDiscordGuidance'
+import { assistantSkillMatchesMode, normalizeAssistantTaskTemplate } from './ProductAssistantTask'
+import type { AssistantTaskTemplate } from './ProductAssistantWorkspaceService'
+import type {
+  AssistantReferenceResource,
+  AssistantResourceCitation,
+} from './ProductAssistantReferences'
 import { assistantGitHubTarget } from './ProductAssistantOnline'
 export { PRODUCT_ASSISTANT_TOOLS, assistantToolsForMode } from './ProductAssistantTools'
 import {
@@ -24,6 +33,9 @@ export {
   validateAssistantCss,
 } from './ProductAssistantRequest'
 import type { AppearanceScope } from '../core/AppearanceScopes'
+import type { CustomUiViews } from '../types/UiCustomization'
+import type { AssistantVueCommand } from '../composables/UseAssistantUiCustomization'
+import type { AppearanceReferenceReader } from './AppearanceReferenceService'
 import type { AssistantAppearanceComparison } from './ProductAssistantAppearanceComparison'
 import { ASSISTANT_GUIDES, findAssistantGuide } from '../core/ProductAssistantGuidance'
 import {
@@ -74,6 +86,7 @@ export interface AssistantToolCall {
   state: 'running' | 'completed' | 'failed' | 'cancelled'
 }
 export interface AssistantTurn {
+  resourceCitations?: AssistantResourceCitation[]
   /** Provider thinking for native API continuity; never rendered as chat text. */
   reasoning?: string
   sources?: Array<{ title: string; url: string }>
@@ -99,6 +112,10 @@ export interface AssistantTurn {
   toolCalls?: AssistantToolCall[]
 }
 export interface AssistantContext {
+  taskSkill?: AssistantTaskTemplate
+  referenceResources?: readonly AssistantReferenceResource[]
+  /** Discovered for this generation only, not saved or accepted as permission. */
+  capabilities?: readonly AssistantCapability[]
   promptOverrides?: AssistantPromptOverrides
   contextSummary?: string
   contextStart?: number
@@ -107,6 +124,7 @@ export interface AssistantContext {
   canRunPageScripts?: boolean
   canConfigureDiscordBrowser?: boolean
   canUseBrowser?: boolean
+  activeBrowserPurpose?: 'general' | 'discord-setup'
   toolCallLimit?: number
   canSearchWeb?: boolean
   comparisonId?: string
@@ -115,6 +133,7 @@ export interface AssistantContext {
   pageContext?: { title: string; scope: string }
   canCaptureCurrent?: boolean
   canCaptureUi?: boolean
+  canCustomizeVue?: boolean
   canControlPet?: boolean
   petSummaryEnabled?: boolean
   assistantName?: string
@@ -124,6 +143,8 @@ export interface AssistantContext {
   globalCss?: string
   scopes: AppearanceScope[]
   css: Record<string, string>
+  /** Draft concurrency snapshot only; source is sent only by an explicit read_vue call. */
+  uiViews?: CustomUiViews
   currentScope: string
   mountedScopes?: string[]
   appDraft?: AssistantAppSummary
@@ -139,14 +160,20 @@ export interface AssistantRequest extends AssistantContext {
   recentProblem?: AssistantProblem
 }
 
-const ASSISTANT_RETRYABLE_WRITES = new Set(['update_css', 'update_global_css', 'apply_preset'])
+const ASSISTANT_RETRYABLE_WRITES = new Set([
+  'update_css',
+  'update_global_css',
+  'apply_preset',
+  'update_vue',
+  'apply_vue',
+])
 function isAssistantTutorialRequest(request: AssistantRequest): boolean {
   const latestUserTurn = [...request.history]
     .reverse()
     .find((turn) => turn.role === 'user' && !turn.contextExcluded)
   if (!latestUserTurn) return false
   const asksForTutorial =
-    /教程|使用方法|操作方法|操作步骤|怎么用|如何使用|怎么操作|教我(?:怎么|如何)/iu.test(
+    /教程|使用方法|操作方法|操作步骤|怎么用|如何使用|怎么操作|教我(?:怎么|如何)|在哪(?:里|儿)|哪里(?:改|设置|打开|找)/iu.test(
       latestUserTurn.text,
     )
   const asksToNavigate = /打开|带我.{0,3}(?:去|到)|跳转|切换到|进入|前往|导航到|定位到|指路/iu.test(
@@ -161,6 +188,9 @@ function getAssistantTurnTools(request: AssistantRequest) {
     : tools
 }
 export type AssistantReply =
+  | { action: 'task-skills'; operation: 'list' | 'read'; args: Record<string, string> }
+  | { action: 'resource-references'; operation: 'search' | 'read'; args: Record<string, string> }
+  | AssistantVueCommand
   | AssistantAppCommand
   | { action: 'online'; operation: 'search-web' | 'read-webpage'; args: Record<string, string> }
   | { action: 'run-page-script'; code: string; answer: string }
@@ -194,6 +224,7 @@ export type AssistantReply =
   | { action: 'keep-comparison'; id: string }
   | { action: 'undo-comparison'; id: string }
 export interface AssistantExecution {
+  resourceCitations?: AssistantResourceCitation[]
   /** Keep intermediate machine-readable reads out of visible chat while retaining them for the model. */
   showInChat?: boolean
   sources?: Array<{ title: string; url: string }>
@@ -213,6 +244,7 @@ export interface AssistantExecution {
 }
 
 export interface AssistantRunResult {
+  resourceCitations?: AssistantResourceCitation[]
   toolBudgetExhausted?: boolean
   reasoning?: string
   petSummary?: string
@@ -257,19 +289,20 @@ export class ProductAssistantService {
     let taskConversationRequired = false
     let expected = request
     const readScopes = new Set<string>()
+    const vueReads = new Map<string, { revision: string; files: Set<string>; paths: Set<string> }>()
+    let referenceReader: AppearanceReferenceReader | undefined
     let readGlobalCss = false
     const seen = new Set<string>()
     const discoveredTools = new Map<string, string>()
     const githubReads = new Map<string, { callId: string; data: Record<string, unknown> }>()
     let finishRepeatedReads = false
     let failedGithubRead = false
-    let githubReadStopReported = false
-    const discordTask = request.history.some(
-      (turn) => !turn.contextExcluded && turn.status === 'discord-setup-internal',
-    )
+    let discordTask =
+      request.mode !== 'appearance' && request.activeBrowserPurpose === 'discord-setup'
     const failedWrites = new Map<string, number>()
     let stopAfterRepeatedWriteFailure = false
     let captured = 0
+    let vueCancelled = false
     let allowedTools = getAssistantTurnTools(request)
     let count = 0
     const toolCallLimit = normalizeAssistantToolCallLimit(request.toolCallLimit) ?? Infinity
@@ -281,6 +314,19 @@ export class ProductAssistantService {
       warning?: string,
       problem?: AssistantProblem,
     ): AssistantRunResult => ({
+      resourceCitations: receipts
+        .flatMap((item) => item.resourceCitations ?? [])
+        .filter(
+          (item, index, all) =>
+            all.findIndex(
+              (v) =>
+                v.id === item.id &&
+                v.contentHash === item.contentHash &&
+                v.locator === item.locator &&
+                v.start === item.start,
+            ) === index,
+        )
+        .slice(-20),
       text,
       sources: receipts
         .flatMap((item) => item.sources ?? [])
@@ -308,6 +354,7 @@ export class ProductAssistantService {
       const value = await host.execute(command, expected, signal)
       if (
         !['inspect', 'presets', 'diagnose', 'pet-expression'].includes(command.action) &&
+        !(command.action === 'vue' && command.operation === 'read') &&
         !(
           command.action === 'app' &&
           ['files', 'read', 'errors', 'progress'].includes(command.operation)
@@ -316,6 +363,14 @@ export class ProductAssistantService {
       ) {
         receipts.push(value)
         host.onExecution?.(value)
+      }
+      if (command.action === 'vue' && value.ok !== false) {
+        const current = host.getContext()
+        const uiViews = { ...(expected.uiViews ?? {}) }
+        const view = current.uiViews?.[command.scope as keyof CustomUiViews]
+        if (view) uiViews[command.scope as keyof CustomUiViews] = view
+        else delete uiViews[command.scope as keyof CustomUiViews]
+        expected = { ...expected, uiViews }
       }
       // Refresh only after our own successful write. Reads never mask a concurrent manual edit.
       if (
@@ -333,11 +388,16 @@ export class ProductAssistantService {
             : {
                 ...current,
                 mode: expected.mode,
+                capabilities: expected.capabilities,
+                taskSkill: expected.taskSkill,
+                referenceResources: expected.referenceResources,
                 appDraft: expected.appDraft,
                 history: request.history,
               }
-        if (command.action === 'undo') readScopes.clear()
-        else if (command.action === 'style' || command.action === 'apply-preset')
+        if (command.action === 'undo') {
+          readScopes.clear()
+          vueReads.clear()
+        } else if (command.action === 'style' || command.action === 'apply-preset')
           readScopes.delete(command.scope)
         else if (command.action === 'global-style') readGlobalCss = false
       }
@@ -347,40 +407,214 @@ export class ProductAssistantService {
       if (request.toolCallingEnabled === false || host.getContext().toolCallingEnabled === false)
         throw new Error('工具调用已关闭，未执行工具')
       if (!allowedTools.some((tool) => tool.name === call.name)) {
-        if (
-          discordTask &&
-          (failedGithubRead || finishRepeatedReads) &&
-          ['read_webpage', 'search_web'].includes(call.name)
-        )
+        if (discordTask && failedGithubRead && ['read_webpage', 'search_web'].includes(call.name))
           throw new Error(
             '本轮 GitHub API 读取已停止；可以用已授权配置浏览器核验实际网页，不重复 API 请求',
           )
         throw new Error('当前模式未开放这个工具，请先切换助手模式')
       }
+      if (stopAfterRepeatedWriteFailure && ASSISTANT_RETRYABLE_WRITES.has(call.name))
+        throw new Error('同类写入连续失败，先重新定位；本轮不继续叠加修改，任务尚未完成')
       const args = argumentsFor(call)
+      if (['list_task_skills', 'read_task_skill'].includes(call.name)) {
+        const value = await execute({
+          action: 'task-skills',
+          operation: call.name === 'list_task_skills' ? 'list' : 'read',
+          args,
+        })
+        if (call.name === 'read_task_skill' && value.ok !== false) {
+          const skill = normalizeAssistantTaskTemplate(value.data?.skill as AssistantTaskTemplate)
+          if (!assistantSkillMatchesMode(skill, expected.mode))
+            throw new Error('技能与当前模式不匹配；先按用户任务切换模式，再读取技能')
+          expected = {
+            ...expected,
+            taskSkill: skill,
+            mode: expected.mode === 'auto' ? (skill.mode ?? 'auto') : expected.mode,
+            capabilities: [
+              ...new Set([...(expected.capabilities ?? []), ...(skill.capabilities ?? [])]),
+            ],
+          }
+          allowedTools = getAssistantTurnTools(expected)
+          messages[0] = buildAssistantMessages(expected)[0]!
+        }
+        return { ok: value.ok !== false, ...value.data }
+      }
+      if (['search_selected_resources', 'read_resource_excerpt'].includes(call.name)) {
+        if (!host.getContext().referenceResources?.length)
+          throw new Error('请先由用户选择资料，不能读取未选资源')
+        const value = await execute({
+          action: 'resource-references',
+          operation: call.name === 'search_selected_resources' ? 'search' : 'read',
+          args,
+        })
+        return { ok: value.ok !== false, ...value.data }
+      }
+      if (['read_vue', 'update_vue', 'preview_vue', 'apply_vue'].includes(call.name)) {
+        if (!host.getContext().canCustomizeVue) throw new Error('当前宿主尚未开放Vue自定义工具')
+        const scope = args.scope!
+        if (call.name === 'read_vue' && !readScopes.has(scope))
+          throw new Error('请先read_css核对该区域；CSS无法完成目标时再说明原因读取Vue')
+        const read = vueReads.get(scope)
+        if (call.name !== 'read_vue' && !read) throw new Error('请先read_vue读取该APP源码')
+        if (
+          call.name === 'update_vue' &&
+          read!.paths.has(args.path!) &&
+          !read!.files.has(args.path!)
+        )
+          throw new Error('修改已有文件前必须read_vue读取该文件')
+        const operation = (
+          {
+            read_vue: 'read',
+            update_vue: 'write',
+            preview_vue: 'preview',
+            apply_vue: 'apply',
+          } as const
+        )[call.name as 'read_vue' | 'update_vue' | 'preview_vue' | 'apply_vue']
+        const value = await execute({
+          action: 'vue',
+          operation,
+          scope,
+          ...(args.path ? { path: args.path } : {}),
+          ...(args.code !== undefined ? { code: args.code } : {}),
+          ...(args.entry ? { entry: args.entry } : {}),
+          ...(read ? { revision: read.revision } : {}),
+        })
+        if (value.cancelled) vueCancelled = true
+        if (value.ok !== false) {
+          const revision = value.data?.revision
+          if (typeof revision !== 'string') throw new Error('Vue工具未返回源码版本，不能继续写入')
+          const files = Array.isArray(value.data?.files)
+            ? (value.data.files as Array<{ path: string }>)
+            : []
+          if (call.name === 'read_vue') {
+            const entry =
+              read?.revision === revision
+                ? read
+                : { revision, files: new Set<string>(), paths: new Set<string>() }
+            if (typeof value.data?.path === 'string') entry.files.add(value.data.path)
+            files.forEach((file) => entry.paths.add(file.path))
+            vueReads.set(scope, entry)
+            if (expected.mode === 'appearance')
+              allowedTools = [
+                ...allowedTools,
+                ...PRODUCT_ASSISTANT_TOOLS.filter(
+                  (tool) =>
+                    ['update_vue', 'preview_vue', 'apply_vue'].includes(tool.name) &&
+                    !allowedTools.some((item) => item.name === tool.name),
+                ),
+              ]
+            const { default: catalog } = await import('virtual:srl-appearance-reference')
+            check()
+            return {
+              ok: true,
+              ...value.data,
+              interfaces: catalog.vue ?? [],
+              hint: `${value.data?.hint ?? ''} Vue仅处理CSS无法完成的部分：${args.reason}。其余外观继续CSS。先update_vue写草稿，preview_vue验证启动，再apply_vue试用；试用须用户保留，保存预设不等于应用。截图不能读取iframe像素，不称看过Vue预览。`,
+            }
+          }
+          if (call.name === 'update_vue') {
+            read!.revision = revision
+            read!.files.clear()
+            if (args.path) read!.paths.add(args.path)
+          } else if (call.name === 'apply_vue') read!.revision = revision
+        }
+        return {
+          ok: value.ok !== false,
+          text: value.text,
+          ...(value.cancelled ? { cancelled: true } : {}),
+          ...value.data,
+        }
+      }
       if (call.name === 'configure_discord_browser') {
         if (!host.getContext().canConfigureDiscordBrowser)
           throw new Error('当前 APK 没有配置浏览器能力')
         const value = await execute({ action: 'discord-setup', args })
-        return { ok: value.ok !== false, text: value.text, ...value.data }
+        const completed = value.ok !== false && value.data?.step === 'done'
+        expected = {
+          ...expected,
+          activeBrowserPurpose: completed ? undefined : host.getContext().activeBrowserPurpose,
+          capabilities: completed
+            ? expected.capabilities?.filter((item) => item !== 'discord')
+            : expected.capabilities,
+        }
+        discordTask = expected.activeBrowserPurpose === 'discord-setup'
+        allowedTools = getAssistantTurnTools(expected)
+        messages[0] = buildAssistantMessages(expected)[0]!
+        return {
+          ok: value.ok !== false,
+          text: value.text,
+          ...value.data,
+          guidance: assistantDiscordGuidance(value.data?.step, value.data?.task),
+        }
       }
       if (call.name === 'browser') {
         if (!host.getContext().canUseBrowser) throw new Error('当前设备没有通用网页协助能力')
         const value = await execute({ action: 'browser', args })
+        const completed =
+          value.ok !== false &&
+          (args.operation === 'close' ||
+            (args.operation === 'finish' && value.data?.verified === true))
+        expected = {
+          ...expected,
+          activeBrowserPurpose: completed ? undefined : host.getContext().activeBrowserPurpose,
+          capabilities: completed
+            ? expected.capabilities?.filter((item) => item !== 'browser')
+            : expected.capabilities,
+        }
+        discordTask = expected.activeBrowserPurpose === 'discord-setup'
+        allowedTools = getAssistantTurnTools(expected)
+        messages[0] = buildAssistantMessages(expected)[0]!
         return { ok: value.ok !== false, text: value.text, ...value.data }
       }
       if (call.name === 'select_mode') {
         if (!['appearance', 'features', 'creation'].includes(args.mode!))
           throw new Error('工作模式无效')
-        expected = { ...expected, mode: args.mode as AssistantMode }
-        allowedTools = getAssistantTurnTools(expected)
-        // Auto can later choose a different domain, without changing saved preferences.
-        allowedTools = [
-          ...allowedTools,
-          PRODUCT_ASSISTANT_TOOLS.find((tool) => tool.name === 'select_mode')!,
-        ]
+        if (args.capability && !Object.hasOwn(ASSISTANT_CAPABILITY_TOOLS, args.capability))
+          throw new Error('未知任务能力，请使用select_mode列出的能力')
+        if (
+          args.capability &&
+          ((args.mode === 'appearance' && args.capability !== 'skills') ||
+            (['custom-tools', 'tool-authoring'].includes(args.capability) &&
+              args.mode !== 'creation'))
+        )
+          throw new Error('外观只加载美化工具；自定义工具制作须使用creation模式')
+        const capabilities = args.mode === expected.mode ? [...(expected.capabilities ?? [])] : []
+        if (args.capability && !capabilities.includes(args.capability as AssistantCapability))
+          capabilities.push(args.capability as AssistantCapability)
+        const current = host.getContext()
+        const next = {
+          ...expected,
+          mode: args.mode as AssistantMode,
+          capabilities,
+          canUseNetwork: expected.canUseNetwork && current.canUseNetwork,
+          canSearchWeb: expected.canSearchWeb && current.canSearchWeb,
+          canUseBrowser: expected.canUseBrowser && current.canUseBrowser,
+          canConfigureDiscordBrowser:
+            expected.canConfigureDiscordBrowser && current.canConfigureDiscordBrowser,
+          canRunPageScripts: expected.canRunPageScripts && current.canRunPageScripts,
+          canControlPet: expected.canControlPet && current.canControlPet,
+        }
+        const nextTools = getAssistantTurnTools(next)
+        if (
+          args.capability &&
+          !nextTools.some((tool) =>
+            (
+              ASSISTANT_CAPABILITY_TOOLS[
+                args.capability as AssistantCapability
+              ] as readonly string[]
+            ).includes(tool.name),
+          )
+        )
+          throw new Error('该能力未获设置授权或当前设备不支持；未加载工具')
+        expected = next
+        allowedTools = nextTools
         messages[0] = buildAssistantMessages(expected)[0]!
-        return { ok: true, mode: args.mode }
+        return {
+          ok: true,
+          mode: args.mode,
+          capabilities,
+          tools: allowedTools.map(({ name }) => name),
+        }
       }
       if (call.name === 'search_conversation') {
         const terms = args.query!.toLocaleLowerCase().trim().split(/\s+/u).filter(Boolean)
@@ -599,14 +833,15 @@ export class ProductAssistantService {
         }
       if (call.name === 'get_feature_help') {
         const query = args.query!.trim()
+        const detail = args.detail ?? 'usage'
+        if (!['usage', 'diagnosis', 'source'].includes(detail)) throw new Error('未知说明类型')
         if (/登录|登陆|oauth|账号认证|认证绕过|login/iu.test(query))
           throw new Error('登录与认证不在功能说明范围内')
         const guides = findAssistantFeatureGuides(query)
         const words = query.toLowerCase().replace(/\s+/gu, '')
         return {
           ok: true,
-          ...(['auto', 'features'].includes(host.getContext().mode ?? 'auto') &&
-          host.getContext().canUseNetwork
+          ...(detail === 'source' && host.getContext().canUseNetwork
             ? { sourceRepositories: assistantFeatureSourceRepositories(guides) }
             : {}),
           guides: guides.map(
@@ -614,10 +849,9 @@ export class ProductAssistantService {
               id,
               title,
               entry,
-              steps,
-              troubleshooting,
-              implementation,
-              owners,
+              ...(detail === 'usage' ? { steps } : {}),
+              ...(detail === 'diagnosis' ? { troubleshooting } : {}),
+              ...(detail === 'source' ? { implementation, owners } : {}),
             }),
           ),
           help: guides.map((guide) => `${guide.title}：${guide.entry.join(' → ')}`),
@@ -672,7 +906,18 @@ export class ProductAssistantService {
       if (call.name === 'read_css') {
         const css = expected.css[scope!.value] ?? ''
         if (css.length > 40_000) throw new Error('当前局部 CSS 超过 40000 字符，请先精简')
-        const { default: sources } = await import('virtual:srl-appearance-starter-css-source')
+        if (!referenceReader) {
+          const [{ default: catalog }, { createInstalledAppearanceReferenceReader }] =
+            await Promise.all([
+              import('virtual:srl-appearance-reference'),
+              import('./AppearanceReferenceService'),
+            ])
+          check()
+          referenceReader = await createInstalledAppearanceReferenceReader(catalog)
+        }
+        const catalog = await referenceReader.read(scope!.appId ? [scope!.appId] : [], signal)
+        const { assistantAppearanceReference } =
+          await import('./ProductAssistantAppearanceReference')
         check()
         readScopes.add(scope!.value)
         return {
@@ -680,8 +925,14 @@ export class ProductAssistantService {
           scope: scope!.value,
           selector: scope!.selector,
           css,
-          builtinCss: sources[scope!.value] ?? '',
-          hint: '宿主包装 @scope，根节点用 :scope；没有内置片段时先 inspect_ui 查看真实类名。',
+          reference: assistantAppearanceReference(
+            catalog,
+            scope!,
+            args.query,
+            readAssistantOffset(args.offset),
+          ),
+          hasGlobalCss: Boolean(expected.globalCss?.trim()),
+          hint: '宿主包装 @scope，根节点用 :scope；存在全局CSS时注意覆盖。未命中先inspect_ui，不猜类名。',
         }
       }
       if (call.name === 'read_global_css') {
@@ -779,24 +1030,25 @@ export class ProductAssistantService {
           return output('工具调用已关闭，已停止后续工具和模型请求。已完成的操作保留。')
         const recoveringBrowser =
           discordTask && allowedTools.some((tool) => tool.name === 'configure_discord_browser')
-        if (recoveringBrowser && (failedGithubRead || finishRepeatedReads))
+        if (recoveringBrowser && failedGithubRead)
           allowedTools = allowedTools.filter(
             (tool) => !['read_webpage', 'search_web'].includes(tool.name),
           )
         const requestTools =
-          count < toolCallLimit &&
-          (!finishRepeatedReads || recoveringBrowser) &&
-          (!failedGithubRead || recoveringBrowser) &&
-          !stopAfterRepeatedWriteFailure
-            ? allowedTools
+          count < toolCallLimit
+            ? allowedTools.filter(
+                (tool) =>
+                  !(failedGithubRead && ['read_webpage', 'search_web'].includes(tool.name)) &&
+                  !(stopAfterRepeatedWriteFailure && ASSISTANT_RETRYABLE_WRITES.has(tool.name)),
+              )
             : []
-        if ((failedGithubRead || finishRepeatedReads) && !githubReadStopReported) {
+        messages[0] = buildAssistantMessages(expected)[0]!
+        if (failedGithubRead || finishRepeatedReads) {
           const reason = failedGithubRead ? 'GitHub 读取失败' : 'GitHub 读取已重复'
-          messages[0]!.content = `${String(messages[0]!.content)}\n${reason}。${recoveringBrowser ? '本轮停止 GitHub API 读取，不重复 API 请求；已授权的配置浏览器仍可用，请用 configure_discord_browser 观察实际网页处理用户的问题，不把 API 失败说成网页权限缺失或要求用户代提交。' : '本轮停止后续联网读取，不重试或换路径尝试；根据真实回执简短回答，不再申请工具，不足处如实说明。'}`
-          githubReadStopReported = true
+          messages[0]!.content = `${String(messages[0]!.content)}\n${reason}。${failedGithubRead ? '本轮停止该API，不重试或换路径重试；' : '同一内容复用已有回执，只读取定位所必需的新资料；'}仍可用其它已授权能力定位和核验。未定位或未复验不能称修复完成；确有证据缺口说明阻塞与下一步。`
         }
         if (stopAfterRepeatedWriteFailure)
-          messages[0]!.content = `${String(messages[0]!.content)}\n同一种美化写入已连续失败两次，停止本轮后续工具调用；根据失败回执简短说明原因，不要再次提交相同或改写后的全局/局部 CSS。`
+          messages[0]!.content = `${String(messages[0]!.content)}\n同一种美化写入已连续失败两次，本轮停止继续写入；可读取和检查失败入口，重新定位，不叠补丁。任务仍未完成，不把一次读取成功当作修复。`
         if (
           count === toolCallLimit &&
           allowedTools.some((tool) => tool.name === 'configure_discord_browser')
@@ -837,14 +1089,6 @@ export class ProductAssistantService {
             reasoning: result.reasoning,
           }
         }
-        if (finishRepeatedReads && !recoveringBrowser)
-          return output(
-            '已停止重复读取。已取得的资料保留；本次没有继续执行工具，请根据资料明确下一步问题。',
-          )
-        if (stopAfterRepeatedWriteFailure && calls.length)
-          return output(
-            '同一项美化写入连续失败两次，已停止本轮工具调用；请查看失败原因后再决定是否重试。',
-          )
         if (count + calls.length > toolCallLimit)
           return {
             ...output(
@@ -890,7 +1134,15 @@ export class ProductAssistantService {
           host.onToolCall?.({ ...activity, state: 'running' })
           let value: Record<string, unknown>
           try {
-            if (['open_feature', 'select_mode'].includes(call.name) && call !== calls.at(-1))
+            if (!requestTools.some((tool) => tool.name === call.name))
+              throw new Error(
+                '当前任务未开放该工具或本轮已停止该操作；按select_mode加载必要且已授权能力，不能把未执行当完成',
+              )
+            if (vueCancelled) throw new Error('Vue预览或试用已取消，未执行后续操作')
+            if (
+              ['open_feature', 'select_mode', 'read_task_skill'].includes(call.name) &&
+              call !== calls.at(-1)
+            )
               throw new Error(`${call.name} 必须是本轮最后一个工具`)
             value = await invoke(call)
             if (call.name === 'read_webpage' && value.reused === true) reusedReads++
@@ -899,7 +1151,12 @@ export class ProductAssistantService {
             check()
             value = { ok: false, error: error instanceof Error ? error.message : '工具执行失败' }
           }
-          if (value.ok === false && call.name === 'read_webpage') failedGithubRead = true
+          if (
+            value.ok === false &&
+            call.name === 'read_webpage' &&
+            requestTools.some((tool) => tool.name === call.name)
+          )
+            failedGithubRead = true
           if (call.name === 'configure_discord_browser' && value.taskConversationRequired === true)
             taskConversationRequired = true
           if (ASSISTANT_RETRYABLE_WRITES.has(call.name)) {
@@ -934,8 +1191,9 @@ export class ProductAssistantService {
             toolError: value.ok === false,
           })
         }
-        finishRepeatedReads = reusedReads === calls.length
+        finishRepeatedReads ||= reusedReads === calls.length
         check()
+        if (vueCancelled) return output('Vue操作已取消；源码草稿保留，未继续执行后续操作。')
         if (taskConversationRequired) return output('已转到本次独立网页协助对话。')
         if (receipts.some((item) => item.navigation))
           return output(
@@ -975,6 +1233,8 @@ export class ProductAssistantService {
         warning,
         signal.aborted ? undefined : problem,
       )
+    } finally {
+      referenceReader?.clear()
     }
   }
 }

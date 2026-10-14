@@ -57,9 +57,9 @@ export const DISCORD_SETUP_STEPS = [
   },
   {
     id: 'github-sync',
-    title: '更新自己的 Fork 分支',
+    title: '核对并更新部署仓库分支',
     site: 'github',
-    hint: '先登录 GitHub，进入自己的 Fork。点 Sync fork → Update branch。保留自己的 Wrangler 配置；出现冲突或 Discard commits 不要覆盖，先返回助手说明卡在哪一步。',
+    hint: '先核对 Worker 实际部署仓库与分支。Fork 才 Sync fork → Update branch；登录者拥有源仓库则核验当前提交，不找 Fork。已最新就复用，保留自己的配置；有冲突先查差异，不点 Discard commits。',
   },
   {
     id: 'cf-deploy',
@@ -162,6 +162,9 @@ export interface DiscordSetupState {
   step: DiscordSetupStep
   startedAt: number
   forkRepo?: string
+  repositoryKind?: 'fork'
+  githubBranch?: string
+  githubFile?: 'wrangler.jsonc' | 'wrangler.json'
   applicationId?: string
   workerUrl?: string
   workerConfirmedAt?: number
@@ -215,10 +218,14 @@ export function normalizeDiscordSetupState(value: unknown): DiscordSetupState | 
     state.appliedDatabaseId = input.appliedDatabaseId
   if (
     typeof input.forkRepo === 'string' &&
-    /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u.test(input.forkRepo) &&
-    !input.forkRepo.startsWith('jixiangruyi117/')
+    /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u.test(input.forkRepo)
   )
     state.forkRepo = input.forkRepo
+  if (input.repositoryKind === 'fork') state.repositoryKind = input.repositoryKind
+  if (typeof input.githubBranch === 'string' && validSetupBranch(input.githubBranch))
+    state.githubBranch = input.githubBranch
+  if (input.githubFile === 'wrangler.jsonc' || input.githubFile === 'wrangler.json')
+    state.githubFile = input.githubFile
   if (typeof input.applicationId === 'string' && /^\d{17,20}$/u.test(input.applicationId))
     state.applicationId = input.applicationId
   if (Number.isFinite(input.workerConfirmedAt))
@@ -251,6 +258,39 @@ export function isSetupForkPage(url: URL, repo?: string): boolean {
     url.hostname === 'github.com' &&
     (url.pathname === `/${repo}` || url.pathname.startsWith(`/${repo}/`))
   )
+}
+export function validSetupBranch(branch: string): boolean {
+  return (
+    !!branch &&
+    branch.length <= 200 &&
+    ![...branch].some(
+      (char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127 || '~^:?*[\\'.includes(char),
+    ) &&
+    !branch.includes('..') &&
+    !branch.includes('@{') &&
+    !branch.startsWith('/') &&
+    !branch.endsWith('/') &&
+    !branch.endsWith('.') &&
+    !branch.includes('//') &&
+    branch.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'))
+  )
+}
+export function setupWranglerPage(
+  url: URL,
+  state: DiscordSetupState,
+  kind?: 'edit' | 'blob',
+): boolean {
+  if (!isSetupForkPage(url, state.forkRepo)) return false
+  const match = url.pathname.match(/\/(edit|blob)\/(.+)\/(wrangler\.jsonc?)$/u)
+  if (!match || (kind && match[1] !== kind)) return false
+  try {
+    return (
+      decodeURIComponent(match[2]!) === (state.githubBranch ?? 'main') &&
+      match[3] === (state.githubFile ?? 'wrangler.jsonc')
+    )
+  } catch {
+    return false
+  }
 }
 export function setupParameterStep(value: string): 'discord-app' | 'd1-uuid' | undefined {
   const url = new URL(value)
@@ -291,5 +331,5 @@ export function discordSetupUrl(state: DiscordSetupState): string | undefined {
   if (state.step === 'github-fork')
     return 'https://github.com/jixiangruyi117/SRL-Discord-Bridge/fork'
   if (!state.forkRepo) return 'https://github.com/'
-  return `https://github.com/${state.forkRepo}${state.step === 'wrangler-edit' ? '/edit/main/wrangler.jsonc' : ''}`
+  return `https://github.com/${state.forkRepo}${state.step === 'wrangler-edit' ? `/edit/${encodeURIComponent(state.githubBranch ?? 'main')}/${state.githubFile ?? 'wrangler.jsonc'}` : ''}`
 }

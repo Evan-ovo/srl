@@ -2,7 +2,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import DiscordSetupAssistant from './DiscordSetupAssistant.vue'
 import { discordSetupService } from '../core/AppContainer'
-import { hasDiscordSetupBrowser } from '../services/AssistantBrowserRuntime'
+import { hasDiscordSetupBrowser, discordSetupSession } from '../services/AssistantBrowserRuntime'
 import { useAssistantHelpContext } from '../composables/UseAssistantHelpContext'
 
 import { useTransientStatus } from '../composables/UseTransientStatus'
@@ -440,6 +440,13 @@ async function clearBotToken(): Promise<void> {
 <template>
   <Teleport to="body">
     <div
+      v-show="
+        !(
+          discordSetupSession.active &&
+          discordSetupSession.webStepActive &&
+          discordSetupSession.chatPresentation
+        )
+      "
       class="resource-source-advanced-overlay mobile-dialog-viewport"
       role="presentation"
       @click.self="emit('close')"
