@@ -568,6 +568,7 @@ async function loadModels(): Promise<void> {
   border: 1px solid var(--control-border, var(--color-line-strong));
   border-radius: var(--control-radius, var(--glass-radius-control));
   background: var(--control-background);
+  box-shadow: var(--control-shadow);
   pointer-events: none;
 }
 .main-api-settings label.main-api-settings__parameter-line {
@@ -597,6 +598,7 @@ async function loadModels(): Promise<void> {
   border: 0;
   border-radius: var(--control-radius, var(--glass-radius-control));
   background: transparent;
+  box-shadow: none;
   color: var(--color-ink);
   font: inherit;
   font-size: 0.875rem;
@@ -645,6 +647,7 @@ async function loadModels(): Promise<void> {
   font-size: 0.875rem;
   color: var(--color-ink);
   background: transparent;
+  box-shadow: none;
 }
 .main-api-settings__button-face {
   display: inline-flex;
@@ -698,6 +701,7 @@ async function loadModels(): Promise<void> {
   border-radius: var(--control-radius, var(--glass-radius-control));
   font-size: 0.875rem;
   background: var(--control-background);
+  box-shadow: var(--control-shadow);
 }
 .main-api-settings :deep(.inline-model-picker__field::before) {
   content: '';
@@ -708,12 +712,14 @@ async function loadModels(): Promise<void> {
   border: 1px solid var(--control-border, var(--color-line-strong));
   border-radius: var(--control-radius, var(--glass-radius-control));
   background: var(--control-background);
+  box-shadow: var(--control-shadow);
   pointer-events: none;
 }
 .main-api-settings :deep(.inline-model-picker__field > input) {
   grid-area: 1 / 1;
   border: 0;
   background: transparent;
+  box-shadow: none;
 }
 .main-api-settings :deep(.inline-model-picker button) {
   font-size: 0.875rem;
@@ -724,6 +730,7 @@ async function loadModels(): Promise<void> {
   min-height: var(--size-touch);
   border: 0;
   background: transparent;
+  box-shadow: none;
 }
 .main-api-settings :deep(.inline-model-picker__field > button::before) {
   content: '';
@@ -733,6 +740,7 @@ async function loadModels(): Promise<void> {
   border: 1px solid var(--button-border, var(--color-line-strong));
   border-radius: var(--button-radius, var(--glass-radius-control));
   background: var(--button-background, var(--glass-panel-strong));
+  box-shadow: var(--button-shadow, var(--glass-shadow));
   pointer-events: none;
 }
 </style>

@@ -1,15 +1,5 @@
-<script setup lang="ts">
-import { chatReaderAppearance, readChatReaderColors } from '../utils/ChatReaderAppearance'
-const appearance = chatReaderAppearance(readChatReaderColors())
-</script>
-
 <template>
-  <section
-    class="chat-reader-startup"
-    :style="appearance"
-    aria-busy="true"
-    aria-label="读了么阅读工作区"
-  >
+  <section class="chat-reader-startup" aria-busy="true" aria-label="读了么阅读工作区">
     <p role="status">正在打开读了么…</p>
   </section>
 </template>
@@ -23,7 +13,7 @@ const appearance = chatReaderAppearance(readChatReaderColors())
   height: var(--app-viewport-height, 100dvh);
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   color: var(--color-ink-soft);
-  background: var(--reader-paper);
+  background: var(--color-canvas);
 }
 .chat-reader-startup p {
   position: absolute;

@@ -189,7 +189,17 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
       return
     }
     if (options?.assistant) appearanceTransaction.keep()
-    if (options?.views !== undefined) appearanceTransaction.rollback()
+    if (options?.views !== undefined || options?.presetId) appearanceTransaction.rollback()
+    if (
+      options?.presetId &&
+      !browserStorageService.getCustomUiPresets().some((preset) => preset.id === options.presetId)
+    ) {
+      showNotice('外观预设已不存在，请重新选择')
+      return
+    }
+    const previousPresetId = options?.presetId
+      ? browserStorageService.getActiveCustomUiPresetId()
+      : undefined
     const previousCss = browserStorageService.getCustomUiCss()
     const previousViews =
       options?.views === undefined ? {} : browserStorageService.getCustomUiViews()
@@ -203,6 +213,7 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
     const persist = (css: string) => browserStorageService.setCustomUiCss(css)
     if ((!nextCss || nextCss === previousCss) && !viewsChanged) {
       appearanceTransaction.clear(nextCss, apply, persist)
+      if (options?.presetId) browserStorageService.setActiveCustomUiPresetId(options.presetId)
       showNotice(nextCss ? '自定义 CSS 未发生变化' : '自定义 CSS 已清除')
       return
     }
@@ -218,6 +229,8 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
           : {}),
         onKeep: () => showNotice(options?.assistant ? 'AI 美化已保留' : '自定义 CSS 已确认保留'),
         onRollback: () => {
+          if (previousPresetId !== undefined)
+            browserStorageService.setActiveCustomUiPresetId(previousPresetId)
           if (viewsChanged) browserStorageService.setCustomUiViews(previousViews)
           showNotice(
             viewsChanged
@@ -228,6 +241,7 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
           )
         },
       })
+      if (options?.presetId) browserStorageService.setActiveCustomUiPresetId(options.presetId)
     } catch (error) {
       showNotice(
         error instanceof Error

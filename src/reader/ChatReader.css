@@ -21,6 +21,33 @@
 .builtin-shell .topbar {
   display: none;
 }
+/* 外层跟随宿主主题；阅读根的 --paper/--ink 等仍由原阅读偏好管理。
+ * 只在 UI 分支映射变量，避免颜色、字体或正文作者内容被全局主题改写。 */
+:host
+  .builtin-shell
+  :is(
+    .library,
+    #sheet,
+    #readerHeader,
+    .reader-bottom,
+    .reader-scripts,
+    .reader-menu,
+    .reader-position,
+    .toast
+  ) {
+  --paper: var(--color-canvas);
+  --surface: var(--color-surface-raised);
+  --ink: var(--color-ink);
+  --muted: var(--color-ink-soft);
+  --line: var(--color-line);
+  --accent: var(--color-accent);
+  --soft: var(--color-accent-soft);
+  --red: var(--color-danger);
+  color: var(--ink);
+}
+:host .chat-reader-surface.builtin-shell {
+  background: var(--color-canvas);
+}
 * {
   box-sizing: border-box;
 }
@@ -218,7 +245,7 @@ svg {
   gap: 14px;
   padding: 18px 20px;
   background: var(--soft);
-  border-radius: 7px;
+  border-radius: var(--radius-card, 7px);
   width: 100%;
   text-align: left;
   margin: 23px 0 10px;
@@ -265,8 +292,8 @@ svg {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  background: #e1e3d8;
-  color: #8a9381;
+  background: var(--soft);
+  color: var(--accent);
   font-size: 26px;
 }
 .role-info {
@@ -753,15 +780,15 @@ svg {
 dialog {
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: var(--dialog-radius, var(--radius-panel, 14px));
   width: min(470px, calc(100% - 28px));
   max-height: 85dvh;
-  background: var(--paper);
+  background: var(--dialog-background, var(--paper));
   color: var(--ink);
-  box-shadow: 0 15px 80px #14200f20;
+  box-shadow: var(--dialog-shadow, 0 15px 80px #14200f20);
 }
 dialog::backdrop {
-  background: #20291f45;
+  background: var(--overlay-background, #20291f45);
   backdrop-filter: blur(3px);
 }
 .sheet-head {
@@ -875,15 +902,15 @@ textarea {
   line-height: 1.7;
 }
 .primary {
-  background: var(--accent);
-  color: var(--surface);
-  border-radius: 5px;
+  background: var(--button-primary-background, var(--accent));
+  color: var(--button-primary-color, var(--color-on-accent, var(--surface)));
+  border-radius: var(--button-radius, var(--radius-control, 5px));
   padding: 12px 20px;
   min-height: 43px;
 }
 .secondary {
   background: var(--soft);
-  border-radius: 5px;
+  border-radius: var(--button-radius, var(--radius-control, 5px));
   padding: 11px 17px;
   min-height: 43px;
 }

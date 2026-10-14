@@ -56,16 +56,13 @@ describe('ExternalAppHost', () => {
     }),
   )
 
-  it('keeps the last reader paper while waiting for the native runtime', async () => {
+  it('uses the shared startup theme without discarding the saved reader colors', async () => {
     rememberChatReaderColors({ ...readChatReaderColors(), paper: '#202622' })
     getExternalApp.mockImplementationOnce(() => new Promise(() => {}))
     const wrapper = mount(ExternalAppHost, { props: { appId: 'com.srl.duleme', official: true } })
     try {
-      expect(
-        (wrapper.get('.chat-reader-startup').element as HTMLElement).style.getPropertyValue(
-          '--reader-paper',
-        ),
-      ).toBe('#202622')
+      expect(wrapper.get('.chat-reader-startup').attributes('style')).toBeUndefined()
+      expect(readChatReaderColors().paper).toBe('#202622')
       expect(wrapper.find('iframe').exists()).toBe(false)
     } finally {
       wrapper.unmount()
@@ -557,7 +554,7 @@ describe('ExternalAppHost', () => {
   it.each([
     { splashColor: undefined, splash: 'var(--color-accent)' },
     { splashColor: '#123456', splash: '#123456' },
-  ])('renders an isolated workspace shell with splash $splash', async ({ splashColor, splash }) => {
+  ])('keeps host theme with splash $splash', async ({ splashColor }) => {
     const featureHubEscape = vi.fn()
     window.addEventListener('keydown', featureHubEscape)
     getExternalApp.mockResolvedValue({
@@ -582,9 +579,12 @@ describe('ExternalAppHost', () => {
     expect(wrapper.get('.external-app-host__runtime').text()).toContain('独立工作区')
     expect(wrapper.get('.external-app-host__runtime').text()).toContain('本机 .srlapp · v1.0.0')
     expect(wrapper.get('.external-app-host__frame').attributes('sandbox')).toBe('allow-scripts')
-    expect(wrapper.get('.external-app-host__workspace').attributes('style')).toContain(
-      `--external-app-splash: ${splash}`,
-    )
+    expect(
+      (wrapper.get('.external-app-host__workspace').element as HTMLElement).style.getPropertyValue(
+        '--external-app-splash',
+      ),
+    ).toBe('')
+    expect((await getExternalApp.mock.results.at(-1)!.value).manifest.splashColor).toBe(splashColor)
 
     await wrapper.get('.external-app-host__fullscreen-toggle').trigger('click')
     expect(wrapper.classes()).toContain('external-app-host--fullscreen')

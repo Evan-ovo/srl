@@ -158,7 +158,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       'Bot Token不进入模型、聊天、任务记录、GitHub或自动截图。用户在同App Bot页完成验证并显示Token，点桌宠可单独确认本机加密保存；原生在本次App的Bot页先按字段关系查找，再按已渲染内容中的Token格式自行定位，支持文字展示、屏外位置和同值重复控件；不同有效值有歧义时拒绝，不读取验证密码或掩码字段。用一次性RSA-OAEP/AES-GCM密文交原SecretResourceService，最终用统一密码保护在原密钥资料卡。用户可解锁查看。也可自行保存后明确确认继续，未完成不去CF。没有或未解锁统一密码时直接出现居中原密码表单。CF Secret操作本次已确认网址对应的实际Worker，不要求默认名称或固定表单布局，名称DISCORD_BOT_TOKEN和Secret类型仍由本机核对；已保存Token用transfer-secret在本机盲转填，未保存等用户手填并确认，之后保存部署、核验真实健康。通用inspect/fill/截图不开放秘密页；模型只收阶段/成功状态。原连接设置可沿本机凭据owner转填已保存Token。重复采集、重开同一配置、建卡后进度保存失败均复用已有卡；删除或另一App的卡不静默重建/覆盖；旧重复资料保留。',
       '再次打开未完成协助先显示居中“继续上次配置 / 重新开始”及上次步骤；继续只打开保存步骤，不自动推进。重开须选定新路线才重置协助进度，已有D1、Worker和本机参数保留；模型start不能覆盖未完成任务，使用open续接或请用户在弹窗选重开。省Token模式关键步骤用固定原生清单由用户核对GitHub main同步/最新提交、CF当前生产部署、Secret保存部署、Discord端点验证与安装授权，清单不请求模型。代理模式按实际网页结果和本机健康证据自动核验公开步骤，安装授权交用户确认；仍在登录/授权/总览页、未核验成功或页面变化时不能直接标记完成。最终本机连接与命令检查须在本次任务开始后通过，且App/Worker与任务一致；完成提示仍请用户在Discord实际使用命令。',
       'Cloudflare Secret：按本次已确认网址定位实际 Worker，不要求默认名称。prepare 阶段可 inspect 公开标题/按钮/字段标签，自行搜索、滚动和打开添加/编辑入口；自动准备失败不是用户接手，可用三个 secret_*_target 绑定实际名称/类型/值字段，让本机在 Key/Name 填写 DISCORD_BOT_TOKEN，并选择 Secret 类型或勾选 Secret 加密框；已经选好时复用，不反复开关；Add variable and deploy 属于保存部署按钮。secret-value 仅提供写入位置，不读值；input 阶段已有加密 Token 用 transfer-secret 盲转填，否则等待用户填写。prepare/submit/saved 阶段都可操作当前页面公开控件、搜索、滚动和填写普通非秘密字段；实际保存/最终部署用 submit-secret 选择最新公开按钮 target，支持字段容器外、其他确认浮层、自定义 role=button 和变化文案，不因教程位置或固定文字拦截；自动识别仍优先所属表单/弹窗，不自动猜多个按钮。submitted 后本机健康核验再继续；弹窗关闭、回执缺失不等于操作失败。inspect 的 secretSavedOnPage 只说明唯一 DISCORD_BOT_TOKEN 的公开类型为 Secret 且表单已关闭，不读取 Value 列。已有保存结果用 advance-step 核验同 Worker 的健康及本机加密凭据；验证失败才编辑已有 Secret，不重复添加。submit 表单重建可 prepare-secret 重新绑定后盲填；表单关闭不能重新 Add。不要重复失败操作、创建重复 Secret 或重新部署来凑证据。Installation 有多个链接时选择实际同 App 官方链接 target，不要求用户代找。',
-      '更新 Worker 或注册指令先问用户卡在哪一步，浏览器也可选择续接步骤。更新复用本机现有连接，不以缺少部署资料卡要求重配，不拿旧卡Token覆盖现有Token；Worker更新确认同一根网址时没有卡就不新建仅含网址的卡。若网址改变，先居中确认并加密保存旧连接，再转完整Secret、端点、安装与连接切换。Worker 更新走自己 Fork 的 Sync fork/Update branch 并确认原 Worker 的 CF 部署，保留 Wrangler，遇到冲突或 Discard commits 不覆盖。Worker 已更新时跳过 GitHub 和 CF，直接重新安装/授权同一 App；Worker 未更新时先同步并部署。注册指令更新还需重新安装/授权同一 App，回原设置注册并核验命令；不能把安装成功当成注册成功。网页点击回执仅代表发出动作，未代表保存或部署成功；本次完成要求新的连接/命令检查。旧 APK 和普通网页不提供配置浏览器。',
+      '更新 Worker 或注册指令先问用户卡在哪一步，浏览器也可选择续接步骤。更新复用本机现有连接，不以缺少部署资料卡要求重配，不拿旧卡Token覆盖现有Token；Worker更新确认同一根网址时没有卡就不新建仅含网址的卡。若网址改变，先居中确认并加密保存旧连接，再转完整Secret、端点、安装与连接切换。Worker 更新走自己 Fork 的 Sync fork/Update branch 并确认原 Worker 的 CF 部署，保留 Wrangler，遇到冲突或 Discard commits 不覆盖。没有新提交时不会触发自动构建或产生新部署记录，更新可复用当前 Worker 已成功生效的生产部署；只有实际构建或排队才等待，未触发或失败时检查原 Worker 的设置与错误并处理。Worker 已更新时跳过 GitHub 和 CF，直接重新安装/授权同一 App；Worker 未更新时先同步并部署。注册指令更新还需重新安装/授权同一 App，回原设置注册并核验命令；不能把安装成功当成注册成功。网页点击回执仅代表发出动作，未代表保存或部署成功；本次完成要求新的连接/命令检查。旧 APK 和普通网页不提供配置浏览器。',
       '代理模式在本次Worker详情本机保存唯一HTTPS根网址到原连接设置和同一密钥卡；同App General Information填根网址+/interactions、保存并核验，Installation打开同App唯一官方安装链接，由用户选账号/目标并授权。模型只收操作状态，不返回参数值。省Token模式用桌宠里的手动工具与步骤续接。',
       '公开网页定位支持实际ARIA标签页、菜单、链接、单选/开关和自定义选项；按checked/invalid及公开feedback判断实际选择和表单错误，不反复切换，不把发出点击当作成功。scroll可指定inspect返回的菜单/列表target，仅滚动该容器；失效目标应重新观察。Cloudflare普通Worker构建设置可操作，变量设置和Secret表单只提供公开控件标签，秘密值始终保护。Worker根网址从当前Worker已渲染链接、只读框或URL文本本机识别，屏外亦可，多网址歧义不猜。cf-deploy及worker-url只把根网址存入本次任务和密钥卡；Secret、Discord端点及安装完成后，local-settings才一并回填本机连接。已加密Token先经本机解锁，再与本次App和Worker一次保存；解锁失败保留原连接，手填新App时不沿用旧App的Token。旧收件配对不阻止采集本次网址。检测到完整原连接时先居中选择复用并排查、配置其他连接或停止；相同配置核验后复用。切换App、公钥、Token或Worker前居中确认，将旧连接与配对资料经原资源/密码Owner加密保存为独立资源并读回，拒绝停止、备份失败不覆盖；关联随任务保存，状态刷新不产生新备份，旧云端资源不删除。不同App另建本次资料卡，原卡保留。Discord旧交互地址先备份并按确认时的原值替换，字段变化重新观察；已有CF Secret先用本次Token核验，匹配就复用；需要覆盖时先核对本机原Token可认证当前Worker并备份，旧秘密无法完整取回时不覆盖。不能把旧配对或备份问题误说成部署失败、重建Worker。配对存在不证明云端真的有待领取任务。Secret自动准备可定位屏外设置区，失败时模型按公开控件自主恢复；表格中已存在DISCORD_BOT_TOKEN时按Name列定位并打开编辑，不重复Add，不读取值列。Wrangler忽略隐藏/只读编辑器，完整文档校验仍必需。',
       '已配过但有问题：原连接设置的“检查部署配置”可检查 Worker /health、D1 查询、缺失变量、App ID/Public Key 真实性及命令注册；本机 Bot Token 只用于既有受保护核验请求，不交给模型。网页交互地址是否保存、实际安装账号和命令能否使用仍需网页/用户证据，不把接口检查通过当作全流程正确。桌宠原协助入口可选择“已经配置过，但有问题，帮我排查”，确认代理权限后调用同一连接检查；按真实问题沿同一独立对话进入原配置/更新修复路线，不另建聊天或密钥卡。停止和配置变化后的迟到结果不推进任务；不能声称任意网站结构或任意模型都已通过真实账号端到端验证。',
@@ -268,7 +268,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '统一外观优先在全局CSS的:root修改公共变量：--color-canvas控制页面与APP底色，--color-surface/--color-surface-raised控制内容区域与内层卡片，--glass-panel/--glass-panel-strong/--glass-panel-muted控制玻璃面板；页面和卡片不是同一个变量，对比图未换色不代表不能修改。--color-accent/--color-on-accent控制主按钮，--color-danger/--color-on-danger控制危险确认，--dialog-background/--dialog-radius/--dialog-border/--dialog-shadow控制公共弹窗，--overlay-background控制遮罩；通知默认沿用弹窗材质，也可用--notice-background/--notice-radius/--notice-border/--notice-shadow单独调整。--glass-radius-control控制控件，--button-radius可单独调整按钮。浮层不一定在页面局部CSS范围内，统一弹窗和通知使用全局变量；阅读正文、作者作品和独立APP的专属主题仍按各自外观范围处理。',
       '外层设置、主API和中继输入、导入导出、保险库、文件夹管理、资源来源管理及反馈页面使用公共控件变量：--button-background/--button-border/--button-color/--button-radius/--button-shadow控制普通按钮，--button-primary-background/--button-primary-border/--button-primary-color控制主按钮，--control-background/--control-border/--control-radius/--control-shadow控制输入框，--selection-background/--selection-border/--selection-color控制选中状态。分类颜色属于保存的数据，浅深主题示意图保持两种主题区别；品牌标识可用--color-brand-discord/--color-brand-github/--color-on-brand单独调整，存储图颜色可用--usage-color-*调整。',
       '常驻的外观、收藏柜、收件箱、云备份、扩展沿用公共控件变量；云备份方式与计划、文件夹筛选和整理选择沿用选中变量，备份范围、收件设置及扩展安装/管理弹窗沿用公共弹窗变量。收藏柜封面与资源占位底色可用--folder-cover-background、占位图文字和图案可用--folder-cover-color、备份范围的文件夹圆点可用--folder-indicator-color统一；留空沿用已保存的分类色和默认前景，不改变分类数据、自定义图片或教程截图。',
-      '抽了么、缝了么、前端了么、AI生图、生图相册、user才是老大、酒馆互传和蒜惹菈的操作控件沿用公共按钮、输入与选中变量。十连抽结果背景使用--dialog-background，完成/翻页按钮使用普通按钮变量，查看详情使用主按钮变量，缩略图选中使用选中变量，空卡面使用--control-background；十连抽弹层挂在页面外，修改这些全局变量即可统一，翻牌动画、角色图片和抽取规则保持。读了么与资源广场专属样式暂未统一。',
+      '抽了么、缝了么、前端了么、AI生图、生图相册、user才是老大、酒馆互传和蒜惹菈的操作控件沿用公共按钮、输入与选中变量。十连抽结果背景使用--dialog-background，完成/翻页按钮使用普通按钮变量，查看详情使用主按钮变量，缩略图选中使用选中变量，空卡面使用--control-background；十连抽弹层挂在页面外，修改这些全局变量即可统一，翻牌动画、角色图片和抽取规则保持。读了么的启动页、角色列表、导航与工具弹窗跟随公共主题；正文纸色和阅读偏好仍由读了么单独管理。',
       '选择APP或界面后优先编辑CSS；颜色、圆角、动效、字体直接在CSS代码中修改，不另设快捷面板。卡片横竖仅在手机宽度不超过860px生效；自定义CSS不要无条件写死卡片height/min-height/aspect-ratio或加important，否则会盖过系统尺寸规则。高度按data-resource-card-height、方向按data-mobile-card-orientation限定；固定正文可通过--resource-card-fixed-body-length调整，无封面为最低高度。外观文字按钮可见底色/边框归appearance-action-face，沿公共按钮变量；点击区域仍保留44px。高级：Vue自定义默认折叠，源码面板按当前功能区域编辑标题、布局、控件和交互；创建Vue模板默认不启用，启用或应用会说明可读取当前显示的非敏感内容及可调用的原有界面操作，不开放数据库或凭据。联网由设置中的允许远程资源统一控制，默认关闭。View.vue可直接改标题、返回按钮和本地交互，Layout/Region保留原布局上下文及动态列表/表单，Page.js只按当前界面的最新控件调用原操作；资源保存与导出仍归原控制器，不直接访问数据库。编辑区只提供源码、启用、预览和恢复默认，不另设文件或联网管理；旧单文件及多文件项目和素材保留，直接编辑其入口文件，不自动重写。自定义CSS右上角圆圈问号打开接口参考弹窗，可一键复制。源码预览跟随草稿：当前所选界面可见时取只读快照，不可见或联网预览时用明确的APP示例；现场快照不进入主题或备份。预览按钮不执行真实资源操作，原功能需要通过保存前预览试用；关闭高级区或切换界面释放预览，恢复默认需确认。',
       '源码在隔离iframe运行，通过window.srlUi.subscribe取得当前显示的非敏感界面与控件，通过invoke调用原控件；不开放底层服务、数据库或凭据。画布、图片、媒体、阅读器和受保护输入保持原实例，可用data-srl-native放置。网络默认关闭，运行权限单独确认；导入/备份恢复关闭源码运行及网络权限。',
       '蒜惹菈可按需检索和加载本机任务技能；技能提供步骤和能力需求，不覆盖用户目标或授予权限。用户先明确选择本机参考资料，助手才检索并读取带内容版本和原文定位的片段；不自动读取未选资源、凭据资料或聊天附件。',
@@ -508,7 +508,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     entry: ['功能', '目标 APP'],
     steps: [
       '在功能桌面找到目标 APP，未安装的官方 APP 先通过已有入口安装。',
-      '安装完成后打开；扩展 APP 的安装、权限和管理使用“扩展”入口。',
+      '安装完成后打开；扩展 APP 的安装、权限和管理使用“扩展”入口。第三方 APP 宿主启动条统一使用资源库强调色，不受安装包 splashColor 覆盖；隔离页面里的作者内容保持原样。',
       '更新多个官方 APP 时，进入“功能 → APP 管理”，勾选要更新的 APP 后点“更新所选”，或点“更新全部”。最多同时下载两个包，按顺序安装；每项显示真实进度，失败项可单独重试，更新保留原有数据。',
       '安装目录在当前运行中复用，安装和卸载后立即更新。日常打开只核对目标 APP 的安装记录和必要宿主依赖；需要完整文件校验时，打开“APP 管理”右上角问号，在“APP 管理说明”弹窗点“检查 APP 状态”，有损坏时点对应 APP 的“修复”，原有数据保留。',
       '也可以在 AI 助手中描述一个小 APP，生成草稿后试用并对话修改；明确要求后导出安装包或确认安装到扩展。',
@@ -567,7 +567,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     steps: [
       '先导入聊天记录，或通过酒馆互传接收；待绑定记录需明确选择角色卡或有效的随附角色资料。',
       '接收时选择“同时保存角色卡”，多份聊天随附字节完全相同的卡会复用同一资源并归在同一角色下；同名但文件不同不自动合并，已有重复副本也不会自动删除。',
-      '选择连续阅读、单楼滚动或分页模式；正文/状态栏显示异常时检查显示正则。',
+      '选择连续阅读、单楼滚动或分页模式；正文/状态栏显示异常时检查显示正则。内置阅读工作区的启动页、角色列表、导航和工具弹窗沿用资源库公共主题，阅读正文的纸色、护眼色、夜间模式和字号继续使用原阅读偏好。',
       '阅读设置中的“允许远程资源”控制远程图片、字体、样式和已启用脚本的远程依赖；内置读了么开启后不再额外询问 APP 联网授权，关闭仍阻止这些资源加载。',
       '正式内置读了么的普通资源读取不反复弹授权；身份需与构建随附的程序内容一致，同名或同 ID 的第三方包仍沿原权限确认。资源修改和文件操作保留原确认。',
       '在角色对应的记录中搜索、收藏楼层或查看已保存的变量快照。',
@@ -584,7 +584,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
 
       '同次运行中重复进入会复用已校验的内置程序包，每次仍检查实时安装状态；完全重启后重新准备，程序包准备失败可返回后再进入。',
       '打开时会先应用保存的外观并准备目标页面，再显示读了么；恢复阅读直接回到上次聊天，不先展示角色列表。准备期间授权仍可操作，失败会显示原错误。',
-      '准备阶段使用阅读底色；同次运行重新进入沿用上次显示的底色。完全重启先使用默认纸色，保存的外观仍在就绪时生效。',
+      '启动准备页使用资源库公共主题；内置阅读器就绪后仍使用原阅读偏好保存的阅读底色，同次运行和完全重启都不丢失阅读颜色。',
     ],
     implementation:
       '聊天解析保留未知字段并由 ResourceService 保存；ChatReaderService 分批读取，变量回顾只读快照。',
@@ -734,7 +734,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     ],
     entry: ['资源库设置', '主 API'],
     steps: [
-      '在主 API 配置页填写协议、接口地址、模型和密钥，保存后可选择设为主 API；蒜惹菈也能选择独立配置。',
+      '在主 API 配置页填写协议、接口地址、模型和密钥，保存后可选择设为主 API；蒜惹菈也能选择独立配置。普通输入和选择控件沿用统一材质变量，控件内部按钮不叠加第二层阴影。',
       '密钥保存方式和生成参数位于更多设置；助手 API 复用同一编辑器。密钥只在本机配置页填写；Android 优先存入系统 Keystore，浏览器使用本机加密存储。',
       '输出 Token 上限留空表示不主动附加上限，填入数值后按设置发送；MainApiService未指定请求期限时不设置本地自动超时；调用方仅在明确传入期限时才限制时长。蒜惹菈生成、联网搜索和对话压缩可手动停止；连接测试仍使用独立的短探测请求。',
     ],

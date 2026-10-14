@@ -1,5 +1,5 @@
 {
-  "knowledgeSha256": "9f76a53321264ff19981605f8d8700f5442345ac0cdc0a555840d88c348849da",
+  "knowledgeSha256": "b06b04453a123dd22d7c9400c4c08b1836fe4dac4121acbf19d68269e0a7d6a2",
   "sources": [
     {
       "path": "src/App.vue",
@@ -79,14 +79,14 @@
       "guides": [
         "chat-reader"
       ],
-      "sha256": "b51e3400e16bf26267f52c357ca0d89fe23f2a4cfae6f8709ed8904b1398bb5c"
+      "sha256": "7f5e9f415240d415c590324d58cda77b6e9c60612feddc917a27ee53f9b4b08e"
     },
     {
       "path": "src/components/ChatReaderStartup.vue",
       "guides": [
         "chat-reader"
       ],
-      "sha256": "35cf30371b43ee519a94590faf3c5b674485535ae45c87816d6df2691a64f326"
+      "sha256": "ac8758bb7b41d1d8889bbf16444a757a6df93c6e7bf8d6345f207acfdc8bd0f1"
     },
     {
       "path": "src/components/CloudBackupCenter.vue",
@@ -200,7 +200,7 @@
       "guides": [
         "chat-reader"
       ],
-      "sha256": "54d066bdef81d126fcaf6c9b91d9e4b92282b5068b88b2d2b8b425baa2ec4b17"
+      "sha256": "115013c32ff5275402eb544f15623e84b61cc59df52e78b463f20b074d1dceab"
     },
     {
       "path": "src/components/ExternalAppManager.vue",
@@ -276,7 +276,7 @@
         "assistant",
         "api"
       ],
-      "sha256": "8df338d17c90ea80b86fb9fff7e09c75c019ebbba75c6cf9580d1b36539ebb7d"
+      "sha256": "90f6e8822542aba25c43755136b443fca4e8939614bc4e17003ae7fd69517e99"
     },
     {
       "path": "src/components/NativeIntakeFiles.vue",
@@ -578,7 +578,7 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "70d6d8ddf943053f283b0251a601cced251f1ea084ffb4ad7995a3f918eec11d"
+      "sha256": "5c3020875c10eba92d9e9182b6cbeb51f486b4ca90cdf2889213749f8883113a"
     },
     {
       "path": "src/composables/UseAssistantHelpContext.ts",
@@ -795,7 +795,7 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "7c3753cd1d19b7537064c1e035b2245daefc7182b7f8e9ac056b6994832347e9"
+      "sha256": "c5707fcbe7ab19dfc125f89930a376854d8df7c90aac0514a855fa74a439f9d4"
     },
     {
       "path": "src/core/AppearanceSafety.ts",
@@ -1118,14 +1118,14 @@
       "guides": [
         "discord-posts"
       ],
-      "sha256": "c3d01996caf0ea7815240a8720f4d11786f48a15c7b04bffebb4c1c649492660"
+      "sha256": "3aea77b8e88240ee56891f166dd377bf60baebec0fff71c4241764ebd1d3c30f"
     },
     {
       "path": "src/services/DiscordSetupWorkflow.ts",
       "guides": [
         "discord-posts"
       ],
-      "sha256": "b1266b6b75d2a4df7ee24deb8a5eb521a78808e36ef8a50d00be5c653657f562"
+      "sha256": "156b223f83c08001644bf57fb1912ca87fb6b7294d118a4bcd96190d34d35508"
     },
     {
       "path": "src/services/DiscordSourceConnectionService.ts",
@@ -1654,7 +1654,7 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "e950e5412b888142dd040f83cdd9db8a6d750faf089b37af216574d26a1aa4cf"
+      "sha256": "2d718b4f27e7d8f729d3651a7479d2072accb1ffd260052dfe78a2d2afb872fc"
     },
     {
       "path": "src/utils/CharacterCardCustomization.ts",

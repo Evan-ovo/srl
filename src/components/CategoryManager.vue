@@ -113,7 +113,10 @@ function saveCategory(category: Category): void {
               <button class="text-button" type="button" @click="editingId = ''">取消</button>
             </template>
             <template v-else>
-              <span class="category-row__dot" :style="{ backgroundColor: category.color }"></span>
+              <span
+                class="category-row__dot"
+                :style="{ '--folder-saved-color': category.color }"
+              ></span>
               <span class="category-row__identity">
                 <strong class="category-row__name">{{ category.name }}</strong>
                 <small>{{ category.hidden ? '已从资源库与抽卡隐藏' : '正常显示' }}</small>

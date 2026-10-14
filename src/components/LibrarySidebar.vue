@@ -133,7 +133,10 @@ const vaultStatus = toRef(input.model, 'vaultStatus')
           type="button"
           @click="selectCategory(category.id)"
         >
-          <span class="category-nav__dot" :style="{ backgroundColor: category.color }"></span>
+          <span
+            class="category-nav__dot"
+            :style="{ '--folder-saved-color': category.color }"
+          ></span>
           <span>{{ category.name }}</span>
           <small>{{ countCategory(category.id) }}</small>
         </button>

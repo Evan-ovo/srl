@@ -185,6 +185,7 @@
   height: 0.625rem;
   flex: 0 0 auto;
   border-radius: 50%;
+  background-color: var(--folder-indicator-color, var(--folder-saved-color, var(--color-accent)));
   box-shadow:
     0 0 0 2px var(--color-surface),
     0 0 0 3px var(--color-line);

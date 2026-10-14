@@ -91,7 +91,9 @@ const meanings: Record<string, string> = {
   '--selection-color': '已选项目文字颜色',
   '--folder-cover-background': '收藏柜无封面占位图背景',
   '--folder-cover-color': '无封面占位图图案与文字颜色',
-  '--folder-indicator-color': '文件夹小圆点颜色，不改保存的分类颜色',
+  '--folder-indicator-color':
+    '侧栏、文件夹管理与备份范围的小圆点显示色；留空沿用保存的分类颜色，不改颜色选择框的实际值',
+  '--folder-saved-color': '文件夹已保存颜色的回退值；统一主题应修改 --folder-indicator-color',
   '--resource-card-fixed-body-length': '固定长度模式的卡片正文高度；无封面时为最低高度',
   '--size-touch': '可操作控件的点击区域尺寸',
   '--font-body': '正文字体',
@@ -288,7 +290,7 @@ export function createReferenceChapters(catalog: ReferenceCatalog): ReferenceCha
   })
 }
 
-export const CSS_REFERENCE_INTRO = `全局用 :root；APP 局部用 :scope，未改属性沿用全局。启动加载页 #srl-boot、本机准备页 #srl-native-preparation、系统迁移提示 .srl-native-migration-notice 使用全局 CSS；--boot-* 可单独改启动页。启动读取已保存的应用样式，试用未确认时恢复上一版，安全模式不应用自定义 CSS。CSS试用/启动恢复/Vue恢复提示位于受保护的 Shadow DOM，只能通过 --recovery-*、公共按钮与颜色变量改外观；普通选择器不能穿透保护层改内部布局。公共弹窗与通知需改全局。以下变量与选择器来自源码或已安装 APP 的实际 CSS；更具体的定义可能覆盖局部变量。带 .appearance-action-face 的按钮只给内层画背景和边框，外层 .appearance-action-hit 保持透明。 data-srl-controls 区域的普通按钮、文本输入、下拉框和文本域共用公共材质；返回键、页头动作、滑杆、色盘、复选框及开关不按普通文本控件处理。data-srl-dialog 标记公共弹窗材质；这些标记不控制卡片方向、尺寸或页面布局。Vue 的 :deep() / :global() 需转成普通 CSS 选择器。宿主 CSS 不能直接改独立 iframe、图片或作者作品内容。`
+export const CSS_REFERENCE_INTRO = `全局用 :root；APP 局部用 :scope，未改属性沿用全局。启动加载页 #srl-boot、本机准备页 #srl-native-preparation、系统迁移提示 .srl-native-migration-notice 使用全局 CSS；--boot-* 可单独改启动页。启动读取已保存的应用样式，试用未确认时恢复上一版，安全模式不应用自定义 CSS。CSS试用/启动恢复/Vue恢复提示位于受保护的 Shadow DOM，只能通过 --recovery-*、公共按钮与颜色变量改外观；普通选择器不能穿透保护层改内部布局。公共弹窗与通知需改全局。原生读了么的启动页/列表/导航/工具弹窗默认使用公共颜色和控件变量；读了么正文的纸色、护眼色、夜间模式与字号仍由阅读外观独立管理。读了么内部 UI 位于 Shadow DOM，普通全局选择器不能直接穿透；需改专属选择器时使用读了么 APP 局部 CSS，宿主会转发该作用域。以下变量与选择器来自源码或已安装 APP 的实际 CSS；更具体的定义可能覆盖局部变量。带 .appearance-action-face 的按钮只给内层画背景和边框，外层 .appearance-action-hit 保持透明。 data-srl-controls 区域的普通按钮、文本输入、下拉框和文本域共用公共材质；返回键、页头动作、滑杆、色盘、复选框及开关不按普通文本控件处理。data-srl-dialog 标记公共弹窗材质；这些标记不控制卡片方向、尺寸或页面布局。Vue 的 :deep() / :global() 需转成普通 CSS 选择器。宿主 CSS 不能直接改独立 iframe、图片或作者作品内容。`
 export const CARD_REFERENCE = `卡片横竖方向只在手机宽度不超过 860px 生效。data-mobile-card-orientation：portrait / landscape / mixed；data-resource-card-height：natural / uniform / fixed。不要无条件写死 height、min-height、aspect-ratio 或加 !important，否则会覆盖系统切换。固定正文可按模式设置 --resource-card-fixed-body-length。`
 export function vueReferenceExample(chapter: ReferenceChapter): string {
   const title = JSON.stringify(chapter.scope.title).replaceAll('<', '\\u003c')

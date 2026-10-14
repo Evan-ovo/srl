@@ -22,6 +22,8 @@ export type CustomUiViews = Partial<Record<CustomCssScope, CustomUiView>>
 export interface UiApplyOptions {
   assistant?: boolean
   views?: CustomUiViews
+  /** 显式应用已保存的 CSS 预设；试用恢复时一并恢复原预设选择。 */
+  presetId?: string
 }
 
 export interface UiControl {

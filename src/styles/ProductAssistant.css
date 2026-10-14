@@ -378,6 +378,7 @@
   background: transparent;
   color: var(--color-ink-soft);
   font-size: 0.6875rem;
+  box-shadow: none;
   cursor: pointer;
 }
 .chat-reasoning-trigger > span {

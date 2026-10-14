@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PreviewPolicy } from '../services/BrowserStorageService'
 import type { CustomUiViews } from '../types/UiCustomization'
+import type { CustomCssPreset } from '../types/BrowserPreferences'
 import { createUiView, normalizeUiViews } from '../core/UiCustomization'
 import { appearanceTransaction } from '../core/AppearanceSafety'
 
 let policy: PreviewPolicy = { allowRemoteResources: false, allowScripts: false }
 let views: CustomUiViews = {}
+let activePresetId = 'previous'
 
 const storage = {
   getLayoutMode: vi.fn(() => 'grid' as const),
@@ -30,7 +32,11 @@ const storage = {
   setCustomUiViews: vi.fn((value: CustomUiViews) => {
     views = normalizeUiViews(value)
   }),
-  getCustomUiPresets: vi.fn(() => []),
+  getCustomUiPresets: vi.fn((): CustomCssPreset[] => []),
+  getActiveCustomUiPresetId: vi.fn(() => activePresetId),
+  setActiveCustomUiPresetId: vi.fn((value: string) => {
+    activePresetId = value
+  }),
   setCustomUiCss: vi.fn(),
   getExtractCharacterAssets: vi.fn(() => false),
   setExtractCharacterAssets: vi.fn(),
@@ -89,6 +95,8 @@ describe('useAppearanceSettings', () => {
     vi.clearAllMocks()
     policy = { allowRemoteResources: false, allowScripts: false }
     views = {}
+    activePresetId = 'previous'
+    storage.getCustomUiPresets.mockReturnValue([])
     notices = []
     document.head.innerHTML = ''
     document.documentElement.removeAttribute('data-theme')
@@ -97,6 +105,46 @@ describe('useAppearanceSettings', () => {
   })
 
   const create = () => useAppearanceSettings((message) => notices.push(message))
+  it('applies a saved preset immediately, and restores both CSS and selection on rollback', () => {
+    const preset = {
+      id: 'plaza',
+      name: '粉樱',
+      globalCss: ':root { --color-accent: pink; }',
+      scopedCss: {},
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.getCustomUiPresets.mockReturnValue([preset])
+    const appearance = create()
+    appearance.saveCustomUiCss(preset.globalCss, { presetId: preset.id })
+    expect(activePresetId).toBe(preset.id)
+    expect(appearance.customUiCss.value).toBe(preset.globalCss)
+    expect(document.getElementById('srl-custom-ui-style')!.textContent).toContain('pink')
+    expect(storage.setCustomUiViews).not.toHaveBeenCalled()
+    appearanceTransaction.rollback()
+    expect(activePresetId).toBe('previous')
+    expect(appearance.customUiCss.value).toBe('')
+    expect(storage.getCustomUiPresets()).toEqual([preset])
+  })
+  it('keeps an explicitly chosen preset after confirmation and refuses a missing preset', () => {
+    const preset = {
+      id: 'plaza',
+      name: '粉樱',
+      globalCss: 'body { color: pink; }',
+      scopedCss: {},
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.getCustomUiPresets.mockReturnValue([preset])
+    const appearance = create()
+    appearance.saveCustomUiCss(preset.globalCss, { presetId: preset.id })
+    appearanceTransaction.keep()
+    expect(activePresetId).toBe(preset.id)
+    appearance.saveCustomUiCss('body{}', { presetId: 'missing' })
+    expect(appearance.customUiCss.value).toBe(preset.globalCss)
+    expect(activePresetId).toBe(preset.id)
+    expect(notices).toContain('外观预设已不存在，请重新选择')
+  })
   it('AI的Vue变化采用原15秒试用；CSS不变也能试用，未保留会恢复其它APP', () => {
     vi.useFakeTimers()
     const before = { ...createUiView(), enabled: true }

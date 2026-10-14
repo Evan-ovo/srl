@@ -797,6 +797,9 @@ export class DiscordSetupService {
                       : undefined
                     : 'srl-discord-source-bridge',
                   reuseExistingWorker: this.state.task.startsWith('update-'),
+                  automaticBuildTrigger: 'new-branch-commit',
+                  requireNewDeploymentRecord: false,
+                  completionEvidence: 'current-worker-production-success',
                   deployCommand: 'npm run deploy',
                 },
               }
@@ -829,7 +832,7 @@ export class DiscordSetupService {
       if (this.state.step === 'github-fork')
         return '助手 Fork 指定上游仓库，确认自己账号下的 Fork 来源后继续；登录授权由你完成。'
       if (this.state.step === 'cf-deploy' && this.state.task.startsWith('update-'))
-        return '更新已配置的同一个 Worker。先观察 Fork 同步触发的实际生产部署；未触发时在原 Worker 处理，不新建或部署示例。生产成功后继续所选更新路线，保留已有 Secret、D1 和交互地址；只有更换 Worker 时先确认备份，再走完整的 Secret、端点与连接切换路线。'
+        return '更新已配置的同一个 Worker。GitHub 分支没有新提交时不会触发自动构建，已最新或复用仓库不意味着会出现新部署记录。先 inspect 原 Worker 的当前生产部署；已有成功/生效结果即可 advance-step，再做本次连接与命令检查，不等待新记录、反复 Sync 或制造空提交。有新提交则查看实际构建/部署状态；明确在构建或排队才 wait-status，未触发或失败时检查原 Worker 的构建设置、分支和错误，按实际入口手动构建/重试，不能等待一个尚未启动的任务。没有成功生产部署不能跳过，不能新建或部署示例。保留已有 Secret、D1 和交互地址；只有更换 Worker 时先确认备份，再走完整的 Secret、端点与连接切换路线。'
       if (this.state.step === 'cf-deploy')
         return '目标是部署本次 Bridge Worker。先观察当前页和已有填写，按实际控件选择自己的 Git 仓库；构建命令与部署命令是不同字段，npm run deploy 填部署命令。已部署成功就按本次路线继续，首次配置下一步是 Secret；不要求仓库名称、分支和提交号在页面上一一匹配，不为凑证据反复打开 Settings、重新关联或重新构建。只有构建成功、网址变化或进入预览页不算生产部署成功；不要误部署 Hello World 示例。生产参数、D1 和连接健康留到后续核验，首次配置先保存部署 Secret。账号登录与网站验证由你完成；Cloudflare GitHub App 的仓库选择与安装授权由助手处理。'
     }

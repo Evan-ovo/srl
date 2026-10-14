@@ -1192,6 +1192,45 @@ describe('APK Discord setup workflow', () => {
     expect(status.hint).toContain('网址')
     expect(status.hint).toContain('构建命令')
   })
+  it.each(['update-worker', 'update-commands'] as const)(
+    'continues %s after an up-to-date Fork using the existing successful production deployment',
+    async (task) => {
+      const f = fixture()
+      await f.service.start(task, 'github-sync', 'agent')
+      f.page.url = 'https://github.com/test-user/SRL-Discord-Bridge/tree/main'
+      f.page.forkOfTarget = true
+      vi.mocked(f.browser.act).mockImplementation(async (options) =>
+        options.operation === 'collect-worker'
+          ? { ok: true, workerUrl: saved.workerBaseUrl }
+          : { ok: true, verified: true, revision: 'a'.repeat(40) },
+      )
+      const advance = (from: string) =>
+        f.service.execute(
+          { operation: 'advance-step', from, document_id: '1', target: '1' },
+          new AbortController().signal,
+        )
+      await advance('github-sync')
+      const status = await f.service.execute({ operation: 'status' }, new AbortController().signal)
+      expect(status).toMatchObject({
+        deploymentGoal: {
+          automaticBuildTrigger: 'new-branch-commit',
+          requireNewDeploymentRecord: false,
+          completionEvidence: 'current-worker-production-success',
+        },
+      })
+      expect(status.hint).toContain('GitHub 分支没有新提交时不会触发自动构建')
+      expect(status.hint).toContain('已有成功/生效结果即可 advance-step')
+      expect(status.hint).toContain('未触发或失败时检查原 Worker')
+      f.page.url = 'https://dash.cloudflare.com/account/workers/services/view/example/production'
+      await advance('cf-deploy')
+      expect(f.stored()?.step).toBe(task === 'update-worker' ? 'verify' : 'discord-install')
+      expect(f.browser.waitStatus).not.toHaveBeenCalled()
+      expect(f.browser.act).not.toHaveBeenCalledWith(
+        expect.objectContaining({ operation: 'click' }),
+      )
+      await f.service.pauseAgent()
+    },
+  )
   it.each(['https://discord.com/login', 'https://accounts.google.com/signin'])(
     'accepts a problem on paused %s without reading or acting on it',
     async (url) => {

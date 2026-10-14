@@ -7,11 +7,7 @@ import markup from '../reader/ChatReader.html?raw'
 import css from '../reader/ChatReader.css?raw'
 import { downloadBlob } from '../utils/LibraryFormatting'
 import { readAppliedAppFrameCss } from '../services/AppearanceScopeService'
-import {
-  chatReaderAppearance,
-  readChatReaderColors,
-  rememberChatReaderColors,
-} from '../utils/ChatReaderAppearance'
+import { readChatReaderColors, rememberChatReaderColors } from '../utils/ChatReaderAppearance'
 import { APPLIED_CSS_CHANGED_EVENT } from '../core/AppearanceScopes'
 import { SRL_BACK_REQUEST_EVENT, type SrlBackRequestDetail } from '../composables/UseBackStack'
 import FeatureAppHeader from './FeatureAppHeader.vue'
@@ -23,7 +19,7 @@ const navigation = ref<ChatReaderNavigation>({
   cover: false,
   colors: readChatReaderColors(),
 })
-const appearance = computed(() => chatReaderAppearance(navigation.value.colors))
+const appearance = computed(() => ({ '--reader-paper': navigation.value.colors.paper }))
 let reader: ReturnType<typeof mountChatReader> | undefined
 let closed = false
 function action(value: 'back' | 'search' | 'cover') {
@@ -147,7 +143,7 @@ onBeforeUnmount(() => {
   padding: var(--safe-top, 0px) var(--safe-right, 0px) var(--safe-bottom, 0px) var(--safe-left, 0px);
   box-sizing: border-box;
   min-height: 0;
-  background: var(--reader-paper);
+  background: var(--color-canvas);
   color: var(--color-ink);
 }
 .chat-reader-app__view {

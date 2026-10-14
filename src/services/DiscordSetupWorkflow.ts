@@ -59,13 +59,13 @@ export const DISCORD_SETUP_STEPS = [
     id: 'github-sync',
     title: '核对并更新部署仓库分支',
     site: 'github',
-    hint: '先核对 Worker 实际部署仓库与分支。Fork 才 Sync fork → Update branch；登录者拥有源仓库则核验当前提交，不找 Fork。已最新就复用，保留自己的配置；有冲突先查差异，不点 Discard commits。',
+    hint: '先核对 Worker 实际部署仓库与分支。Fork 才 Sync fork → Update branch；登录者拥有源仓库则核验当前提交，不找 Fork。已最新就复用，保留自己的配置；没有新提交不会触发自动构建，下一步检查原 Worker 当前生产部署，不等待新记录。有冲突先查差异，不点 Discard commits。',
   },
   {
     id: 'cf-deploy',
     title: '部署并确认 Worker 成功',
     site: 'cloudflare',
-    hint: 'Cloudflare → Workers & Pages，部署本次 Bridge Worker；部署命令使用 npm run deploy（包含 D1 迁移）。确认当前 Worker 的生产部署成功即可继续，不要求仓库名、分支和提交号逐一匹配；Secret 与实际连接在后续步骤检查。',
+    hint: 'Cloudflare → Workers & Pages，部署本次 Bridge Worker；部署命令使用 npm run deploy（包含 D1 迁移）。确认当前 Worker 的生产部署成功即可继续，既有成功部署也可复用；仓库没有新提交不会自动产生新部署记录，不因此停住或制造提交。没有成功部署时检查实际构建/部署错误并处理原 Worker，只有正在构建或排队才等待。不要求仓库名、分支和提交号逐一匹配；Secret 与实际连接在后续步骤检查。',
   },
   {
     id: 'cf-secret',

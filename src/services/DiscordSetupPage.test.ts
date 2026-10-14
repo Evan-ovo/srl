@@ -583,6 +583,27 @@ describe('bundled external-page executor', () => {
       f.dom.window.close()
     }
   })
+  it('accepts an existing active production deployment without a new build or matching source revision', () => {
+    const f = page(
+      '<h2>Production</h2><output>Current deployment</output><time datetime="2026-01-01">January 1</time>',
+      'https://dash.cloudflare.com/account/workers/services/view/bridge/production',
+    )
+    try {
+      const controls = f.run('inspect').controls as Array<Record<string, string>>
+      const statusTarget = controls.find((control) => control.label === 'Current deployment')!
+      expect(statusTarget).toBeDefined()
+      expect(
+        f.run('verify-step', {
+          step: 'cf-deploy',
+          statusTarget,
+          autonomous: true,
+          expectedRevision: 'f'.repeat(40),
+        }),
+      ).toMatchObject({ verified: true })
+    } finally {
+      f.dom.window.close()
+    }
+  })
   it.each(['Serving all incoming traffic', 'Running in production', '正在为生产流量提供服务'])(
     'exposes unfamiliar public result wording %s and accepts an explicit assessment tied to that fresh observation',
     (text) => {
