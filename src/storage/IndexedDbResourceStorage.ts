@@ -164,7 +164,10 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     return getMissingPngThumbnailRepairStatus(this.thumbnailContext())
   }
 
-  repairMissingPngCharacterCardThumbnails(options?: { restart?: boolean }): Promise<number> {
+  repairMissingPngCharacterCardThumbnails(options?: {
+    restart?: boolean
+    signal?: AbortSignal
+  }): Promise<number> {
     if (this.missingPngThumbnailRepairPromise) return this.missingPngThumbnailRepairPromise
     const operation = repairMissingPngCharacterCardThumbnails(this.thumbnailContext(), options)
     this.missingPngThumbnailRepairPromise = operation
@@ -899,6 +902,8 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
   ): Promise<ResourceSummary> {
     if (changes.thumbnailBlob) {
       const asset = await this.assets.put(changes.thumbnailBlob, { source: 'thumbnail' })
+      if ((await this.getSummary(id))?.type === RESOURCE_TYPE.CHARACTER_CARD)
+        await this.assets.thumbnails.prepareCard(asset.assetId)
       changes = { ...changes, thumbnailBlob: undefined, thumbnailAssetId: asset.assetId }
     }
     return this.database.transaction(

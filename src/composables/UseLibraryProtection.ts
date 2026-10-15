@@ -158,8 +158,15 @@ export function useLibraryProtection(getContext: () => LibraryProtectionContext)
     }
   }
 
+  let thumbnailPreparation:
+    { controller: AbortController; taskId: string; operation?: Promise<number> } | undefined
   async function repairOldPngThumbnails(): Promise<void> {
     const context = getContext()
+    if (thumbnailPreparation) {
+      thumbnailPreparation.controller.abort()
+      taskCenter.update(thumbnailPreparation.taskId, { phase: '正在停止，等待当前图片保存' })
+      return
+    }
     if (
       isRepairingOldPngThumbnails.value ||
       context.isVaultBusy.value ||
@@ -168,23 +175,47 @@ export function useLibraryProtection(getContext: () => LibraryProtectionContext)
       return
 
     isRepairingOldPngThumbnails.value = true
+    const controller = new AbortController()
+    const taskId = taskCenter.start({
+      name: '准备列表缩略图',
+      phase: '补回缺图并准备卡片尺寸',
+      cancelable: true,
+      cancel: async () => {
+        controller.abort()
+        taskCenter.update(taskId, { phase: '正在停止，等待当前图片保存' })
+        await thumbnailPreparation?.operation?.catch(() => undefined)
+      },
+    })
+    thumbnailPreparation = { controller, taskId }
     try {
-      const repaired = await resourceService.repairMissingPngCharacterCardThumbnails({
+      const operation = resourceService.repairMissingPngCharacterCardThumbnails({
         // This is an explicit scan request. Storage resumes a running checkpoint
         // and only resets a completed scan, even if the displayed status is stale.
         restart: true,
+        signal: controller.signal,
       })
+      thumbnailPreparation.operation = operation
+      const repaired = await operation
+      controller.signal.throwIfAborted()
       await refreshOldPngThumbnailRepairStatus()
       if (repaired > 0) await context.loadResources()
       context.showNotice(
-        repaired > 0 ? `已补回 ${repaired} 张旧资源缩略图` : '扫描完成，没有需要补回的缩略图',
+        repaired > 0 ? `已准备 ${repaired} 张列表缩略图` : '扫描完成，没有新增缩略图；现有封面保留',
       )
+      taskCenter.complete(taskId)
     } catch (error) {
       await refreshOldPngThumbnailRepairStatus()
-      context.showNotice(
-        error instanceof Error ? error.message : '旧资源缩略图补回失败，可继续重试',
-      )
+      if (controller.signal.aborted) {
+        taskCenter.cancelled(taskId)
+        context.showNotice('已停止准备，已完成的缩略图保留，可手动继续')
+      } else {
+        taskCenter.fail(taskId, error)
+        context.showNotice(
+          error instanceof Error ? error.message : '列表缩略图准备失败，可继续重试',
+        )
+      }
     } finally {
+      thumbnailPreparation = undefined
       isRepairingOldPngThumbnails.value = false
     }
   }

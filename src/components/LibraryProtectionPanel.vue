@@ -290,7 +290,7 @@ const isParsedTagCleanerOpen = toRef(input.model, 'isParsedTagCleanerOpen')
       </article>
 
       <article class="protection-card protection-card--extracted">
-        <span class="protection-card__label">旧资源缩略图补回</span>
+        <span class="protection-card__label">列表缩略图准备</span>
         <strong>
           {{
             oldPngThumbnailRepairStatus.status === 'complete'
@@ -300,16 +300,19 @@ const isParsedTagCleanerOpen = toRef(input.model, 'isParsedTagCleanerOpen')
                 : '尚未扫描'
           }}
         </strong>
-        <p>仅检查缺封面的 PNG 角色卡；扫描可断点续做，完成后可再次扫描新增或遗漏的资源。</p>
+        <p>
+          补回缺封面的 PNG
+          角色卡，并为已有角色封面准备列表小图。原图和高清预览保留；可停止，已完成项保留，手动继续时复用。
+        </p>
         <button
           class="protection-card__action"
           type="button"
-          :disabled="isRepairingOldPngThumbnails || isVaultBusy || vaultStatus.locked"
+          :disabled="isVaultBusy || vaultStatus.locked"
           @click="repairOldPngThumbnails"
         >
           {{
             isRepairingOldPngThumbnails
-              ? '正在补回…'
+              ? '停止准备'
               : oldPngThumbnailRepairStatus.status === 'complete'
                 ? '再次扫描'
                 : oldPngThumbnailRepairStatus.status === 'running'

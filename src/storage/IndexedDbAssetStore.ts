@@ -2,17 +2,40 @@ import type { AppDatabase } from '../database/AppDatabase'
 import type { VaultService } from '../services/VaultService'
 import { hashBlob } from '../services/HashService'
 import type { AssetRecord, AssetSource, ThumbnailLevel } from '../types/Asset'
-import type { Resource } from '../types/Resource'
+import { RESOURCE_TYPE, type Resource } from '../types/Resource'
+import { Capacitor } from '@capacitor/core'
+import { isAndroidNativeAppDatabaseActive, runAndroidNativeRead } from './AndroidNativeDexieCore'
+import { nativeAppDatabase } from './NativeAppDatabaseBridge'
+import { ThumbnailService } from '../services/ThumbnailService'
 
 type AssetVault = Pick<VaultService, 'isEnabled' | 'protectBlob' | 'revealBlob'>
 
 export class IndexedDbAssetStore {
+  readonly thumbnails = new ThumbnailService(this)
   private readonly database: AppDatabase
   private readonly vault?: AssetVault
+  private imageSourcesAvailable = true
+  private readonly imageRequests = new Map<
+    string,
+    {
+      assetId: string
+      level: 'card' | 'preview'
+      promise: Promise<string | undefined>
+      resolve: (url?: string) => void
+      reject: (error: unknown) => void
+    }
+  >()
+  private imageBatchScheduled = false
 
   constructor(database: AppDatabase, vault?: AssetVault) {
     this.database = database
     this.vault = vault
+  }
+
+  get supportsImageUrls(): boolean {
+    return (
+      isAndroidNativeAppDatabaseActive() && this.imageSourcesAvailable && !this.vault?.isEnabled()
+    )
   }
 
   async put(
@@ -94,9 +117,110 @@ export class IndexedDbAssetStore {
     )
   }
 
+  /** Same-turn native display reads share metadata, never hydrate or cache image bytes in JS. */
+  getImageUrl(assetId: string, level: 'card' | 'preview' = 'preview'): Promise<string | undefined> {
+    if (!this.supportsImageUrls) return Promise.resolve(undefined)
+    const requestKey = JSON.stringify([assetId, level])
+    const existing = this.imageRequests.get(requestKey)
+    if (existing) return existing.promise
+    let resolve!: (url?: string) => void
+    let reject!: (error: unknown) => void
+    const promise = new Promise<string | undefined>((accept, fail) => {
+      resolve = accept
+      reject = fail
+    })
+    this.imageRequests.set(requestKey, { assetId, level, promise, resolve, reject })
+    if (!this.imageBatchScheduled) {
+      this.imageBatchScheduled = true
+      queueMicrotask(() => void this.readImageUrls())
+    }
+    return promise
+  }
+
+  private async readImageUrls(): Promise<void> {
+    // Capture the pending generation: callers arriving during a bridge call own the next batch.
+    const pending = [...this.imageRequests.entries()]
+    const batches: (typeof pending)[] = []
+    for (const level of ['card', 'preview']) {
+      const group = pending.filter(([, request]) => request.level === level)
+      for (let offset = 0; offset < group.length; offset += 32)
+        batches.push(group.slice(offset, offset + 32))
+    }
+    for (const batch of batches) {
+      try {
+        if (
+          !isAndroidNativeAppDatabaseActive() ||
+          !this.imageSourcesAvailable ||
+          this.vault?.isEnabled()
+        ) {
+          for (const [, request] of batch) request.resolve()
+          continue
+        }
+        const rows = await this.database.transaction(
+          'r',
+          this.database.assets,
+          this.database.assetFiles,
+          (transaction) =>
+            runAndroidNativeRead(transaction.idbtrans, () =>
+              nativeAppDatabase.getAssetImageSources(
+                batch.map(([, request]) => JSON.stringify(request.assetId)),
+                batch
+                  .filter(([, request]) => request.level === 'card')
+                  .map(([, request]) => JSON.stringify(request.assetId)),
+              ),
+            ),
+        )
+        const byKey = new Map(rows.map((row) => [row.key, row]))
+        for (const [, request] of batch) {
+          const row = byKey.get(JSON.stringify(request.assetId))
+          if (!row) {
+            request.reject(new Error('原生图片读取结果缺失'))
+            continue
+          }
+          if (row.error) {
+            request.reject(new Error(row.error))
+            continue
+          }
+          if (row.fallback || this.vault?.isEnabled() || !isAndroidNativeAppDatabaseActive()) {
+            request.resolve()
+            continue
+          }
+          const blob = row.blob
+          if (
+            !blob ||
+            !blob.path.startsWith('file:///') ||
+            !blob.mimeType.startsWith('image/') ||
+            !Number.isSafeInteger(blob.size) ||
+            blob.size < 0 ||
+            !/^[a-f0-9]{64}$/.test(blob.sha256)
+          ) {
+            request.reject(new Error('原生图片描述无效'))
+            continue
+          }
+          request.resolve(Capacitor.convertFileSrc(blob.path))
+        }
+      } catch (error) {
+        if ((error as { code?: string }).code === 'UNIMPLEMENTED') {
+          this.imageSourcesAvailable = false
+          for (const [, request] of batch) request.resolve()
+        } else for (const [, request] of batch) request.reject(error)
+      } finally {
+        for (const [id, request] of batch)
+          if (this.imageRequests.get(id) === request) this.imageRequests.delete(id)
+      }
+    }
+    this.imageBatchScheduled = false
+    if (this.imageRequests.size) {
+      this.imageBatchScheduled = true
+      queueMicrotask(() => void this.readImageUrls())
+    }
+  }
+
   async externalizeResourceThumbnail(resource: Resource): Promise<Resource> {
     if (!(resource.thumbnailBlob instanceof Blob)) return resource
     const asset = await this.put(resource.thumbnailBlob, { source: 'thumbnail' })
+    if (resource.type === RESOURCE_TYPE.CHARACTER_CARD)
+      await this.thumbnails.prepareCard(asset.assetId)
     return { ...resource, thumbnailAssetId: asset.assetId, thumbnailBlob: undefined }
   }
 
@@ -111,10 +235,12 @@ export class IndexedDbAssetStore {
     level: ThumbnailLevel,
     thumbnailAssetId: string,
   ): Promise<void> {
-    const asset = await this.database.assets.get(assetId)
-    if (!asset) throw new Error('原始素材已经不存在')
-    await this.database.assets.update(assetId, {
-      thumbnailRefs: { ...asset.thumbnailRefs, [level]: thumbnailAssetId },
+    await this.database.transaction('rw', this.database.assets, async () => {
+      const asset = await this.database.assets.get(assetId)
+      if (!asset) throw new Error('原始素材已经不存在')
+      await this.database.assets.update(assetId, {
+        thumbnailRefs: { ...asset.thumbnailRefs, [level]: thumbnailAssetId },
+      })
     })
   }
 

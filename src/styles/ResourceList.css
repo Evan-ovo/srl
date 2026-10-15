@@ -299,8 +299,6 @@
 :root[data-resource-card-height='fixed'] .resource-grid > .resource-card {
   display: flex;
   flex-direction: column;
-  content-visibility: visible;
-  contain-intrinsic-size: none;
 }
 
 :root[data-resource-card-height='uniform']

@@ -1,5 +1,5 @@
 {
-  "knowledgeSha256": "d459618e4f1e299659c6a8bb195120d6c7a54039deec88f539e9e61a0558d88a",
+  "knowledgeSha256": "16330a38d3f3df3426894317beb6f88b2df78ed1da9137c35b47ff1617633526",
   "sources": [
     {
       "path": "src/App.vue",
@@ -156,7 +156,7 @@
         "discord-posts",
         "inbox-resource-claim"
       ],
-      "sha256": "80feec91dacdd653b6890b18734dfaa280fde1f04c077bb0c3194e9e6f7edbef"
+      "sha256": "82a3d71ff7c681526f52e8a0b24fcbba00fe6ef00ec8c891a7b014ba542500f5"
     },
     {
       "path": "src/components/DiscordSetupAssistant.vue",
@@ -262,7 +262,7 @@
         "import",
         "data-protection"
       ],
-      "sha256": "26dc7ecbdb8fe0622ee6bc59febb4e600129f53ff484fa26cc8450ec39db2122"
+      "sha256": "d041314bc68223fcc3ea333cb1479262415c8f2d79b68abeeb773e2c65b6b471"
     },
     {
       "path": "src/components/LibraryToolbar.vue",
@@ -699,7 +699,7 @@
         "import",
         "data-protection"
       ],
-      "sha256": "625543f313f3d72782ecf19b65475a8cf339acd32a47fd70507078eccf379963"
+      "sha256": "dbc52f541c70f72201402ec0316057227e130f93f076319dd0bfc7ba84756630"
     },
     {
       "path": "src/composables/UseLibraryQueryView.ts",
@@ -832,7 +832,7 @@
       "guides": [
         "import"
       ],
-      "sha256": "88b18f975938d1e63abf00459f0fabe4266adede57bdce99b97f545aff9806df"
+      "sha256": "5b00482a183367dfb78f5be9ca8230e6f09eda64a2915757fcf53e3f420c195a"
     },
     {
       "path": "src/core/NativeRuntime.ts",
@@ -1466,7 +1466,7 @@
       "guides": [
         "world-book"
       ],
-      "sha256": "c81f34fff5f605f17d0c03523aa6d4337c92ccc73a9791a1d6a22e7619d62f50"
+      "sha256": "e5a38f30104bb6890a5e7c81c1f05b82e318715c1c25c9197de00e8dcb955388"
     },
     {
       "path": "src/services/ResourceVersionMatcher.ts",
@@ -1607,7 +1607,7 @@
       "guides": [
         "import"
       ],
-      "sha256": "be179372ff5de4e0cafa09e41cdd30f2afb995d893c5c22ea6a789d8e358a64b"
+      "sha256": "dea8be57ef8fcc34973be14b0299c216a168c2cb87cc96e0b0aa5f75293dda9f"
     },
     {
       "path": "src/storage/InstalledOfficialAppStorage.ts",
@@ -1621,7 +1621,7 @@
       "guides": [
         "import"
       ],
-      "sha256": "cc5ab9d6f0d84ec2286169a3f49b5a3ddce5791eb356fc66e761b6a0ac48932d"
+      "sha256": "cbe128c2c2872c00b80aa5f5396e13f17a02ef8a1c607fe39bdea8d97646ce03"
     },
     {
       "path": "src/storage/NativeResourceFileMirror.ts",
@@ -1642,7 +1642,7 @@
       "guides": [
         "import"
       ],
-      "sha256": "5795243a130435cbeb40021012d2dad4d112479b56e8ace7c24076070151cb37"
+      "sha256": "67b55cf35c00612e88a887f7334d864204dee87cdc3a17a3e84dcbc0fa6533b4"
     },
     {
       "path": "src/types/Import.ts",
@@ -1768,7 +1768,7 @@
         "background-notifications",
         "discord-posts"
       ],
-      "sha256": "5d2f0db973a2930f737144469c3c7a5c4eae1ac1484dde4a14b76f70100abc34"
+      "sha256": "3548a932d15449e452ce07f2cb96ae61329d2ca88b66c4ac456bc8c529ea3994"
     }
     ,
 {

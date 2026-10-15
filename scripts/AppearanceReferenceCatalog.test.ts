@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createAppearanceReferenceCatalog } from './AppearanceReferenceCatalog'
+import {
+  createAppearanceReferenceCatalog,
+  splitReferenceSources,
+} from './AppearanceReferenceCatalog'
 import { createVueReference } from './AppearanceVueReference'
 import { UI_VIEW_HELPER } from '../src/core/UiViewStarter'
 import { createReferenceChapters, referenceMarkdown } from '../src/core/AppearanceReference'
@@ -11,6 +14,44 @@ const bridge = readFileSync('src/services/UiViewRuntime.ts', 'utf8')
 const types = readFileSync('src/types/UiCustomization.ts', 'utf8')
 
 describe('接口手册随源码更新', () => {
+  it('keeps interface content identity stable when only release metadata changes', () => {
+    const read = (version: string) => (path: string) =>
+      path === resolve('build-info.json')
+        ? JSON.stringify({ buildId: version })
+        : readFileSync(path, 'utf8')
+    const first = createAppearanceReferenceCatalog(process.cwd(), read('srl-test-v1'))
+    const next = createAppearanceReferenceCatalog(process.cwd(), read('srl-test-v2'))
+    expect(next.version).toBe('srl-test-v2')
+    expect(first.version).toBe('srl-test-v1')
+    expect(next.fingerprint).toBe(first.fingerprint)
+    expect(next.sources).toEqual(first.sources)
+  })
+
+  it('资源广场和原生读了么的公共主题映射进入实际 APP 手册', () => {
+    const catalog = createAppearanceReferenceCatalog(process.cwd())
+    const chapters = createReferenceChapters(catalog)
+    for (const [appId, sourcePath] of [['chatReader', 'src/reader/ChatReader.css']]) {
+      const source = catalog.sources.find((item) => item.path.startsWith(sourcePath + ':'))
+      expect(source).toBeDefined()
+      const chapter = chapters.find((item) => item.scope.appId === appId)
+      expect(chapter?.sources).toContainEqual(source)
+      expect(chapter?.variables.some((item) => item.name === '--color-canvas')).toBe(true)
+    }
+    const reader = chapters.find((item) => item.scope.appId === 'chatReader')!
+    const canvas = reader.variables.find((item) => item.name === '--color-canvas')!
+    expect(canvas.uses.some((use) => use.source.startsWith('src/reader/ChatReader.css:'))).toBe(
+      true,
+    )
+    expect(referenceMarkdown([reader], 'css')).toContain('src/reader/ChatReader.css')
+    expect(referenceMarkdown(chapters, 'css')).toContain('--folder-indicator-color')
+  })
+  it('分块保持完整规则、来源与顺序，普通分块不超过既有脚本预算', () => {
+    const catalog = createAppearanceReferenceCatalog(process.cwd())
+    const parts = splitReferenceSources(catalog.sources)
+    expect(parts.length).toBeGreaterThan(1)
+    expect(parts.flat()).toEqual(catalog.sources)
+    expect(parts.every((part) => Buffer.byteLength(JSON.stringify(part)) < 500 * 1024)).toBe(true)
+  })
   it('保留注册变量、Unicode变量、important、作用域/媒体条件与CSS依赖', () => {
     const imports: string[] = []
     const source = parseAppearanceCss(

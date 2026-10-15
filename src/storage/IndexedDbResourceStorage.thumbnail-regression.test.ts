@@ -16,6 +16,53 @@ import {
 } from '../types/Resource'
 import { IndexedDbResourceStorage } from './IndexedDbResourceStorage'
 import { createImageThumbnail } from '../utils/createImageThumbnail'
+import { IndexedDbAssetStore } from './IndexedDbAssetStore'
+
+it('prepares existing covers without hydrating originals, checkpoints a stopped batch and resumes only explicitly', async () => {
+  const database = new AppDatabase(`thumbnail-card-preparation-${crypto.randomUUID()}`)
+  const assets = new IndexedDbAssetStore(database)
+  const storage = new IndexedDbResourceStorage(database, undefined, assets)
+  const ids: string[] = []
+  for (const id of ['a', 'b']) {
+    const asset = await assets.put(new Blob([`preview-${id}`], { type: 'image/webp' }), {
+      source: 'thumbnail',
+    })
+    ids.push(asset.assetId)
+    const resource = {
+      ...createResource(1),
+      id,
+      thumbnailBlob: undefined,
+      thumbnailAssetId: asset.assetId,
+    }
+    await database.resources.put(resource)
+    await database.resourceSummaries.put(toResourceSummary(resource))
+    await database.resourceListSummaries.put(toResourceListSummary(resource))
+  }
+  const originalRead = vi.spyOn(storage, 'get')
+  const controller = new AbortController()
+  vi.mocked(createImageThumbnail)
+    .mockClear()
+    .mockImplementationOnce(async () => {
+      controller.abort()
+      return new Blob(['prepared-card'], { type: 'image/webp' })
+    })
+  await expect(
+    storage.repairMissingPngCharacterCardThumbnails({ signal: controller.signal }),
+  ).rejects.toThrow()
+  expect(createImageThumbnail).toHaveBeenCalledTimes(1)
+  expect((await assets.get(ids[0]!))?.thumbnailRefs.card).toBeTruthy()
+  expect((await assets.get(ids[1]!))?.thumbnailRefs.card).toBeUndefined()
+  expect(
+    (await database.settings.get('repair.resourceThumbnails.missingPng.v28'))?.value,
+  ).toMatchObject({ status: 'running', checkpoint: 'a', repaired: 1 })
+  await storage.repairMissingPngCharacterCardThumbnails({ signal: new AbortController().signal })
+  expect((await assets.get(ids[1]!))?.thumbnailRefs.card).toBeTruthy()
+  expect(originalRead).not.toHaveBeenCalled()
+  expect(createImageThumbnail).toHaveBeenCalledTimes(2)
+  expect(await storage.repairMissingPngCharacterCardThumbnails()).toBe(0)
+  database.close()
+  await database.delete()
+})
 
 function createResource(index: number): Resource {
   const original = new Uint8Array(64 * 1024)
@@ -67,7 +114,8 @@ describe('IndexedDbResourceStorage thumbnail regression', () => {
     expect(
       listSummary && !('encrypted' in listSummary) ? listSummary.thumbnailBlob : undefined,
     ).toBeUndefined()
-    expect(await database.assetFiles.count()).toBe(1)
+    expect(await database.assetFiles.count()).toBe(2)
+    expect((await database.assets.get(assetId!))?.thumbnailRefs.card).toMatch(/^asset-/u)
     await expect(
       (await storage.get(resource.id))?.thumbnailBlob?.arrayBuffer(),
     ).resolves.toHaveProperty('byteLength', 128)
@@ -201,7 +249,7 @@ describe('IndexedDbResourceStorage thumbnail regression', () => {
       maxEdge: 640,
       allowImageElement: true,
     })
-    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    expect(createImageThumbnail).toHaveBeenCalledTimes(2)
     expect(assetId).toMatch(/^asset-/u)
     expect(summary).toMatchObject({ thumbnailAssetId: assetId })
     expect(listSummary).toMatchObject({ thumbnailAssetId: assetId })
@@ -220,7 +268,7 @@ describe('IndexedDbResourceStorage thumbnail regression', () => {
     await database.resourceListSummaries.put(toResourceListSummary(later))
     expect(await storage.repairMissingPngCharacterCardThumbnails()).toBe(0)
     expect(await storage.repairMissingPngCharacterCardThumbnails({ restart: true })).toBe(1)
-    expect(createImageThumbnail).toHaveBeenCalledTimes(2)
+    expect(createImageThumbnail).toHaveBeenCalledTimes(3)
     expect((await storage.listResourceListSummaries()).every((item) => item.thumbnailAssetId)).toBe(
       true,
     )
@@ -288,7 +336,7 @@ describe('IndexedDbResourceStorage thumbnail regression', () => {
     vi.mocked(createImageThumbnail).mockClear()
     expect(await storage.repairMissingPngCharacterCardThumbnails()).toBe(3)
 
-    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    expect(createImageThumbnail).toHaveBeenCalledTimes(2)
     expect(await database.settings.get('repair.resourceThumbnails.missingPng.v28')).toMatchObject({
       value: { status: 'complete', repaired: 3 },
     })

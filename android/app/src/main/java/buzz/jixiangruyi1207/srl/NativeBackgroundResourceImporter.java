@@ -2,7 +2,6 @@ package buzz.jixiangruyi1207.srl;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.webkit.MimeTypeMap;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -974,37 +973,31 @@ final class NativeBackgroundResourceImporter {
 
     /** Best-effort list preview: a bad/unsupported image must never block the original import. */
     private static String storeThumbnail(NativeAppDatabase database, File png) {
+        String preview = storeThumbnail(database, png, THUMBNAIL_MAX_EDGE);
+        if (preview == null) return null;
+        String card = storeThumbnail(database, png, 320);
+        if (card != null) try {
+            String key = JSONObject.quote(preview);
+            JSONObject asset = database.getRecord("assets", key);
+            JSONObject refs = asset.optJSONObject("thumbnailRefs");
+            if (refs == null) refs = new JSONObject();
+            asset.put("thumbnailRefs", refs.put("card", card));
+            database.applyBatch(new JSONArray().put(putOperation("assets", key, asset)), true);
+        } catch (Exception ignored) { /* The full preview remains usable. */ }
+        return preview;
+    }
+
+    private static String storeThumbnail(NativeAppDatabase database, File png, int maxEdge) {
         byte[] bytes = null;
         NativeAppDatabase.BlobTransfer transfer = null;
         try {
-            BitmapFactory.Options bounds = new BitmapFactory.Options();
-            bounds.inJustDecodeBounds = true;
-            BitmapFactory.decodeFile(png.getAbsolutePath(), bounds);
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            int sample = 1;
-            while (sample <= (1 << 29)
-                && Math.max(bounds.outWidth / sample, bounds.outHeight / sample) > THUMBNAIL_MAX_EDGE)
-                sample <<= 1;
-            options.inSampleSize = sample;
-            Bitmap decoded = BitmapFactory.decodeFile(png.getAbsolutePath(), options);
-            if (decoded == null) return null;
-            Bitmap scaled = decoded;
+            Bitmap scaled = NativeImageDecoder.thumbnail(png, maxEdge);
+            if (scaled == null) return null;
             try {
-                int edge = Math.max(decoded.getWidth(), decoded.getHeight());
-                if (edge > THUMBNAIL_MAX_EDGE) {
-                    float ratio = (float) THUMBNAIL_MAX_EDGE / edge;
-                    scaled = Bitmap.createScaledBitmap(decoded,
-                        Math.max(1, Math.round(decoded.getWidth() * ratio)),
-                        Math.max(1, Math.round(decoded.getHeight() * ratio)), true);
-                }
                 ByteArrayOutputStream output = new ByteArrayOutputStream();
                 if (!scaled.compress(Bitmap.CompressFormat.JPEG, 84, output)) return null;
                 bytes = output.toByteArray();
-            } finally {
-                if (scaled != decoded) scaled.recycle();
-                decoded.recycle();
-            }
+            } finally { scaled.recycle(); }
             if (bytes.length == 0 || bytes.length > NativeAppDatabase.MAX_BLOB_BYTES) return null;
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
             StringBuilder hex = new StringBuilder();

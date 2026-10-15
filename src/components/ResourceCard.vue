@@ -43,7 +43,13 @@ function safePreviewColor(value: unknown, fallback: string): string {
 const isRevealed = ref(props.blurThumbnails === false)
 const cardElement = ref<Element | null>(null)
 const remoteCoverUrl = ref('')
-const thumbnailBlob = useResourceThumbnail(() => props.resource, cardElement, remoteCoverUrl)
+const nativeDisplay = { url: ref(''), failedUrl: ref('') }
+const thumbnailBlob = useResourceThumbnail(
+  () => props.resource,
+  cardElement,
+  remoteCoverUrl,
+  nativeDisplay,
+)
 const { previewUrl, replacePreview, confirmPreviewLoaded } = useLoadedObjectUrl()
 const previewRetried = ref(false)
 let previewIdentity = ''
@@ -106,6 +112,10 @@ watch(
 )
 
 function retryPreview(): void {
+  if (nativeDisplay.url.value) {
+    nativeDisplay.failedUrl.value = nativeDisplay.url.value
+    return
+  }
   const blob = thumbnailBlob.value
   if (!blob || previewRetried.value) return
   previewRetried.value = true
@@ -124,11 +134,12 @@ watch(
     phoneIconUrl: props.resource.metadata.phoneIconUrl,
     customCoverId: resourceCoverId(props.resource),
     remoteCover: remoteCoverUrl.value,
+    nativeCover: nativeDisplay.url.value,
   }),
-  ({ blob, type, mimeType, fileName, phoneIconUrl, customCoverId, remoteCover }) => {
-    if (remoteCover) {
-      previewIdentity = remoteCover
-      replacePreview(remoteCover)
+  ({ blob, type, mimeType, fileName, phoneIconUrl, customCoverId, remoteCover, nativeCover }) => {
+    if (remoteCover || nativeCover) {
+      previewIdentity = remoteCover || nativeCover
+      replacePreview(previewIdentity)
       return
     }
     if (

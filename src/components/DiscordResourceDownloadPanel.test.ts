@@ -45,6 +45,24 @@ beforeEach(() => {
   api.remove.mockResolvedValue(undefined)
 })
 describe('resource download panel', () => {
+  it('reuses the local failed task retry instead of racing its pending cloud receipt', async () => {
+    api.list.mockResolvedValue({ jobs: [], recent: [job], hasMore: false })
+    const retry = vi.fn(async () => undefined)
+    const operationId = `discord-resource-${job.id}`
+    taskCenter.start({ operationId, name: job.name, retry })
+    taskCenter.fail(operationId, '失败状态确认未完成')
+    const wrapper = mount(DiscordResourceDownloadPanel)
+    try {
+      await flushPromises()
+      await wrapper.get('button[aria-label="重试 角色卡.json"]').trigger('click')
+      await flushPromises()
+      expect(retry).toHaveBeenCalledOnce()
+      expect(api.ack).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      taskCenter.dismiss(operationId)
+    }
+  })
   it('shows the committed local processing phase instead of a stale cloud queued label', async () => {
     api.list.mockResolvedValue({ jobs: [{ ...job, state: 'queued' }], recent: [], hasMore: false })
     const operationId = `discord-resource-${job.id}`

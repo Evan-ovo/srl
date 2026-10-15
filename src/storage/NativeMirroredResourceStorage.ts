@@ -100,7 +100,10 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     )
   }
 
-  repairMissingPngCharacterCardThumbnails(options?: { restart?: boolean }): Promise<number> {
+  repairMissingPngCharacterCardThumbnails(options?: {
+    restart?: boolean
+    signal?: AbortSignal
+  }): Promise<number> {
     return this.enqueueMutation(() =>
       this.delegate.repairMissingPngCharacterCardThumbnails
         ? this.delegate.repairMissingPngCharacterCardThumbnails(options)

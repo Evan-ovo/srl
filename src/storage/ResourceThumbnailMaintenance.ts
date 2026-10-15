@@ -130,8 +130,9 @@ export async function getMissingPngThumbnailRepairStatus(
 
 export async function repairMissingPngCharacterCardThumbnails(
   context: ResourceThumbnailMaintenanceContext,
-  options: { restart?: boolean } = {},
+  options: { restart?: boolean; signal?: AbortSignal } = {},
 ): Promise<number> {
+  options.signal?.throwIfAborted()
   if (context.vault?.getStatus().locked) return 0
 
   const saved = await context.database.settings.get(MISSING_PNG_THUMBNAIL_REPAIR_SETTING_ID)
@@ -167,13 +168,30 @@ export async function repairMissingPngCharacterCardThumbnails(
     checkpoint ? table.where('id').above(checkpoint) : table.orderBy('id')
   ).primaryKeys()
   for (let offset = 0; offset < ids.length; offset += THUMBNAIL_MIGRATION_BATCH_SIZE) {
+    options.signal?.throwIfAborted()
     const batchIds = ids.slice(offset, offset + THUMBNAIL_MIGRATION_BATCH_SIZE)
     const batch = (await table.bulkGet(batchIds)).filter(
       (summary): summary is StoredResourceSummary => summary !== undefined,
     )
 
     let batchRepaired = 0
-    for (const summary of batch) {
+    let completedId = checkpoint
+    const prepareSummary = async (summary: StoredResourceSummary) => {
+      options.signal?.throwIfAborted()
+      if (
+        !isEncryptedResourceSummary(summary) &&
+        summary.type === RESOURCE_TYPE.CHARACTER_CARD &&
+        summary.thumbnailAssetId
+      ) {
+        const asset = await context.assets.get(summary.thumbnailAssetId)
+        options.signal?.throwIfAborted()
+        if (
+          !asset?.thumbnailRefs.card &&
+          (await context.assets.thumbnails.prepareCard(summary.thumbnailAssetId))
+        )
+          batchRepaired++
+        return
+      }
       if (
         isEncryptedResourceSummary(summary) ||
         summary.type !== RESOURCE_TYPE.CHARACTER_CARD ||
@@ -181,7 +199,7 @@ export async function repairMissingPngCharacterCardThumbnails(
         summary.thumbnailBlob instanceof Blob ||
         !(summary.mimeType === 'image/png' || /\.png$/iu.test(summary.fileName))
       )
-        continue
+        return
 
       const resource = await context.loadResource(summary.id)
       if (
@@ -189,18 +207,20 @@ export async function repairMissingPngCharacterCardThumbnails(
         !(resource.mimeType === 'image/png' || /\.png$/iu.test(resource.fileName)) ||
         !(resource.originalBlob instanceof Blob)
       )
-        continue
+        return
 
+      options.signal?.throwIfAborted()
       const thumbnail = await createImageThumbnail(resource.originalBlob, {
         maxEdge: 640,
         allowImageElement: true,
       })
-      if (!thumbnail) continue
+      if (!thumbnail) return
       const asset = await context.assets.put(thumbnail, { source: 'thumbnail' })
+      if (!options.signal?.aborted) await context.assets.thumbnails.prepareCard(asset.assetId)
       const updated = { ...resource, thumbnailAssetId: asset.assetId, thumbnailBlob: undefined }
       const storedSummary = context.toStoredSummary(updated as StoredResource)
       const [listSummary] = await context.createStoredListSummariesFromSummaries([storedSummary])
-      if (!listSummary) continue
+      if (!listSummary) return
 
       await context.database.transaction(
         'rw',
@@ -222,9 +242,18 @@ export async function repairMissingPngCharacterCardThumbnails(
         },
       )
     }
+    let interrupted: unknown
+    try {
+      for (const summary of batch) {
+        await prepareSummary(summary)
+        completedId = summary.id
+      }
+    } catch (error) {
+      interrupted = error
+    }
 
-    // A summary may have been deleted since ID enumeration; still advance past that ID.
-    checkpoint = batchIds.at(-1)!
+    // Publish completed items before acknowledging a stop; resume never skips the interrupted item.
+    checkpoint = interrupted ? completedId : batchIds.at(-1)!
     repaired += batchRepaired
     await context.database.settings.put({
       id: MISSING_PNG_THUMBNAIL_REPAIR_SETTING_ID,
@@ -236,9 +265,12 @@ export async function repairMissingPngCharacterCardThumbnails(
       } satisfies MissingPngThumbnailRepairState,
       updatedAt: Date.now(),
     })
+    if (interrupted) throw interrupted
+    options.signal?.throwIfAborted()
     if (offset + THUMBNAIL_MIGRATION_BATCH_SIZE < ids.length) await yieldMainThread()
   }
 
+  options.signal?.throwIfAborted()
   await context.database.settings.put({
     id: MISSING_PNG_THUMBNAIL_REPAIR_SETTING_ID,
     value: {

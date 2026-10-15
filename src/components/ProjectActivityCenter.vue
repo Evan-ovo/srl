@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import { noticeCenter, type NoticeRecord } from '../core/NoticeCenter'
+import { isCompletedNotice, noticeCenter, type NoticeRecord } from '../core/NoticeCenter'
 import { taskCenter, type TaskRecord } from '../core/TaskCenter'
 
 const props = withDefaults(
@@ -56,27 +56,41 @@ const centeredImportTask = computed(() =>
 )
 const visibleTasks = computed(() =>
   displayedTasks.value
-    .filter((task) => task.status === 'running' || task.status === 'failed' || task.actionLabel)
+    .filter(
+      (task) =>
+        !isCompletedTask(task) &&
+        (task.status === 'running' || task.status === 'failed' || task.actionLabel),
+    )
     .slice(0, 8),
+)
+function isCompletedTask(task: TaskRecord): boolean {
+  return task.status === 'completed' && task.phase !== '下载完成，可继续导入'
+}
+const completedTasks = computed(() => displayedTasks.value.filter(isCompletedTask))
+const pendingNotices = computed(() => notices.value.filter((notice) => !isCompletedNotice(notice)))
+const completedNotices = computed(() => notices.value.filter(isCompletedNotice))
+const activityGroups = computed(() =>
+  [
+    { completed: false, tasks: visibleTasks.value, notices: pendingNotices.value.slice(0, 8) },
+    {
+      completed: true,
+      tasks: completedTasks.value,
+      notices: completedNotices.value,
+    },
+  ].filter((group) => group.tasks.length || group.notices.length),
 )
 const visible = computed(() =>
   inline.value
     ? activeTasks.value.length > 0
-    : visibleTasks.value.length > 0 || notices.value.length > 0,
+    : visibleTasks.value.length > 0 ||
+      completedTasks.value.some((task) => task.actionLabel) ||
+      notices.value.length > 0,
 )
 const persistentNoticeCount = computed(
-  () => notices.value.filter((notice) => notice.persistent).length,
+  () => pendingNotices.value.filter((notice) => notice.persistent).length,
 )
-const completedNoticeCount = computed(
-  () =>
-    notices.value.filter((notice) => notice.type === 'success' && !notice.actions.length).length,
-)
-const completedTaskCount = computed(
-  () =>
-    tasks.value.filter(
-      (task) => task.status === 'completed' && task.phase !== '下载完成，可继续导入',
-    ).length,
-)
+const completedNoticeCount = computed(() => completedNotices.value.length)
+const completedTaskCount = computed(() => completedTasks.value.length)
 function dismissCompletedActivity(): void {
   taskCenter.dismissCompleted()
   noticeCenter.dismissCompleted()
@@ -86,7 +100,10 @@ const summary = computed(() => {
   if (active) return `${active.name} · ${active.phase}`
   const failed = visibleTasks.value.find((task) => task.status === 'failed')
   if (failed) return `${failed.name} · 失败`
-  return notices.value[0]?.message ?? '任务与通知'
+  return (
+    pendingNotices.value[0]?.message ??
+    `已完成 ${completedTaskCount.value + completedNoticeCount.value} 项`
+  )
 })
 
 function refreshTasks(): void {
@@ -145,10 +162,19 @@ watch(
 )
 
 async function runNoticeAction(action: NoticeRecord['actions'][number]): Promise<void> {
-  await action.run()
+  open.value = false
+  try {
+    await action.run()
+  } catch (error) {
+    noticeCenter.push({
+      type: 'error',
+      message: error instanceof Error ? error.message : '通知操作未完成，请重试。',
+    })
+  }
 }
 
 async function runTaskAction(task: TaskRecord): Promise<void> {
+  open.value = false
   try {
     await taskCenter.open(task.operationId)
   } catch (error) {
@@ -210,87 +236,97 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <div v-if="visibleTasks.length" class="activity-center__group">
-        <h3>任务</h3>
-        <article v-for="task in visibleTasks" :key="task.operationId" class="activity-card">
-          <div>
-            <strong>{{ task.name }}</strong
-            ><small>{{ task.phase }}</small>
-          </div>
-          <small v-if="task.status === 'running'" class="activity-card__elapsed">{{
-            elapsed(task)
-          }}</small>
-          <small v-if="waitingForProgress(task)" class="activity-card__waiting">
-            当前步骤超过 15 秒没有新进度；大文件解析或写入可能较久，请等待结果或检查存储空间。
-          </small>
-          <progress
-            v-if="task.status === 'running' || task.progress !== undefined"
-            :value="task.progress"
-            :aria-label="`${task.name}：${task.phase}`"
-            max="1"
-          ></progress>
-          <p v-if="task.transfer" class="activity-card__transfer" aria-live="off">
-            {{ transferDescription(task) }}
-          </p>
-          <p v-if="task.error">{{ task.error }}</p>
-          <footer>
-            <button v-if="task.actionLabel" type="button" @click="runTaskAction(task)">
-              {{ task.actionLabel }}
-            </button>
-            <button
-              v-if="task.status === 'running' && task.cancelable"
-              type="button"
-              @click="taskCenter.cancel(task.operationId)"
-            >
-              取消
-            </button>
-            <button
-              v-if="task.status === 'failed' && task.retryable"
-              type="button"
-              @click="taskCenter.retry(task.operationId)"
-            >
-              重试
-            </button>
-            <button
-              v-if="task.status !== 'running'"
-              type="button"
-              @click="taskCenter.dismiss(task.operationId)"
-            >
-              移除
-            </button>
-          </footer>
-        </article>
-      </div>
+      <component
+        :is="group.completed ? 'details' : 'div'"
+        v-for="group in activityGroups"
+        :key="String(group.completed)"
+        :class="{ 'activity-center__completed': group.completed }"
+      >
+        <summary v-if="group.completed">
+          已完成（{{ completedTaskCount + completedNoticeCount }}）
+        </summary>
+        <div v-if="group.tasks.length" class="activity-center__group">
+          <h3>任务</h3>
+          <article v-for="task in group.tasks" :key="task.operationId" class="activity-card">
+            <div>
+              <strong>{{ task.name }}</strong
+              ><small>{{ task.phase }}</small>
+            </div>
+            <small v-if="task.status === 'running'" class="activity-card__elapsed">{{
+              elapsed(task)
+            }}</small>
+            <small v-if="waitingForProgress(task)" class="activity-card__waiting">
+              当前步骤超过 15 秒没有新进度；大文件解析或写入可能较久，请等待结果或检查存储空间。
+            </small>
+            <progress
+              v-if="task.status === 'running' || task.progress !== undefined"
+              :value="task.progress"
+              :aria-label="`${task.name}：${task.phase}`"
+              max="1"
+            ></progress>
+            <p v-if="task.transfer" class="activity-card__transfer" aria-live="off">
+              {{ transferDescription(task) }}
+            </p>
+            <p v-if="task.error">{{ task.error }}</p>
+            <footer>
+              <button v-if="task.actionLabel" type="button" @click="runTaskAction(task)">
+                {{ task.actionLabel }}
+              </button>
+              <button
+                v-if="task.status === 'running' && task.cancelable"
+                type="button"
+                @click="taskCenter.cancel(task.operationId)"
+              >
+                取消
+              </button>
+              <button
+                v-if="task.status === 'failed' && task.retryable"
+                type="button"
+                @click="taskCenter.retry(task.operationId)"
+              >
+                重试
+              </button>
+              <button
+                v-if="task.status !== 'running'"
+                type="button"
+                @click="taskCenter.dismiss(task.operationId)"
+              >
+                移除
+              </button>
+            </footer>
+          </article>
+        </div>
 
-      <div v-if="notices.length" class="activity-center__group">
-        <h3>通知</h3>
-        <article
-          v-for="notice in notices.slice(0, 8)"
-          :key="notice.id"
-          class="activity-card"
-          :class="`is-${notice.type}`"
-        >
-          <div>
-            <strong>{{ notice.message }}</strong
-            ><small>{{ notice.type }}</small>
-          </div>
-          <details v-if="notice.details">
-            <summary>查看详情</summary>
-            <p>{{ notice.details }}</p>
-          </details>
-          <footer>
-            <button
-              v-for="action in notice.actions"
-              :key="action.label"
-              type="button"
-              @click="runNoticeAction(action)"
-            >
-              {{ action.label }}
-            </button>
-            <button type="button" @click="noticeCenter.dismiss(notice.id)">关闭</button>
-          </footer>
-        </article>
-      </div>
+        <div v-if="group.notices.length" class="activity-center__group">
+          <h3>通知</h3>
+          <article
+            v-for="notice in group.notices"
+            :key="notice.id"
+            class="activity-card"
+            :class="`is-${notice.type}`"
+          >
+            <div>
+              <strong>{{ notice.message }}</strong
+              ><small>{{ notice.type }}</small>
+            </div>
+            <details v-if="notice.details">
+              <summary>查看详情</summary>
+              <p>{{ notice.details }}</p>
+            </details>
+            <footer>
+              <button
+                v-for="action in notice.actions"
+                :key="action.label"
+                type="button"
+                @click="runNoticeAction(action)"
+              >
+                {{ action.label }}
+              </button>
+              <button type="button" @click="noticeCenter.dismiss(notice.id)">关闭</button>
+            </footer>
+          </article>
+        </div>
+      </component>
     </section>
 
     <section

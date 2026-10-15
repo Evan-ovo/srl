@@ -12,7 +12,12 @@ export interface NoticeRecord {
   details?: string
   createdAt: number
   persistent: boolean
+  completed?: boolean
   actions: NoticeAction[]
+}
+
+export function isCompletedNotice(notice: NoticeRecord): boolean {
+  return notice.completed === true || (notice.type === 'success' && notice.actions.length === 0)
 }
 
 export class NoticeCenter {
@@ -37,6 +42,7 @@ export class NoticeCenter {
       details: input.details,
       createdAt,
       persistent,
+      completed: input.completed,
       actions: input.actions ?? [],
     })
     this.publish()
@@ -53,7 +59,7 @@ export class NoticeCenter {
 
   dismissCompleted(): void {
     const completed = [...this.notices.values()]
-      .filter((notice) => notice.type === 'success' && notice.actions.length === 0)
+      .filter(isCompletedNotice)
       .map((notice) => notice.id)
     if (!completed.length) return
     for (const id of completed) this.notices.delete(id)

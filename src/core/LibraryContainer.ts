@@ -34,7 +34,6 @@ import { IndexedDbArchiveStorage } from '../storage/IndexedDbArchiveStorage'
 import { IndexedDbCommunitySourceStorage } from '../storage/IndexedDbCommunitySourceStorage'
 import { NativeMirroredResourceStorage } from '../storage/NativeMirroredResourceStorage'
 import { NativeRestoreStagingStore } from '../storage/NativeRestoreStagingStore'
-import { ThumbnailService } from '../services/ThumbnailService'
 import { hashBytes } from '../services/HashService'
 import { isCapacitorApp } from '../utils/CapacitorDetection'
 
@@ -48,7 +47,7 @@ export function initializeVaultOnce(): ReturnType<VaultService['initialize']> {
 }
 
 export const assetStore = new IndexedDbAssetStore(database, vaultService)
-export const thumbnailService = new ThumbnailService(assetStore)
+export const thumbnailService = assetStore.thumbnails
 export const indexedDbStorage = new IndexedDbResourceStorage(database, vaultService, assetStore)
 export const resourceHealthStorage = new IndexedDbResourceHealthStorage(database, indexedDbStorage)
 export const storage = new NativeMirroredResourceStorage(indexedDbStorage, vaultService)

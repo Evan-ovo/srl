@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppDatabase } from '../database/AppDatabase'
 import { IndexedDbAssetStore } from '../storage/IndexedDbAssetStore'
 import { ThumbnailService } from './ThumbnailService'
+import type { Resource } from '../types/Resource'
 
 vi.mock('../utils/createImageThumbnail', () => ({
   createImageThumbnail: vi.fn(
@@ -13,6 +14,37 @@ vi.mock('../utils/createImageThumbnail', () => ({
 }))
 
 const databases: AppDatabase[] = []
+
+it('keeps both references when different tiers finish concurrently', async () => {
+  const database = new AppDatabase(`thumbnail-tiers-${crypto.randomUUID()}`)
+  databases.push(database)
+  const assets = new IndexedDbAssetStore(database)
+  const asset = await assets.put(new Blob(['preview'], { type: 'image/webp' }), {
+    source: 'thumbnail',
+  })
+  await Promise.all([
+    assets.thumbnails.getOrCreate(asset.assetId, 'tiny'),
+    assets.thumbnails.getOrCreate(asset.assetId, 'card'),
+  ])
+  expect((await assets.get(asset.assetId))?.thumbnailRefs).toEqual({
+    tiny: expect.any(String),
+    card: expect.any(String),
+  })
+})
+
+it('preserves the full preview when optional card generation fails', async () => {
+  const database = new AppDatabase(`thumbnail-optional-${crypto.randomUUID()}`)
+  databases.push(database)
+  const assets = new IndexedDbAssetStore(database)
+  vi.mocked(createImageThumbnail).mockRejectedValueOnce(new Error('unsupported image'))
+  const prepared = await assets.externalizeResourceThumbnail({
+    type: 'characterCard',
+    thumbnailBlob: new Blob(['full-preview'], { type: 'image/webp' }),
+  } as Resource)
+  expect(prepared.thumbnailBlob).toBeUndefined()
+  expect((await assets.get(prepared.thumbnailAssetId!))?.thumbnailRefs.card).toBeUndefined()
+  expect(await (await assets.getBlob(prepared.thumbnailAssetId!))?.text()).toBe('full-preview')
+})
 afterEach(async () => {
   await Promise.all(databases.splice(0).map((database) => database.delete()))
 })

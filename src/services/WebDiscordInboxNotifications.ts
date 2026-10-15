@@ -19,6 +19,7 @@ async function notify(
   title: string,
   body: string,
   applicationNotice = true,
+  completed = false,
 ): Promise<void> {
   if (delivered.has(key)) return
   if (applicationNotice)
@@ -26,6 +27,7 @@ async function notify(
       id: key,
       type: 'info',
       persistent: true,
+      completed,
       message: `${title}：${body}`,
       actions: [
         {
@@ -72,7 +74,11 @@ export async function notifyWebDiscordInboxResult(result: DiscordInboxResult): P
           waiting_binding: '保存成功，待整理',
           failed: '帖子保存未完成，请查看原因',
         }[result.state]
-  await notify(key, message, result.name)
+  const completed =
+    result.kind === 'resource'
+      ? result.state === 'imported' || result.state === 'duplicate'
+      : result.state === 'saved'
+  await notify(key, message, result.name, true, completed)
 }
 export async function notifyWebDiscordAutoBinding(
   sourceTitle: string,

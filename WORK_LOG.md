@@ -278,3 +278,11 @@
 
 - 提交 `0f53908e4d2d3f757e81a8418b1758c99cde60f2` 已推送到 `origin/main`，远端 `refs/heads/main` 回读一致；推送后工作树干净。author/committer 均为 `285288120+jixiangruyi117@users.noreply.github.com`。
 - 增量隐私审计基线 `99844508aaca03a547caa99eb0aa776075daa6d0` 覆盖1个提交、54个路径；findings 0、binaryReview 0。两条测试文件 addressReview 已复核为示例占位域名与公开 npm 包名。未构建 APK、未部署、未操作实体手机。
+
+## 2026-10-16：同步官版最新已提交共享功能并推送准备
+
+- 基线：Public `016a64243a87a392e0e85f4945ff01d1ce1e78f3`，工作树原先干净；按官版本地 main 最新已提交源码快照同步，官版未提交的工作记录和其他本地改动未纳入。
+- 改动：同步角色列表缩略图预生成/原生按尺寸直显、数据保护中的旧库缩略图准备、原生数据库图片来源批读、Discord收件失败隔离与任务完成折叠；合并共享助手说明并保留Public无默认中继的Worker指引。更新相关测试、外观手册构建脚本、Discord收件审计脚本及两张已脱敏教程截图。未复制官版资源广场/官方发行APP包、APK、官版发布元数据；Public身份和版本号未改。
+- 验证：13个定向测试文件216项通过；`vue-tsc --noEmit`、助手知识243 Owner、功能合同14个APP/29个备份范围、Prettier、`git diff --check`及Public网页生产构建通过；构建核验9个当前/51个保留APP包。Android JVM测试因没有可用JDK未能启动；无Android设备/实体手机测试。
+- 审计：增量隐私基线为Public `016a64243a87a392e0e85f4945ff01d1ce1e78f3`，覆盖51个路径，findings 0。两张教程截图的应用ID/Token已人工查看确认遮挡；两个新增PNG列入binaryReview并已人工复核。四条addressReview均为测试占位、localhost、Discord官方地址或公开包名。没有发现私人邮箱、域名或基础设施地址。提交邮箱设置为GitHub noreply，提交后仍需复核author/committer并扫描最终提交。
+- 未决：同步器对助手知识文件中的Public替换区仍报告三方合并冲突；该文件已人工三方合并并通过243 Owner检查。Android JVM/仪器测试未运行。当前同步改动待提交和推送。

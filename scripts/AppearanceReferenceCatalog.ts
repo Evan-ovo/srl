@@ -176,7 +176,6 @@ export function createAppearanceReferenceCatalog(
     readSource('src/services/UiViewRuntime.ts'),
     readSource('src/types/UiCustomization.ts'),
   )
-  const version = (JSON.parse(readSource('build-info.json')) as { buildId: string }).buildId
   readSource('src/core/FeatureAppRegistry.ts')
   // Content identity also changes for logic-only interface updates; never reuse yesterday's docs.
   const fingerprint = createHash('sha256')
@@ -191,6 +190,8 @@ export function createAppearanceReferenceCatalog(
       ),
     )
     .digest('hex')
+  // Release metadata is display context, not the identity of interface source content.
+  const version = (JSON.parse(readSource('build-info.json')) as { buildId: string }).buildId
   return {
     sources: [...sources.values()].filter((source) => source.rules.length),
     scopes,
@@ -200,28 +201,66 @@ export function createAppearanceReferenceCatalog(
   }
 }
 
+/** Keep the on-demand catalog complete without a single oversized JS data module. */
+export function splitReferenceSources(sources: ReferenceSource[], maxBytes = 256 * 1024) {
+  const parts: ReferenceSource[][] = []
+  let current: ReferenceSource[] = []
+  let bytes = 2
+  for (const source of sources) {
+    const size = Buffer.byteLength(JSON.stringify(source)) + 1
+    if (current.length && bytes + size > maxBytes) {
+      parts.push(current)
+      current = []
+      bytes = 2
+    }
+    current.push(source)
+    bytes += size
+  }
+  if (current.length) parts.push(current)
+  return parts
+}
+
 export function appearanceReferencePlugin(): Plugin {
   const id = 'virtual:srl-appearance-reference'
+  const partPrefix = `${id}-part-`
+  let parts: string[] = []
   const inputs = new Set<string>()
   return {
     name: 'srl-appearance-reference',
-    resolveId: (value) => (value === id ? `\0${id}` : undefined),
+    resolveId: (value) =>
+      value === id || new RegExp(`^${partPrefix}\\d+$`, 'u').test(value) ? `\0${value}` : undefined,
     load(value) {
+      if (value.startsWith(`\0${partPrefix}`)) {
+        const part = parts[Number(value.slice(partPrefix.length + 1))]
+        return part === undefined ? undefined : `export default ${part}`
+      }
       if (value !== `\0${id}`) return
       inputs.clear()
-      return `export default ${JSON.stringify(
-        createAppearanceReferenceCatalog(process.cwd(), undefined, (path) => {
+      const { sources, ...metadata } = createAppearanceReferenceCatalog(
+        process.cwd(),
+        undefined,
+        (path) => {
           inputs.add(path.replaceAll('\\', '/'))
           this.addWatchFile(path)
-        }),
-      )}`
+        },
+      )
+      delete metadata.version
+      parts = splitReferenceSources(sources).map((part) => JSON.stringify(part))
+      return `import { BUILD_INFO } from ${JSON.stringify(resolve(process.cwd(), 'src/core/BuildInfo.ts'))};
+${parts.map((_, index) => `import part${index} from '${partPrefix}${index}';`).join('\n')}
+export default {...${JSON.stringify(metadata)}, version: BUILD_INFO.buildId, sources: [${parts.map((_, index) => `...part${index}`).join(',')}]}`
     },
     handleHotUpdate(context) {
       // A changed source import graph must be recollected, including newly added styles.
       const module = context.server.moduleGraph.getModuleById(`\0${id}`)
       if (!module || !inputs.has(context.file.replaceAll('\\', '/'))) return
+      const dataModules = parts.flatMap((_, index) => {
+        const part = context.server.moduleGraph.getModuleById(`\0${partPrefix}${index}`)
+        return part ? [part] : []
+      })
+      for (const part of dataModules) context.server.moduleGraph.invalidateModule(part)
       context.server.moduleGraph.invalidateModule(module)
-      return [...context.modules, module]
+      return [...context.modules, module, ...dataModules]
     },
   }
 }

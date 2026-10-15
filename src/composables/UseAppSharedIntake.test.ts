@@ -55,6 +55,53 @@ function mountApp() {
   return { app, wrapper, context, download }
 }
 
+it('releases the real share importer after an unsupported file so a queued character card is imported', async () => {
+  const { app, wrapper, context } = mountApp()
+  const failed = vi.fn(async () => undefined)
+  const imported = vi.fn(async () => undefined)
+  const taskIds = ['web-failure-share', 'web-success-share']
+  try {
+    context.receiveSharedFileBatch({
+      files: [new File(['not-card'], 'unsupported.pdf')],
+      recoveryId: taskIds[0],
+      route: 'resource',
+      automaticCloud: true,
+      onFailure: failed,
+      acknowledge: async () => undefined,
+    })
+    context.receiveSharedFileBatch({
+      files: [
+        new File(
+          [
+            JSON.stringify({
+              spec: 'chara_card_v2',
+              spec_version: '2.0',
+              data: {
+                name: 'Queued card after unsupported file',
+                description: 'fixture',
+                first_mes: 'Hello',
+                extensions: {},
+              },
+            }),
+          ],
+          'queued-card.json',
+          { type: 'application/json' },
+        ),
+      ],
+      recoveryId: taskIds[1],
+      route: 'resource',
+      automaticCloud: true,
+      acknowledge: imported,
+    })
+    await vi.waitFor(() => expect(imported).toHaveBeenCalledOnce(), { timeout: 5000 })
+    expect(failed).toHaveBeenCalledOnce()
+    expect(app.isBusy.value).toBe(false)
+    expect(app.pendingSharedFileBatch.value).toBeUndefined()
+  } finally {
+    wrapper.unmount()
+  }
+})
+
 it('retains a paused web inbox batch without blocking unrelated shares and resumes only explicitly', async () => {
   const { app, wrapper, context } = mountApp()
   try {

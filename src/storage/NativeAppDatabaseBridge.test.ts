@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 
 const state = vi.hoisted(() => ({ platform: 'android', native: true, available: true }))
 const plugin = vi.hoisted(() => ({
+  getAssetImageSources: vi.fn(),
   queryKeyPage: vi.fn(),
   getStatus: vi.fn(),
   getBlobPath: vi.fn(),
@@ -45,6 +46,21 @@ function encodeBase64(value: string): string {
 }
 
 describe('NativeAppDatabaseBridge', () => {
+  it('reads a bounded batch of image descriptions without fetching any binary', async () => {
+    plugin.getAssetImageSources.mockResolvedValueOnce({ rows: [{ key: '"a"', fallback: true }] })
+    await expect(nativeAppDatabase.getAssetImageSources(['"a"'])).resolves.toEqual([
+      { key: '"a"', fallback: true },
+    ])
+    expect(plugin.getAssetImageSources).toHaveBeenCalledWith({ keys: ['"a"'] })
+    expect(plugin.getRecord).not.toHaveBeenCalled()
+    expect(plugin.getBlobPath).not.toHaveBeenCalled()
+    expect(plugin.readBlobChunk).not.toHaveBeenCalled()
+    await expect(nativeAppDatabase.getAssetImageSources([])).rejects.toThrow('批次无效')
+    await expect(nativeAppDatabase.getAssetImageSources(Array(33).fill('"a"'))).rejects.toThrow(
+      '批次无效',
+    )
+  })
+
   it('forwards bounded key ranges and revision anchors without fetching records', async () => {
     const query = {
       indexName: 'updatedAt',

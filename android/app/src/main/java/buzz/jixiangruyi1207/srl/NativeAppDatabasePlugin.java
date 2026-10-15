@@ -244,6 +244,14 @@ public final class NativeAppDatabasePlugin extends Plugin {
         runIo(call, () -> call.resolve(new JSObject(database.completeBlob(required(call, "token")).toString())));
     }
 
+    @PluginMethod public void getAssetImageSources(PluginCall call) {
+        runIo(call, () -> {
+            JSObject result = new JSObject();
+            result.put("rows", database.getAssetImageSources(call.getArray("keys"), call.getArray("cardKeys")));
+            call.resolve(result);
+        });
+    }
+
     @PluginMethod public void getBlobPath(PluginCall call) {
         runIo(call, () -> {
             JSONObject result = database.getBlobPath(required(call, "store"), required(call, "key"), required(call, "fieldPath"));

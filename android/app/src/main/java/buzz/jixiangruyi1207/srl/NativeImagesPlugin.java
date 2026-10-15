@@ -53,7 +53,7 @@ public class NativeImagesPlugin extends Plugin {
     @PluginMethod
     public void createThumbnail(PluginCall call) {
         runIo(call, () -> {
-            File file = NativeFileAccess.resolve(getContext(), call.getString("uri"));
+            File file = NativeFileAccess.resolveImage(getContext(), call.getString("uri"));
             NativeBridgeNumber.matchingFileSize(
                 call.getData().opt("size"), file.length(), NativeBridgeNumber.MAX_SAFE_INTEGER,
                 "原生文件大小无效", "原生文件大小已变化"
@@ -66,7 +66,7 @@ public class NativeImagesPlugin extends Plugin {
                 result.put("uri", saveTemporaryThumbnail(thumbnail, quality));
             }
             call.resolve(result);
-        });
+        }, NativeExecutors.ioLimited());
     }
 
     @PluginMethod
@@ -85,7 +85,10 @@ public class NativeImagesPlugin extends Plugin {
 
     private interface CheckedAction { void run() throws Exception; }
     private void runIo(PluginCall call, CheckedAction action) {
-        NativeExecutors.ioSerial().execute(() -> { try { action.run(); } catch (Exception error) { call.reject(error.getMessage(), error); } });
+        runIo(call, action, NativeExecutors.ioSerial());
+    }
+    private void runIo(PluginCall call, CheckedAction action, java.util.concurrent.ExecutorService executor) {
+        executor.execute(() -> { try { action.run(); } catch (Exception error) { call.reject(error.getMessage(), error); } });
     }
     private String required(PluginCall call, String key, int maxLength) {
         String value = call.getString(key);

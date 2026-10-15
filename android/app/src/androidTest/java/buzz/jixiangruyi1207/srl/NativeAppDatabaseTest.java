@@ -21,6 +21,46 @@ import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 public final class NativeAppDatabaseTest {
+    @Test public void readsRequestedImagePathsWithEncryptedAndStagedReferences() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        String name = "srl-app-image-sources-" + UUID.randomUUID();
+        NativeAppDatabase database = new NativeAppDatabase(context, name);
+        try {
+            byte[] bytes = Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=", Base64.NO_WRAP);
+            JSONArray assets = new JSONArray(), files = new JSONArray();
+            for (String id : new String[] {"visible", "encrypted", "unrequested", "card"}) {
+                byte[] imageBytes="card".equals(id)?java.util.Arrays.copyOf(bytes,bytes.length+1):bytes;
+                String key = JSONObject.quote(id);
+                String owner = "staged-" + id;
+                NativeAppDatabase.BlobTransfer transfer = database.beginBlob("assetFiles", owner, "/blob", imageBytes.length, "image/png");
+                database.appendBlob(transfer.token, 0, imageBytes);
+                JSONObject blob = database.completeBlob(transfer.token).put("__srlAppDatabaseValueV1", "blob")
+                    .put("fieldPath", "/blob").put("blobOwnerKey", owner);
+                assets.put(new JSONObject().put("key", key).put("value", new JSONObject().put("assetId", id)
+                    .put("mimeType", "image/png").put("size", imageBytes.length).put("encrypted", "encrypted".equals(id))
+                    .put("thumbnailRefs",new JSONObject().put("card","card"))));
+                files.put(new JSONObject().put("key", key).put("value", new JSONObject().put("assetId", id).put("blob", blob)));
+            }
+            database.putRecords("assets", assets); database.putRecords("assetFiles", files);
+            JSONArray result = database.getAssetImageSources(new JSONArray().put("\"visible\"").put("\"encrypted\""));
+            assertEquals(2, result.length());
+            JSONObject direct = result.getJSONObject(0).getJSONObject("blob");
+            assertEquals(bytes.length, direct.getLong("size"));
+            assertTrue(new File(android.net.Uri.parse(direct.getString("path")).getPath()).isFile());
+            assertTrue(result.getJSONObject(1).getBoolean("fallback"));
+            JSONArray selected=database.getAssetImageSources(new JSONArray().put("\"visible\"").put("\"encrypted\""),new JSONArray().put("\"visible\"").put("\"encrypted\""));
+            assertEquals(bytes.length+1,selected.getJSONObject(0).getJSONObject("blob").getLong("size"));
+            assertTrue(selected.getJSONObject(1).getBoolean("fallback"));
+            assertTrue(NativeFileAccess.resolveImage(context,selected.getJSONObject(0).getJSONObject("blob").getString("path")).isFile());
+            assertThrows(Exception.class,()->NativeFileAccess.resolveImage(context,new File(context.getFilesDir(),"not-an-image").toURI().toString()));
+            JSONObject brokenCard=database.getRecord("assets","\"card\"");
+            brokenCard.put("size",999);
+            database.putRecords("assets",new JSONArray().put(new JSONObject().put("key","\"card\"").put("value",brokenCard)));
+            assertEquals(bytes.length,database.getAssetImageSources(new JSONArray().put("\"visible\""),new JSONArray().put("\"visible\"")).getJSONObject(0).getJSONObject("blob").getLong("size"));
+            assertFalse(result.getJSONObject(1).has("blob"));
+        } finally { database.close(); context.deleteDatabase(name); }
+    }
+
     @Test public void retiredTranslationCleanupKeepsSiblingDataAndRejectsLinks() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         File parent = new File(context.getCacheDir(), "retired-model-test-" + UUID.randomUUID());

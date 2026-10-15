@@ -190,6 +190,7 @@ describe('FolderLibraryView', () => {
       .mockImplementation((id) => new Promise<Blob>((resolve) => pending.set(id, resolve)))
     const wrapper = render([], cards, ['card-0', 'card-1', 'card-2', 'card-3'])
     try {
+      await flushPromises()
       expect(getBlob).toHaveBeenCalledTimes(4)
       pending.get('asset-0')!(new Blob(['first'], { type: 'image/png' }))
       await flushPromises()
@@ -235,6 +236,7 @@ describe('FolderLibraryView', () => {
         [...images, ...emptyImages],
       )
       try {
+        await flushPromises()
         expect(getBlob).toHaveBeenCalledTimes(4)
         expect(inspected).toBeGreaterThanOrEqual(size)
         inspected = 0
@@ -265,6 +267,7 @@ describe('FolderLibraryView', () => {
       [{ ...resource('card', '卡片'), thumbnailAssetId: 'asset' }],
       ['card'],
     )
+    await flushPromises()
     wrapper.unmount()
     resolve(new Blob(['late']))
     await flushPromises()

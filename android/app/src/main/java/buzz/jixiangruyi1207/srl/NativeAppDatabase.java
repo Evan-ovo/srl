@@ -307,6 +307,10 @@ final class NativeAppDatabase extends SQLiteOpenHelper {
     JSONObject getBlobPath(String store, String key, String fieldPath) {
         JSONObject metadata = blobMetadata(store, key, fieldPath);
         if (metadata == null) return null;
+        return validatedBlobPath(metadata);
+    }
+
+    private JSONObject validatedBlobPath(JSONObject metadata) {
         String hash = metadata.optString("sha256");
         if (!hash.matches("[a-f0-9]{64}")) throw new IllegalStateException("原生二进制哈希无效");
         File source = blobFile("blobs/" + hash.substring(0, 2) + "/" + hash + ".bin");
@@ -314,6 +318,80 @@ final class NativeAppDatabase extends SQLiteOpenHelper {
             throw new IllegalStateException("原生二进制文件缺失或大小校验失败");
         try { return metadata.put("path", android.net.Uri.fromFile(source).toString()); }
         catch (Exception error) { throw new IllegalStateException("原生二进制路径读取失败", error); }
+    }
+
+    JSONArray getAssetImageSources(JSONArray keys) throws Exception {
+        return getAssetImageSources(keys, null);
+    }
+
+    JSONArray getAssetImageSources(JSONArray keys, JSONArray cardKeys) throws Exception {
+        if (keys == null || keys.length() > NativeAssetImageSources.MAX_BATCH)
+            throw new IllegalArgumentException("图片读取批次无效");
+        // One SQLite snapshot for both records and attachment identities, including background writers.
+        SQLiteDatabase database = getReadableDatabase();
+        database.beginTransactionNonExclusive();
+        try {
+            JSONArray assets = getRecordsByKeys("assets", keys);
+            JSONArray selected = NativeAssetImageSources.selectCardKeys(keys, assets, cardKeys);
+            java.util.LinkedHashSet<String> union = new java.util.LinkedHashSet<>();
+            for (int index=0;index<keys.length();index++) union.add(keys.getString(index));
+            JSONArray extra = new JSONArray();
+            for (int index=0;index<selected.length();index++) {
+                String key=selected.getString(index);
+                if (union.add(key)) extra.put(key);
+            }
+            if (extra.length()>0) {
+                JSONArray variants=getRecordsByKeys("assets", extra);
+                for(int index=0;index<variants.length();index++)assets.put(variants.get(index));
+            }
+            JSONArray output=NativeAssetImageSources.read(selected, assets,
+                getRecordsByKeys("assetFiles", selected), this::getAssetBlobPaths);
+            JSONArray fallback=new JSONArray();
+            for(int index=0;index<keys.length();index++) {
+                if(!keys.getString(index).equals(selected.getString(index)) && !output.getJSONObject(index).has("blob"))
+                    fallback.put(keys.getString(index));
+                output.getJSONObject(index).put("key",keys.getString(index));
+            }
+            if(fallback.length()>0) {
+                JSONArray parents=NativeAssetImageSources.read(fallback, assets,
+                    getRecordsByKeys("assetFiles",fallback),this::getAssetBlobPaths);
+                java.util.Map<String,JSONObject> byKey=new java.util.HashMap<>();
+                for(int index=0;index<parents.length();index++)byKey.put(parents.getJSONObject(index).getString("key"),parents.getJSONObject(index));
+                for(int index=0;index<output.length();index++) {
+                    JSONObject parent=byKey.get(keys.getString(index));
+                    if(parent!=null)output.put(index,parent);
+                }
+            }
+            return output;
+        } finally { database.endTransaction(); }
+    }
+
+    private JSONArray getAssetBlobPaths(JSONArray references) throws Exception {
+        StringBuilder selection = new StringBuilder("store_name = ? AND (");
+        String[] arguments = new String[1 + references.length() * 2]; arguments[0] = "assetFiles";
+        for (int index = 0; index < references.length(); index++) {
+            JSONObject reference = references.getJSONObject(index);
+            String key = reference.getString("key"), field = reference.getString("fieldPath");
+            requireKey(key); requireFieldPath(field);
+            if (index > 0) selection.append(" OR ");
+            selection.append("(record_key = ? AND field_path = ?)");
+            arguments[1 + index * 2] = key; arguments[2 + index * 2] = field;
+        }
+        selection.append(')');
+        JSONArray output = new JSONArray();
+        try (Cursor cursor = getReadableDatabase().query("app_blobs",
+                new String[] {"record_key", "field_path", "mime_type", "byte_length", "sha256"},
+                selection.toString(), arguments, null, null, null)) {
+            while (cursor.moveToNext()) {
+                JSONObject row = new JSONObject().put("key", cursor.getString(0)).put("fieldPath", cursor.getString(1));
+                try {
+                    row.put("blob", validatedBlobPath(new JSONObject().put("mimeType", cursor.getString(2))
+                        .put("size", cursor.getLong(3)).put("sha256", cursor.getString(4))));
+                } catch (Exception error) { row.put("error", error.getMessage()); }
+                output.put(row);
+            }
+        }
+        return output;
     }
 
     JSONObject readBlobChunk(String store, String key, String fieldPath, long offset, int requestedBytes) {

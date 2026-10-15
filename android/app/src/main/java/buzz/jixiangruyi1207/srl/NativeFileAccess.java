@@ -51,6 +51,24 @@ final class NativeFileAccess {
         throw new IOException("文件不属于资源库原件或导入暂存目录");
     }
 
+    /** Image-only access to immutable native database objects; never other app-private files. */
+    static File resolveImage(Context context, String value) throws Exception {
+        if (value == null) throw new IOException("缺少原生文件位置");
+        Uri uri = Uri.parse(value);
+        if ("file".equals(uri.getScheme())) {
+            File root = new File(context.getFilesDir(), "srl-app-data/blobs").getCanonicalFile();
+            File file = new File(uri.getPath()).getCanonicalFile();
+            String prefix = root.getPath() + File.separator;
+            if (file.getPath().startsWith(prefix)) {
+                String relative = file.getPath().substring(prefix.length()).replace(File.separatorChar, '/');
+                if (relative.matches("[a-f0-9]{2}/[a-f0-9]{64}\\.bin")
+                        && relative.substring(0, 2).equals(relative.substring(3, 5)) && file.isFile()) return file;
+                throw new IOException("原生图片附件位置无效");
+            }
+        }
+        return resolve(context, value);
+    }
+
     static String hash(File file) throws Exception {
         return hash(file, (readBytes, totalBytes) -> {});
     }

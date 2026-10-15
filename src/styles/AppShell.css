@@ -1547,7 +1547,7 @@
 }
 
 @supports (content-visibility: auto) {
-  .resource-card,
+  /* 卡片已有分页与按需读图；离屏跳过绘制会让已加载封面在回看时重新绘制。 */
   .resource-row {
     content-visibility: auto;
     contain-intrinsic-size: auto 24rem;

@@ -25,6 +25,15 @@ export class ThumbnailService {
     return task
   }
 
+  /** Optional derived image: failure preserves the already stored full preview. */
+  async prepareCard(assetId: string): Promise<boolean> {
+    try {
+      return Boolean(await this.getOrCreate(assetId, 'card'))
+    } catch {
+      return false
+    }
+  }
+
   private async createThumbnail(assetId: string, level: ThumbnailLevel): Promise<Blob | undefined> {
     const asset = await this.assets.get(assetId)
     if (!asset) return undefined

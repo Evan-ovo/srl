@@ -80,6 +80,13 @@ function receive(): void {
 }
 async function retry(job: DiscordResourceJob): Promise<void> {
   try {
+    const task = localTask(job)
+    if (task?.status === 'failed' && task.retryable) {
+      if (!(await taskCenter.retry(task.operationId)))
+        throw new Error('重试未完成，请查看任务详情。')
+      await refresh()
+      return
+    }
     await acknowledgeDiscordResource(job.id, 'queued', inboxConnection())
     receive()
   } catch (cause) {

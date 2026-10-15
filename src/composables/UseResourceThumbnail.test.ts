@@ -1,12 +1,34 @@
 /** @vitest-environment jsdom */
 import { defineComponent, h, ref } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ResourceReference } from '../types/Resource'
 
-const { getBlob } = vi.hoisted(() => ({ getBlob: vi.fn() }))
-vi.mock('../core/AppContainer', () => ({ assetStore: { getBlob } }))
-import { useResourceThumbnail } from './UseResourceThumbnail'
+const { getBlob, getImageUrl } = vi.hoisted(() => ({ getBlob: vi.fn(), getImageUrl: vi.fn() }))
+vi.mock('../core/AppContainer', () => ({
+  assetStore: {
+    getBlob,
+    getImageUrl,
+  },
+}))
+import {
+  enqueueThumbnailRead,
+  useResourceThumbnail,
+  thumbnailLevelForDisplay,
+} from './UseResourceThumbnail'
+
+it('selects a prepared tier only when actual pixels fit, preserving high-density and unknown layouts', () => {
+  expect(thumbnailLevelForDisplay(100, 150, 2)).toBe('card')
+  expect(thumbnailLevelForDisplay(100, 150, 3)).toBe('preview')
+  expect(thumbnailLevelForDisplay(160, 160, 2)).toBe('card')
+  expect(thumbnailLevelForDisplay(161, 161, 2)).toBe('preview')
+  expect(thumbnailLevelForDisplay(0, 150, 2)).toBe('preview')
+  expect(thumbnailLevelForDisplay(100, 150, NaN)).toBe('preview')
+})
+
+beforeEach(() => {
+  getImageUrl.mockReset().mockResolvedValue(undefined)
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -106,4 +128,103 @@ it('retains the loaded image for metadata-only replacement and reloads a changed
   expect(getBlob).toHaveBeenCalledTimes(2)
   expect(getBlob).toHaveBeenLastCalledWith('replacement')
   wrapper.unmount()
+})
+
+it('prioritizes visible work over earlier prefetch jobs while keeping four active reads', async () => {
+  const order: string[] = []
+  const pending: Array<() => void> = []
+  const cancel = Array.from({ length: 8 }, (_, index) =>
+    enqueueThumbnailRead(
+      async () => {
+        order.push(String(index))
+        await new Promise<void>((resolve) => pending.push(resolve))
+      },
+      () => (index < 4 ? 1 : 3),
+    ),
+  )
+  await flushPromises()
+  expect(order).toEqual(['4', '5', '6', '7'])
+  cancel.forEach((stop) => stop())
+  pending.forEach((complete) => complete())
+  await flushPromises()
+  expect(order).toHaveLength(4)
+})
+
+it('cancels queued images that leave the nearby viewport before their read starts', async () => {
+  let visible!: IntersectionObserverCallback
+  const elements: Element[] = []
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      constructor(callback: IntersectionObserverCallback) {
+        visible = callback
+      }
+      observe(element: Element) {
+        elements.push(element)
+      }
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+  const pending: Array<(blob: Blob) => void> = []
+  getBlob.mockImplementation(() => new Promise((resolve) => pending.push(resolve)))
+  const wrappers = Array.from({ length: 8 }, (_, id) =>
+    mount(
+      defineComponent({
+        setup() {
+          const host = ref<Element | null>(null)
+          useResourceThumbnail(
+            () => ({ id: String(id), thumbnailAssetId: String(id) }) as ResourceReference,
+            host,
+          )
+          return () => h('div', { ref: host })
+        },
+      }),
+    ),
+  )
+  const notify = (targets: Element[], isIntersecting: boolean) =>
+    visible(
+      targets.map((target) => ({ target, isIntersecting })) as IntersectionObserverEntry[],
+      {} as IntersectionObserver,
+    )
+  notify(elements, true)
+  await flushPromises()
+  expect(getBlob).toHaveBeenCalledTimes(4)
+  notify(elements.slice(4), false)
+  await flushPromises()
+  pending.forEach((complete) => complete(new Blob(['image'])))
+  await flushPromises()
+  expect(getBlob).toHaveBeenCalledTimes(4)
+  wrappers.forEach((wrapper) => wrapper.unmount())
+})
+
+it('discards an unmounted native result before it can trigger a fallback byte read', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  let complete!: (url?: string) => void
+  getImageUrl.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        complete = resolve
+      }),
+  )
+  const display = { url: ref(''), failedUrl: ref('') }
+  const wrapper = mount(
+    defineComponent({
+      setup() {
+        useResourceThumbnail(
+          () => ({ id: 'a', thumbnailAssetId: 'a' }) as ResourceReference,
+          undefined,
+          undefined,
+          display,
+        )
+        return () => h('div')
+      },
+    }),
+  )
+  await flushPromises()
+  wrapper.unmount()
+  complete()
+  await flushPromises()
+  expect(getBlob).not.toHaveBeenCalled()
+  expect(display.url.value).toBe('')
 })

@@ -59,6 +59,37 @@ vi.mock('./UseConfirmDialog', () => ({ confirmAction: native.confirm }))
 
 import { useLibraryProtection } from './UseLibraryProtection'
 import { domainEvents } from '../core/DomainEvents'
+import { taskCenter } from '../core/TaskCenter'
+
+it('stops thumbnail preparation at its safe boundary and ignores a late successful result until explicit resume', async () => {
+  let finish!: (count: number) => void
+  let signal!: AbortSignal
+  native.repairOldPngThumbnails.mockImplementationOnce((options: { signal: AbortSignal }) => {
+    signal = options.signal
+    return new Promise<number>((resolve) => {
+      finish = resolve
+    })
+  })
+  const { protection, context } = createProtection()
+  const running = protection.repairOldPngThumbnails()
+  const task = taskCenter.active().find((task) => task.name === '准备列表缩略图')!
+  expect(task).toBeDefined()
+  taskCenter.cancel(task.operationId)
+  expect(signal.aborted).toBe(true)
+  expect(protection.isRepairingOldPngThumbnails.value).toBe(true)
+  finish(1)
+  await running
+  expect(protection.isRepairingOldPngThumbnails.value).toBe(false)
+  expect(context.loadResources).not.toHaveBeenCalled()
+  expect(taskCenter.list().find((item) => item.operationId === task.operationId)?.status).toBe(
+    'cancelled',
+  )
+  createProtection()
+  expect(native.repairOldPngThumbnails).toHaveBeenCalledTimes(1)
+  await protection.repairOldPngThumbnails()
+  expect(native.repairOldPngThumbnails).toHaveBeenCalledTimes(2)
+  expect(native.repairOldPngThumbnails.mock.calls[1]![0].signal.aborted).toBe(false)
+})
 
 function createProtection() {
   const context = {
@@ -137,9 +168,12 @@ describe('useLibraryProtection', () => {
     await protection.repairOldPngThumbnails()
 
     expect(native.repairOldPngThumbnails).toHaveBeenCalledOnce()
-    expect(native.repairOldPngThumbnails).toHaveBeenCalledWith({ restart: true })
+    expect(native.repairOldPngThumbnails).toHaveBeenCalledWith({
+      restart: true,
+      signal: expect.any(AbortSignal),
+    })
     expect(context.loadResources).toHaveBeenCalledOnce()
-    expect(context.showNotice).toHaveBeenCalledWith('已补回 3 张旧资源缩略图')
+    expect(context.showNotice).toHaveBeenCalledWith('已准备 3 张列表缩略图')
     expect(protection.isRepairingOldPngThumbnails.value).toBe(false)
   })
 
@@ -149,7 +183,10 @@ describe('useLibraryProtection', () => {
     await protection.refreshOldPngThumbnailRepairStatus()
     await protection.repairOldPngThumbnails()
 
-    expect(native.repairOldPngThumbnails).toHaveBeenCalledWith({ restart: true })
+    expect(native.repairOldPngThumbnails).toHaveBeenCalledWith({
+      restart: true,
+      signal: expect.any(AbortSignal),
+    })
     expect(context.loadResources).not.toHaveBeenCalled()
   })
 

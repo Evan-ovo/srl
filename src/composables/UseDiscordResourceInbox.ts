@@ -67,6 +67,9 @@ interface ActiveResource {
   controller: AbortController
   delivered: boolean
   imported: boolean
+  failed?: boolean
+  waitingVersion?: boolean
+  waitingAcknowledgement?: Promise<void>
   cancelRequested?: boolean
   confirm?: () => Promise<void>
   confirming?: Promise<void>
@@ -95,8 +98,10 @@ export function useDiscordResourceInbox(
   let readingNative = false
   let notificationPermissionChecked = false
   let webCycle: WebResourceCycle | undefined
+  const pendingWebCycles: WebResourceCycle[] = []
   let unregisterWebInbox: (() => void) | undefined
-  const webBusy = () => [...active.values()].some((entry) => !entry.imported)
+  const webBusy = () =>
+    [...active.values()].some((entry) => !entry.imported && !entry.failed && !entry.waitingVersion)
   const visible = () =>
     document.visibilityState !== 'hidden' ||
     (native && isNativeDiscordInboxRunning()) ||
@@ -135,13 +140,15 @@ export function useDiscordResourceInbox(
     entry: ActiveResource,
     value: 'imported' | 'duplicate' | 'waiting_version' | 'cancelled' | 'failed',
   ): Promise<void> {
-    await notifyNativeDiscordInboxResult({
+    const notification = notifyNativeDiscordInboxResult({
       kind: 'resource',
       id: entry.job.id,
       ...entry.target,
       name: entry.job.name,
       state: value,
     })
+    if (native) await notification
+    else void notification.catch(() => undefined)
   }
   async function failure(entry: ActiveResource, reason: unknown): Promise<void> {
     if (!native && !entry.imported && isWebDiscordInboxPaused() && entry.staging) {
@@ -162,18 +169,46 @@ export function useDiscordResourceInbox(
       return
     }
     taskCenter.fail(entry.taskId, message)
+    if (!native) {
+      finishWebFailure(entry, message)
+      return
+    }
     await notifyResult(entry, 'failed')
     active.delete(entry.job.id)
-    const confirmation = state(entry, 'failed', message).then(
-      () => true,
-      () => false,
-    )
-    if (!native) {
-      const confirmed = await confirmation
-      releaseWebDownload(entry, confirmed && entry.delivered)
-    }
+    const confirmation = (entry.waitingAcknowledgement ?? Promise.resolve())
+      .then(() => state(entry, 'failed', message))
+      .then(
+        () => true,
+        () => false,
+      )
+    void confirmation
     noticeCenter.push({ id: entry.taskId, type: 'error', message: `${entry.job.name}：${message}` })
     changed()
+  }
+
+  function finishWebFailure(entry: ActiveResource, message: string): void {
+    if (entry.failed) return
+    entry.failed = true
+    releaseWebDownload(entry, false)
+    // Keep the local terminal receipt until ACK succeeds so a stale cloud listing cannot
+    // download the failed file again. Neither ACK nor OS notification owns the import slot.
+    const confirmation = state(entry, 'failed', message).then(
+      () => {
+        if (active.get(entry.job.id) === entry) active.delete(entry.job.id)
+      },
+      () => {
+        if (!disposed && active.get(entry.job.id) === entry)
+          taskCenter.update(entry.taskId, { phase: '本机处理已结束，云端状态确认未完成' })
+      },
+    )
+    entry.confirming = confirmation
+    void confirmation.finally(() => {
+      if (entry.confirming === confirmation) entry.confirming = undefined
+    })
+    void notifyResult(entry, 'failed').catch(() => undefined)
+    noticeCenter.push({ id: entry.taskId, type: 'error', message: `${entry.job.name}：${message}` })
+    changed()
+    void request(entry.automatic)
   }
 
   async function finishNativeImport(
@@ -296,10 +331,15 @@ export function useDiscordResourceInbox(
         entry.finishProcessing?.()
         entry.processing = undefined
         entry.finishProcessing = undefined
+        if (!native && waiting) {
+          entry.waitingVersion = true
+          void request(entry.automatic)
+        }
       },
       // Explicit cloud command chooses resources; a retained file does not open the route picker.
       recoveryId: original.recoveryId || entry.taskId,
       onCancel: async () => {
+        await entry.waitingAcknowledgement
         await state(entry, 'cancelled', '用户取消了中断的资源解析。')
         await original.acknowledge()
         cancelled = true
@@ -325,14 +365,20 @@ export function useDiscordResourceInbox(
             phase: native ? '等待确认历史版本' : '等待确认历史版本，处理后继续领取',
           })
           await notifyResult(entry, 'waiting_version')
-          const confirmation = state(entry, 'waiting_version').catch(() => {
+          const confirmation = (
+            native
+              ? state(entry, 'waiting_version')
+              : (entry.waitingAcknowledgement ?? Promise.resolve()).then(() =>
+                  state(entry, 'waiting_version'),
+                )
+          ).catch(() => {
             noticeCenter.push({
               id: entry.taskId,
               type: 'warning',
               message: '文件已下载并等待版本选择，云端状态尚未确认；请完成本机选择。',
             })
           })
-          if (!native) await confirmation
+          if (!native) entry.waitingAcknowledgement = confirmation
         }
       },
       onVersionResolved: async (hash, resourceId) => {
@@ -346,6 +392,19 @@ export function useDiscordResourceInbox(
         if (cancelled) return
         if (waiting) return
         if (failed || skipped) {
+          const message =
+            importedItems + duplicateItems > 0
+              ? skipped
+                ? '部分资源已保存；已跳过其余版本选择。'
+                : '部分资源已保存；其余资源解析或导入失败，可重试。'
+              : skipped
+                ? '已跳过版本导入，文件未新增。'
+                : '资源解析或导入失败。'
+          if (!native && !skipped) {
+            taskCenter.fail(entry.taskId, message)
+            finishWebFailure(entry, message)
+            return
+          }
           if (skipped) {
             taskCenter.cancelled(entry.taskId)
             await notifyResult(entry, 'cancelled')
@@ -353,17 +412,8 @@ export function useDiscordResourceInbox(
             taskCenter.fail(entry.taskId, '资源未全部导入，请重试。')
             await notifyResult(entry, 'failed')
           }
-          const confirmation = state(
-            entry,
-            skipped ? 'cancelled' : 'failed',
-            importedItems + duplicateItems > 0
-              ? skipped
-                ? '部分资源已保存；已跳过其余版本选择。'
-                : '部分资源已保存；其余资源解析或导入失败，可重试。'
-              : skipped
-                ? '已跳过版本导入，文件未新增。'
-                : '资源解析或导入失败。',
-          )
+          const confirmation = (entry.waitingAcknowledgement ?? Promise.resolve())
+            .then(() => state(entry, skipped ? 'cancelled' : 'failed', message))
             .then(() => true)
             .catch(() => {
               noticeCenter.push({
@@ -399,6 +449,7 @@ export function useDiscordResourceInbox(
     const operation = (async () => {
       try {
         taskCenter.update(entry.taskId, { phase: '已导入，正在确认云端' })
+        await entry.waitingAcknowledgement
         await state(entry, 'imported')
         await original.acknowledge()
         taskCenter.update(entry.taskId, { phase: '已导入资源库' })
@@ -442,7 +493,6 @@ export function useDiscordResourceInbox(
   }
 
   async function settleWebCycle(cycle: WebResourceCycle): Promise<void> {
-    cycle.finishBindingBatch()
     if (!targetCurrent(cycle.target)) return
     try {
       const settings = await discordInboxAutomationSettingsService.load()
@@ -462,9 +512,10 @@ export function useDiscordResourceInbox(
         if (summary) resources.push(summary)
       }
       if (disposed || vault.value.locked || !targetCurrent(cycle.target)) return
-      bindings.push(
-        ...(await autoBindIncomingCardBatch(communitySourceService, resources, settings)),
-      )
+      if (resources.length)
+        bindings.push(
+          ...(await autoBindIncomingCardBatch(communitySourceService, resources, settings)),
+        )
       for (const binding of bindings)
         window.dispatchEvent(
           new CustomEvent('srl:community-sources-changed', {
@@ -474,6 +525,17 @@ export function useDiscordResourceInbox(
     } catch {
       // Binding remains best effort; a completed local import must not be rolled back.
     }
+  }
+
+  async function settleWebCycles(): Promise<void> {
+    if (webCycle || webBusy()) return
+    // A waiting decision releases transport, but remains part of its original logical batch.
+    // Release every ready cohort's scan barrier together before flushing deferred post scans.
+    if ([...active.values()].some((entry) => entry.webCycle && !entry.imported && !entry.failed))
+      return
+    const cycles = pendingWebCycles.splice(0)
+    for (const cycle of cycles) cycle.finishBindingBatch()
+    for (const cycle of cycles) await settleWebCycle(cycle)
   }
 
   async function readNative(): Promise<void> {
@@ -571,8 +633,10 @@ export function useDiscordResourceInbox(
           await entry.confirm()
           return
         }
+        if (entry.failed) await entry.confirming
         if (entry.staging) releaseNativeClaim(entry.staging)
         await acknowledgeDiscordResource(job.id, 'queued', target)
+        if (entry.failed && active.get(job.id) === entry) active.delete(job.id)
         await request(entry.automatic)
       },
     })
@@ -738,6 +802,7 @@ export function useDiscordResourceInbox(
       cursor = next
     }
     if (disposed || vault.value.locked || !targetCurrent(target)) return
+    if (!jobs.length && pendingWebCycles.length) return
     return {
       target,
       automatic,
@@ -785,11 +850,17 @@ export function useDiscordResourceInbox(
             webCycle.finishBindingBatch(true)
             webCycle = undefined
           }
+          for (let index = pendingWebCycles.length - 1; index >= 0; index -= 1) {
+            if (targetCurrent(pendingWebCycles[index]!.target)) continue
+            pendingWebCycles[index]!.finishBindingBatch(true)
+            pendingWebCycles.splice(index, 1)
+          }
           // A single attachment owns all importer callbacks, including every item inside a ZIP.
           // Keep at most one downloaded Web attachment until its import/decisions finish.
           for (const entry of active.values())
             if (!entry.delivered && entry.staging) deliver(entry, entry.staging)
           if (webBusy()) break
+          await settleWebCycles()
           webCycle ??= await snapshotWebCycle(target, automaticRequest)
           if (!webCycle) break
           if (isWebDiscordInboxRunning()) webCycle.background = true
@@ -813,9 +884,9 @@ export function useDiscordResourceInbox(
             (automaticRequest && isWebDiscordInboxPaused())
           )
             break
-          await settleWebCycle(cycle)
-          cycle.resourceIds.clear()
+          pendingWebCycles.push(cycle)
           webCycle = undefined
+          await settleWebCycles()
           // Preserve the existing 100-job bound per cohort, with later arrivals in another cohort.
           if (cycle.hasMore) {
             requested = true
@@ -942,6 +1013,8 @@ export function useDiscordResourceInbox(
     window.removeEventListener('srl:web-inbox-state', webStateChanged)
     webCycle?.finishBindingBatch(true)
     webCycle = undefined
+    for (const cycle of pendingWebCycles) cycle.finishBindingBatch(true)
+    pendingWebCycles.length = 0
     if (nativeTimer !== undefined) clearTimeout(nativeTimer)
     for (const entry of active.values()) entry.controller.abort()
     for (const event of events) window.removeEventListener(event, wake)

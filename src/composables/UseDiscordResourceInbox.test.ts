@@ -111,6 +111,7 @@ function start(locked = false) {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  setup.notify.mockResolvedValue(undefined)
   setup.native = false
   setup.webRunning = false
   setup.webPaused = false
@@ -145,6 +146,255 @@ afterEach(() => {
   }
 })
 describe('cloud resource coordination', () => {
+  it.each(['imported', 'cancelled'])(
+    'orders the final %s ACK after a delayed waiting-version ACK',
+    async (outcome) => {
+      setup.webRunning = true
+      let finish!: () => void
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const ack = setup.ack.getMockImplementation()!
+      setup.ack.mockImplementation((id, state, ...args) =>
+        state === 'waiting_version' ? pending : ack(id, state, ...args),
+      )
+      const intake = start()
+      await flushPromises()
+      const first = intake.receive.mock.calls[0]![0]
+      await first.onItemComplete?.({ status: 'versionCandidate' } as ImportResult)
+      first.onProcessingSettled?.()
+      await flushPromises()
+      await first.onVersionResolved?.(outcome === 'imported' ? 'a'.repeat(64) : undefined, 'A')
+      const completing = first.acknowledge()
+      try {
+        await flushPromises()
+        expect(setup.ack.mock.calls.some(([, state]) => state === outcome)).toBe(false)
+      } finally {
+        finish()
+        await completing
+        await flushPromises()
+      }
+      expect(
+        setup.ack.mock.calls.filter(([id]) => id === job.id).map(([, state]) => state),
+      ).toEqual(['downloading', 'importing', 'waiting_version', outcome])
+    },
+  )
+
+  it.each(['notification', 'cloud ACK'])(
+    'releases a history decision from transport while its %s is pending',
+    async (phase) => {
+      setup.webRunning = true
+      const next = { ...job, id: '22222222-2222-4222-a222-222222222222', name: 'next.png' }
+      setup.list.mockResolvedValueOnce({ jobs: [job, next], recent: [], hasMore: false })
+      let finish!: () => void
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const ack = setup.ack.getMockImplementation()!
+      if (phase === 'notification') setup.notify.mockImplementationOnce(() => pending)
+      else
+        setup.ack.mockImplementation((id, state, ...args) =>
+          id === job.id && state === 'waiting_version' ? pending : ack(id, state, ...args),
+        )
+      const intake = start()
+      await flushPromises()
+      const first = intake.receive.mock.calls[0]![0]
+      const reporting = Promise.resolve(
+        first.onItemComplete?.({ status: 'versionCandidate' } as ImportResult),
+      ).then(() => first.onProcessingSettled?.())
+      try {
+        await flushPromises()
+        expect(setup.download).toHaveBeenCalledTimes(2)
+      } finally {
+        finish()
+        await reporting
+        await flushPromises()
+      }
+    },
+  )
+
+  it('preserves a waiting history choice across pause, continues only explicitly, and settles after skip', async () => {
+    setup.webRunning = true
+    const next = { ...job, id: '22222222-2222-4222-a222-222222222222', name: 'next.png' }
+    setup.list.mockResolvedValueOnce({ jobs: [job, next], recent: [], hasMore: false })
+    setup.summary.mockResolvedValue({
+      id: 'B',
+      type: 'characterCard',
+      name: 'B',
+      fileName: 'B.png',
+    })
+    const intake = start()
+    await flushPromises()
+    const first = intake.receive.mock.calls[0]![0]
+    await first.onItemComplete?.({ status: 'versionCandidate' } as ImportResult)
+    setup.webPaused = true
+    setup.webRunning = false
+    window.dispatchEvent(new Event('srl:web-inbox-state'))
+    first.onProcessingSettled?.()
+    await intake.request()
+    expect(setup.download).toHaveBeenCalledOnce()
+    setup.webPaused = false
+    setup.webRunning = true
+    await intake.request()
+    expect(setup.download).toHaveBeenCalledTimes(2)
+    await first.onVersionResolved?.()
+    await first.acknowledge()
+    const second = intake.receive.mock.calls[1]![0]
+    await second.onItemComplete?.({
+      status: 'imported',
+      resource: { id: 'B', type: 'characterCard' },
+    } as ImportResult)
+    await second.acknowledge()
+    await flushPromises()
+    expect(setup.bindCards).toHaveBeenCalledOnce()
+    expect(setup.bindCards.mock.calls[0]![1].map((item: { id: string }) => item.id)).toEqual(['B'])
+  })
+
+  it('continues same and later Web cohorts while a history choice waits, then binds complete cohorts in order', async () => {
+    setup.webRunning = true
+    const next = { ...job, id: '22222222-2222-4222-a222-222222222222', name: 'B.png' }
+    const later = { ...job, id: '33333333-3333-4333-a333-333333333333', name: 'C.png' }
+    setup.list.mockResolvedValueOnce({ jobs: [job, next], recent: [], hasMore: false })
+    setup.summary.mockImplementation(async (id) => ({
+      id,
+      type: 'characterCard',
+      name: id,
+      fileName: `${id}.png`,
+    }))
+    const intake = start()
+    await flushPromises()
+    const first = intake.receive.mock.calls[0]![0]
+    await first.onItemComplete?.({ status: 'versionCandidate' } as ImportResult)
+    // Parsing must finish before this file ceases to own the import slot.
+    await intake.request()
+    expect(setup.download).toHaveBeenCalledOnce()
+    first.onProcessingSettled?.()
+    await flushPromises()
+    expect(setup.download).toHaveBeenCalledTimes(2)
+    const second = intake.receive.mock.calls[1]![0]
+    await second.onItemComplete?.({
+      status: 'imported',
+      resource: { id: 'B', type: 'characterCard' },
+    } as ImportResult)
+    await second.acknowledge()
+    await flushPromises()
+    expect(setup.bindCards).not.toHaveBeenCalled()
+    setup.list.mockResolvedValueOnce({ jobs: [later], recent: [], hasMore: false })
+    await intake.request()
+    const third = intake.receive.mock.calls[2]![0]
+    expect(setup.download).toHaveBeenCalledTimes(3)
+    await third.onItemComplete?.({
+      status: 'imported',
+      resource: { id: 'C', type: 'characterCard' },
+    } as ImportResult)
+    await third.acknowledge()
+    await flushPromises()
+    expect(setup.bindCards).not.toHaveBeenCalled()
+    await first.onVersionResolved?.('a'.repeat(64), 'A')
+    await first.acknowledge()
+    await flushPromises()
+    expect(setup.bindCards).toHaveBeenCalledTimes(2)
+    expect(setup.bindCards.mock.calls[0]![1].map((item: { id: string }) => item.id)).toEqual([
+      'B',
+      'A',
+    ])
+    expect(setup.bindCards.mock.calls[1]![1].map((item: { id: string }) => item.id)).toEqual(['C'])
+    expect(setup.download).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(
+    ['notification', 'cloud acknowledgement'].flatMap((pendingPhase) =>
+      ['download', 'parser callback', 'import result'].map((phase) => ({ pendingPhase, phase })),
+    ),
+  )(
+    'continues after an unsupported file at $phase while its failed $pendingPhase is pending',
+    async ({ pendingPhase, phase }) => {
+      const next = { ...job, id: '22222222-2222-4222-a222-222222222222', name: 'next.png' }
+      setup.list.mockResolvedValueOnce({ jobs: [job, next], recent: [], hasMore: false })
+      let finish!: () => void
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const ack = setup.ack.getMockImplementation()!
+      if (pendingPhase === 'notification') setup.notify.mockImplementationOnce(() => pending)
+      else
+        setup.ack.mockImplementation((id, state, ...args) =>
+          id === job.id && state === 'failed' ? pending : ack(id, state, ...args),
+        )
+      if (phase === 'download') setup.download.mockRejectedValueOnce(new Error('下载失败'))
+      const intake = start()
+      await flushPromises()
+      const first = intake.receive.mock.calls[0]?.[0]
+      let failing: void | Promise<void>
+      if (phase === 'parser callback') failing = first!.onFailure!('不支持的酒馆资源文件')
+      if (phase === 'import result') {
+        await first!.onItemComplete?.({
+          status: 'failed',
+          message: '不支持的酒馆资源文件',
+        } as ImportResult)
+        failing = first!.acknowledge()
+      }
+      try {
+        await flushPromises()
+        expect(setup.download).toHaveBeenCalledTimes(2)
+        expect(intake.receive).toHaveBeenCalledTimes(phase === 'download' ? 1 : 2)
+        await intake.request()
+        expect(setup.download).toHaveBeenCalledTimes(2)
+      } finally {
+        finish()
+        await failing!
+        await flushPromises()
+      }
+    },
+  )
+
+  it('retains a failed cloud receipt without re-downloading it and allows explicit retry', async () => {
+    setup.ack.mockImplementation(async (_id, state) => {
+      if (state === 'failed') throw new Error('ACK offline')
+    })
+    const intake = start()
+    await flushPromises()
+    await intake.receive.mock.calls[0]![0].onFailure!('不支持的资源')
+    await flushPromises()
+    await intake.request()
+    expect(setup.download).toHaveBeenCalledOnce()
+    expect(
+      taskCenter.list().find((task) => task.operationId === `discord-resource-${job.id}`),
+    ).toMatchObject({
+      status: 'failed',
+      retryable: true,
+    })
+    await taskCenter.retry(`discord-resource-${job.id}`)
+    expect(setup.download).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not revive receiving after a late failure ACK when the user has paused', async () => {
+    setup.webRunning = true
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const ack = setup.ack.getMockImplementation()!
+    setup.ack.mockImplementation((id, state, ...args) =>
+      state === 'failed' ? pending : ack(id, state, ...args),
+    )
+    const intake = start()
+    await flushPromises()
+    await intake.receive.mock.calls[0]![0].onFailure!('不支持的资源')
+    await flushPromises()
+    setup.webRunning = false
+    setup.webPaused = true
+    window.dispatchEvent(new Event('srl:web-inbox-state'))
+    finish()
+    await flushPromises()
+    await intake.request()
+    expect(setup.download).toHaveBeenCalledOnce()
+    setup.webRunning = true
+    setup.webPaused = false
+    await intake.request()
+    expect(setup.download).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps a failed Web cloud ACK retryable without blocking the next file or re-importing the committed one', async () => {
     setup.webRunning = true
     const next = { ...job, id: '22222222-2222-4222-a222-222222222222', name: 'next.json' }

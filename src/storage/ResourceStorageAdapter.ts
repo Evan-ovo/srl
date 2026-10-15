@@ -61,7 +61,10 @@ export interface ResourceStorageAdapter {
   getThumbnail?(id: string): Promise<Blob | undefined>
   repairThumbnailAssets?(): Promise<number>
   getMissingPngThumbnailRepairStatus?(): Promise<MissingPngThumbnailRepairStatus>
-  repairMissingPngCharacterCardThumbnails?(options?: { restart?: boolean }): Promise<number>
+  repairMissingPngCharacterCardThumbnails?(options?: {
+    restart?: boolean
+    signal?: AbortSignal
+  }): Promise<number>
   get(id: string): Promise<Resource | undefined>
   getReadSource?(id: string): Promise<ResourceReadSource | undefined>
   getSummary?(id: string, historical?: boolean): Promise<ResourceSummary | undefined>

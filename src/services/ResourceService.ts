@@ -239,7 +239,10 @@ export class ResourceService {
     )
   }
 
-  repairMissingPngCharacterCardThumbnails(options?: { restart?: boolean }): Promise<number> {
+  repairMissingPngCharacterCardThumbnails(options?: {
+    restart?: boolean
+    signal?: AbortSignal
+  }): Promise<number> {
     return this.storage.repairMissingPngCharacterCardThumbnails?.(options) ?? Promise.resolve(0)
   }
 

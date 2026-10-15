@@ -38,7 +38,18 @@ export interface NativeKeyPage {
   revision: string
 }
 
+export interface NativeAssetImageSource {
+  key: string
+  fallback?: boolean
+  error?: string
+  blob?: { path: string; size: number; mimeType: string; sha256: string }
+}
+
 interface NativeAppDatabasePlugin {
+  getAssetImageSources(options: {
+    keys: string[]
+    cardKeys?: string[]
+  }): Promise<{ rows: NativeAssetImageSource[] }>
   compact(): Promise<{ beforeBytes: number; afterBytes: number }>
   queryKeyPage(options: { store: string; query: NativeKeyPageQuery }): Promise<NativeKeyPage>
   getBlobPath(options: { store: string; key: string; fieldPath: string }): Promise<{
@@ -218,6 +229,17 @@ function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
 
 /** APK-only persistence bridge. The browser/PWA remains on its existing IndexedDB adapters. */
 export const nativeAppDatabase = {
+  async getAssetImageSources(
+    keys: string[],
+    cardKeys: string[] = [],
+  ): Promise<NativeAssetImageSource[]> {
+    assertAndroidDatabase()
+    if (!keys.length || keys.length > 32) throw new Error('图片读取批次无效')
+    return (
+      await databasePlugin.getAssetImageSources({ keys, ...(cardKeys.length ? { cardKeys } : {}) })
+    ).rows
+  },
+
   async compact(): Promise<{ beforeBytes: number; afterBytes: number }> {
     assertAndroidDatabase()
     return databasePlugin.compact()

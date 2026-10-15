@@ -229,6 +229,21 @@
   margin-top: 0.9rem;
 }
 
+.activity-center__completed {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--color-line);
+}
+
+.activity-center__completed > summary {
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  padding: 0.75rem 0.1rem;
+  color: var(--color-ink-soft);
+  font-size: 0.78rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
 .activity-center__group h3 {
   margin: 0 0 0.4rem;
   color: var(--color-ink-soft);
