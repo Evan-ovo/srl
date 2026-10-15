@@ -115,3 +115,5 @@ Public已同步官版本地main `cc2af662afe4f73345df7834e6035cc96d060f2d` 的�
 - 官版本地已提交 main 快照 `ae352cee656b3012381fa03b8299aee8de7a669c`；Public 基线 `397f7355b1ba4eec868cfcf575b023d00327d27b`。补齐此前遗漏的 `LibraryFormatting` 导出实现及三组测试，并同步设计系统契约测试；读了么纸色也已在此前提交对齐。
 - 干净源快照全量投影审计1551文件一致、25路径有差异。所有差异已分类为既定 Public 边界（账号/登录/反馈/托管/资源广场、自部署 Worker 与更新渠道）、相关文案/测试、脱敏夹具及 Public 专有测试；三个重复 MAIN-ONLY 标记文件逐块核对后共享实现一致。无发现排除范围以外的功能/UI差异。该结论依据静态源码投影与逐项复核，不代表全量运行时/真机验收。
 - 定向测试4文件33项通过，`git diff --check`通过；全量测试、Android JVM、APK及实体手机未运行。改动和本记录待提交、隐私复核与推送。
+
+- 发布回执：Public `015ba0ddf4a08c5457a0ce3fa962e8835d2d712c` 已推送并回读确认；提交邮箱为GitHub noreply，增量隐私审计基线 `397f7355b1ba4eec868cfcf575b023d00327d27b` 覆盖1提交/7路径且无 finding、binary/address review。官版临时干净审计 worktree 已清理。

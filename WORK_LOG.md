@@ -258,3 +258,5 @@
 - 对照官版本地已提交 main `ae352cee656b3012381fa03b8299aee8de7a669c`，确认之前 Public 的 `LibraryFormatting` 本机导出路径仍落后；同步实现及三组相关测试，并同步设计系统契约测试。导出使用唯一目录避免同名冲突，并只清理过期且可识别的生成目录。
 - 干净官版快照全量审计：1551 个文件一致、25 个文件有路径级差异。25 项逐项归类为登录/账号/反馈/托管服务与资源广场、Public 自部署 Worker/无默认中继及 APK 更新边界、对应文案/知识/测试、两份仅测试用的脱敏夹具和一份 Public 专用浏览器策略测试。3 个 MAIN-ONLY 重复 ID 文件由标准解析器拒绝；逐区块核对后确认共享实现一致。另有测试健壮性差异，不涉及产品行为。未发现这些范围以外的未同步功能或 UI 差异。
 - 验证：`LibraryFormatting` 三组测试及 `DesignSystemContract.test.ts` 共33项通过；`git diff --check`通过。当前改动待提交；未运行全量测试、Android JVM/APK 或实体手机测试。
+
+- 提交/推送回执：Public `015ba0ddf4a08c5457a0ce3fa962e8835d2d712c` 已推送到 `origin/main`，`git ls-remote` 回读同一 SHA；author/committer 均为该账号 GitHub noreply。增量隐私检查从 `397f7355b1ba4eec868cfcf575b023d00327d27b` 覆盖1提交、7路径，findings/binaryReview/addressReview 均为0。工作树干净。
