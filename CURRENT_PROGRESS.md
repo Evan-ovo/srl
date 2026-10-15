@@ -2,10 +2,16 @@
 
 ## 2026-10-15 当前：Public 共享功能与 UI 已同步、提交并推送
 
-- 来源官版本地已提交 `main`：`bcb193ea4b7ef8326517b963d1ff3fd39ba06435`（相对上轮 `1561cba3` 仅新增助手内容修订号提交）。Public 提交 `1146915387c947fac6ebf099982d3a81b03aec2f` 已推送至 `origin/main`；推送前远端为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，推送后 `ls-remote` 与本机 HEAD 一致。
+- 来源官版本地已提交 `main`：`bcb193ea4b7ef8326517b963d1ff3fd39ba06435`（此前同步快照）；Public 同步提交 `1146915387c947fac6ebf099982d3a81b03aec2f` 已推送。后续复查按官版本地已提交 main `ae352cee656b3012381fa03b8299aee8de7a669c` 精确对照，发现并移除读了么外壳多余的 `--reader-paper` 覆盖及相应测试预期；本机导出 UI、归档流程与通用 Android 本机保存代码已与官版一致，官版新增的 63 行资源广场专用导入/下载按合同排除。当前这次小修已通过定向测试，提交/推送状态见下方最新记录。
 - 细查投影：标准审计 1546 路径一致、30 路径报告差异；其中 3 个文件因 MAIN-ONLY 标记 ID 重复被拒绝，逐块配对后共享代码可对齐。其余差异属于 Public 登录/资源广场/托管服务与更新通道、自部署 Worker、读了么纸色、本机原生导出路径及相应测试/文档。额外发现 Assistant 内容修订号未纳入扫描：官版42、Public原33；因 Public 助手知识已更新，本轮将其增至34。移除了仅用于已删除分享 UI 的84行孤立样式，并恢复“不显示广场分享入口”的断言。仍有27处路径层面的真实差异需按既有边界看待；另有 Public 专用 Discord 浏览器策略测试没有官版对应文件。
 - 验证：源组件定向测试19/19、知识源238 Owner、9个当前+51个保留APP包校验及 `git diff --check`通过。增量隐私审计基线 `67c85d3c20778692ed416a0146b7d33bd5ec8877` → `1146915387c947fac6ebf099982d3a81b03aec2f`，169路径、1提交，findings 0、binaryReview 0；人工地址核对通过，author/committer 均为该 GitHub 账号 noreply。未跑全量测试、Android JVM、APK或真机。
 - 清理：临时 parity worktree 已解除登记，但 `.codex-tmp/public-parity-20261015-1561/node_modules/better-sqlite3` 清理时 Windows 返回 Access denied，未继续强制处理。
+
+## 2026-10-15 当前补正：读了么纸色与本机导出差异复核
+
+- 对照官版本地已提交 `main` `ae352cee656b3012381fa03b8299aee8de7a669c`，不是官版工作区未提交文件。同步移除 Public 读了么外壳额外的 `--reader-paper` 内联样式，测试改为与官版一致；保留正文阅读主题/纸色设置本身。
+- 复核本机导出：`NativeExportDialog.vue`、`ExportService.ts`、`ChatReaderAppearance.ts` 及通用 Android 保存到图片/下载/用户目录流程均与官版 main 一致。官版额外的资源广场下载/导入接口共63行，均为 MAIN-ONLY 服务能力，Public 没有广场后端，因此依合同排除；此前将其笼统称为“本机导出差异”不准确。
+- 验证：`ChatReaderApp.test.ts` 5/5、`git diff --check`通过。尚未构建 APK或操作手机；提交/推送结果以后续状态更新为准。
 
 ## 2026-10-13 当前：官版已提交共享更新已同步并推送至 Public
 

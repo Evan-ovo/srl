@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { resourceService, externalAppService } from '../core/AppContainer'
 import { createChatReaderHost, type ChatReaderNavigation } from '../services/ChatReaderHostService'
 import { mountChatReader } from '../reader/ChatReaderView.js'
@@ -19,7 +19,6 @@ const navigation = ref<ChatReaderNavigation>({
   cover: false,
   colors: readChatReaderColors(),
 })
-const appearance = computed(() => ({ '--reader-paper': navigation.value.colors.paper }))
 let reader: ReturnType<typeof mountChatReader> | undefined
 let closed = false
 function action(value: 'back' | 'search' | 'cover') {
@@ -91,7 +90,6 @@ onBeforeUnmount(() => {
 <template>
   <section
     class="chat-reader-app"
-    :style="appearance"
     data-srl-feature-root="chatReader"
     :data-reader-page="navigation.page"
     :aria-busy="!ready"

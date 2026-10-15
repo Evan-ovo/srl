@@ -71,12 +71,7 @@ it('mounts a host page with no outer iframe and batches all 30 visible chat stat
   const wrapper = await open(),
     root = wrapper.get('.chat-reader-app__view').element.shadowRoot!
   expect(wrapper.find('iframe').exists()).toBe(false)
-  expect(wrapper.attributes('style')).toContain('--reader-paper: #f6f3ec')
-  expect(
-    (wrapper.get('.chat-reader-app').element as HTMLElement).style.getPropertyValue(
-      '--color-canvas',
-    ),
-  ).toBe('')
+  expect(wrapper.attributes('style')).toBeUndefined()
   expect(root.querySelector('iframe')).toBeNull()
   expect(root.querySelector('[data-role="role"]')).not.toBeNull()
   ;(root.querySelector('[data-role="role"]') as HTMLElement).click()

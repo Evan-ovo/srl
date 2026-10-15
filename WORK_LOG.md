@@ -246,3 +246,9 @@
 - 验证：定向组件测试19/19、助手知识源238 Owner、9个当前+51个保留 APP 包校验和 `git diff --check`通过；全量测试与 Android JVM/APK/真机未执行。提交前增量隐私扫描基线为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，finding 0、binaryReview 0；逐项复核地址命中为 GitHub noreply 邮箱、官方服务域名及 example/test 主机，没有作者私人邮箱、私人域名或私人基础设施地址。
 - 发布：仓库级 Git 邮箱为该 GitHub 账号 noreply，推送前确认活动账号为 `jixiangruyi117`、远端为 Public `origin/main`。提交 `1146915387c947fac6ebf099982d3a81b03aec2f` 的 author/committer 均为 `285288120+jixiangruyi117@users.noreply.github.com`；已快进推送，`git ls-remote` 回读的远端 `main` 与本机 HEAD 一致。
 - 未决：全量等价性审计仍有已分类的 Public 边界差异；不声称 APK、Android JVM或真机验收通过。未修改官版远端或操作实体手机。
+
+## 2026-10-15：补正读了么纸色与本机导出差异分类
+
+- 对照官版本地已提交 `main` `ae352cee656b3012381fa03b8299aee8de7a669c`，移除 Public 读了么外壳多余的 `--reader-paper` 覆盖，并同步测试预期；正文阅读主题/纸色设置保留。
+- 复核 `NativeExportDialog.vue`、`ExportService.ts`、`ChatReaderAppearance.ts` 与通用 Android 本机保存代码均和官版 main 一致。仅官版新增的63行资源广场导入/下载接口由 MAIN-ONLY 标记包围，Public无广场后端，按合同排除。之前把整类称作“本机导出差异”不准确。
+- 验证：`ChatReaderApp.test.ts` 5/5，`git diff --check`通过；未构建 APK或操作手机。提交/推送结果随后续状态更新为准。
