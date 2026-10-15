@@ -244,5 +244,5 @@
 
 - 目标/改动：提交本轮及此前保留在 Public 工作树中的官版共享功能同步、UI 对齐、测试和工作记录；保留 Public 登录/资源广场/服务边界、Public 版本身份及所有用户已有工作。仅提交 Git 跟踪和非忽略的工作树内容，不纳入 `.codex-tmp`。
 - 验证：定向组件测试19/19、助手知识源238 Owner、9个当前+51个保留 APP 包校验和 `git diff --check`通过；全量测试与 Android JVM/APK/真机未执行。提交前增量隐私扫描基线为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，finding 0、binaryReview 0；逐项复核地址命中为 GitHub noreply 邮箱、官方服务域名及 example/test 主机，没有作者私人邮箱、私人域名或私人基础设施地址。
-- 发布：仓库级 Git 邮箱为该 GitHub 账号 noreply，推送前确认活动账号为 `jixiangruyi117`、远端为 Public `origin/main`。本地提交和远端回读结果记录在本节后续核验中。
+- 发布：仓库级 Git 邮箱为该 GitHub 账号 noreply，推送前确认活动账号为 `jixiangruyi117`、远端为 Public `origin/main`。提交 `1146915387c947fac6ebf099982d3a81b03aec2f` 的 author/committer 均为 `285288120+jixiangruyi117@users.noreply.github.com`；已快进推送，`git ls-remote` 回读的远端 `main` 与本机 HEAD 一致。
 - 未决：全量等价性审计仍有已分类的 Public 边界差异；不声称 APK、Android JVM或真机验收通过。未修改官版远端或操作实体手机。
