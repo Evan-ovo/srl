@@ -518,7 +518,13 @@ describe('PresetStitcherApp', () => {
   it('点选插入位置后加入条目，主预设工作副本同步且底板结构项不可移除', async () => {
     const wrapper = render()
     await pickBaseAndSource(wrapper)
-    await wrapper.findAll('.stitch-insertion button')[1].trigger('click')
+    expect(wrapper.find('.stitch-insertion button').exists()).toBe(false)
+    const main = targetRow(wrapper, '主提示')
+    await main.find('.stitch-entry__copy').trigger('click')
+    await main
+      .findAll('button')
+      .find((button) => button.text() === '从此条后插入')!
+      .trigger('click')
     await sourceRow(wrapper, '文风段').find('.stitch-entry__add').trigger('click')
 
     const targetNames = wrapper

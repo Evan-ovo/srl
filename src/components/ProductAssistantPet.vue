@@ -27,6 +27,7 @@ import {
   discordSetupSession,
 } from '../services/AssistantBrowserRuntime'
 import { renderAssistantPetFrame } from '../services/ProductAssistantPetFrame'
+import { CUSTOM_UI_APPEARANCE_MENU_REQUEST } from '../types/UiCustomization'
 import DiscordSetupHelp from './DiscordSetupHelp.vue'
 import type { FeatureHubProps } from '../composables/UseFeatureHub'
 
@@ -189,6 +190,7 @@ function syncMotion() {
 function syncVisibility() {
   pageHidden.value = document.hidden
   if (pageHidden.value) {
+    resetRecoveryTaps()
     clearCue()
     travelling.value = false
   }
@@ -287,6 +289,12 @@ let press:
   | undefined
 let suppressClick = false
 let lastTap = 0
+let recoveryTapCount = 0
+let recoveryTapStarted = 0
+function resetRecoveryTaps() {
+  recoveryTapCount = 0
+  recoveryTapStarted = 0
+}
 let helpTapCount = 0
 let helpTapStarted = 0
 let guideSpeech = ''
@@ -568,6 +576,7 @@ function move(event: PointerEvent) {
 async function up(event: PointerEvent) {
   if (!press || press.id !== event.pointerId) return
   const dragged = press.dragged
+  if (dragged || event.type === 'pointercancel') resetRecoveryTaps()
   if (dragged) {
     lastTap = 0
     helpTapCount = 0
@@ -599,6 +608,22 @@ function click(event: MouseEvent) {
   // Touch browsers do not consistently produce dblclick. Count two genuine
   // taps here; keyboard activation remains a single accessible operation.
   const now = performance.now()
+  if (event.detail === 0) resetRecoveryTaps()
+  else {
+    if (!recoveryTapCount || now - recoveryTapStarted > 3000) {
+      recoveryTapStarted = now
+      recoveryTapCount = 0
+    }
+    if (++recoveryTapCount === 5) {
+      resetRecoveryTaps()
+      if (
+        !window.dispatchEvent(new Event(CUSTOM_UI_APPEARANCE_MENU_REQUEST, { cancelable: true }))
+      ) {
+        lastTap = 0
+        return
+      }
+    }
+  }
   if (
     event.detail !== 0 &&
     !taskChat.value &&
@@ -793,7 +818,10 @@ function assistantActivity(value: boolean) {
 watch(
   () => props.hidden,
   (hidden) => {
-    if (hidden) close()
+    if (hidden) {
+      resetRecoveryTaps()
+      close()
+    }
   },
 )
 function expand() {

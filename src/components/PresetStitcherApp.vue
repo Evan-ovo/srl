@@ -407,8 +407,8 @@ function jumpToReviewChangedPage(): void {
             <li
               v-if="targetPageItems.length"
               class="stitch-insertion"
+              role="presentation"
               :class="{
-                'is-active': insertionIndex === targetPageItems[0].index,
                 'is-drag-over':
                   sourceDrag?.picked &&
                   sourceDrag.overDropSlot &&
@@ -416,9 +416,7 @@ function jumpToReviewChangedPage(): void {
               }"
               :data-insertion-index="targetPageItems[0].index"
             >
-              <button type="button" @click="selectInsertionIndex(targetPageItems[0].index)">
-                {{ insertionIndex === targetPageItems[0].index ? '插入位置' : '插到此页之前' }}
-              </button>
+              <span aria-hidden="true">松开插入</span>
             </li>
             <template v-for="{ entry, index: actualIndex } in targetPageItems" :key="entry.key">
               <li
@@ -517,6 +515,22 @@ function jumpToReviewChangedPage(): void {
                         下移
                       </button>
                       <button
+                        class="button button--quiet"
+                        type="button"
+                        :aria-pressed="insertionIndex === actualIndex"
+                        @click="selectInsertionIndex(actualIndex)"
+                      >
+                        从此条前插入
+                      </button>
+                      <button
+                        class="button button--quiet"
+                        type="button"
+                        :aria-pressed="insertionIndex === actualIndex + 1"
+                        @click="selectInsertionIndex(actualIndex + 1)"
+                      >
+                        从此条后插入
+                      </button>
+                      <button
                         v-if="entry.origin === 'pick'"
                         type="button"
                         class="button button--quiet is-danger"
@@ -530,8 +544,8 @@ function jumpToReviewChangedPage(): void {
               </li>
               <li
                 class="stitch-insertion"
+                role="presentation"
                 :class="{
-                  'is-active': insertionIndex === actualIndex + 1,
                   'is-drag-over':
                     sourceDrag?.picked &&
                     sourceDrag.overDropSlot &&
@@ -539,9 +553,7 @@ function jumpToReviewChangedPage(): void {
                 }"
                 :data-insertion-index="actualIndex + 1"
               >
-                <button type="button" @click="selectInsertionIndex(actualIndex + 1)">
-                  {{ insertionIndex === actualIndex + 1 ? '插入位置' : '插到这里' }}
-                </button>
+                <span aria-hidden="true">松开插入</span>
               </li>
             </template>
             <li v-if="!targetPageItems.length" class="stitch__empty">当前筛选下没有主预设条目。</li>

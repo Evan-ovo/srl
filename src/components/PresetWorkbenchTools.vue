@@ -196,6 +196,10 @@ onUnmounted(() => document.removeEventListener('pointerdown', dismissOutside, tr
   justify-content: flex-start;
   text-align: left;
   padding: 6px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   font-size: var(--text-caption);
   line-height: 1.3;
   font-family: var(--font-body);

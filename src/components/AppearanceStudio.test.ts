@@ -25,6 +25,7 @@ vi.mock('./ProductAssistant.vue', () => ({
 import { BrowserStorageService, type CustomCssScope } from '../services/BrowserStorageService'
 import AppearanceOriginalCssActions from './AppearanceOriginalCssActions.vue'
 import AppearanceStudio from './AppearanceStudio.vue'
+import AppearanceUiEditor from './AppearanceUiEditor.vue'
 import ProductAssistant from './ProductAssistant.vue'
 import ProductAssistantComparison from './ProductAssistantComparison.vue'
 import type { AssistantRequest, AssistantReply } from '../services/ProductAssistantService'
@@ -344,6 +345,134 @@ describe('AppearanceStudio cabinet layout', () => {
     expect(wrapper.emitted('update:uiFontScale')?.[0]).toEqual(['large'])
   })
 })
+describe('AppearanceStudio Vue preset import', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.mocked(confirmAction).mockReset().mockResolvedValue(true)
+  })
+  const sourcePreset = () => ({
+    id: 'source',
+    name: 'CSS与Vue整套界面',
+    globalCss: ':root { --imported: pink; }',
+    scopedCss: {},
+    createdAt: '',
+    updatedAt: '',
+    views: {
+      shell: {
+        ...createUiView(),
+        enabled: true,
+        allowNetwork: true,
+        files: [
+          ...createUiView().files,
+          { path: 'Icon.vue', contents: '<template><svg/></template>' },
+        ],
+      },
+    },
+  })
+  const open = () =>
+    mount(AppearanceStudio, {
+      props: { theme: 'light', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
+    })
+  it.each([true, false])(
+    'asks before enabling imported Vue, preserves all files and selects its actual scope (consent=%s)',
+    async (consent) => {
+      const original = sourcePreset()
+      const text = JSON.stringify({ format: 'srl-appearance-preset', version: 1, preset: original })
+      const storage = new BrowserStorageService()
+      const wrapper = open()
+      let answer!: (value: boolean) => void
+      vi.mocked(confirmAction).mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            answer = resolve
+          }),
+      )
+      try {
+        const input = wrapper.get('[data-appearance-preset-import]')
+        Object.defineProperty(input.element, 'files', {
+          value: [{ name: 'theme.srl-style(1).json', size: text.length, text: async () => text }],
+        })
+        await input.trigger('change')
+        await flushPromises()
+        expect(confirmAction).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: '检测到 Vue 自定义界面',
+            confirmLabel: '启用并试用',
+            cancelLabel: '仅应用 CSS',
+            centered: true,
+          }),
+          undefined,
+        )
+        expect(wrapper.emitted('save-css')).toBeUndefined()
+        answer(consent)
+        await flushPromises()
+        const imported = storage.getCustomUiPresets()[0]!
+        expect(imported.views?.shell).toMatchObject({
+          enabled: consent,
+          allowNetwork: false,
+          files: original.views.shell.files,
+        })
+        expect(imported.globalCss).toBe(original.globalCss)
+        expect(wrapper.emitted('save-css')?.at(-1)).toEqual([
+          original.globalCss,
+          { views: imported.views },
+        ])
+        expect(wrapper.getComponent(AppearanceUiEditor).props('scope')).toBe('shell')
+        expect(wrapper.get<HTMLDetailsElement>('.appearance-advanced').element.open).toBe(true)
+        expect(
+          wrapper.get<HTMLTextAreaElement>('.appearance-ui-editor__source textarea').element.value,
+        ).toBe(original.views.shell.files[0]!.contents)
+        expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('Vue')
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+  it('finds Vue from an already imported disabled shell-only preset, without needing local CSS', async () => {
+    const original = sourcePreset()
+    const storage = new BrowserStorageService()
+    original.views.shell.enabled = false
+    storage.setCustomUiPresets([original])
+    const wrapper = open()
+    try {
+      await flushPromises()
+      expect(wrapper.getComponent(AppearanceUiEditor).props('scope')).toBe('shell')
+      expect(wrapper.get<HTMLDetailsElement>('.appearance-advanced').element.open).toBe(true)
+      expect(
+        wrapper.get<HTMLTextAreaElement>('.appearance-ui-editor__source textarea').element.value,
+      ).toBe(original.views.shell.files[0]!.contents)
+      expect(confirmAction).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+  it('does not enable or prompt for an inactive Vue preset when the last imported file is CSS only', async () => {
+    const text = JSON.stringify({
+      format: 'srl-appearance-preset',
+      version: 1,
+      preset: sourcePreset(),
+    })
+    const storage = new BrowserStorageService()
+    const wrapper = open()
+    try {
+      const input = wrapper.get('[data-appearance-preset-import]')
+      Object.defineProperty(input.element, 'files', {
+        value: [
+          { name: 'vue.json', size: text.length, text: async () => text },
+          { name: 'last.css', size: 5, text: async () => 'a { color: red; }' },
+        ],
+      })
+      await input.trigger('change')
+      await flushPromises()
+      expect(storage.getCustomUiPresets()[0]!.views?.shell?.enabled).toBe(false)
+      expect(confirmAction).not.toHaveBeenCalled()
+      expect(wrapper.emitted('save-css')?.at(-1)).toEqual(['a { color: red; }'])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
 describe('AppearanceStudio AI CSS owner', () => {
   beforeEach(() => {
     localStorage.clear()

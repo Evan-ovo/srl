@@ -2,7 +2,44 @@
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const runtime = vi.hoisted(() => ({ android: false, postMedia: false, save: vi.fn() }))
+const runtime = vi.hoisted(() => ({
+  android: false,
+  postMedia: false,
+  save: vi.fn(),
+  permission: 'default' as 'unsupported' | NotificationPermission,
+  nativeGranted: false,
+  requestNative: vi.fn(async () => {
+    runtime.nativeGranted = true
+    return true
+  }),
+  requestWeb: vi.fn(async () => {
+    runtime.permission = 'granted'
+    return 'granted' as const
+  }),
+  inboxStatus: 'off' as 'off' | 'starting' | 'running' | 'pausing' | 'paused',
+  inboxListeners: new Set<() => void>(),
+  startAudio: vi.fn(async () => {
+    runtime.inboxStatus = 'running'
+    runtime.inboxListeners.forEach((fn) => fn())
+  }),
+  stopAudio: vi.fn(async () => {
+    runtime.inboxStatus = 'off'
+    runtime.inboxListeners.forEach((fn) => fn())
+  }),
+}))
+vi.mock('../services/WebBackgroundKeepAlive', () => ({
+  webBackgroundAudioState: () => ({ status: runtime.inboxStatus, message: '' }),
+  subscribeWebBackgroundAudio: (listener: () => void) => {
+    runtime.inboxListeners.add(listener)
+    return () => runtime.inboxListeners.delete(listener)
+  },
+  startWebBackgroundAudio: runtime.startAudio,
+  stopWebBackgroundAudio: runtime.stopAudio,
+}))
+vi.mock('../services/WebDiscordInboxNotifications', () => ({
+  webInboxNotificationStatus: () => runtime.permission,
+  enableWebInboxNotifications: runtime.requestWeb,
+}))
 vi.mock('../core/LibraryContainer', async () => ({
   browserStorageService: new (
     await import('../services/BrowserStorageService')
@@ -25,7 +62,17 @@ vi.mock('../core/LibraryContainer', async () => ({
 vi.mock('../core/PlatformService', () => ({
   platform: {
     update: { isAndroidApk: () => runtime.android },
-    security: { getState: async () => null },
+    security: {
+      getState: async () =>
+        runtime.android
+          ? {
+              notificationsGranted: runtime.nativeGranted,
+              secureScreen: false,
+              biometricAvailable: false,
+            }
+          : null,
+      requestNotifications: runtime.requestNative,
+    },
     backup: { getStatus: async () => null },
     systemUi: { getState: async () => null },
   },
@@ -97,6 +144,10 @@ afterEach(() => {
   runtime.android = false
   runtime.postMedia = false
   runtime.save.mockClear()
+  runtime.inboxStatus = 'off'
+  runtime.permission = 'default'
+  runtime.nativeGranted = false
+  vi.clearAllMocks()
   localStorage.clear()
 })
 
@@ -123,6 +174,70 @@ function mountSettings() {
   wrappers.push(wrapper)
   return wrapper
 }
+
+describe('background audio and unified notification settings', () => {
+  it('uses one audio toggle and retains its running state when settings reopen', async () => {
+    const first = mountSettings()
+    const toggle = first.get('input[aria-label="后台音频保活"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(runtime.startAudio).toHaveBeenCalledExactlyOnceWith()
+    first.unmount()
+    const second = mountSettings()
+    const reopened = second.get('input[aria-label="后台音频保活"]')
+    expect((reopened.element as HTMLInputElement).checked).toBe(true)
+    expect(runtime.stopAudio).not.toHaveBeenCalled()
+    await reopened.setValue(false)
+    expect(runtime.stopAudio).toHaveBeenCalledOnce()
+    expect((reopened.element as HTMLInputElement).checked).toBe(false)
+    expect(second.text()).not.toContain('画中画')
+    expect(second.text()).not.toContain('心跳')
+  })
+  it('requests web permission only after clicking, then displays already authorized', async () => {
+    const wrapper = mountSettings()
+    await flushPromises()
+    const button = wrapper.get('button[aria-label="系统通知"]')
+    expect(runtime.requestWeb).not.toHaveBeenCalled()
+    await button.trigger('click')
+    await flushPromises()
+    expect(runtime.requestWeb).toHaveBeenCalledOnce()
+    expect(button.text()).toContain('已授权')
+    expect(button.attributes('disabled')).toBeDefined()
+    const reopened = mountSettings().get('button[aria-label="系统通知"]')
+    expect(reopened.text()).toContain('已授权')
+    expect(runtime.requestWeb).toHaveBeenCalledOnce()
+  })
+  it('keeps an authorized web permission visible without requesting again', () => {
+    runtime.permission = 'granted'
+    const wrapper = mountSettings()
+    expect(wrapper.get('button[aria-label="系统通知"]').text()).toContain('已授权')
+    expect(runtime.requestWeb).not.toHaveBeenCalled()
+  })
+  it('uses the existing native permission owner and hides the web audio toggle in APK', async () => {
+    runtime.android = true
+    const wrapper = mountSettings()
+    await flushPromises()
+    expect(wrapper.find('input[aria-label="后台音频保活"]').exists()).toBe(false)
+    const button = wrapper.get('button[aria-label="系统通知"]')
+    await button.trigger('click')
+    await flushPromises()
+    expect(runtime.requestNative).toHaveBeenCalledOnce()
+    expect(runtime.requestWeb).not.toHaveBeenCalled()
+    expect(button.text()).toContain('已授权')
+    expect(wrapper.text()).not.toContain('允许系统任务通知')
+  })
+  it('explains denied and unavailable permissions instead of claiming authorization', () => {
+    runtime.permission = 'denied'
+    const denied = mountSettings()
+    expect(denied.get('button[aria-label="系统通知"]').text()).not.toContain('已授权')
+    runtime.permission = 'unsupported'
+    const unsupported = mountSettings()
+    expect(unsupported.get('button[aria-label="系统通知"]').attributes('disabled')).toBeDefined()
+    expect(unsupported.get('button[aria-label="系统通知"]').text()).toContain('不支持')
+    expect(unsupported.text()).not.toContain('各功能需单独开启')
+  })
+})
 
 describe('LayoutSettingsPanel platform-specific preview options', () => {
   it('多线路开关在网页也可见，确认前保持实际关闭状态', async () => {

@@ -178,8 +178,9 @@ const previewCss = computed(() =>
         <p v-else-if="file" class="appearance-ui-editor__binary">{{ file.path }} · 素材文件</p>
         <p>
           可直接修改模板里的标题、按钮和交互；原列表、表单由 Region
-          持续更新。“预览并试用”在真实界面运行草稿，可保留或恢复。运行后长按界面 5
-          秒可显示“恢复原界面”。
+          持续更新。“预览并试用”在真实界面运行草稿，可保留或恢复。运行后长按界面 2
+          秒显示“恢复原界面”。3 秒内连点悬浮蒜惹菈 5 下可打开外观快捷切换，从预设库切换预设、关闭
+          Vue 或恢复默认预设。
         </p>
         <div class="appearance-ui-editor__project-actions">
           <button type="button" class="appearance-action-hit" @click="previewSource">

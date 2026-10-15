@@ -3,6 +3,74 @@
   font: 14px/1.5 var(--font-body, system-ui, sans-serif);
   color: var(--recovery-color, var(--color-ink, #173832));
 }
+.appearance-quick-menu {
+  pointer-events: auto;
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(24rem, calc(100vw - 2rem));
+  max-height: calc(var(--visual-viewport-height, 100dvh) - 2rem);
+  overflow: auto;
+  padding: 12px 16px;
+  color: var(--color-ink, #173832);
+  font: 14px/1.5 var(--font-body, system-ui, sans-serif);
+}
+.appearance-quick-menu::backdrop {
+  background: var(--overlay-background, #102d2877);
+}
+.appearance-quick-menu header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.appearance-quick-menu h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.appearance-quick-menu header button {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+.appearance-quick-menu svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+}
+.appearance-quick-menu__preset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+.appearance-quick-menu select {
+  min-width: 0;
+  width: 100%;
+  font-size: 14px;
+}
+.appearance-quick-menu footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-line, #7eaaa133);
+}
+.appearance-quick-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.appearance-quick-menu [role='alert'] {
+  color: var(--color-danger, #a23131);
+}
 *,
 *::before,
 *::after {

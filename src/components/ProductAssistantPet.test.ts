@@ -137,6 +137,69 @@ function renderPet() {
   })
   return document.querySelector<HTMLButtonElement>('.assistant-pet')!
 }
+it('连续五次桌宠点击请求外观快捷菜单；前四次和键盘操作不触发，拖动重新计数', async () => {
+  vi.useFakeTimers()
+  const request = vi.fn((event: Event) => event.preventDefault())
+  window.addEventListener('srl:appearance-quick-menu', request)
+  try {
+    const pet = renderPet()
+    const tap = () => pet.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true }))
+    for (let i = 0; i < 4; i++) tap()
+    expect(request).not.toHaveBeenCalled()
+    tap()
+    expect(request).toHaveBeenCalledOnce()
+    request.mockClear()
+    for (let i = 0; i < 4; i++) tap()
+    pet.dispatchEvent(new MouseEvent('click', { detail: 0, bubbles: true }))
+    tap()
+    expect(request).not.toHaveBeenCalled()
+    for (let i = 0; i < 4; i++) tap()
+    expect(request).toHaveBeenCalledOnce()
+    request.mockClear()
+    for (let i = 0; i < 4; i++) tap()
+    for (const [type, x] of [
+      ['pointerdown', 10],
+      ['pointermove', 40],
+      ['pointerup', 40],
+    ] as const) {
+      const event = new MouseEvent(type, { button: 0, clientX: x, clientY: 10, bubbles: true })
+      Object.defineProperty(event, 'pointerId', { value: 1 })
+      pet.dispatchEvent(event)
+    }
+    await flushPromises()
+    tap() // Drag-generated click remains suppressed by the original pet handler.
+    for (let i = 0; i < 4; i++) tap()
+    expect(request).not.toHaveBeenCalled()
+    tap()
+    expect(request).toHaveBeenCalledOnce()
+  } finally {
+    window.removeEventListener('srl:appearance-quick-menu', request)
+  }
+})
+it('零散点击不累积成快捷菜单手势，切后台后重新计数', () => {
+  vi.useFakeTimers()
+  const request = vi.fn((event: Event) => event.preventDefault())
+  window.addEventListener('srl:appearance-quick-menu', request)
+  try {
+    const pet = renderPet()
+    const tap = () => pet.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true }))
+    for (let i = 0; i < 4; i++) tap()
+    vi.advanceTimersByTime(3001)
+    tap()
+    expect(request).not.toHaveBeenCalled()
+    for (let i = 0; i < 3; i++) tap()
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    document.dispatchEvent(new Event('visibilitychange'))
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    document.dispatchEvent(new Event('visibilitychange'))
+    tap()
+    expect(request).not.toHaveBeenCalled()
+    for (let i = 0; i < 4; i++) tap()
+    expect(request).toHaveBeenCalledOnce()
+  } finally {
+    window.removeEventListener('srl:appearance-quick-menu', request)
+  }
+})
 it('reuses the existing compact pet dialog for browser chat and closes it when returning to the browser', async () => {
   discordSetupSession.active = true
   discordSetupSession.assistantConversationId = 'setup-chat'

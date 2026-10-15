@@ -6,6 +6,21 @@ const runtime = vi.hoisted(() => ({
   state: vi.fn(),
   start: vi.fn(),
   stop: vi.fn(),
+  webAvailable: false,
+  webStatus: 'off',
+  webStart: vi.fn(),
+  webStop: vi.fn(),
+  webListeners: new Set<() => void>(),
+}))
+vi.mock('../services/WebDiscordInboxSession', () => ({
+  isWebDiscordInboxAvailable: () => runtime.webAvailable,
+  webDiscordInboxState: () => ({ status: runtime.webStatus, message: '' }),
+  startWebDiscordInbox: runtime.webStart,
+  pauseWebDiscordInbox: runtime.webStop,
+  subscribeWebDiscordInbox: (listener: () => void) => {
+    runtime.webListeners.add(listener)
+    return () => runtime.webListeners.delete(listener)
+  },
 }))
 vi.mock('../services/NativeDiscordInboxService', () => ({
   isNativeDiscordInboxAvailable: () => runtime.available,
@@ -17,6 +32,8 @@ import Mode from './DiscordNativeInboxMode.vue'
 beforeEach(() => {
   vi.clearAllMocks()
   runtime.available = true
+  runtime.webAvailable = false
+  runtime.webStatus = 'off'
   runtime.state.mockResolvedValue(false)
   runtime.start.mockResolvedValue(undefined)
   runtime.stop.mockResolvedValue(undefined)
@@ -84,5 +101,32 @@ describe('receive mode control', () => {
     const wrapper = mount(Mode)
     expect(wrapper.find('button').exists()).toBe(false)
     wrapper.unmount()
+  })
+  it('uses the same entry for a web session and preserves it when the inbox view closes', async () => {
+    runtime.available = false
+    runtime.webAvailable = true
+    runtime.webStart.mockImplementationOnce(async () => {
+      runtime.webStatus = 'running'
+      runtime.webListeners.forEach((fn) => fn())
+    })
+    runtime.webStop.mockImplementationOnce(async () => {
+      runtime.webStatus = 'paused'
+      runtime.webListeners.forEach((fn) => fn())
+    })
+    const first = mount(Mode)
+    await first.get('button').trigger('click')
+    await flushPromises()
+    expect(runtime.webStart).toHaveBeenCalledOnce()
+    expect(runtime.start).not.toHaveBeenCalled()
+    expect(first.get('button').text()).toBe('停止收件')
+    first.unmount()
+    expect(runtime.webStop).not.toHaveBeenCalled()
+    const second = mount(Mode)
+    expect(second.get('button').text()).toBe('停止收件')
+    await second.get('button').trigger('click')
+    await flushPromises()
+    expect(runtime.webStop).toHaveBeenCalledOnce()
+    expect(second.get('button').text()).toBe('开启收件模式')
+    second.unmount()
   })
 })

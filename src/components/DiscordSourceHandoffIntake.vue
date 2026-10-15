@@ -29,6 +29,14 @@ import {
 } from '../services/NativeDiscordInboxService'
 import { autoBindPostToRecentCard, markPostForNextPng } from '../services/DiscordInboxAutoBinding'
 import { DEFAULT_DISCORD_INBOX_AUTOMATION_SETTINGS } from '../services/DiscordInboxAutomationSettings'
+import {
+  isWebDiscordInboxAvailable,
+  isWebDiscordInboxPaused,
+  webDiscordInboxSignal,
+  registerWebInboxParticipant,
+  type WebInboxCycle,
+} from '../services/WebDiscordInboxSession'
+import { installWebInboxNotificationNavigation } from '../services/WebDiscordInboxNotifications'
 import type { NativeDeepLink } from '../core/NativeRuntime'
 import type { ResourceCommunitySourceView } from '../types/CommunitySource'
 import type { ResourceListSummary } from '../types/Resource'
@@ -49,6 +57,8 @@ let receiveQueue: Promise<void> = Promise.resolve()
 let receiveOperations = 0
 let inboxRun: Promise<void> | undefined
 let inboxRequested = false
+let unregisterWebInbox: (() => void) | undefined
+let removeNotificationNavigation: (() => void) | undefined
 let disposed = false
 const queuedRequests = new Map<string, Promise<void>>()
 const deferredRequests = new Map<string, DiscordHandoffRequest>()
@@ -138,16 +148,37 @@ function queueAttachments(sourceId: string, messageId: string): void {
 }
 
 function startAttachmentLocalization(): void {
-  if (localizing || disposed || vaultService.getStatus().locked || !attachmentJobs.size) return
+  if (
+    localizing ||
+    disposed ||
+    vaultService.getStatus().locked ||
+    !attachmentJobs.size ||
+    (isWebDiscordInboxAvailable() && isWebDiscordInboxPaused())
+  )
+    return
   localizing = true
   void (async () => {
-    while (attachmentJobs.size && !disposed && !vaultService.getStatus().locked) {
+    while (
+      attachmentJobs.size &&
+      !disposed &&
+      !vaultService.getStatus().locked &&
+      !(isWebDiscordInboxAvailable() && isWebDiscordInboxPaused())
+    ) {
       const [key, job] = attachmentJobs.entries().next().value!
+      const signal = webDiscordInboxSignal()
       try {
-        await communitySourceService.localizeSavedMessageAttachments(job.sourceId, job.messageId)
+        if (signal)
+          await communitySourceService.localizeSavedMessageAttachments(
+            job.sourceId,
+            job.messageId,
+            signal,
+          )
+        else
+          await communitySourceService.localizeSavedMessageAttachments(job.sourceId, job.messageId)
       } catch {
         if (!disposed) showTransientStatus('正文已保存，附件缓存未完成；可从来源内容重试。', 6_000)
       }
+      if (signal?.aborted) break
       attachmentJobs.delete(key)
     }
   })().finally(() => {
@@ -343,16 +374,17 @@ async function receiveManual(request: DiscordHandoffRequest, key: string): Promi
   }
 }
 
-function receiveInbox(): Promise<void> {
+function receiveInbox(background?: WebInboxCycle, manual = false): Promise<void> {
   inboxRequested = true
   if (inboxRun) return inboxRun
   inboxRun = enqueueReceive(async () => {
     inboxRequested = false
-    await receiveInboxBatch()
+    await receiveInboxBatch(background, manual)
   })
   const finish = () => {
     inboxRun = undefined
-    if (inboxRequested && !disposed) void receiveInbox()
+    if (inboxRequested && !disposed && !(isWebDiscordInboxAvailable() && isWebDiscordInboxPaused()))
+      void receiveInbox()
   }
   void inboxRun.then(finish, () => {
     publishInboxProgress({
@@ -367,7 +399,13 @@ function receiveInbox(): Promise<void> {
   return inboxRun
 }
 
-async function receiveInboxBatch(): Promise<void> {
+async function receiveInboxBatch(background?: WebInboxCycle, manual = false): Promise<void> {
+  const halted = () =>
+    Boolean(
+      (background && !background.current()) ||
+      (!manual && isWebDiscordInboxAvailable() && isWebDiscordInboxPaused()),
+    )
+  if (halted()) return
   await initializeVaultOnce()
   const settings = loadDiscordSourceConnectionSettings()
   let received = 0
@@ -393,13 +431,18 @@ async function receiveInboxBatch(): Promise<void> {
   let currentPost: { id: string; name: string } | undefined
   try {
     for (let batch = 0; batch < 5 && !disposed; batch++) {
+      if (halted()) return
       assertInboxConnection(settings)
-      const listing = await listDiscordInboxJobs(cursor)
+      const listing = await (background
+        ? listDiscordInboxJobs(cursor, background.signal)
+        : listDiscordInboxJobs(cursor))
+      if (halted()) return
       const { jobs, hasMore } = listing
       const candidates = jobs.filter((job) => !seen.has(job.id)).slice(0, 20)
       if (!candidates.length) break
       for (const job of candidates) {
         if (disposed) break
+        if (halted()) return
         if (vaultService.getStatus().locked) {
           progress('locked', '保险库已锁定，剩余帖子仍保留在云端，解锁后继续。')
           return
@@ -408,7 +451,10 @@ async function receiveInboxBatch(): Promise<void> {
         seen.add(job.id)
         currentPost = { id: job.id, name: job.title || 'Discord 帖子' }
         try {
-          const envelope = await receiveDiscordInboxJob(job.id)
+          const envelope = await (background
+            ? receiveDiscordInboxJob(job.id, background.signal)
+            : receiveDiscordInboxJob(job.id))
+          if (halted()) return
           assertInboxConnection(settings)
           if (envelope.delivery?.libraryId !== settings.inboxLibraryId)
             throw new Error('这条帖子属于其它收件库，未写入当前资源库。请检查默认目标。')
@@ -432,6 +478,7 @@ async function receiveInboxBatch(): Promise<void> {
           if (state === 'waiting_binding') waitingBinding++
           progress('receiving')
         } catch (error) {
+          if (halted()) return
           if (disposed) return
           assertInboxConnection(settings)
           if (vaultService.getStatus().locked) throw error
@@ -455,6 +502,7 @@ async function receiveInboxBatch(): Promise<void> {
       if (next === cursor) break
       cursor = next
     }
+    if (halted()) return
     await reconcileBoundSources(settings)
     if (failedPosts)
       progress(
@@ -463,6 +511,7 @@ async function receiveInboxBatch(): Promise<void> {
       )
     else progress(vaultService.getStatus().locked ? 'locked' : 'ready')
   } catch (error) {
+    if (halted()) return
     if (currentPost)
       await notifyNativeDiscordInboxResult({
         kind: 'post',
@@ -490,12 +539,22 @@ async function reconcileManualWaitingDeliveries(): Promise<void> {
 }
 
 function handleVisibilityChange(): void {
-  if (document.visibilityState === 'visible') handleInboxRequested()
+  if (
+    document.visibilityState === 'visible' &&
+    !(isWebDiscordInboxAvailable() && isWebDiscordInboxPaused())
+  )
+    handleInboxRequested()
 }
 
-function handleInboxRequested(): void {
+function handleInboxRequested(event?: Event): void {
+  if (
+    isWebDiscordInboxAvailable() &&
+    isWebDiscordInboxPaused() &&
+    event?.type !== 'srl:receive-discord-inbox'
+  )
+    return
   for (const request of deferredRequests.values()) void receive(request)
-  void receiveInbox()
+  void receiveInbox(undefined, event?.type === 'srl:receive-discord-inbox')
 }
 
 async function reconcileBoundSources(
@@ -638,6 +697,14 @@ function keepForLater(): void {
 }
 
 onMounted(() => {
+  removeNotificationNavigation = installWebInboxNotificationNavigation()
+  if (isWebDiscordInboxAvailable())
+    unregisterWebInbox = registerWebInboxParticipant('posts', async (cycle) => {
+      await inboxRun
+      if (!cycle.current()) return
+      startAttachmentLocalization()
+      await receiveInbox(cycle)
+    })
   window.addEventListener('srl:native-deep-link', handleNativeDeepLink)
   window.addEventListener('srl:vault-unlocked', handleVaultUnlocked)
   window.addEventListener('srl:open-discord-handoff-paste', openPasteDialog)
@@ -648,11 +715,13 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   const fromLocation = readDiscordHandoffFromLocation()
   if (fromLocation) void receive(fromLocation)
-  void receiveInbox()
+  if (!(isWebDiscordInboxAvailable() && isWebDiscordInboxPaused())) void receiveInbox()
 })
 
 onBeforeUnmount(() => {
   disposed = true
+  unregisterWebInbox?.()
+  removeNotificationNavigation?.()
   manualWaitingDeliveries.clear()
   window.removeEventListener('srl:native-deep-link', handleNativeDeepLink)
   window.removeEventListener('srl:vault-unlocked', handleVaultUnlocked)

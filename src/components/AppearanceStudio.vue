@@ -33,7 +33,7 @@ import {
 } from '../services/ProductAssistantAppearanceInspection'
 
 import { confirmAction } from '../composables/UseConfirmDialog'
-import { useCustomUiViews } from '../composables/UseCustomUiViews'
+import { confirmViewScripts, useCustomUiViews } from '../composables/UseCustomUiViews'
 import { usePreviewPolicy } from '../composables/UsePreviewPolicy'
 import FeatureAppHeader from './FeatureAppHeader.vue'
 import AppearanceOriginalCssActions from './AppearanceOriginalCssActions.vue'
@@ -273,11 +273,15 @@ function clonePreset(value: CustomCssPreset): CustomCssPreset {
 
 function presetCssScope(preset: CustomCssPreset): CustomCssScope {
   return (Object.entries(preset.scopedCss).find(([, css]) => css?.trim())?.[0] ??
+    Object.keys(preset.views ?? {})[0] ??
     'library') as CustomCssScope
 }
 
-function hasScopedCss(preset: CustomCssPreset): boolean {
-  return Object.values(preset.scopedCss).some((css) => css?.trim())
+function hasScopedContent(preset: CustomCssPreset): boolean {
+  return (
+    Object.values(preset.scopedCss).some((css) => css?.trim()) ||
+    Object.keys(preset.views ?? {}).length > 0
+  )
 }
 
 const storedPresets = storage.getCustomUiPresets()
@@ -290,11 +294,11 @@ const presets = ref(storedPresets)
 const activePresetId = ref(initialPreset.id)
 const draft = ref(clonePreset(initialPreset))
 const activeScope = ref<CustomCssScope>(presetCssScope(initialPreset))
-const scopedEditorOpen = ref(hasScopedCss(initialPreset))
+const scopedEditorOpen = ref(hasScopedContent(initialPreset))
 
 function showPresetCss(preset: CustomCssPreset): void {
   activeScope.value = presetCssScope(preset)
-  scopedEditorOpen.value = hasScopedCss(preset)
+  scopedEditorOpen.value = hasScopedContent(preset)
 }
 
 const activeScopedCss = computed({
@@ -336,7 +340,12 @@ function available(scope: AppearanceScope): boolean {
 const activeScopes = computed(() => scopes.filter(available))
 const inactiveScopes = computed<AppearanceScope[]>(() => [
   ...scopes.filter((scope) => !available(scope)),
-  ...Object.keys(draft.value.scopedCss ?? {})
+  ...[
+    ...new Set([
+      ...Object.keys(draft.value.scopedCss ?? {}),
+      ...Object.keys(draft.value.views ?? {}),
+    ]),
+  ]
     .filter((key) => !scopes.some((scope) => scope.value === key))
     .map((key) => ({
       value: key as CustomCssScope,
@@ -508,26 +517,6 @@ function persistPreset(candidate: CustomCssPreset, apply = true): boolean {
   return true
 }
 
-async function confirmViewScripts(views?: CustomUiViews, signal?: AbortSignal): Promise<boolean> {
-  const enabled = Object.entries(views ?? {}).filter(([, view]) => view?.enabled)
-  if (!enabled.length) return true
-  const current = storage.getCustomUiViews()
-  if (
-    enabled.every(
-      ([key, view]) => JSON.stringify(current[key as CustomCssScope]) === JSON.stringify(view),
-    )
-  )
-    return true
-  return confirmAction(
-    {
-      title: '应用自定义界面',
-      message: `将运行 ${enabled.length} 个界面的自定义源码。脚本可读取这些页面当前显示的非敏感内容，并调用原有界面操作；不提供数据库或凭据访问。${previewPolicy.value.allowRemoteResources ? '已允许 HTTPS 网络，源码可以发送它读取的界面内容。' : '网络访问关闭。'}可在保护提示中撤销，或点“恢复原界面”。`,
-      confirmLabel: '运行并试用',
-      danger: true,
-    },
-    signal,
-  )
-}
 function applyPreset(preset: CustomCssPreset, css: string) {
   if (preset.views || Object.keys(storage.getCustomUiViews()).length)
     emit('save-css', css, { views: preset.views ?? {} })
@@ -1138,6 +1127,13 @@ async function importPresets(event: Event): Promise<void> {
     input.value = ''
     return
   }
+  const selected = prepared.at(-1)
+  if (selected && Object.keys(selected.views ?? {}).length) {
+    const enabledViews = normalizeUiViews(selected.views)
+    for (const view of Object.values(enabledViews)) if (view) view.enabled = true
+    if (await confirmViewScripts(enabledViews, undefined, selected.name))
+      selected.views = enabledViews
+  }
   for (const imported of prepared) {
     presets.value.push(imported)
     activePresetId.value = imported.id
@@ -1150,7 +1146,7 @@ async function importPresets(event: Event): Promise<void> {
     applyPreset(draft.value, compilePreset(draft.value))
     flash(
       selectedFiles.length === files.length
-        ? `已导入 ${files.length} 个 CSS 预设`
+        ? `已导入 ${files.length} 个外观预设${Object.values(draft.value.views ?? {}).some((view) => view?.enabled) ? '，请在试用提示中确认保留 Vue' : ''}`
         : `已导入 ${files.length} 个，预设库上限为 30 个`,
     )
   }
@@ -1406,7 +1402,8 @@ async function importPresets(event: Event): Promise<void> {
               :class="{ 'is-active': activeScope === scope.value }"
               @click="activeScope = scope.value"
             >
-              {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i>
+              {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i
+              ><small v-if="draft.views?.[scope.value]">Vue</small>
             </button>
           </div>
           <p v-if="installationError" role="status">{{ installationError }}</p>
@@ -1433,7 +1430,8 @@ async function importPresets(event: Event): Promise<void> {
                 :class="{ 'is-active': activeScope === scope.value }"
                 @click="activeScope = scope.value"
               >
-                {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i>
+                {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i
+                ><small v-if="draft.views?.[scope.value]">Vue</small>
               </button>
             </div>
           </details>

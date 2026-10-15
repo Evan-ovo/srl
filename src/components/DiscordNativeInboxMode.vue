@@ -6,10 +6,28 @@ import {
   startNativeDiscordInbox,
   stopNativeDiscordInbox,
 } from '../services/NativeDiscordInboxService'
-const available = isNativeDiscordInboxAvailable()
-const running = ref(false)
-const busy = ref(false)
+import {
+  isWebDiscordInboxAvailable,
+  webDiscordInboxState,
+  startWebDiscordInbox,
+  pauseWebDiscordInbox,
+  subscribeWebDiscordInbox,
+} from '../services/WebDiscordInboxSession'
+const native = isNativeDiscordInboxAvailable()
+const available = native || isWebDiscordInboxAvailable()
+const initialWebState = native ? undefined : webDiscordInboxState()
+const running = ref(initialWebState?.status === 'running')
+const busy = ref(initialWebState?.status === 'starting' || initialWebState?.status === 'pausing')
 const error = ref('')
+const webMessage = ref(initialWebState?.message || '')
+const unsubscribe = native
+  ? undefined
+  : subscribeWebDiscordInbox(() => {
+      const value = webDiscordInboxState()
+      running.value = value.status === 'running'
+      busy.value = value.status === 'starting' || value.status === 'pausing'
+      webMessage.value = value.message
+    })
 function state(event: Event) {
   running.value = (event as CustomEvent<{ running: boolean }>).detail.running
 }
@@ -17,16 +35,24 @@ async function toggle() {
   busy.value = true
   error.value = ''
   try {
-    if (running.value) await stopNativeDiscordInbox()
-    else await startNativeDiscordInbox()
+    if (native) {
+      if (running.value) await stopNativeDiscordInbox()
+      else await startNativeDiscordInbox()
+    } else if (running.value) await pauseWebDiscordInbox('')
+    else await startWebDiscordInbox()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '收件模式无法启动，请更新 APK。'
+    error.value =
+      reason instanceof Error
+        ? reason.message
+        : native
+          ? '收件模式无法启动，请更新 APK。'
+          : '收件模式无法启动。'
   } finally {
     busy.value = false
   }
 }
 onMounted(() => {
-  if (!available) return
+  if (!native) return
   window.addEventListener('srl:cloud-inbox-state', state)
   void readNativeDiscordInboxState()
     .then((value) => {
@@ -36,7 +62,10 @@ onMounted(() => {
       error.value = '开启收件模式需要更新 APK。'
     })
 })
-onBeforeUnmount(() => window.removeEventListener('srl:cloud-inbox-state', state))
+onBeforeUnmount(() => {
+  window.removeEventListener('srl:cloud-inbox-state', state)
+  unsubscribe?.()
+})
 </script>
 <template>
   <section v-if="available" class="native-inbox-mode">
@@ -46,11 +75,14 @@ onBeforeUnmount(() => window.removeEventListener('srl:cloud-inbox-state', state)
         {{ busy ? (running ? '正在停止…' : '正在启动…') : running ? '停止收件' : '开启收件模式' }}
       </button>
     </div>
-    <p>
+    <p v-if="native">
       开启后每 30 秒检查云端，显示常驻通知；最长约 5
       小时，系统也可能提前暂停。下载失败、版本确认和帖子待绑定可从通知返回。
     </p>
-    <p>应用被结束后文件仍保留，重新打开继续解析导入。</p>
+    <template v-else>
+      <p v-if="webMessage" role="status">{{ webMessage }}</p>
+    </template>
+    <p v-if="native">应用被结束后文件仍保留，重新打开继续解析导入。</p>
     <p v-if="error" role="alert">{{ error }}</p>
   </section>
 </template>

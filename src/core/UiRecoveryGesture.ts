@@ -24,7 +24,7 @@ export function installUiRecoveryGesture(
       if (!press || doc.hidden || !active(event)) return
       suppressClick = true
       reveal()
-    }, 5000)
+    }, 2000)
   }
   const move = (event: PointerEvent) => {
     if (

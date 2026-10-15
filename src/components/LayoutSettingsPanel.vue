@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-// SRL-PUBLIC-SYNC: PUBLIC-ONLY id=worker-settings-next-tick-import
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { platform } from '../core/PlatformService'
 import { resetPerformanceMonitorPosition } from '../core/PerformanceMonitor'
 import { forceRefresh, manualCheckForUpdate } from '../core/ServiceWorkerUpdate'
@@ -29,6 +28,16 @@ import MainApiSettings from './MainApiSettings.vue'
 import RelayWorkerSettings from './RelayWorkerSettings.vue'
 import SecretProtectionSettings from './SecretProtectionSettings.vue'
 import ResourceHealthCenter from './ResourceHealthCenter.vue'
+import {
+  stopWebBackgroundAudio,
+  startWebBackgroundAudio,
+  subscribeWebBackgroundAudio,
+  webBackgroundAudioState,
+} from '../services/WebBackgroundKeepAlive'
+import {
+  enableWebInboxNotifications,
+  webInboxNotificationStatus,
+} from '../services/WebDiscordInboxNotifications'
 
 const props = defineProps<{
   vaultEnabled: boolean
@@ -92,7 +101,42 @@ const isNativeApk = platform.update.isAndroidApk()
 const nativeStorageInfo = ref<Awaited<ReturnType<typeof getNativeResourceStorageInfo>>>(null)
 const nativeSecurityState = ref<NativeSecurityState | null>(null)
 const nativeBiometricMessage = ref('')
-const nativeNotificationMessage = ref('')
+const notificationMessage = ref('')
+const notificationBusy = ref(false)
+const webNotificationPermission = ref(webInboxNotificationStatus())
+const notificationsGranted = computed(() =>
+  isNativeApk
+    ? nativeSecurityState.value?.notificationsGranted === true
+    : webNotificationPermission.value === 'granted',
+)
+const backgroundAudio = ref(webBackgroundAudioState())
+const audioError = ref('')
+const unsubscribeBackgroundAudio = subscribeWebBackgroundAudio(() => {
+  backgroundAudio.value = webBackgroundAudioState()
+})
+async function toggleBackgroundAudio(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const enabled = input.checked
+  input.checked = backgroundAudio.value.status === 'running'
+  audioError.value = ''
+  try {
+    if (enabled) await startWebBackgroundAudio()
+    else stopWebBackgroundAudio()
+  } catch (error) {
+    audioError.value = error instanceof Error ? error.message : '后台音频未能开启。'
+  }
+}
+function refreshNotificationPermission(): void {
+  if (document.visibilityState !== 'visible') return
+  if (isNativeApk) {
+    void platform.security
+      .getState()
+      .then((value) => {
+        nativeSecurityState.value = value
+      })
+      .catch(() => undefined)
+  } else webNotificationPermission.value = webInboxNotificationStatus()
+}
 const nativeSafBackup = ref<NativeSafBackupStatus | null>(null)
 const nativeHapticsEnabled = ref(isNativeHapticsEnabled())
 const nativeSystemUiState = ref<NativeSystemUiState | null>(null)
@@ -105,6 +149,7 @@ const inboxAutomationSettings = ref<DiscordInboxAutomationSettings>({
 })
 let offlineDownloadController: AbortController | undefined
 onMounted(async () => {
+  document.addEventListener('visibilitychange', refreshNotificationPermission)
   const [storage, security, saf, systemUi, offline, automation] = await Promise.all([
     getNativeResourceStorageInfo().catch(() => null),
     platform.security.getState().catch(() => null),
@@ -122,7 +167,11 @@ onMounted(async () => {
   offlineResourceStatus.value = offline
   inboxAutomationSettings.value = automation
 })
-onBeforeUnmount(() => offlineDownloadController?.abort())
+onBeforeUnmount(() => {
+  offlineDownloadController?.abort()
+  unsubscribeBackgroundAudio()
+  document.removeEventListener('visibilitychange', refreshNotificationPermission)
+})
 async function handleCheckUpdate(): Promise<void> {
   updateCheckResult.value = '正在检查…'
   try {
@@ -170,12 +219,20 @@ async function verifyDeviceOwner(): Promise<void> {
   }
 }
 
-async function enableNativeNotifications(): Promise<void> {
-  const granted = await platform.security.requestNotifications().catch(() => false)
-  if (nativeSecurityState.value) nativeSecurityState.value.notificationsGranted = granted
-  nativeNotificationMessage.value = granted
-    ? '系统任务通知已允许'
-    : '未授予通知权限；后台导入和备份仍会执行'
+async function enableSystemNotifications(): Promise<void> {
+  notificationBusy.value = true
+  notificationMessage.value = ''
+  try {
+    if (isNativeApk) {
+      const granted = await platform.security.requestNotifications()
+      if (nativeSecurityState.value) nativeSecurityState.value.notificationsGranted = granted
+      notificationMessage.value = granted ? '' : '未授予通知权限；后台任务和应用内通知仍可使用。'
+    } else webNotificationPermission.value = await enableWebInboxNotifications()
+  } catch (error) {
+    notificationMessage.value = error instanceof Error ? error.message : '未能取得通知权限。'
+  } finally {
+    notificationBusy.value = false
+  }
 }
 
 function formatBytes(bytes?: number): string {
@@ -662,6 +719,62 @@ async function clearOfflineResources(): Promise<void> {
           </label>
         </section>
 
+        <section
+          class="settings-section settings-section--links"
+          aria-labelledby="background-notifications-title"
+        >
+          <header>
+            <div><h3 id="background-notifications-title">后台与通知</h3></div>
+            <span>仅此设备</span>
+          </header>
+          <label v-if="!isNativeApk" class="settings-switch-row">
+            <span>
+              <strong>后台音频保活</strong>
+              <small v-if="audioError" role="alert">{{ audioError }}</small>
+              <small v-else-if="backgroundAudio.message" role="status">{{
+                backgroundAudio.message
+              }}</small>
+              <small v-else-if="backgroundAudio.status === 'starting'" role="status"
+                >正在开启…</small
+              >
+            </span>
+            <input
+              type="checkbox"
+              aria-label="后台音频保活"
+              :checked="backgroundAudio.status === 'running'"
+              :disabled="backgroundAudio.status === 'starting'"
+              @change="toggleBackgroundAudio"
+            />
+            <i aria-hidden="true"></i>
+          </label>
+          <button
+            type="button"
+            aria-label="系统通知"
+            :disabled="
+              notificationsGranted ||
+              notificationBusy ||
+              (!isNativeApk && webNotificationPermission === 'unsupported')
+            "
+            @click="enableSystemNotifications"
+          >
+            <span
+              ><strong>系统通知</strong
+              ><small v-if="notificationMessage" role="alert">{{
+                notificationMessage
+              }}</small></span
+            >
+            <i class="settings-notification-status">{{
+              notificationsGranted
+                ? '已授权'
+                : notificationBusy
+                  ? '授权中…'
+                  : !isNativeApk && webNotificationPermission === 'unsupported'
+                    ? '不支持'
+                    : '授权'
+            }}</i>
+          </button>
+        </section>
+
         <section v-if="!isNativeApk" class="settings-section" aria-labelledby="offline-title">
           <header>
             <div>
@@ -835,19 +948,6 @@ async function clearOfflineResources(): Promise<void> {
               </span>
               <i>→</i>
             </button>
-            <button
-              v-if="!nativeSecurityState.notificationsGranted"
-              type="button"
-              @click="enableNativeNotifications"
-            >
-              <span>
-                <strong>允许系统任务通知</strong>
-                <small>{{
-                  nativeNotificationMessage || '显示后台导入、上传进度和完成/失败结果'
-                }}</small>
-              </span>
-              <i>→</i>
-            </button>
           </template>
           <button type="button" @click="emit('open-version-recognition')">
             <span>
@@ -889,4 +989,11 @@ async function clearOfflineResources(): Promise<void> {
     <!-- SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=worker-deploy-guide-page -->
   </div>
 </template>
-<!-- SRL-PUBLIC-SYNC: PUBLIC-ONLY id=worker-settings-css -->
+
+<style scoped>
+.settings-notification-status {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+</style>

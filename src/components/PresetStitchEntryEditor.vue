@@ -172,8 +172,10 @@ const editor = toRef(props.model, 'editor')
     right: max(0.35rem, var(--safe-right));
     bottom: calc(max(0.35rem, var(--safe-bottom)) + var(--stitch-editor-keyboard-offset, 0px));
     left: max(0.35rem, var(--safe-left));
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 6rem;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    gap: 0.3rem;
     height: calc(
       var(--stitch-editor-viewport, var(--app-viewport-height)) - max(0.35rem, var(--safe-top)) -
         max(0.35rem, var(--safe-bottom))
@@ -188,25 +190,21 @@ const editor = toRef(props.model, 'editor')
     box-shadow: var(--dialog-shadow, 0 8px 24px var(--color-shadow));
   }
   .stitch-editor textarea {
-    min-height: min(11rem, 38svh);
+    /* 键盘缩高后仍须容纳在正文轨道内，不能越过宏按钮和保存栏。 */
+    min-height: 0;
     flex: 1;
     resize: none;
   }
   .stitch-editor > label:has(textarea) {
     min-height: 0;
-    flex: 1;
+    grid-column: 1 / -1;
   }
-  .stitch-editor > label:not(:has(textarea)),
   .stitch-editor__macros,
   .stitch-editor__actions {
-    flex: none;
+    grid-column: 1 / -1;
   }
   .stitch-editor__actions {
-    position: sticky;
-    bottom: -0.65rem;
-    margin: 0 -0.65rem -0.65rem;
-    padding: 0.5rem 0.65rem;
-    background: var(--dialog-background, var(--color-canvas));
+    padding-top: 0.25rem;
   }
 }
 </style>

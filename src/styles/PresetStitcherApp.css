@@ -518,7 +518,9 @@
   min-height: 44px;
   padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
   touch-action: none;
   user-select: none;
   cursor: grab;
@@ -552,7 +554,7 @@
   background: var(--stitch-paper);
 }
 
-/* 拖动只突出落点，保持条目位置不跳动。 */
+/* 只展开当前落点，其他条目间不预留插入按钮的高度。 */
 .stitch-workbench.is-dragging {
   outline: 2px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
   outline-offset: 2px;
@@ -561,10 +563,6 @@
 .stitch-workbench.is-dragging .stitch-pane--target {
   border-color: var(--stitch-moss);
   box-shadow: var(--glass-shadow);
-}
-
-.stitch-workbench.is-dragging .stitch-insertion {
-  background: var(--stitch-moss-soft);
 }
 
 .stitch-pane--target {
@@ -971,7 +969,9 @@
   overflow: hidden;
   padding: 2px 1px;
   border: 0;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
   text-align: left;
   touch-action: pan-y;
 }
@@ -1117,9 +1117,10 @@ span.stitch-entry__copy {
 
 .stitch-insertion {
   position: relative;
-  /* 点击区域必须与公共按钮同高，否则按钮会越过落点行遮住下一条。 */
-  height: var(--size-touch, 44px);
+  height: 0;
+  overflow: hidden;
   list-style: none;
+  pointer-events: none;
 }
 
 .stitch-insertion::before {
@@ -1131,48 +1132,32 @@ span.stitch-entry__copy {
   content: '';
 }
 
-.stitch-insertion button {
+.stitch-insertion span {
   position: relative;
   z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
-  min-height: var(--size-touch, 44px);
   padding: 0 0.5rem;
-  border: 0;
-  /* 行间落点用线和文字反馈，普通按钮的背景/阴影会把它画成覆盖内容的卡片。 */
-  background: transparent;
-  box-shadow: none;
   color: var(--stitch-muted);
   font-size: var(--text-caption);
-  line-height: 1.4;
+  line-height: 24px;
+  text-align: center;
 }
 
-.stitch-insertion:hover::before,
-.stitch-insertion:focus-within::before {
-  border-top-color: var(--stitch-moss);
-}
-
-.stitch-insertion:hover button {
-  color: var(--button-color, var(--stitch-moss));
-}
-
-.stitch-insertion.is-active::before {
-  border-top: 3px solid var(--stitch-moss);
+.stitch-insertion.is-drag-over {
+  height: 24px;
+  background: var(--stitch-moss-soft);
 }
 
 .stitch-insertion.is-drag-over::before {
-  border-top: 4px solid var(--stitch-thread);
+  border-top: 1px dashed var(--stitch-thread);
 }
 
-.stitch-insertion.is-drag-over button {
-  color: var(--button-color, var(--stitch-thread));
-  font-weight: 700;
-}
-
-.stitch-insertion.is-active button,
-.stitch-insertion button:focus-visible {
-  color: var(--selection-color, var(--stitch-moss));
+.stitch-insertion.is-drag-over span {
+  color: var(--stitch-thread);
+  background: var(--stitch-paper);
+  font-weight: var(--weight-ui);
 }
 
 .stitch-entry__actions .is-danger {

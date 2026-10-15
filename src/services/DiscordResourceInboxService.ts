@@ -48,6 +48,7 @@ function parseJob(value: unknown): DiscordResourceJob {
 export async function listDiscordResourceJobs(
   target?: DiscordInboxTarget,
   after?: string,
+  signal?: AbortSignal,
 ): Promise<{
   jobs: DiscordResourceJob[]
   recent: DiscordResourceJob[]
@@ -61,6 +62,7 @@ export async function listDiscordResourceJobs(
       'GET',
       undefined,
       target,
+      signal,
     )
   ).json()) as Record<string, unknown>
   const read = (value: unknown) => {
@@ -82,8 +84,11 @@ function jobPath(id: string): string {
 export async function readDiscordResourceJob(
   id: string,
   target: DiscordInboxTarget,
+  signal?: AbortSignal,
 ): Promise<DiscordResourceJob & { url: string }> {
-  const payload = (await (await inboxRequest(jobPath(id), 'GET', undefined, target)).json()) as {
+  const payload = (await (
+    await inboxRequest(jobPath(id), 'GET', undefined, target, signal)
+  ).json()) as {
     url?: unknown
   }
   const job = parseJob(payload)

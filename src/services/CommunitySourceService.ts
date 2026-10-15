@@ -578,21 +578,29 @@ export class CommunitySourceService {
     return { source: savedSource, messages, binding }
   }
 
-  async localizeSavedMessageAttachments(sourceId: string, messageId: string): Promise<void> {
-    if (!this.assetStore) return
+  async localizeSavedMessageAttachments(
+    sourceId: string,
+    messageId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.assetStore || signal?.aborted) return
     const source = await this.storage.getSource(sourceId)
     if (!source) return
     await withCaptureSave(
       'discord-local-media',
       () =>
         withCaptureSave(source.sourceKeyHash, () =>
-          this.persistSavedMessageAttachments(sourceId, messageId),
+          this.persistSavedMessageAttachments(sourceId, messageId, signal),
         ),
       'shared',
     )
   }
 
-  private async persistSavedMessageAttachments(sourceId: string, messageId: string): Promise<void> {
+  private async persistSavedMessageAttachments(
+    sourceId: string,
+    messageId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const keyHash = await messageKeyHash(sourceId, messageId)
     const message = await this.storage.getMessage(sourceId, keyHash)
     if (!message?.attachments.length) return
@@ -600,6 +608,8 @@ export class CommunitySourceService {
       message.attachments,
       message.attachments,
       AUTO_LOCAL_ATTACHMENT_BYTES,
+      false,
+      signal,
     )
     await this.storage.putMessage({ ...message, attachments, updatedAt: Date.now() })
   }
@@ -1260,6 +1270,7 @@ export class CommunitySourceService {
     existingAttachments: readonly DiscordAttachmentMeta[],
     maxBytes: number,
     force = false,
+    signal?: AbortSignal,
   ): Promise<DiscordAttachmentMeta[]> {
     const normalized = normalizeAttachments([...remoteAttachments])
     if (!force && !(await this.shouldDownloadPostMedia())) {
@@ -1275,6 +1286,16 @@ export class CommunitySourceService {
     // 叠加峰值内存。这里宁愿略慢，也不同时把多份二进制驻留内存。
     for (const attachment of normalized) {
       const previous = existingById.get(attachment.id)
+      if (signal?.aborted) {
+        // Commit completed attachment references, leave the rest remote for explicit continuation.
+        result.push(
+          previous ?? {
+            ...attachment,
+            localState: COMMUNITY_SOURCE_ATTACHMENT_LOCAL_STATE.REMOTE_ONLY,
+          },
+        )
+        continue
+      }
       if (previous?.localAssetId && attachmentIdentityMatches(previous, attachment)) {
         result.push({
           ...attachment,
@@ -1293,7 +1314,7 @@ export class CommunitySourceService {
         continue
       }
       try {
-        const blob = await this.downloadAttachment(attachment, maxBytes)
+        const blob = await this.downloadAttachment(attachment, maxBytes, signal)
         const asset = await this.assetStore.put(blob, {
           source: 'remote',
           remoteUrl: attachment.url,
@@ -1327,6 +1348,7 @@ export class CommunitySourceService {
   private async downloadAttachment(
     attachment: DiscordAttachmentMeta,
     maxBytes: number,
+    signal?: AbortSignal,
   ): Promise<Blob> {
     const candidates = [safeHttpUrl(attachment.url), safeHttpUrl(attachment.proxyUrl)].filter(
       (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index,
@@ -1336,7 +1358,10 @@ export class CommunitySourceService {
 
     let lastError: unknown
     for (const remoteUrl of candidates) {
+      signal?.throwIfAborted()
       const controller = new AbortController()
+      const abort = () => controller.abort(signal?.reason)
+      signal?.addEventListener('abort', abort, { once: true })
       const timer = setTimeout(() => controller.abort(), ATTACHMENT_DOWNLOAD_TIMEOUT_MS)
       try {
         const response = await fetch(remoteUrl, {
@@ -1357,9 +1382,11 @@ export class CommunitySourceService {
           ? blob
           : new Blob([blob], { type: attachment.contentType })
       } catch (error) {
+        signal?.throwIfAborted()
         lastError = error
       } finally {
         clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
       }
     }
     throw lastError instanceof Error ? lastError : new Error('Discord 附件读取失败')

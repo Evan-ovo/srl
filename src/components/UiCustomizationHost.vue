@@ -8,6 +8,7 @@ import { BrowserStorageService } from '../services/BrowserStorageService'
 import { createUiDomSession, UI_PRIVATE_SELECTOR } from '../services/UiViewDom'
 import { readUiViewPreviewCss } from '../core/UiViewPreview'
 import { APPLIED_CSS_CHANGED_EVENT } from '../core/AppearanceScopes'
+import { noticeCenter } from '../core/NoticeCenter'
 import type { CustomCssScope } from '../types/BrowserPreferences'
 import type { CustomUiViews, UiViewSnapshot, UiNativePlacement } from '../types/UiCustomization'
 import CustomUiFrame from './CustomUiFrame.vue'
@@ -145,7 +146,7 @@ function hideController() {
   }
 }
 function revealRecovery() {
-  if (!ready.value || failed.value || !view.value?.enabled) return
+  if (!ready.value || failed.value || !view.value?.enabled) return false
   if (!rescue) {
     const layer = createProtectedHost('srl-custom-ui-rescue')
     rescue = layer.host
@@ -156,6 +157,7 @@ function revealRecovery() {
       rescue = undefined
     })
   }
+  return true
 }
 function disableCurrent() {
   if (!scope.value) return
@@ -163,6 +165,15 @@ function disableCurrent() {
   const saved = storage.getCustomUiViews()
   if (saved[scope.value]) saved[scope.value]!.enabled = false
   storage.setCustomUiViews(saved)
+}
+function failCurrent(message: string) {
+  failed.value = true
+  disableCurrent()
+  noticeCenter.push({
+    id: 'custom-ui-failed',
+    type: 'error',
+    message: `${message}；已停用当前Vue，源码仍保留，可在外观中重新应用。`,
+  })
 }
 function refreshState() {
   if (!session) return
@@ -347,7 +358,7 @@ onBeforeUnmount(() => {
         recovery
         @recovery="revealRecovery"
         @ready="ready = true"
-        @error="failed = true"
+        @error="failCurrent"
         @native="placeNative"
       />
     </div>

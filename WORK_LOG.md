@@ -260,3 +260,16 @@
 - 验证：`LibraryFormatting` 三组测试及 `DesignSystemContract.test.ts` 共33项通过；`git diff --check`通过。当前改动待提交；未运行全量测试、Android JVM/APK 或实体手机测试。
 
 - 提交/推送回执：Public `015ba0ddf4a08c5457a0ce3fa962e8835d2d712c` 已推送到 `origin/main`，`git ls-remote` 回读同一 SHA；author/committer 均为该账号 GitHub noreply。增量隐私检查从 `397f7355b1ba4eec868cfcf575b023d00327d27b` 覆盖1提交、7路径，findings/binaryReview/addressReview 均为0。工作树干净。
+
+## 2026-10-15：同步官版最新已提交 main 至 Public 本地工作树
+
+- 来源：按官版本地 `main` 最新干净提交快照同步；只含上次 Public 对应快照之后的5个已提交提交，官版当前未提交的缩略图/数据库等工作没有复制或改写。Public 起始 HEAD 为 `99844508aaca03a547caa99eb0aa776075daa6d0`，起始工作树干净。
+- 改动：同步共享外观 Vue 预设导入确认与恢复、桌宠外观快捷切换、缝了么布局、网页 Discord 后台收件/通知及设置；按 Public 自身边界保留资源广场、登录/托管、无默认中继和更新通道差异。手工同步 APP 包依赖策略和相关测试、PWA 通知点击处理及共享 APP 内容修订号；保持 Public 应用身份、Worker 配置和 Public 版旧包目录/封面兼容。助手知识文案合并共享更新，保留 Public Worker 指引并删除资源广场专属说明；更新243个 Owner 的本地知识指纹，增加5个共享 Owner。
+- 验证：16个定向测试文件262项通过；APP打包插件测试13项通过；`vue-tsc --noEmit`、知识源243 Owner、功能合同14个 APP/29个备份范围、关键文件 Prettier、Service Worker 语法和 `git diff --check`通过。全量测试、APK、Android JVM和实体手机未运行。
+- 对照审计：同步器应用43个无冲突文件，并手工合并边界文件。干净 main 快照全量审计1561个文件一致、24个路径差异，均为既有 Public 边界/专有测试/脱敏夹具及对应知识文案；3个重复 MAIN-ONLY 标记文件仍不能自动归一化。同步器对助手“目标 APP”说明仍报一个三方合并冲突，因为两端没有同 ID 的 REPLACE 标记；已人工核对并保留 Public 专用安装说明，新增共享说明已合入。
+- 发布：改动只在 Public 本地，未提交、未推送、未部署、未构建 APK；Public 版本号未改。官版和 Public 之外的工作树未清理；本轮创建的干净官版审计 worktree 已移除。
+
+## 2026-10-15：Public 同步内容推送前隐私审计
+
+- 增量审计基线为 Public `99844508aaca03a547caa99eb0aa776075daa6d0`，覆盖本次工作树的54个路径；扫描无 finding、无二进制复核项。两项 addressReview 已逐文件检查：`worker.example` 为测试用示例占位域名，`@capacitor/core` 为公开 npm 包名；未发现作者私人邮箱、私人域名或私人基础设施地址。
+- 提交邮箱已按仓库设置为账号 noreply；提交后仍需核对新提交 author/committer 邮箱并对最终提交重跑增量扫描。仅发布本次同步文件，不构建 APK、不部署、不触碰实体手机。

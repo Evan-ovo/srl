@@ -1,6 +1,10 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { requestNativeNotifications } from '../core/NativeSecurity'
 import { inboxConnection } from './DiscordHandoffService'
+import {
+  notifyWebDiscordAutoBinding,
+  notifyWebDiscordInboxResult,
+} from './WebDiscordInboxNotifications'
 
 interface DiscordInboxResultBase {
   id: string
@@ -42,7 +46,11 @@ export async function notifyNativeDiscordAutoBinding(
   resourceName: string,
   identity?: { sourceId: string; resourceId: string },
 ): Promise<void> {
-  if (!isNativeDiscordInboxAvailable()) return
+  if (!isNativeDiscordInboxAvailable()) {
+    if (!Capacitor.isNativePlatform())
+      await notifyWebDiscordAutoBinding(sourceTitle, resourceName, identity)
+    return
+  }
   try {
     await receiver.notifyCloudInboxAutoBinding({ sourceTitle, resourceName, ...identity })
   } catch {
@@ -122,7 +130,10 @@ export function checkNativeDiscordInboxTarget(workerUrl: string, libraryId: stri
 
 /** Only the local commit/decision owner can report a completed receive operation. */
 export async function notifyNativeDiscordInboxResult(result: DiscordInboxResult): Promise<void> {
-  if (!isNativeDiscordInboxAvailable()) return
+  if (!isNativeDiscordInboxAvailable()) {
+    if (!Capacitor.isNativePlatform()) await notifyWebDiscordInboxResult(result)
+    return
+  }
   try {
     const { id, workerUrl, libraryId, name } = result
     const base = { id, workerUrl, libraryId, name }

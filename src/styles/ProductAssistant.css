@@ -866,6 +866,10 @@
   width: 100%;
   min-height: 54px;
   padding: 0.625rem 1rem;
+  border: 0;
+  border-radius: 0;
+  background: var(--button-background, transparent);
+  box-shadow: none;
   text-align: left;
   font: inherit;
   font-size: 0.875rem;

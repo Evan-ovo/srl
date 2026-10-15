@@ -575,7 +575,10 @@ function parseInboxJobs(value: unknown, pending: boolean): DiscordInboxJob[] {
   })
 }
 
-export async function listDiscordInboxJobs(after?: string): Promise<{
+export async function listDiscordInboxJobs(
+  after?: string,
+  signal?: AbortSignal,
+): Promise<{
   jobs: DiscordInboxJob[]
   recent: DiscordInboxJob[]
   hasMore: boolean
@@ -583,7 +586,13 @@ export async function listDiscordInboxJobs(after?: string): Promise<{
   if (after !== undefined && !/^\d{1,13}:[a-f\d-]{36}$/u.test(after))
     throw new Error('云端帖子分页游标无效')
   const payload = (await (
-    await inboxRequest(`/jobs${after ? '?after=' + encodeURIComponent(after) : ''}`)
+    await inboxRequest(
+      `/jobs${after ? '?after=' + encodeURIComponent(after) : ''}`,
+      'GET',
+      undefined,
+      undefined,
+      signal,
+    )
   ).json()) as Record<string, unknown>
   if (typeof payload.hasMore !== 'boolean') throw new Error('云端收件列表无效')
   return {
@@ -623,11 +632,16 @@ export async function clearDiscordInboxCloudHistory(
   return { posts: Number(payload.posts), resources: Number(payload.resources) }
 }
 
-export async function receiveDiscordInboxJob(id: string): Promise<DiscordHandoffEnvelope> {
+export async function receiveDiscordInboxJob(
+  id: string,
+  signal?: AbortSignal,
+): Promise<DiscordHandoffEnvelope> {
   if (!/^[a-zA-Z0-9-]{1,80}$/u.test(id)) throw new Error('云端收件任务无效')
   const connection = inboxConnection()
   const envelope = parseHandoffEnvelope(
-    await (await inboxRequest(`/jobs/${encodeURIComponent(id)}`)).json(),
+    await (
+      await inboxRequest(`/jobs/${encodeURIComponent(id)}`, 'GET', undefined, undefined, signal)
+    ).json(),
   )
   if (envelope.delivery?.id !== id || envelope.delivery.libraryId !== connection.libraryId) {
     throw new Error('云端收件目标不匹配，任务尚未确认。')

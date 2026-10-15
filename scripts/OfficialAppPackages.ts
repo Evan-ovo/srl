@@ -230,13 +230,10 @@ export function officialAppPackagesPlugin(shellVersion: string, requireLoadingGa
               ),
           )?.fileName
           if (!gate && requireLoadingGate) throw new Error('Official APP loading gate missing')
-          const graph = closure(
-            gate
-              ? [entry, gate, this.getFileName(runtimeRef)]
-              : [entry, this.getFileName(runtimeRef)],
-            false,
-            core,
-          )
+          // The shell loads the gate before importing an installed APP. Making it a
+          // package root pulls the shell/installer graph into every APP and turns
+          // unrelated shell rebuilds into mandatory compatibility repairs.
+          const graph = closure([entry, this.getFileName(runtimeRef)], false, core)
           // Source import/preview is an actual frontend APP capability. Its lazy compiler
           // must work offline even though the shared container also reaches this service.
           if (id === 'frontendWorkshop') {

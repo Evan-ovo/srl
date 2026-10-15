@@ -105,6 +105,47 @@ describe('useAppearanceSettings', () => {
   })
 
   const create = () => useAppearanceSettings((message) => notices.push(message))
+  it.each(['vue', 'default'] as const)(
+    '快捷恢复%s取消未确认试用且不会迟到重新启用，预设/源码保持',
+    (mode) => {
+      vi.useFakeTimers()
+      try {
+        const view = { ...createUiView(), enabled: true }
+        const preset = {
+          id: 'saved',
+          name: '预设',
+          globalCss: '.saved{}',
+          scopedCss: {},
+          views: { shell: view },
+          createdAt: '',
+          updatedAt: '',
+        }
+        storage.getCustomUiPresets.mockReturnValue([preset])
+        views = { shell: view }
+        const appearance = create()
+        appearance.saveCustomUiCss('.trial{}', {
+          views: {
+            shell: {
+              ...view,
+              files: [{ path: 'View.vue', contents: '<template>试用源码</template>' }],
+            },
+          },
+          presetId: 'saved',
+        })
+        storage.getCustomUiCss.mockReturnValueOnce('.trial{}')
+        appearance.saveCustomUiCss('.trial{}', { recovery: mode })
+        expect(appearance.customUiCss.value).toBe(mode === 'default' ? '' : '.trial{}')
+        expect(views.shell?.enabled).toBe(false)
+        expect(views.shell?.files[0]?.contents).toContain('试用源码')
+        expect(activePresetId).toBe(mode === 'default' ? '' : 'saved')
+        vi.advanceTimersByTime(16000)
+        expect(views.shell?.enabled).toBe(false)
+        expect(storage.getCustomUiPresets()).toEqual([preset])
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
   it('applies a saved preset immediately, and restores both CSS and selection on rollback', () => {
     const preset = {
       id: 'plaza',

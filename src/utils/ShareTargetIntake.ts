@@ -212,6 +212,10 @@ export function removeNativeIntakeFile(entry: NativeIntakeFile): Promise<number>
 }
 
 export interface SharedFileBatch {
+  /** A paused session retains this batch in the existing importer queue until explicit resume. */
+  canProcess?(): boolean
+  onProcessingStarted?(): void
+  onProcessingSettled?(): void
   /** The receiver's task continues through parsing/import; do not create a second task. */
   taskOperationId?: string
   /** True only for resources received from the paired Discord cloud inbox. */

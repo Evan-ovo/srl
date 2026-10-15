@@ -583,6 +583,10 @@ export function useApp() {
   }
 
   function activateSharedFileBatch(batch: SharedFileBatch): void {
+    if (batch.canProcess?.() === false) {
+      queuedSharedFileBatches.push(batch)
+      return
+    }
     pendingSharedFileBatch.value = batch
     isLinkImportOpen.value = false
     const attachment = batch.discordAttachment
@@ -628,8 +632,16 @@ export function useApp() {
 
   watch([isBusy, pendingSharedFileBatch], ([busy, pending]) => {
     if (busy || pending || !queuedSharedFileBatches.length) return
-    activateSharedFileBatch(queuedSharedFileBatches.shift()!)
+    continueSharedInboxBatches()
   })
+  function continueSharedInboxBatches(): void {
+    if (isBusy.value || pendingSharedFileBatch.value || !queuedSharedFileBatches.length) return
+    const index = queuedSharedFileBatches.findIndex((batch) => batch.canProcess?.() !== false)
+    if (index < 0) return
+    activateSharedFileBatch(queuedSharedFileBatches.splice(index, 1)[0]!)
+  }
+  onMounted(() => window.addEventListener('srl:web-inbox-state', continueSharedInboxBatches))
+  onUnmounted(() => window.removeEventListener('srl:web-inbox-state', continueSharedInboxBatches))
 
   async function downloadSharedDiscordAttachmentNow(): Promise<void> {
     await downloadDiscordAttachment(false)
@@ -680,6 +692,7 @@ export function useApp() {
     isImportChooserOpen.value = false
     let savedRoute = false
     let importCommitted = false
+    batch.onProcessingStarted?.()
     try {
       if (!batch.route && batch.setRoute) {
         await batch.setRoute(route)
@@ -746,6 +759,8 @@ export function useApp() {
       showNotice(`分享文件处理失败${reason}；原分享文件仍保留，可重新选择用途。`, 9000)
       isImportChooserOpen.value = true
       return
+    } finally {
+      batch.onProcessingSettled?.()
     }
     pendingSharedFileBatch.value = undefined
   }

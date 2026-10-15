@@ -40,6 +40,14 @@ import {
 } from '../utils/ShareTargetIntake'
 import type { VaultStatus } from '../types/Vault'
 import { RESOURCE_TYPE, type ResourceListSummary } from '../types/Resource'
+import {
+  isWebDiscordInboxRunning,
+  isWebDiscordInboxPaused,
+  pauseWebDiscordInbox,
+  webDiscordInboxSignal,
+  registerWebInboxParticipant,
+  type WebInboxCycle,
+} from '../services/WebDiscordInboxSession'
 
 interface WebResourceCycle {
   target: DiscordInboxTarget
@@ -48,6 +56,7 @@ interface WebResourceCycle {
   resourceIds: Set<string>
   hasMore: boolean
   finishBindingBatch: (discard?: boolean) => void
+  background?: boolean
 }
 
 interface ActiveResource {
@@ -65,6 +74,8 @@ interface ActiveResource {
   webCycle?: WebResourceCycle
   nativeOutcome?: Awaited<ReturnType<typeof readCloudDiscordResource>>['nativeImportOutcome']
   nativeAckSettled?: boolean
+  processing?: Promise<void>
+  finishProcessing?: () => void
 }
 
 /** Transport coordination only: every file and decision goes through the existing share importer. */
@@ -84,8 +95,12 @@ export function useDiscordResourceInbox(
   let readingNative = false
   let notificationPermissionChecked = false
   let webCycle: WebResourceCycle | undefined
+  let unregisterWebInbox: (() => void) | undefined
+  const webBusy = () => [...active.values()].some((entry) => !entry.imported)
   const visible = () =>
-    document.visibilityState !== 'hidden' || (native && isNativeDiscordInboxRunning())
+    document.visibilityState !== 'hidden' ||
+    (native && isNativeDiscordInboxRunning()) ||
+    (!native && isWebDiscordInboxRunning())
 
   function changed(): void {
     window.dispatchEvent(new Event('srl:discord-resources-updated'))
@@ -129,6 +144,13 @@ export function useDiscordResourceInbox(
     })
   }
   async function failure(entry: ActiveResource, reason: unknown): Promise<void> {
+    if (!native && !entry.imported && isWebDiscordInboxPaused() && entry.staging) {
+      // Preserve the original file and existing hash/alias checkpoints; only explicit resume redelivers it.
+      entry.delivered = false
+      taskCenter.cancelled(entry.taskId)
+      changed()
+      return
+    }
     const message = reason instanceof Error ? reason.message : String(reason || '资源下载失败')
     if (!taskCenter.list().some((task) => task.operationId === entry.taskId))
       startEntryTask(entry, entry.imported ? '已导入，云端确认未完成' : '导入未完成')
@@ -260,7 +282,21 @@ export function useDiscordResourceInbox(
       taskOperationId: entry.taskId,
       automaticCloud: entry.automatic,
       deferAutomaticBinding: Boolean(entry.webCycle),
+      canProcess:
+        !native && entry.webCycle?.background
+          ? () => isWebDiscordInboxRunning() && targetCurrent(entry.target) && !vault.value.locked
+          : undefined,
       route: 'resource',
+      onProcessingStarted: () => {
+        entry.processing = new Promise<void>((resolve) => {
+          entry.finishProcessing = resolve
+        })
+      },
+      onProcessingSettled: () => {
+        entry.finishProcessing?.()
+        entry.processing = undefined
+        entry.finishProcessing = undefined
+      },
       // Explicit cloud command chooses resources; a retained file does not open the route picker.
       recoveryId: original.recoveryId || entry.taskId,
       onCancel: async () => {
@@ -373,7 +409,6 @@ export function useDiscordResourceInbox(
         noticeCenter.dismiss(entry.taskId)
         changed()
       } catch (error) {
-        if (!native) throw error
         const message = '资源已导入，云端确认或暂存清理未完成，可重试确认。'
         if (
           !taskCenter
@@ -382,7 +417,9 @@ export function useDiscordResourceInbox(
         )
           startEntryTask(entry, '已导入，云端确认未完成')
         taskCenter.fail(entry.taskId, message)
+        if (!native) releaseWebDownload(entry)
         changed()
+        if (!native) throw error
         throw new Error(message, { cause: error })
       } finally {
         entry.confirming = undefined
@@ -417,7 +454,9 @@ export function useDiscordResourceInbox(
       const resources: ResourceListSummary[] = []
       // Reload only the final lightweight records: later containers/versions may change the
       // current name, author or PNG representation without changing the logical resource ID.
-      for (const id of cycle.automatic && settings.bindForeground ? cycle.resourceIds : []) {
+      for (const id of cycle.automatic && (settings.bindForeground || cycle.background)
+        ? cycle.resourceIds
+        : []) {
         if (disposed || vault.value.locked || !targetCurrent(cycle.target)) return
         const summary = await resourceService.getResourceListSummary(id)
         if (summary) resources.push(summary)
@@ -598,7 +637,12 @@ export function useDiscordResourceInbox(
             taskCenter.updateTransfer(taskId, { transferredBytes: bytes, totalBytes: total }),
         )
         controller.signal.throwIfAborted()
-        if (!targetCurrent(target) || vault.value.locked || disposed)
+        if (
+          !targetCurrent(target) ||
+          vault.value.locked ||
+          disposed ||
+          (automatic && isWebDiscordInboxPaused())
+        )
           throw new DOMException('下载领取已暂停', 'AbortError')
         await state(entry, 'importing')
         entry.staging = cloudWebResourceBatch(file, taskId, entry.automatic)
@@ -612,7 +656,11 @@ export function useDiscordResourceInbox(
         active.delete(job.id)
         taskCenter.cancelled(taskId)
         if (!entry.cancelRequested) {
-          const paused = document.visibilityState === 'hidden' || vault.value.locked || disposed
+          const paused =
+            document.visibilityState === 'hidden' ||
+            vault.value.locked ||
+            disposed ||
+            isWebDiscordInboxPaused()
           await state(entry, paused ? 'queued' : 'cancelled').catch(() => undefined)
           // Pausing a download does not finish that member of the logical batch.
           if (paused && entry.webCycle === webCycle) entry.webCycle?.jobs.unshift(job)
@@ -669,9 +717,13 @@ export function useDiscordResourceInbox(
     // snapshot unclaimed rather than presenting a partial cohort as a unique match.
     for (let page = 0; page < 5; page += 1) {
       if (disposed || vault.value.locked || !visible() || !targetCurrent(target)) return
-      const result = await listDiscordResourceJobs(target, cursor)
+      const result = await listDiscordResourceJobs(
+        target,
+        cursor,
+        isWebDiscordInboxRunning() ? webDiscordInboxSignal() : undefined,
+      )
       for (const job of result.jobs)
-        if (!seen.has(job.id)) {
+        if (!seen.has(job.id) && !active.has(job.id)) {
           seen.add(job.id)
           jobs.push(job)
         }
@@ -706,7 +758,12 @@ export function useDiscordResourceInbox(
       do {
         requested = false
         const automaticRequest = requestedAutomatic
-        if (vault.value.locked || !visible()) break
+        if (
+          vault.value.locked ||
+          !visible() ||
+          (!native && automaticRequest && isWebDiscordInboxPaused())
+        )
+          break
         let target: DiscordInboxTarget
         try {
           const connection = inboxConnection()
@@ -732,16 +789,30 @@ export function useDiscordResourceInbox(
           // Keep at most one downloaded Web attachment until its import/decisions finish.
           for (const entry of active.values())
             if (!entry.delivered && entry.staging) deliver(entry, entry.staging)
-          if (active.size) break
+          if (webBusy()) break
           webCycle ??= await snapshotWebCycle(target, automaticRequest)
           if (!webCycle) break
+          if (isWebDiscordInboxRunning()) webCycle.background = true
           const cycle = webCycle
           while (cycle.jobs.length && !disposed) {
-            if (vault.value.locked || !visible() || !targetCurrent(cycle.target)) break
+            if (
+              vault.value.locked ||
+              !visible() ||
+              !targetCurrent(cycle.target) ||
+              (automaticRequest && isWebDiscordInboxPaused())
+            )
+              break
             await accept(cycle.jobs.shift()!, cycle.target, cycle.automatic)
-            if (active.size) break
+            if (webBusy()) break
           }
-          if (active.size || cycle.jobs.length || vault.value.locked || !visible()) break
+          if (
+            webBusy() ||
+            cycle.jobs.length ||
+            vault.value.locked ||
+            !visible() ||
+            (automaticRequest && isWebDiscordInboxPaused())
+          )
+            break
           await settleWebCycle(cycle)
           cycle.resourceIds.clear()
           webCycle = undefined
@@ -792,7 +863,7 @@ export function useDiscordResourceInbox(
       void request()
       scheduleNative()
     } else {
-      if (!native)
+      if (!native && !isWebDiscordInboxRunning())
         for (const entry of active.values()) if (!entry.delivered) entry.controller.abort()
       scheduleNative()
     }
@@ -833,15 +904,33 @@ export function useDiscordResourceInbox(
     'srl:native-share-download-failed',
     'online',
   ]
+  async function webPoll(cycle: WebInboxCycle): Promise<void> {
+    if (cycle.current()) await request()
+  }
+  function webStateChanged(): void {
+    if (native || isWebDiscordInboxRunning()) return
+    for (const entry of active.values()) {
+      if (!entry.automatic || entry.imported) continue
+      if (!entry.delivered) entry.controller.abort(new DOMException('收件已暂停', 'AbortError'))
+      else taskCenter.cancel(entry.taskId)
+    }
+  }
   watch(
     () => vault.value.locked,
     (locked) => {
       if (!locked) void request()
-      else if (!native)
+      else if (!native) {
+        if (isWebDiscordInboxRunning()) pauseWebDiscordInbox('保险库已锁定，请解锁后手动继续收件。')
         for (const entry of active.values()) if (!entry.delivered) entry.controller.abort()
+      }
     },
   )
   onMounted(() => {
+    if (!native)
+      unregisterWebInbox = registerWebInboxParticipant('resources', webPoll, async () => {
+        await Promise.all([...active.values()].map((entry) => entry.processing))
+      })
+    window.addEventListener('srl:web-inbox-state', webStateChanged)
     for (const event of events) window.addEventListener(event, wake)
     window.addEventListener('srl:discord-resource-cancelled', cancelRequested)
     document.addEventListener('visibilitychange', visibility)
@@ -849,6 +938,8 @@ export function useDiscordResourceInbox(
   })
   onBeforeUnmount(() => {
     disposed = true
+    unregisterWebInbox?.()
+    window.removeEventListener('srl:web-inbox-state', webStateChanged)
     webCycle?.finishBindingBatch(true)
     webCycle = undefined
     if (nativeTimer !== undefined) clearTimeout(nativeTimer)

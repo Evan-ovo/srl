@@ -55,6 +55,35 @@ function mountApp() {
   return { app, wrapper, context, download }
 }
 
+it('retains a paused web inbox batch without blocking unrelated shares and resumes only explicitly', async () => {
+  const { app, wrapper, context } = mountApp()
+  try {
+    let allowed = false
+    const paused: SharedFileBatch = {
+      files: [new File(['{}'], 'paused.json')],
+      canProcess: () => allowed,
+      acknowledge: async () => undefined,
+    }
+    context.receiveSharedFileBatch(paused)
+    expect(app.pendingSharedFileBatch.value).toBeUndefined()
+    const other: SharedFileBatch = {
+      files: [new File(['{}'], 'other.json')],
+      acknowledge: async () => undefined,
+    }
+    context.receiveSharedFileBatch(other)
+    expect(app.pendingSharedFileBatch.value).toBe(other)
+    app.pendingSharedFileBatch.value = undefined
+    await nextTick()
+    window.dispatchEvent(new Event('srl:web-inbox-state'))
+    expect(app.pendingSharedFileBatch.value).toBeUndefined()
+    allowed = true
+    window.dispatchEvent(new Event('srl:web-inbox-state'))
+    expect(app.pendingSharedFileBatch.value).toBe(paused)
+  } finally {
+    wrapper.unmount()
+  }
+})
+
 it('cloud download events do not create a second generic share task or disturb the active import', () => {
   const { app, wrapper, context } = mountApp()
   try {

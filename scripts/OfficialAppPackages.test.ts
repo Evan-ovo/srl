@@ -86,6 +86,7 @@ describe('official APP renderer build identity', () => {
     publicDirectory: string | false = false,
     hostLazyTool = false,
     requiredCompiler = false,
+    changes: { serviceLabel?: string; component?: string } = {},
   ) {
     const fixture: Plugin = {
       name: 'official-app-consumer-fixture',
@@ -115,7 +116,7 @@ describe('official APP renderer build identity', () => {
         if (id === '\0fixture:host-tool') return 'export const compiler="host-only-heavy-compiler";'
         if (id === '\0fixture:app-tool') return 'export const tool="app-owned-lazy-tool";'
         if (id === '\0fixture:service')
-          return "export const label='shared service'; export const compile=()=>import('fixture:host-tool');"
+          return `export const label=${JSON.stringify(changes.serviceLabel ?? 'shared service')}; export const compile=()=>import('fixture:host-tool');`
         if (id === '\0fixture:host')
           return `import {createApp,h${extraHostApis ? ',useTemplateRef,onActivated,watchPostEffect' : ''}} from 'vue';
             ${hostLazyTool ? "import {compile} from 'fixture:service'; globalThis.compile=compile;" : ''}
@@ -128,7 +129,7 @@ describe('official APP renderer build identity', () => {
         if (id.replaceAll('\\', '/').includes('/src/components/') && id.endsWith('.vue'))
           return `import {defineComponent,h,renderSlot} from 'vue';
             ${hostLazyTool ? "import {label} from 'fixture:service';" : ''}
-            export default defineComponent({render(){return h('article',${hostLazyTool ? "{onClick:()=>import('fixture:app-tool')}," : ''}[${hostLazyTool ? 'label,' : ''}renderSlot(this.$slots,'default')])}});`
+            export default defineComponent({render(){return h('article',${hostLazyTool ? "{onClick:()=>import('fixture:app-tool')}," : ''}[${hostLazyTool ? 'label,' : ''}${changes.component && id.endsWith('/' + changes.component) ? '"changed APP content",' : ''}renderSlot(this.$slots,'default')])}});`
       },
       transform(code, id) {
         if (changedVue && id.replaceAll('\\', '/').includes('/@vue/runtime-core/'))
@@ -166,8 +167,11 @@ describe('official APP renderer build identity', () => {
       (files as Array<{ path: string }>).filter((file) => file.path === before.app.runtimeEntry)
     expect(renderer(after.app.hostFiles)).toHaveLength(1)
     expect(renderer(after.app.hostFiles)).toEqual(renderer(before.app.hostFiles))
-    // Product host chunks can change while Vue stays identical; their new hashes still matter.
-    expect(after.app.hostFiles).not.toEqual(before.app.hostFiles)
+    // The loading gate belongs to the shell; rebuilding it is not an APP dependency change.
+    expect(after.app.hostFiles).toEqual(before.app.hostFiles)
+    const owned = (archive: Record<string, Uint8Array>) =>
+      Object.fromEntries(Object.entries(archive).filter(([name]) => name !== 'manifest.json'))
+    expect(owned(after.packageFiles)).toEqual(owned(before.packageFiles))
     for (const file of renderer(after.app.hostFiles)) {
       const path = file.path.slice(1)
       expect(after.packageFiles[path]).toEqual(before.packageFiles[path])
@@ -180,6 +184,41 @@ describe('official APP renderer build identity', () => {
     const after = await sample('shell-after', false, true)
     expect(after.app.runtimeEntry).not.toBe(before.app.runtimeEntry)
     expect(after.app.hostFiles).not.toEqual(before.app.hostFiles)
+  }, 20000)
+
+  it('does not change an unrelated APP when another APP changes', async () => {
+    const before = await sample('shell-before', false)
+    const after = await sample('shell-after', false, false, false, false, false, false, {
+      component: 'PresetStitcherApp.vue',
+    })
+    expect(after.app.hostFiles).toEqual(before.app.hostFiles)
+    expect(after.app.runtimeEntry).toBe(before.app.runtimeEntry)
+    const { 'manifest.json': beforeManifest, ...beforeFiles } = before.packageFiles
+    const { 'manifest.json': afterManifest, ...afterFiles } = after.packageFiles
+    expect(beforeManifest).toBeDefined()
+    expect(afterManifest).toBeDefined()
+    expect(afterFiles).toEqual(beforeFiles)
+    expect(
+      after.output.some(
+        (file) => file.type === 'chunk' && file.code.includes('changed APP content'),
+      ),
+    ).toBe(true)
+  }, 20000)
+
+  it('still declares changed product services actually imported by an APP', async () => {
+    const before = await sample('shell-before', false, false, false, false, true)
+    const after = await sample('shell-after', false, false, false, false, true, false, {
+      serviceLabel: 'changed shared service',
+    })
+    expect(after.app.hostFiles).not.toEqual(before.app.hostFiles)
+    const changedService = after.output.find(
+      (file) => file.type === 'chunk' && file.code.includes('changed shared service'),
+    )!
+    expect(changedService).toBeDefined()
+    expect(after.app.hostFiles).toContainEqual(
+      expect.objectContaining({ path: '/' + changedService.fileName, bundled: true }),
+    )
+    expect(after.packageFiles[changedService.fileName]).toBeDefined()
   }, 20000)
 
   it('keeps a host-only lazy compiler in the shell without copying it into every APP', async () => {

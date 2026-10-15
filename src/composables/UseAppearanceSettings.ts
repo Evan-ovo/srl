@@ -176,6 +176,33 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
   onUnmounted(() => window.removeEventListener(CUSTOM_UI_VIEWS_CHANGED, syncCustomUiCss))
 
   function saveCustomUiCss(value: string, options?: UiApplyOptions): void {
+    if (options?.recovery) {
+      const css = options.recovery === 'default' ? '' : browserStorageService.getCustomUiCss()
+      const presetId =
+        options.recovery === 'default' ? '' : browserStorageService.getActiveCustomUiPresetId()
+      const disabled = normalizeUiViews(browserStorageService.getCustomUiViews())
+      for (const view of Object.values(disabled)) if (view) view.enabled = false
+      try {
+        appearanceTransaction.clear(
+          css,
+          (next) => {
+            customUiCss.value = next
+            syncCustomUiCss()
+          },
+          (next) => browserStorageService.setCustomUiCss(next),
+        )
+        browserStorageService.setCustomUiViews(disabled)
+        browserStorageService.setActiveCustomUiPresetId(presetId)
+        showNotice(
+          options.recovery === 'default'
+            ? '已恢复默认预设，预设库与源码保留'
+            : 'Vue已关闭，当前CSS与预设库保留',
+        )
+      } catch (error) {
+        showNotice(error instanceof Error ? error.message : '外观恢复失败，请检查本机存储空间')
+      }
+      return
+    }
     const nextCss = value
     if (
       isSafeModeActive() &&

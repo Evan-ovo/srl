@@ -19,8 +19,8 @@ afterEach(() => {
   vi.useRealTimers()
   document.body.replaceChildren()
 })
-describe('隐藏恢复入口的5秒长按', () => {
-  it('短按不影响点击；满5秒只显示入口，并吞掉这次松手产生的原控件点击', () => {
+describe('隐藏恢复入口的2秒长按', () => {
+  it('短按不影响点击；满2秒只显示入口，并吞掉这次松手产生的原控件点击', () => {
     const reveal = vi.fn(),
       click = vi.fn()
     stop = installUiRecoveryGesture(document, reveal)
@@ -32,7 +32,7 @@ describe('隐藏恢复入口的5秒长按', () => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
     expect(click).toHaveBeenCalledTimes(1)
     pointer('pointerdown')
-    vi.advanceTimersByTime(4999)
+    vi.advanceTimersByTime(1999)
     expect(reveal).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(reveal).toHaveBeenCalledOnce()
@@ -58,7 +58,7 @@ describe('隐藏恢复入口的5秒长按', () => {
     const reveal = vi.fn()
     stop = installUiRecoveryGesture(document, reveal)
     pointer('pointerdown')
-    vi.advanceTimersByTime(4900)
+    vi.advanceTimersByTime(1900)
     if (reason === 'move') pointer('pointermove', 40)
     else if (reason === 'scroll') document.dispatchEvent(new Event('scroll'))
     else if (reason === 'hidden') {
@@ -68,7 +68,7 @@ describe('隐藏恢复入口的5秒长按', () => {
     else if (reason === 'dispose') stop()
     else if (reason === 'blur' || reason === 'pagehide') window.dispatchEvent(new Event(reason))
     else pointer(reason)
-    vi.advanceTimersByTime(6000)
+    vi.advanceTimersByTime(3000)
     expect(reveal).not.toHaveBeenCalled()
   })
   it('右键或未启用的界面不启动恢复手势', () => {
@@ -76,22 +76,22 @@ describe('隐藏恢复入口的5秒长按', () => {
       active = vi.fn(() => true)
     stop = installUiRecoveryGesture(document, reveal, active)
     pointer('pointerdown', 20, 1, true, 2)
-    vi.advanceTimersByTime(5000)
+    vi.advanceTimersByTime(2000)
     active.mockReturnValue(false)
     pointer('pointerdown')
-    vi.advanceTimersByTime(5000)
+    vi.advanceTimersByTime(2000)
     expect(reveal).not.toHaveBeenCalled()
   })
   it('离开页面取消旧计时，返回后仍可重新长按', () => {
     const reveal = vi.fn()
     stop = installUiRecoveryGesture(document, reveal)
     pointer('pointerdown')
-    vi.advanceTimersByTime(4900)
+    vi.advanceTimersByTime(1900)
     window.dispatchEvent(new Event('pagehide'))
     vi.advanceTimersByTime(1000)
     expect(reveal).not.toHaveBeenCalled()
     pointer('pointerdown')
-    vi.advanceTimersByTime(5000)
+    vi.advanceTimersByTime(2000)
     expect(reveal).toHaveBeenCalledOnce()
   })
 })

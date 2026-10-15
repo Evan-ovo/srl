@@ -142,7 +142,7 @@ export function usePresetSourceDrag(context: PresetSourceDragContext) {
     stopSourceDragTracking()
     if (state.picked) {
       suppressNextSourceAction()
-      if (!state.overDropSlot) notice.value = '未放到主预设虚线位置，本次没有加入'
+      if (!state.overDropSlot) notice.value = '未放到主预设条目之间，本次没有加入'
       else commitSourceDrop(state.kind, state.id, state.targetIndex)
     }
     sourceDrag.value = undefined

@@ -23,6 +23,16 @@ const AiTaggingPanel = createAsyncPanel('AI 标签实验台', loadAiTaggingPanel
 const ExportPanel = createAsyncPanel('导出', () => import('./components/ExportPanel.vue'))
 const FeatureHub = createAsyncPanel('功能桌面', () => import('./components/FeatureHub.vue'))
 const customUiViews = useCustomUiViews()
+import { CUSTOM_UI_APPEARANCE_MENU_REQUEST } from './types/UiCustomization'
+const appearanceQuickMenuOpen = ref(false)
+const AppearanceQuickMenu = createAsyncPanel(
+  '外观快捷切换',
+  () => import('./components/AppearanceQuickMenu.vue'),
+)
+function openAppearanceQuickMenu(event: Event) {
+  event.preventDefault()
+  appearanceQuickMenuOpen.value = true
+}
 const UiCustomizationHost = createAsyncPanel(
   '自定义界面',
   () => import('./components/UiCustomizationHost.vue'),
@@ -392,10 +402,12 @@ watch(
 watch(resourceGridElement, syncUniformResourceCardHeight, { flush: 'post' })
 onMounted(() => {
   window.addEventListener('resize', syncUniformResourceCardHeight)
+  window.addEventListener(CUSTOM_UI_APPEARANCE_MENU_REQUEST, openAppearanceQuickMenu)
   syncUniformResourceCardHeight()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('resize', syncUniformResourceCardHeight)
+  window.removeEventListener(CUSTOM_UI_APPEARANCE_MENU_REQUEST, openAppearanceQuickMenu)
   if (uniformCardHeightFrame !== undefined) cancelAnimationFrame(uniformCardHeightFrame)
 })
 
@@ -1633,6 +1645,12 @@ const isBatchBarVisible = computed(
     <UiCustomizationHost
       v-if="Object.values(customUiViews).some((view) => view?.enabled)"
       :views="customUiViews"
+    />
+    <AppearanceQuickMenu
+      v-if="appearanceQuickMenuOpen"
+      :views="customUiViews"
+      @close="appearanceQuickMenuOpen = false"
+      @save-css="saveCustomUiCss"
     />
   </div>
 </template>

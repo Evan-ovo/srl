@@ -117,3 +117,13 @@ Public已同步官版本地main `cc2af662afe4f73345df7834e6035cc96d060f2d` 的�
 - 定向测试4文件33项通过，`git diff --check`通过；全量测试、Android JVM、APK及实体手机未运行。改动和本记录待提交、隐私复核与推送。
 
 - 发布回执：Public `015ba0ddf4a08c5457a0ce3fa962e8835d2d712c` 已推送并回读确认；提交邮箱为GitHub noreply，增量隐私审计基线 `397f7355b1ba4eec868cfcf575b023d00327d27b` 覆盖1提交/7路径且无 finding、binary/address review。官版临时干净审计 worktree 已清理。
+
+## 2026-10-15 当前：同步最新官版已提交内容
+
+- 官版本地 main 的最新干净提交快照比 Public 上次对应快照多5个已提交提交；官版未提交文件保持原样。Public 本次起始基线 `99844508aaca03a547caa99eb0aa776075daa6d0`，起始工作树干净。同步外观 Vue 预设确认、桌宠快捷菜单、缝了么交互、网页 Discord 后台收件/通知、APP 打包依赖与包内容修订；资源广场/登录托管、自部署 Worker、无默认中继和更新通道边界保留。Public 身份与版本号未动。
+- 助手知识说明已合并共享功能更新，保留 Public Worker 指引、排除广场专属内容；知识 Owner 243项通过。全量源码审计1561文件一致、24路径差异，均属已分类的 Public 服务边界、Public 专用测试/脱敏夹具及对应说明。3个重复 MAIN-ONLY 标记文件和助手目标 APP 文案的 REPLACE 标记问题仍限制自动归一化，已人工核对后处理共享改动。
+- 验证：定向测试16文件262项、APP打包测试13项、`vue-tsc`、知识源、功能合同、关键文件格式、Service Worker语法与 `git diff --check`通过。未跑全量测试、APK/Android JVM/真机；Public改动未提交/推送，官版未提交工作保持原样。
+
+## 2026-10-15 Public 发布前核验
+
+Public 本地同步内容已按基线 `99844508aaca03a547caa99eb0aa776075daa6d0` 完成增量隐私扫描：54个路径、无 finding、无二进制项；两条测试文件地址命中已确认是示例域名和公开依赖包名。提交邮箱设置为 GitHub noreply，等待提交后复核邮箱并扫描最终提交。当前改动尚待提交和推送。

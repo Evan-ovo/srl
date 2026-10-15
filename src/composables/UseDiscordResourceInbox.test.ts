@@ -27,6 +27,15 @@ const setup = vi.hoisted(() => ({
   summary: vi.fn(),
   bindCards: vi.fn(),
   refresh: vi.fn(),
+  webRunning: false,
+  webPaused: false,
+}))
+vi.mock('../services/WebDiscordInboxSession', () => ({
+  isWebDiscordInboxRunning: () => setup.webRunning,
+  isWebDiscordInboxPaused: () => setup.webPaused,
+  webDiscordInboxSignal: () => undefined,
+  pauseWebDiscordInbox: vi.fn(),
+  registerWebInboxParticipant: () => () => undefined,
 }))
 vi.mock('../services/NativeDiscordInboxService', () => ({
   isNativeDiscordInboxRunning: () => setup.inboxMode,
@@ -103,6 +112,8 @@ function start(locked = false) {
 beforeEach(() => {
   vi.clearAllMocks()
   setup.native = false
+  setup.webRunning = false
+  setup.webPaused = false
   setup.inboxMode = false
   setup.target = { ...target }
   setup.automation.mockResolvedValue({ bindForeground: false })
@@ -134,6 +145,96 @@ afterEach(() => {
   }
 })
 describe('cloud resource coordination', () => {
+  it('keeps a failed Web cloud ACK retryable without blocking the next file or re-importing the committed one', async () => {
+    setup.webRunning = true
+    const next = { ...job, id: '22222222-2222-4222-a222-222222222222', name: 'next.json' }
+    setup.list.mockResolvedValueOnce({ jobs: [job, next], recent: [], hasMore: false })
+    const acknowledge = setup.ack.getMockImplementation()!
+    let fail = true
+    setup.ack.mockImplementation(async (id, state, ...args) => {
+      if (id === job.id && state === 'imported' && fail) {
+        fail = false
+        throw new Error('ACK offline')
+      }
+      return acknowledge(id, state, ...args)
+    })
+    const intake = start()
+    await flushPromises()
+    const first = intake.receive.mock.calls[0]![0]
+    await first.onItemComplete?.({
+      status: 'imported',
+      resource: { id: 'first', type: 'characterCard' },
+    } as ImportResult)
+    await expect(first.acknowledge()).rejects.toThrow('ACK offline')
+    await flushPromises()
+    expect(intake.receive).toHaveBeenCalledTimes(2)
+    expect(setup.download).toHaveBeenCalledTimes(2)
+    expect(
+      taskCenter.list().find((task) => task.operationId === `discord-resource-${job.id}`)?.status,
+    ).toBe('failed')
+    await taskCenter.retry(`discord-resource-${job.id}`)
+    expect(setup.download).toHaveBeenCalledTimes(2)
+    expect(intake.receive).toHaveBeenCalledTimes(2)
+  })
+  it('runs the Web download/import/binding cohort while hidden only with an explicit media session', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    try {
+      setup.summary.mockResolvedValue({
+        id: 'web-card',
+        type: 'characterCard',
+        name: '角色',
+        fileName: 'card.json',
+      })
+      const intake = start()
+      await flushPromises()
+      expect(setup.download).not.toHaveBeenCalled()
+      setup.webRunning = true
+      await intake.request()
+      await flushPromises()
+      expect(setup.download).toHaveBeenCalledOnce()
+      const batch = intake.receive.mock.calls[0]![0]
+      expect(batch.canProcess?.()).toBe(true)
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(vi.mocked(setup.download).mock.calls[0]![2].aborted).toBe(false)
+      await batch.onItemComplete?.({
+        status: 'imported',
+        resource: { id: 'web-card', type: 'characterCard' },
+      } as ImportResult)
+      await batch.acknowledge()
+      await flushPromises()
+      expect(setup.bindCards).toHaveBeenCalledOnce()
+      // bindForeground is false: explicit background mode still follows the configured binding rules.
+      expect(setup.summary).toHaveBeenCalledWith('web-card')
+      visibility.mockReturnValue('visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+      await flushPromises()
+      expect(intake.receive).toHaveBeenCalledOnce()
+      expect(setup.download).toHaveBeenCalledOnce()
+    } finally {
+      visibility.mockRestore()
+    }
+  })
+  it('retains an interrupted import and its file, and requires explicit resume before redelivery', async () => {
+    setup.webRunning = true
+    const intake = start()
+    await flushPromises()
+    const batch = intake.receive.mock.calls[0]![0]
+    setup.webRunning = false
+    setup.webPaused = true
+    window.dispatchEvent(new Event('srl:web-inbox-state'))
+    expect(batch.canProcess?.()).toBe(false)
+    await batch.onFailure?.('用户已停止导入')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await flushPromises()
+    expect(intake.receive).toHaveBeenCalledOnce()
+    expect(setup.notify).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'failed' }))
+    setup.webRunning = true
+    setup.webPaused = false
+    await intake.request()
+    expect(intake.receive).toHaveBeenCalledTimes(2)
+    expect(setup.download).toHaveBeenCalledOnce()
+    expect(intake.receive.mock.calls[1]![0].files[0]).toBe(batch.files[0])
+  })
   it('keeps the same native attempt when returning to a half-downloaded attachment', async () => {
     setup.native = true
     setup.nativeRead.mockResolvedValue({ active: true, transferredBytes: 6, totalBytes: 12 })

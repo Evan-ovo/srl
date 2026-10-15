@@ -2,6 +2,8 @@ import type { CustomCssScope } from './BrowserPreferences'
 
 export const CUSTOM_UI_VIEWS_KEY = 'srl.ui.customViews.v1'
 export const CUSTOM_UI_VIEWS_CHANGED = 'srl:custom-ui-views-changed'
+/** Cancelable request to open the host's appearance quick menu, including when Vue is off. */
+export const CUSTOM_UI_APPEARANCE_MENU_REQUEST = 'srl:appearance-quick-menu'
 
 export interface CustomUiFile {
   path: string
@@ -20,6 +22,8 @@ export interface CustomUiView {
 
 export type CustomUiViews = Partial<Record<CustomCssScope, CustomUiView>>
 export interface UiApplyOptions {
+  /** Explicit safe exit: close Vue while keeping CSS, or restore the uncustomized appearance. */
+  recovery?: 'vue' | 'default'
   assistant?: boolean
   views?: CustomUiViews
   /** 显式应用已保存的 CSS 预设；试用恢复时一并恢复原预设选择。 */
