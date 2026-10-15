@@ -20,6 +20,20 @@ export interface ResourceVersionMatchFingerprintCache {
   versions: Record<string, { signature: string; full: string; core: string }>
 }
 
+export interface ChatReadPositionCache {
+  schemaVersion: 1
+  key: string
+  stride: number
+  checkpoints: Array<{
+    byteOffset: number
+    line: number
+    floor: number
+    visible: number
+    replies: number
+    previousReply: number | null
+  }>
+}
+
 export interface ResourceListSummaryFilter {
   types?: readonly ResourceType[]
   ids?: readonly string[]
@@ -29,6 +43,9 @@ export interface ResourceStorageAdapter {
   getVersionMatchFingerprintCache?(): Promise<ResourceVersionMatchFingerprintCache | undefined>
   setVersionMatchFingerprintCache?(cache: ResourceVersionMatchFingerprintCache): Promise<void>
   clearVersionMatchFingerprintCache?(): Promise<void>
+  getChatReadPositionCache?(id: string): Promise<ChatReadPositionCache | undefined>
+  setChatReadPositionCache?(id: string, cache: ChatReadPositionCache): Promise<void>
+  deleteChatReadPositionCache?(id: string): Promise<void>
   list(): Promise<Resource[]>
   listSummaries(): Promise<ResourceSummary[]>
   listResourceListSummaries?(filter?: ResourceListSummaryFilter): Promise<ResourceListSummary[]>

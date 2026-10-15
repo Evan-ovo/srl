@@ -23,7 +23,7 @@ interface ResourceVersionsContext {
   isOrganizing: Ref<boolean>
   resources: Ref<ResourceSummary[]>
   showNotice: (message: string) => void
-  loadResources: () => Promise<void>
+  loadResources: (ids?: string[]) => Promise<void>
   refreshStorageHealth: () => Promise<void>
 }
 
@@ -190,13 +190,50 @@ export function useResourceVersions(context: ResourceVersionsContext) {
     const resource = context.organizingResource.value
     if (!resource || context.isOrganizing.value) return
     context.isOrganizing.value = true
+    let saved = false
     try {
       await resourceService.updateVersionNote(resource.id, versionId, note)
-      context.organizingResource.value = await resourceService.get(resource.id)
-      await reloadVersionState(resource.id)
-      context.showNotice(note.trim() ? '备注已保存' : '备注已清除')
+      saved = true
+      const updated = await resourceService.getSummary(versionId, versionId !== resource.id)
+      if (!updated) throw new Error('备注已保存，但对应版本已不存在，请重新打开版本页确认')
+      // A late read must not reopen a closed detail or replace another resource's state.
+      if (context.organizingResource.value !== resource) return
+      const known =
+        versionId === resource.id
+          ? resource
+          : context.organizingVersions.value
+              .flatMap((view) => view.carriers ?? [view.resource])
+              .find((item) => item.id === versionId)
+      if (!known || known.contentHash !== updated.contentHash) {
+        // A real version/content change needs the existing full detail read, not a note-only patch.
+        const current = await resourceService.get(resource.id)
+        const versions = await resourceService.listVersions(resource.id)
+        if (context.organizingResource.value !== resource) return
+        context.organizingResource.value = current
+        context.organizingVersions.value = versions
+        await context.loadResources([resource.id])
+      } else {
+        const patch = (item: Resource): Resource =>
+          item.id === versionId
+            ? { ...item, versionNote: updated.versionNote, updatedAt: updated.updatedAt }
+            : item
+        if (versionId === resource.id) context.organizingResource.value = patch(resource)
+        context.organizingVersions.value = context.organizingVersions.value.map((view) => ({
+          ...view,
+          resource: patch(view.resource),
+          ...(view.carriers ? { carriers: view.carriers.map(patch) } : {}),
+        }))
+        if (versionId === resource.id) await context.loadResources([resource.id])
+      }
+      context.showNotice(updated.versionNote?.trim() ? '备注已保存' : '备注已清除')
     } catch (error) {
-      context.showNotice(error instanceof Error ? error.message : '版本备注保存失败')
+      context.showNotice(
+        saved
+          ? '备注已保存，但显示刷新未完成，请重新打开版本页确认'
+          : error instanceof Error
+            ? error.message
+            : '版本备注保存失败',
+      )
     } finally {
       context.isOrganizing.value = false
     }

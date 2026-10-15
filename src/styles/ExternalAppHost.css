@@ -305,8 +305,8 @@
   top: max(0.5rem, calc(var(--safe-top) + 0.25rem));
   left: max(0.5rem, calc(var(--safe-left) + 0.25rem));
   display: grid;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: var(--size-touch);
+  height: var(--size-touch);
   place-items: center;
   padding: 0;
   border: 1px solid var(--button-border, var(--glass-border));
@@ -329,7 +329,7 @@
 
 .external-app-host__fullscreen-error {
   position: fixed;
-  z-index: 1;
+  z-index: 2001;
   inset: max(4.25rem, calc(var(--safe-top) + 3.5rem)) max(0.75rem, var(--safe-right)) auto
     max(0.75rem, var(--safe-left));
   margin: 0 auto;

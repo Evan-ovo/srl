@@ -4,6 +4,7 @@ import { RESOURCE_TYPE, getRelatedResourceIds, type Resource } from '../types/Re
 import { parseGreetingResource } from '../types/GreetingResource'
 import { inspectGreetingScripts, type GreetingScriptChoice } from '../utils/GreetingScriptMerge'
 import { isRecord } from '../utils/UnknownValue'
+import { hashBytes } from './HashService'
 import {
   createModifiedCharacterResource,
   readCharacterCardOverrides,
@@ -12,6 +13,15 @@ import {
 /** Coordinates the existing import/version owners; does not maintain another resource store. */
 export class GreetingResourceService {
   private saveQueue: Promise<unknown> = Promise.resolve()
+  // Keep only digests, never greeting text or files. Content changes naturally invalidate a hit.
+  private readonly contentSignatures = new Map<string, string>()
+  private rememberSignature(hash: string, signature: string): void {
+    if (!hash) return
+    this.contentSignatures.delete(hash)
+    this.contentSignatures.set(hash, signature)
+    if (this.contentSignatures.size > 512)
+      this.contentSignatures.delete(this.contentSignatures.keys().next().value!)
+  }
   private readonly savedListeners = new Set<() => void>()
   onSaved(listener: () => void): () => void {
     this.savedListeners.add(listener)
@@ -37,27 +47,40 @@ export class GreetingResourceService {
   private async saveOnce(file: File): Promise<Resource> {
     const document = parseGreetingResource(JSON.parse(await file.text()))
     const content = (value: typeof document) =>
-      JSON.stringify([value.first_mes, value.alternate_greetings, value.companion_scripts])
-    const signature = content(document)
-    const candidates = (await this.resources.listSummaries()).filter(
-      (item) => item.type === RESOURCE_TYPE.GREETING,
-    )
+      hashBytes(
+        new TextEncoder().encode(
+          JSON.stringify([value.first_mes, value.alternate_greetings, value.companion_scripts]),
+        ),
+      )
+    const signature = await content(document)
+    const candidates = await this.resources.listResourceListSummaries({
+      types: [RESOURCE_TYPE.GREETING],
+    })
     for (const candidate of candidates) {
+      const cached = candidate.contentHash
+        ? this.contentSignatures.get(candidate.contentHash)
+        : undefined
+      if (cached && cached !== signature) continue
       const existing = await this.resources.get(candidate.id)
       if (!existing) continue
+      if (cached === signature && existing.contentHash === candidate.contentHash)
+        return this.saved(existing)
       let value: typeof document
       try {
         value = parseGreetingResource(JSON.parse(await existing.originalBlob.text()))
       } catch {
         continue
       }
-      if (content(value) === signature) return this.saved(existing)
+      const existingSignature = await content(value)
+      this.rememberSignature(existing.contentHash, existingSignature)
+      if (existingSignature === signature) return this.saved(existing)
     }
     const parsed = await new JsonResourceParser().parse(file)
     if (parsed.type !== RESOURCE_TYPE.GREETING) throw new Error('请选择开场白资源文件')
     const result = await this.resources.importPreparedFile(file, parsed)
     if (result.status === 'failed' || result.status === 'versionCandidate')
       throw new Error(result.status === 'failed' ? result.message : '开场白保存失败')
+    this.rememberSignature(result.resource.contentHash, signature)
     return this.saved(result.resource)
   }
 

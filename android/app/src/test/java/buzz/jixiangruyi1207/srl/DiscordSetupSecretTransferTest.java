@@ -5,7 +5,7 @@ import org.junit.Test;
 
 public class DiscordSetupSecretTransferTest {
     @Test public void refusesInvalidTransferKeysBeforeAccessingAndroidEncoding() {
-        String token = "TEST_DISCORD_TOKEN_PLACEHOLDER";
+        String token = "discord-test-secret-value";
         assertThrows(IllegalArgumentException.class, () -> DiscordSetupSecretTransfer.seal(token, null));
         assertThrows(IllegalArgumentException.class, () -> DiscordSetupSecretTransfer.seal(token, new String(new char[1025])));
     }

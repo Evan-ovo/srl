@@ -481,13 +481,12 @@ function readOrderGroups(preset: Record<string, unknown>): OrderGroup[] {
 }
 
 /**
- * 预设通常带多组按 character_id 区分的 prompt_order，内容几乎总是一致；
- * 取条目最多的一组作为展示与装配基准。
+ * 酒馆聊天补全使用 100001 全局组，旧组即使更长也不是当前顺序。
+ * 不带全局组的旧文件沿用首个有效组；不能仅凭条目数量猜测当前角色。
  */
-function dominantOrder(preset: Record<string, unknown>): Record<string, unknown>[] {
+function readPresetOrderGroup(preset: Record<string, unknown>): OrderGroup | undefined {
   const groups = readOrderGroups(preset)
-  if (!groups.length) return []
-  return groups.reduce((best, item) => (item.order.length > best.order.length ? item : best)).order
+  return groups.find(({ group }) => String(group.character_id) === '100001') ?? groups[0]
 }
 
 function segmentFromPrompt(
@@ -511,27 +510,39 @@ function segmentFromPrompt(
   }
 }
 
-/** 按 prompt_order 顺序列出预设条目，孤儿条目（不在 order 中）附在末尾。 */
-export function listPresetSegments(preset: Record<string, unknown>): PresetSegmentView[] {
+/** 详情与缝合共用顺序/启停解析，原记录只读；未排序条目附在末尾。 */
+export function listPresetPromptEntries(
+  preset: Record<string, unknown>,
+): { prompt: Record<string, unknown>; enabled: boolean; inOrder: boolean }[] {
   const prompts = readPrompts(preset)
+  const group = readPresetOrderGroup(preset)
+  // 没有排序表的旧格式仍展示原数组及其启停状态，保留无 identifier 的条目。
+  if (!group)
+    return prompts.map((prompt) => ({ prompt, enabled: prompt.enabled !== false, inOrder: false }))
   const byIdentifier = new Map(prompts.map((prompt) => [readString(prompt.identifier), prompt]))
-  const order = dominantOrder(preset)
-  const segments: PresetSegmentView[] = []
+  const entries: ReturnType<typeof listPresetPromptEntries> = []
   const seen = new Set<string>()
-  for (const entry of order) {
+  for (const entry of group.order) {
     const identifier = readString(entry.identifier)
     const prompt = byIdentifier.get(identifier)
-    if (!prompt || seen.has(identifier)) continue
+    if (!identifier || !prompt || seen.has(identifier)) continue
     seen.add(identifier)
-    segments.push(segmentFromPrompt(prompt, entry.enabled !== false, true))
+    entries.push({ prompt, enabled: entry.enabled !== false, inOrder: true })
   }
   for (const prompt of prompts) {
     const identifier = readString(prompt.identifier)
-    if (seen.has(identifier)) continue
-    seen.add(identifier)
-    segments.push(segmentFromPrompt(prompt, false, false))
+    if (identifier && seen.has(identifier)) continue
+    if (identifier) seen.add(identifier)
+    entries.push({ prompt, enabled: false, inOrder: false })
   }
-  return segments
+  return entries
+}
+
+/** 按 prompt_order 顺序列出预设条目，孤儿条目（不在 order 中）附在末尾。 */
+export function listPresetSegments(preset: Record<string, unknown>): PresetSegmentView[] {
+  return listPresetPromptEntries(preset).map(({ prompt, enabled, inOrder }) =>
+    segmentFromPrompt(prompt, inOrder && enabled, inOrder),
+  )
 }
 
 /** 预设内嵌整组正则（extensions.regex_scripts）中的可缝条目。 */
@@ -707,8 +718,10 @@ export function stitchPreset(
     })
   }
 
-  const dominantIds = new Set(
-    dominantOrder(base).map((orderEntry) => readString(orderEntry.identifier)),
+  const baseOrderIds = new Set(
+    (readPresetOrderGroup(base)?.order ?? []).map((orderEntry) =>
+      readString(orderEntry.identifier),
+    ),
   )
   const groups = readOrderGroups(preset)
   const applyOrder = (group: OrderGroup): void => {
@@ -726,7 +739,7 @@ export function stitchPreset(
     })
     // 该组独有、不在装配基准里的条目保留在末尾，不丢失其他 character 组的私有顺序。
     const extras = group.order
-      .filter((orderEntry) => !dominantIds.has(readString(orderEntry.identifier)))
+      .filter((orderEntry) => !baseOrderIds.has(readString(orderEntry.identifier)))
       .map((orderEntry) => cloneJson(orderEntry))
     group.group.order = [...rebuilt, ...extras]
   }

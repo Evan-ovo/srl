@@ -362,6 +362,55 @@ describe('mode loading and recalled context', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
+  it('loads requested read-only references in appearance without enabling unrelated tools', async () => {
+    const current = { ...request, canUseNetwork: true, canSearchWeb: true }
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...result('', 'tool_calls'),
+        toolCalls: [
+          {
+            id: 'reference-mode',
+            name: 'select_mode',
+            arguments: JSON.stringify({ mode: 'appearance', capability: 'source' }),
+          },
+        ],
+      })
+      .mockResolvedValueOnce(result('先查公开样式资料'))
+    await new ProductAssistantService({ completeWithUsage }).reply(
+      current,
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute: vi.fn() },
+    )
+    const names = completeWithUsage.mock.calls[1]![2].tools.map(
+      (tool: { name: string }) => tool.name,
+    )
+    expect(names).toContain('update_css')
+    expect(names).toContain('read_webpage')
+    expect(names).not.toContain('browser')
+    expect(names).not.toContain('run_page_script')
+    const selected = getAssistantRequestTools({
+      ...request,
+      referenceResources: [{ id: 'theme-reference', name: '主题参考', contentHash: 'abc' }],
+      capabilities: ['history', 'source'],
+      canUseNetwork: false,
+      canCaptureCurrent: true,
+      canCaptureUi: false,
+    })
+    expect(selected.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        'search_conversation',
+        'read_conversation',
+        'search_selected_resources',
+        'read_resource_excerpt',
+      ]),
+    )
+    expect(selected.map(({ name }) => name)).not.toContain('read_webpage')
+    expect(selected.map(({ name }) => name)).not.toContain('capture_ui')
+    expect(selected.map(({ name }) => name)).not.toContain('capture_current_ui')
+  })
+
   it('does not revive excluded or old browser-task instructions in the appearance prompt', () => {
     const current = {
       ...request,
@@ -769,6 +818,7 @@ describe('mode loading and recalled context', () => {
         for (const name of ['read_webpage', 'search_web']) expect(names.includes(name)).toBe(false)
         const currentCapture = tools.find((tool) => tool.name === 'capture_current_ui')
         if (enabled) {
+          expect(currentCapture?.description).toContain('仅用户明确要求')
           expect(currentCapture?.description).toContain('遮蔽正文/图片/输入')
           if (mode === 'appearance')
             expect(tools.find((tool) => tool.name === 'capture_ui')?.description).toContain('本机')
@@ -818,6 +868,38 @@ describe('mode loading and recalled context', () => {
     expect(names).not.toContain('capture_ui')
     expect(names).not.toContain('capture_current_ui')
     expect(names).toContain('get_navigation_targets')
+  })
+  it('passes a live screenshot revocation to the CSS owner before writing', async () => {
+    const current = { ...request, globalCss: '', canCaptureUi: true }
+    const completeWithUsage = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        current.canCaptureUi = false
+        return {
+          ...result('', 'tool_calls'),
+          toolCalls: [
+            { id: 'read', name: 'read_global_css', arguments: '{}' },
+            {
+              id: 'write',
+              name: 'update_global_css',
+              arguments: JSON.stringify({ css: '.button{color:purple}', description: '修改颜色' }),
+            },
+          ],
+        }
+      })
+      .mockResolvedValueOnce(result('已修改，未截图'))
+    const execute = vi.fn().mockResolvedValue({ ok: true, text: '已修改' })
+    await new ProductAssistantService({ completeWithUsage }).reply(
+      { ...current },
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute },
+    )
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'global-style' }),
+      expect.objectContaining({ canCaptureUi: false, canCaptureCurrent: false }),
+      expect.anything(),
+    )
   })
   it('exposes page scripts only after explicit permission is enabled', () => {
     expect(getAssistantRequestTools(request).map((tool) => tool.name)).not.toContain(
@@ -1063,7 +1145,7 @@ describe('mode loading and recalled context', () => {
       buildAssistantMessages({ ...request, mode: 'appearance' })[0]!.content,
     )
     const creation = String(buildAssistantMessages({ ...request, mode: 'creation' })[0]!.content)
-    expect(appearance).toContain('每次修改前都重新读取对应范围')
+    expect(appearance).toContain('修改前重读对应范围并保留无关规则')
     expect(appearance).not.toContain('set_app_plan')
     expect(creation).toContain('set_app_plan')
     expect(creation).not.toContain('全局动画')
@@ -1300,6 +1382,79 @@ describe('ProductAssistantService', () => {
     })
     expect(JSON.stringify(hidden)).not.toContain(reference.json)
   })
+  it('keeps references and images within the effective task context', () => {
+    const messages = buildAssistantMessages({
+      ...request,
+      contextStart: 1,
+      history: [
+        {
+          role: 'user',
+          text: '旧任务',
+          designReferences: [{ id: 'old', name: 'old.json', json: 'OLD_THEME_DATA' }],
+        },
+        {
+          role: 'user',
+          text: '旧调度',
+          status: 'discord-setup-internal',
+          images: [{ id: 'internal', name: '旧图', dataUrl: 'INTERNAL_IMAGE' }],
+          designReferences: [{ id: 'internal', name: 'internal.json', json: 'INTERNAL_THEME' }],
+        },
+        {
+          role: 'user',
+          text: '新任务',
+          designReferences: [{ id: 'new', name: 'new.json', json: 'CURRENT_THEME' }],
+        },
+      ],
+    })
+    expect(JSON.stringify(messages)).not.toMatch(/OLD_THEME_DATA|INTERNAL_IMAGE|INTERNAL_THEME/)
+    expect(JSON.stringify(messages)).toContain('CURRENT_THEME')
+  })
+  it.each(['browser', 'configure_discord_browser'])(
+    'lets %s clear a public field through its existing owner',
+    async (name) => {
+      const current = {
+        ...request,
+        mode: 'features' as const,
+        capabilities: ['browser', 'discord'] as const,
+        canUseBrowser: true,
+        canConfigureDiscordBrowser: true,
+      }
+      const execute = vi.fn().mockResolvedValue({ ok: true, data: { filled: true } })
+      const completeWithUsage = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ...result('', 'tool_calls'),
+          toolCalls: [
+            {
+              id: 'clear',
+              name,
+              arguments: JSON.stringify({
+                operation: 'fill',
+                value: '',
+                target: '1',
+                document_id: '1',
+                ...(name === 'browser' ? { tab_id: '1' } : {}),
+              }),
+            },
+          ],
+        })
+        .mockResolvedValueOnce(result('输入已清空，接着核验'))
+      await new ProductAssistantService({ completeWithUsage }).reply(
+        current,
+        DEFAULT_MAIN_API_CONFIG,
+        signal(),
+        { getContext: () => current, execute },
+      )
+      expect(execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: name === 'browser' ? 'browser' : 'discord-setup',
+          args: expect.objectContaining({ value: '' }),
+        }),
+        expect.anything(),
+        expect.anything(),
+      )
+    },
+  )
   it('separates appearance, feature and creation tools while auto starts with common discovery tools', () => {
     const names = (mode: 'auto' | 'appearance' | 'features' | 'creation') =>
       assistantToolsForMode(mode).map((tool) => tool.name)
@@ -2524,17 +2679,48 @@ describe('ProductAssistantService', () => {
   })
   it('allows global root selectors while keeping local selectors scoped', () => {
     expect(validateAssistantCss(':root{--brand:blue}', { global: true })).toContain(':root')
-    expect(() => validateAssistantCss(':root{--brand:blue}')).toThrow()
+    expect(() => validateAssistantCss(':root{--brand:blue}')).toThrow('请写入全局 CSS')
+  })
+  it('accepts a complete theme with existing scopes, global tokens and login form appearance', () => {
+    const css =
+      ':root{--color-accent:#EB8FAF;--boot-background:#FFF8F3;--recovery-background:#FFFCFE}body,#app{color:#523C4A}:root[data-theme="dark"]{--color-surface:#211C2C}@scope (.reader-host){@media(min-width:320px){:scope .toolbar{background:#B9A4EA}}}.auth-form input,.login-dialog button{border-radius:12px}'
+    expect(validateAssistantCss(css, { global: true })).toBe(css)
+    expect(validateAssistantCss('@scope (.panel){:scope{color:purple}}')).toContain('@scope')
+    expect(validateAssistantCss('.auth-form input{color:purple}')).toContain('.auth-form')
+    expect(() =>
+      validateAssistantCss('#srl-appearance-safe-layer{display:none}', { global: true }),
+    ).toThrow('恢复保护层')
+    expect(() =>
+      validateAssistantCss('#srl-custom-ui-style{display:none}', { global: true }),
+    ).toThrow('样式注入节点')
+  })
+  it('accepts browser CSS at-rules and ordinary escapes without allowing escaped executable CSS', () => {
+    for (const css of [
+      '@property --accent {syntax:"<color>";inherits:true;initial-value:purple}',
+      '@font-face{font-family:Theme;src:url("https://example.com/theme.woff2")}',
+      '@namespace svg url(http://www.w3.org/2000/svg);',
+      '@starting-style{.card{opacity:0}}',
+      '.icon::before{content:"\\e001"}.foo\\:bar{color:purple}',
+    ])
+      expect(validateAssistantCss(css, { global: true })).toBe(css)
+    for (const css of [
+      '.x{background:url("java\\73 cript:alert(1)")}',
+      '.x{width:expre\\73sion(alert(1))}',
+      '.x{beha\\76ior:url(x.htc)}',
+      '@import url("java\\73 cript:alert(1)");',
+      '#srl-appearance-safe-\\6c ayer{display:none}',
+    ])
+      expect(() => validateAssistantCss(css, { global: true })).toThrow()
+    expect(() => validateAssistantCss('b\\6f dy{color:red}')).toThrow('请写入全局 CSS')
   })
   it.each([
     '.x {color:',
     'body{color:red}',
     ':root{--x:1}',
-    '.auth-portal{display:none}',
     '#srl-appearance-safe-layer{display:none}',
-    '@scope(body){.x{color:red}}',
+    '@import url(javascript:alert(1));',
     '.x{background:url(javascript:alert(1))}',
-    '.x{background:\\75rl(x)}',
+    '.x{background:\\75rl(javascript:alert(1))}',
     '',
   ])('rejects unsafe or invalid CSS %s', (css) => expect(() => validateAssistantCss(css)).toThrow())
   it('reads supported references and rejects an entire invalid attachment set', async () => {
@@ -2774,6 +2960,52 @@ describe('online evidence transport', () => {
     expect(completeWithUsage).toHaveBeenCalledTimes(3)
     expect(submittedTools[2]).toContain('search_conversation')
   })
+  it('keeps source tools available after a local argument rejection and permits correction', async () => {
+    const current = {
+      ...request,
+      mode: 'features' as const,
+      capabilities: ['source'] as const,
+      canUseNetwork: true,
+    }
+    const execute = vi.fn().mockResolvedValue({
+      ok: true,
+      data: { text: 'REAL_SOURCE', path: 'src/entry.ts', ref: 'main' },
+    })
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce(
+        readRound(
+          readCall('bad-path', {
+            url: 'https://github.com/example/public-repo',
+            path: '../entry.ts',
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        readRound(
+          readCall('corrected', {
+            url: 'https://github.com/example/public-repo',
+            path: 'src/entry.ts',
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(result('读取完成'))
+    await new ProductAssistantService({ completeWithUsage }).reply(
+      current,
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute },
+    )
+    expect(execute).toHaveBeenCalledOnce()
+    expect(
+      completeWithUsage.mock.calls[1]![2].tools.map((tool: { name: string }) => tool.name),
+    ).toContain('read_webpage')
+    const denied = completeWithUsage.mock.lastCall![0].find(
+      (message: { toolCallId?: string }) => message.toolCallId === 'bad-path',
+    )
+    expect(JSON.parse(denied.content)).toMatchObject({ ok: false, requestAttempted: false })
+    expect(JSON.stringify(completeWithUsage.mock.lastCall![0])).toContain('REAL_SOURCE')
+  })
   it('stops failed GitHub requests while keeping other diagnosis tools available', async () => {
     const current = {
       capabilities: ['source'] as const,
@@ -2849,6 +3081,7 @@ describe('online evidence transport', () => {
     const toolInstructions = JSON.stringify(completeWithUsage.mock.calls[2]![2].tools)
     expect(toolInstructions).not.toContain('宿主每轮给准确工具计数')
     expect(toolInstructions).not.toContain('最多 3 次工具调用')
+    expect(toolInstructions).not.toContain('工具次数已用完')
     expect(completeWithUsage.mock.calls[3]![2].tools).toEqual([])
     expect(reply.toolBudgetExhausted).toBe(true)
   })
@@ -2948,6 +3181,61 @@ describe('online evidence transport', () => {
       { getContext: () => current, execute },
     )
     expect(execute).toHaveBeenCalledTimes(5)
+  })
+  it('keeps CSS correction available after two validation rejections that never reached the owner', async () => {
+    const current = { ...request, globalCss: ':root{--accent:blue}' }
+    const css =
+      ':root{--accent:#EB8FAF;--boot-color:#523C4A}@scope (.reader-host){.toolbar{color:purple}}.auth-form input{border-radius:12px}'
+    const toolCall = (id: string, name: string, args: unknown) => ({
+      ...result('', 'tool_calls'),
+      toolCalls: [{ id, name, arguments: JSON.stringify(args) }],
+    })
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce(toolCall('read', 'read_global_css', {}))
+      .mockResolvedValueOnce(
+        toolCall('invalid-1', 'update_global_css', {
+          css: '.toolbar{color:',
+          description: '修正主题',
+        }),
+      )
+      .mockResolvedValueOnce(
+        toolCall('invalid-2', 'update_global_css', {
+          css: '#srl-appearance-safe-layer{display:none}',
+          description: '修正主题',
+        }),
+      )
+      .mockResolvedValueOnce(
+        toolCall('corrected', 'update_global_css', { css, description: '应用修正后的主题' }),
+      )
+      .mockResolvedValueOnce(result('主题已应用'))
+    const execute = vi.fn().mockResolvedValue({ text: '已应用全局样式' })
+    await new ProductAssistantService({ completeWithUsage }).reply(
+      current,
+      DEFAULT_MAIN_API_CONFIG,
+      signal(),
+      { getContext: () => current, execute },
+    )
+    expect(execute).toHaveBeenCalledOnce()
+    expect(execute).toHaveBeenCalledWith(
+      { action: 'global-style', css, answer: '应用修正后的主题' },
+      expect.any(Object),
+      expect.any(AbortSignal),
+    )
+    const correctionRequest = completeWithUsage.mock.calls[3]!
+    expect(correctionRequest[2].tools.map((tool: { name: string }) => tool.name)).toContain(
+      'update_global_css',
+    )
+    expect(String(correctionRequest[0][0].content)).not.toContain('美化写入已连续失败两次')
+    const toolReplies = correctionRequest[0].filter(
+      (message: { role: string }) => message.role === 'tool',
+    )
+    expect(
+      toolReplies.filter((message: { toolError?: boolean }) => message.toolError),
+    ).toHaveLength(2)
+    for (const message of toolReplies.filter((item: { toolError?: boolean }) => item.toolError)) {
+      expect(JSON.parse(message.content)).toMatchObject({ ok: false, writeAttempted: false })
+    }
   })
   it('stops stacking failed CSS writes but keeps inspection available for locating the problem', async () => {
     const current = { ...request, globalCss: ':root{--accent:blue}' }

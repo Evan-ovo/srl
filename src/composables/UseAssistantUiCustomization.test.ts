@@ -191,6 +191,44 @@ describe('Vue工具适配现有源码Owner', () => {
       ),
     ).rejects.toThrow('Vue草稿已变化')
   })
+  it.each(['write', 'preview'] as const)(
+    '停止%s时不等待未完成编译，迟到结果不覆盖草稿或打开预览',
+    async (operation) => {
+      const ctx = setup({ library: createEditableUiView('资源库') })
+      const read = await ctx.read()
+      const previous = JSON.stringify(ctx.draft.value)
+      let finish!: (source: string) => void
+      vi.mocked(compileCustomUiView).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      const controller = new AbortController()
+      const pending = ctx.tools.execute(
+        {
+          action: 'vue',
+          operation,
+          scope: 'library',
+          revision: read.data!.revision as string,
+          ...(operation === 'write'
+            ? { path: 'View.vue', code: '<template>新内容</template>' }
+            : {}),
+        },
+        ctx.request(),
+        controller.signal,
+      )
+      const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      controller.abort()
+      await rejected
+      finish('late-compiled-vue')
+      await Promise.resolve()
+      expect(JSON.stringify(ctx.draft.value)).toBe(previous)
+      expect(ctx.tools.preview.value).toBeUndefined()
+      expect(ctx.apply).not.toHaveBeenCalled()
+    },
+  )
   it('关闭预览取消等待，迟到ready被丢弃；重新打开才继续', async () => {
     const ctx = setup({ library: createEditableUiView('资源库') })
     const read = await ctx.read()

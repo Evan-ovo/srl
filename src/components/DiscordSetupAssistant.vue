@@ -3,7 +3,11 @@ import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import DiscordSetupHelp from './DiscordSetupHelp.vue'
 import { discordSetupService } from '../core/AppContainer'
 import { hasDiscordSetupBrowser } from '../services/AssistantBrowserRuntime'
-import { setupStep, type DiscordSetupState } from '../services/DiscordSetupWorkflow'
+import {
+  setupStep,
+  setupContinueLabel,
+  type DiscordSetupState,
+} from '../services/DiscordSetupWorkflow'
 const available = hasDiscordSetupBrowser()
 const state = ref<DiscordSetupState>()
 const menuOpen = ref(false)
@@ -42,7 +46,7 @@ onBeforeUnmount(() => window.removeEventListener('srl:discord-setup-changed', re
   <section v-if="available" class="discord-setup-assistant" aria-label="蒜惹菈网页协助">
     <div class="discord-setup-assistant__row">
       <div class="discord-setup-assistant__copy">
-        <strong>蒜惹菈网页协助</strong>
+        <strong>{{ state?.step === 'diagnose' ? '蒜惹菈配置排查' : '蒜惹菈网页协助' }}</strong>
         <p>
           {{
             active && state
@@ -60,7 +64,9 @@ onBeforeUnmount(() => window.removeEventListener('srl:discord-setup-changed', re
           :disabled="busy"
           @click="continueSetup"
         >
-          <span>{{ busy ? '处理中' : active ? '继续' : '开始协助' }}</span>
+          <span>{{
+            busy ? '处理中' : active && state ? setupContinueLabel(state.step) : '开始协助'
+          }}</span>
         </button>
       </div>
     </div>

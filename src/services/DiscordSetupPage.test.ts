@@ -79,6 +79,30 @@ describe('bundled external-page executor', () => {
     })
     f.dom.window.close()
   })
+  it('dispatches Discord public-page keys while rejecting a password target', () => {
+    const f = page(
+      '<label for="name">Database name</label><input id="name">',
+      'https://dash.cloudflare.com/account/d1',
+    )
+    const controls = f.run('inspect').controls as Array<{ target: string; label: string }>
+    const name = controls.find((control) => control.label === 'Database name')!
+    expect(f.run('press', { ...name, key: 'Escape', nativeKey: true })).toMatchObject({
+      ok: true,
+      keyDispatch: true,
+    })
+    f.document.body.insertAdjacentHTML(
+      'beforeend',
+      '<label for="private">Password</label><input id="private" type="password">',
+    )
+    const password = (
+      f.run('inspect', { general: true }).controls as Array<{ target: string; label: string }>
+    ).find((control) => control.label === 'Password')!
+    expect(password).toBeDefined()
+    expect(f.run('press', { ...password, key: 'Enter', nativeKey: true })).toMatchObject({
+      ok: false,
+    })
+    f.dom.window.close()
+  })
   it('fills a normal general text area while retaining the Discord Wrangler-only path', () => {
     const f = page(
       '<label for="description">介绍</label><textarea id="description" name="content"></textarea>',
@@ -89,6 +113,55 @@ describe('bundled external-page executor', () => {
     expect(f.run('fill', { general: true, ...control, value: 'ordinary text' })).toMatchObject({
       ok: true,
       filled: true,
+    })
+    f.dom.window.close()
+  })
+  it('clears ordinary fields and selects native options by value or label without guessing duplicates', () => {
+    const f = page(
+      '<label for="name">名称</label><input id="name" value="wrong"><label for="region">地区</label><select id="region"><option value="">请选择</option><option value="apac">亚洲</option><option value="eu">欧洲</option><optgroup label="不可用" disabled><option value="off">禁用地区</option></optgroup><option value="duplicate">重复一</option><option value="duplicate">重复二</option></select>',
+      'https://example.org/form',
+    )
+    const controls = f.run('inspect', { general: true }).controls as Array<{
+      target: string
+      label: string
+    }>
+    const input = controls.find(({ label }) => label === '名称')!
+    const region = controls.find(({ label }) => label === '地区')!
+    expect(f.run('fill', { general: true, ...input, value: '' })).toMatchObject({
+      ok: true,
+      filled: true,
+    })
+    expect(f.document.querySelector('input')!.value).toBe('')
+    expect(f.run('select', { general: true, ...region, value: '亚洲' })).toMatchObject({
+      ok: true,
+      filled: true,
+    })
+    expect(f.document.querySelector('select')!.value).toBe('apac')
+    expect(f.run('select', { general: true, ...region, value: '' })).toMatchObject({
+      ok: true,
+      filled: true,
+    })
+    for (const value of ['off', 'duplicate', 'not-an-option'])
+      expect(f.run('select', { general: true, ...region, value })).toMatchObject({ ok: false })
+    expect(f.document.querySelector('select')!.value).toBe('')
+    f.dom.window.close()
+  })
+  it('does not read a sensitive select value when asked to select an option', () => {
+    const f = page(
+      '<label for="token">API Token</label><select id="token"><option value="private">已保存</option></select>',
+      'https://example.org/form',
+    )
+    const control = (
+      f.run('inspect', { general: true }).controls as Array<{ target: string; label: string }>
+    ).find(({ label }) => label === 'API Token')!
+    Object.defineProperty(f.document.querySelector('option')!, 'value', {
+      get() {
+        throw new Error('secret read')
+      },
+    })
+    expect(control).toBeDefined()
+    expect(f.run('select', { general: true, ...control, value: 'private' })).toMatchObject({
+      ok: false,
     })
     f.dom.window.close()
   })

@@ -36,6 +36,66 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 describe('current-view screenshot', () => {
+  it('does not substitute an open APP or chat for the requested feature desktop', async () => {
+    document.body.innerHTML =
+      '<main class="feature-hub" data-feature-page="assistant"><p>聊天页</p></main>'
+    await expect(
+      captureAssistantPage(
+        { value: 'features', title: '功能桌面', selector: '.feature-hub', hint: '' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('当前没有打开')
+    expect(render).not.toHaveBeenCalled()
+  })
+  it('selects the visible instance of the requested page instead of a retained hidden one', async () => {
+    document.body.innerHTML =
+      '<div style="display:none"><main class="library">OLD</main></div><main class="library">ACTUAL</main>'
+    render.mockImplementation(async (node: HTMLElement) => {
+      expect(node.textContent).toBe('ACTUAL')
+      return 'data:image/jpeg;base64,SHOT'
+    })
+    await captureAssistantPage(scope, new AbortController().signal)
+    expect(render).toHaveBeenCalledOnce()
+  })
+  it('captures the current frame without waiting for unrelated pending document fonts', async () => {
+    document.body.innerHTML = '<main class="library">当前页面</main>'
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: { ready: new Promise(() => {}) },
+    })
+    await expect(captureAssistantPage(scope, new AbortController().signal)).resolves.toMatchObject({
+      dataUrl: 'data:image/jpeg;base64,SHOT',
+    })
+    expect(render).toHaveBeenCalledOnce()
+  })
+  it('cancels a stalled renderer, removes its clone and consumes a late completion', async () => {
+    document.body.innerHTML = '<main class="library">当前页面</main>'
+    let resolve!: (value: string) => void
+    render.mockImplementationOnce(
+      () =>
+        new Promise<string>((done) => {
+          resolve = done
+        }),
+    )
+    const controller = new AbortController()
+    const capture = captureAssistantPage(scope, controller.signal, true)
+    const rejected = expect(capture).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(render).toHaveBeenCalledOnce())
+    const [node, options] = render.mock.calls[0]!
+    expect(node.isConnected).toBe(true)
+    expect(options.fetchRequestInit).toMatchObject({
+      signal: controller.signal,
+      credentials: 'omit',
+    })
+    controller.abort()
+    await rejected
+    expect(node.isConnected).toBe(false)
+    expect(() => options.imagePlaceholder).toThrow()
+    resolve('data:image/jpeg;base64,LATE')
+    await Promise.resolve()
+    expect(document.querySelectorAll('.library')).toHaveLength(1)
+    expect(document.querySelector('.library')!.textContent).toBe('当前页面')
+  })
   it('identifies the full assistant instead of falling back to the hidden home', () => {
     document.body.innerHTML =
       '<main class="library" style="display:none"></main><main class="feature-hub" data-feature-page="assistant"><span data-official-app-ready="assistant"></span><div class="product-assistant"></div></main>'

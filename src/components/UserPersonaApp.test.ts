@@ -27,7 +27,11 @@ const mocks = vi.hoisted(() => ({
     cacheAvatarFile: vi.fn(),
     cacheAvatarFromUrl: vi.fn(),
   },
-  resourceService: { importFiles: vi.fn() },
+  resourceService: {
+    importFiles: vi.fn(),
+    listResourceListSummaries: vi.fn(),
+    updateDetails: vi.fn(),
+  },
   recycleBinService: {
     moveToRecycleBin: vi.fn(),
     movePersonaVersionToRecycleBin: vi.fn(),
@@ -53,6 +57,7 @@ function render(resources: ResourceSummary[] = []) {
     global: {
       stubs: {
         TavernBridgeCenter: {
+          name: 'TavernBridgeCenter',
           template: '<button class="transfer-back" @click="$emit(\'back\')">返回人设</button>',
           emits: ['back', 'import-files'],
         },
@@ -122,6 +127,7 @@ async function openSecond(wrapper: VueWrapper) {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.resourceService.listResourceListSummaries.mockReset().mockResolvedValue([])
   mocks.templates = []
   mocks.chooseAction.mockImplementation(async (options: { title: string }) =>
     options.title === '资源文件版本' ? 'confirm' : 'cancel',
@@ -825,6 +831,120 @@ describe('人设列表和单页编辑', () => {
     await flushPromises()
     expect(w.get('.persona-app').isVisible()).toBe(true)
     expect(w.emitted('back')).toBeUndefined()
+  })
+  it.each(['other-resource', 'persona-without-bindings'])(
+    'does not scan the catalogue for transferred %s',
+    async (kind) => {
+      const resource =
+        kind === 'other-resource'
+          ? summary('card', RESOURCE_TYPE.CHARACTER_CARD)
+          : persona(multiBackup)
+      mocks.resourceService.importFiles.mockResolvedValue([{ status: 'imported', resource }])
+      const file = new File(['{}'], 'transfer.json')
+      Object.defineProperty(file, 'text', { value: vi.fn(async () => JSON.stringify(multiBackup)) })
+      const complete = vi.fn()
+      const w = render()
+      await click(w, '酒馆互传')
+      w.findComponent({ name: 'TavernBridgeCenter' }).vm.$emit('import-files', [file], complete)
+      await flushPromises()
+
+      expect(mocks.resourceService.listResourceListSummaries).not.toHaveBeenCalled()
+      expect(mocks.resourceService.updateDetails).not.toHaveBeenCalled()
+      expect(w.emitted('library-changed')).toHaveLength(1)
+      expect(w.text()).toContain('已接收 1 项')
+      expect(complete).toHaveBeenCalledOnce()
+    },
+  )
+  it('shares a fresh catalogue for bound personas within a transfer while preserving manual links and catalogue order', async () => {
+    const backup: SillyTavernPersonaBackup = {
+      personas: { 'a.png': '甲' },
+      persona_descriptions: {
+        'a.png': {
+          srl_persona_character_bindings: {
+            'saved.png': { avatar: 'saved.png', name: '角色', hash: 'a'.repeat(64) },
+          },
+        },
+      },
+    }
+    const files = ['first', 'second'].map((name) => {
+      const file = new File(['{}'], `${name}.json`)
+      Object.defineProperty(file, 'text', { value: async () => JSON.stringify(backup) })
+      return file
+    })
+    mocks.resourceService.importFiles.mockResolvedValue([
+      { status: 'imported', resource: { ...persona(backup), id: 'first' } },
+      { status: 'duplicate', resource: { ...persona(backup), id: 'second' } },
+    ])
+    mocks.resourceService.listResourceListSummaries
+      .mockResolvedValueOnce([
+        ...Array.from({ length: 10000 }, (_, i) => summary(`unrelated-${i}`, RESOURCE_TYPE.OTHER)),
+        { ...summary('card-2', RESOURCE_TYPE.CHARACTER_CARD), contentHash: 'a'.repeat(64) },
+        { ...summary('wrong-type', RESOURCE_TYPE.OTHER), contentHash: 'a'.repeat(64) },
+        { ...summary('card-1', RESOURCE_TYPE.CHARACTER_CARD), contentHash: 'a'.repeat(64) },
+      ])
+      .mockResolvedValueOnce([
+        { ...summary('new-card', RESOURCE_TYPE.CHARACTER_CARD), contentHash: 'a'.repeat(64) },
+      ])
+    const w = render()
+    await click(w, '酒馆互传')
+    w.findComponent({ name: 'TavernBridgeCenter' }).vm.$emit('import-files', files)
+    await flushPromises()
+    expect(mocks.resourceService.listResourceListSummaries).toHaveBeenCalledOnce()
+    expect(mocks.resourceService.updateDetails).toHaveBeenCalledTimes(2)
+    for (const [, details] of mocks.resourceService.updateDetails.mock.calls) {
+      expect(details.relatedResourceIds).toEqual(['manual-link', 'card-2', 'card-1'])
+    }
+    expect(w.text()).toContain('已接收 1 项，跳过重复 1 项')
+
+    await click(w, '酒馆互传')
+    w.findComponent({ name: 'TavernBridgeCenter' }).vm.$emit('import-files', files)
+    await flushPromises()
+    expect(mocks.resourceService.listResourceListSummaries).toHaveBeenCalledTimes(2)
+    expect(mocks.resourceService.updateDetails).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'second' }),
+      expect.objectContaining({ relatedResourceIds: ['manual-link', 'new-card'] }),
+    )
+  })
+
+  it('reports binding read failures after a successful import without retrying the catalogue for each persona', async () => {
+    const backup: SillyTavernPersonaBackup = {
+      personas: { 'a.png': '甲' },
+      persona_descriptions: {
+        'a.png': {
+          srl_persona_character_bindings: {
+            card: { avatar: 'card.png', name: '角色', hash: 'a'.repeat(64) },
+          },
+        },
+      },
+    }
+    const files = ['first', 'second'].map((name) => {
+      const file = new File(['{}'], `${name}.json`)
+      Object.defineProperty(file, 'text', { value: async () => JSON.stringify(backup) })
+      return file
+    })
+    mocks.resourceService.importFiles.mockResolvedValue(
+      files.map((file) => ({
+        status: 'imported',
+        resource: { ...persona(backup), id: file.name },
+      })),
+    )
+    mocks.resourceService.listResourceListSummaries.mockRejectedValueOnce(
+      new Error('catalogue failed'),
+    )
+    const complete = vi.fn()
+    const w = render()
+    await click(w, '酒馆互传')
+    w.findComponent({ name: 'TavernBridgeCenter' }).vm.$emit('import-files', files, complete)
+    await flushPromises()
+
+    expect(mocks.resourceService.listResourceListSummaries).toHaveBeenCalledOnce()
+    expect(mocks.resourceService.importFiles).toHaveBeenCalledOnce()
+    expect(mocks.resourceService.updateDetails).not.toHaveBeenCalled()
+    expect(w.emitted('library-changed')).toHaveLength(1)
+    expect(w.get('[role="alert"]').text()).toContain('first.json 已接收，但角色卡关系未能更新')
+    expect(w.get('[role="alert"]').text()).toContain('second.json 已接收，但角色卡关系未能更新')
+    expect(w.text()).toContain('已接收 2 项')
+    expect(complete).toHaveBeenCalledOnce()
   })
   it('surfaces JSON import failures', async () => {
     mocks.userPersonaService.importFiles.mockRejectedValue(new Error('导入失败测试'))

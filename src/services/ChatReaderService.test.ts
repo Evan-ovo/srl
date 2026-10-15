@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ChatReaderService } from './ChatReaderService'
 import type { ResourceService } from './ResourceService'
+import type { ChatReadPositionCache } from '../storage/ResourceStorageAdapter'
 import { ChatResourceParser } from '../parser/ChatResourceParser'
 
 async function fixture() {
@@ -91,6 +92,32 @@ describe('ChatReaderService', () => {
     }
   })
 
+  it('keeps a complete default page in the bounded recent-floor cache', async () => {
+    const { service, resources, chat } = await fixture()
+    const rows = Array.from({ length: 1000 }, (_, floor) => ({
+      name: '角色',
+      mes: `第${floor}楼` + '正文'.repeat(40),
+      is_user: floor % 3 === 1,
+    }))
+    chat.originalBlob = new File([rows.map((row) => JSON.stringify(row)).join('\n')], 'page.jsonl')
+    chat.metadata.messageCount = rows.length
+    chat.metadata.visibleMessageCount = rows.length
+    const slices = vi.spyOn(chat.originalBlob, 'slice')
+    const cold = await service.read('chat', 900, 20)
+    expect(cold.messages.map((entry) => entry.index)).toEqual(
+      Array.from({ length: 20 }, (_, index) => 900 + index),
+    )
+    expect(slices).toHaveBeenCalled()
+    slices.mockClear()
+    const warm = await new ChatReaderService(resources as unknown as ResourceService).read(
+      'chat',
+      900,
+      20,
+    )
+    expect(warm).toEqual(cold)
+    expect(slices).not.toHaveBeenCalled()
+  })
+
   it('preserves hidden-user navigation across checkpoints, long user gaps and backward byte trimming', async () => {
     const { service, chat } = await fixture()
     const rows = Array.from({ length: 700 }, (_, floor) => ({
@@ -149,7 +176,7 @@ describe('ChatReaderService', () => {
 
   it('bounds retained floors by count and keeps the same IPC byte limits on cache hits', async () => {
     const { service, chat } = await fixture()
-    const rows = Array.from({ length: 25 }, (_, floor) => ({
+    const rows = Array.from({ length: 80 }, (_, floor) => ({
       name: '角色',
       mes: String(floor),
       is_user: false,
@@ -158,13 +185,17 @@ describe('ChatReaderService', () => {
       [rows.map((row) => JSON.stringify(row)).join('\n')],
       'window.jsonl',
     )
-    chat.metadata.messageCount = 25
-    chat.metadata.visibleMessageCount = 25
+    chat.metadata.messageCount = 80
+    chat.metadata.visibleMessageCount = 80
     const slices = vi.spyOn(chat.originalBlob, 'slice')
     await service.read('chat', 0, 20)
     slices.mockClear()
     expect((await service.read('chat', 19, 1)).messages[0]!.message.mes).toBe('19')
     expect(slices).not.toHaveBeenCalled()
+    await service.read('chat', 20, 20)
+    await service.read('chat', 40, 20)
+    await service.read('chat', 60, 20)
+    slices.mockClear()
     await service.read('chat', 0, 1)
     expect(slices).toHaveBeenCalled()
     chat.originalBlob = new File(
@@ -198,6 +229,122 @@ describe('ChatReaderService', () => {
     text.mockClear()
     expect(await service.read('chat', 1, 1)).toEqual(page)
     expect(text).not.toHaveBeenCalled()
+    expect(await service.search('chat', '第二', 1)).toMatchObject({
+      results: [{ floor: 1, text: '第二楼' }],
+      nextOffset: null,
+    })
+    expect(await service.chapters('chat', 1, 1)).toMatchObject({
+      items: [{ floor: 1, text: '第二楼' }],
+      nextOffset: null,
+    })
+  })
+
+  it('persists sparse byte checkpoints and resumes after recreating the reader service', async () => {
+    const { chat } = await fixture()
+    const rows = Array.from({ length: 700 }, (_, floor) => ({
+      name: '角色',
+      mes: `第${floor}楼` + '正文'.repeat(20),
+      is_user: floor % 3 === 1,
+    }))
+    const source = Object.assign(
+      new File([rows.map((row) => JSON.stringify(row)).join('\n')], 'persistent.jsonl'),
+      { contentIdentity: 'a'.repeat(64) },
+    )
+    const readChat = {
+      ...chat,
+      originalSource: source,
+      metadata: {
+        ...chat.metadata,
+        format: 'jsonl',
+        messageCount: rows.length,
+        visibleMessageCount: rows.length,
+      },
+    }
+    const stored = new Map<string, ChatReadPositionCache>()
+    const makeResources = () =>
+      ({
+        getReadSource: vi.fn(async () => readChat),
+        getChatReadPositionCache: vi.fn(async (id: string) => structuredClone(stored.get(id))),
+        setChatReadPositionCache: vi.fn(async (id: string, cache: ChatReadPositionCache) =>
+          stored.set(id, structuredClone(cache)),
+        ),
+        deleteChatReadPositionCache: vi.fn(async (id: string) => {
+          stored.delete(id)
+        }),
+      }) as unknown as ResourceService
+
+    await new ChatReaderService(makeResources()).read('chat', 600, 1)
+    expect(stored.get('chat')).toMatchObject({
+      schemaVersion: 1,
+      checkpoints: expect.arrayContaining([expect.objectContaining({ floor: 512 })]),
+    })
+
+    const slices = vi.spyOn(source, 'slice')
+    const reopened = new ChatReaderService(makeResources())
+    const page = await reopened.read('chat', 600, 1)
+    expect(page.messages.map(({ index }) => index)).toEqual([600])
+    expect(slices.mock.calls[0]![0]).toBeGreaterThan(0)
+    expect(
+      slices.mock.calls.reduce(
+        (sum, [start, end]) =>
+          sum + Math.max(0, Math.min(Number(end), source.size) - Number(start)),
+        0,
+      ),
+    ).toBeLessThan(source.size / 2)
+
+    slices.mockClear()
+    expect(await reopened.search('chat', '第600楼', 600)).toEqual({
+      results: [{ floor: 600, text: expect.stringContaining('第600楼') }],
+      nextOffset: null,
+    })
+    expect(slices.mock.calls[0]![0]).toBeGreaterThan(0)
+    expect(
+      slices.mock.calls.reduce(
+        (sum, [start, end]) =>
+          sum + Math.max(0, Math.min(Number(end), source.size) - Number(start)),
+        0,
+      ),
+    ).toBeLessThan(source.size / 2)
+
+    slices.mockClear()
+    expect(await reopened.chapters('chat', 600, 1)).toMatchObject({
+      items: [{ floor: 600, text: expect.stringContaining('第600楼') }],
+      nextOffset: 601,
+    })
+    expect(slices.mock.calls[0]![0]).toBeGreaterThan(0)
+    expect(
+      slices.mock.calls.reduce(
+        (sum, [start, end]) =>
+          sum + Math.max(0, Math.min(Number(end), source.size) - Number(start)),
+        0,
+      ),
+    ).toBeLessThan(source.size / 2)
+
+    slices.mockClear()
+    const corrupted = structuredClone(stored.get('chat')!)
+    corrupted.checkpoints[1]!.byteOffset = source.size + 1
+    stored.set('chat', corrupted)
+    const corruptedResources = makeResources()
+    await new ChatReaderService(corruptedResources).read('chat', 600, 1)
+    expect(corruptedResources.deleteChatReadPositionCache).toHaveBeenCalledWith('chat')
+    expect(slices.mock.calls[0]![0]).toBe(0)
+
+    slices.mockClear()
+    source.contentIdentity = 'b'.repeat(64)
+    const changedResources = makeResources()
+    await new ChatReaderService(changedResources).read('chat', 600, 1)
+    expect(changedResources.deleteChatReadPositionCache).toHaveBeenCalledWith('chat')
+    expect(slices.mock.calls[0]![0]).toBe(0)
+
+    const broken = makeResources()
+    vi.mocked(broken.getChatReadPositionCache).mockRejectedValue(new Error('cache unavailable'))
+    vi.mocked(broken.setChatReadPositionCache).mockRejectedValue(new Error('cache full'))
+    expect((await new ChatReaderService(broken).read('chat', 600, 1)).messages[0]!.index).toBe(600)
+    expect(broken.setChatReadPositionCache).toHaveBeenCalled()
+    vi.mocked(broken.getReadSource).mockRejectedValue(new Error('original unavailable'))
+    await expect(new ChatReaderService(broken).read('chat', 600, 1)).rejects.toThrow(
+      'original unavailable',
+    )
   })
 
   it('evicts by estimated bytes before the count limit and drops an inactive chat index', async () => {

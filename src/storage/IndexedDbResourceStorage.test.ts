@@ -42,6 +42,89 @@ function createResource(index: number): Resource {
 }
 
 describe('IndexedDbResourceStorage', () => {
+  it('repairs only selected keys, removes selected orphans, and leaves the global repair marker unset', async () => {
+    const database = new AppDatabase(`scoped-repair-${crypto.randomUUID()}`)
+    try {
+      const storage = new IndexedDbResourceStorage(database)
+      await storage.saveMany([createResource(1), createResource(2), createResource(3)])
+      await database.resourceListSummaries.bulkDelete(['resource-1', 'resource-2'])
+      await database.resources.delete('resource-3')
+      const globalKeys = vi.spyOn(database.resources, 'toCollection')
+      expect(
+        (
+          await storage.listResourceListSummaries({ ids: ['resource-1', 'resource-3', 'missing'] })
+        ).map((row) => row.id),
+      ).toEqual(['resource-1'])
+      expect(globalKeys).not.toHaveBeenCalled()
+      expect(await database.resourceListSummaries.get('resource-2')).toBeUndefined()
+      expect(await database.resourceListSummaries.get('resource-3')).toBeUndefined()
+      expect(await database.settings.get('index.resourceListSummaries.v20')).toBeUndefined()
+      expect(await storage.listResourceListSummaries()).toHaveLength(2)
+      expect(await database.resourceListSummaries.get('resource-2')).toBeDefined()
+    } finally {
+      await database.delete()
+    }
+  })
+  it('does no index work for an empty selected scope', async () => {
+    const database = new AppDatabase(`empty-scoped-repair-${crypto.randomUUID()}`)
+    try {
+      const storage = new IndexedDbResourceStorage(database)
+      const transaction = vi.spyOn(database, 'transaction')
+      expect(await storage.listResourceListSummaries({ ids: [] })).toEqual([])
+      expect(transaction).not.toHaveBeenCalled()
+    } finally {
+      await database.delete()
+    }
+  })
+  it('persists sparse chat positions in existing settings and caps retained chat indexes', async () => {
+    const database = new AppDatabase(`chat-read-position-cache-${crypto.randomUUID()}`)
+    let timestamp = 100
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => timestamp++)
+    try {
+      const storage = new IndexedDbResourceStorage(database)
+      const cache = (index: number) => ({
+        schemaVersion: 1 as const,
+        key: `content-${index}`,
+        stride: 128,
+        checkpoints: [
+          {
+            byteOffset: 0,
+            line: 1,
+            floor: 0,
+            visible: 0,
+            replies: 0,
+            previousReply: null,
+          },
+        ],
+      })
+      for (let index = 0; index < 4; index++) {
+        await storage.setChatReadPositionCache(`chat-${index}`, {
+          ...cache(index),
+        })
+      }
+
+      const reopenedStorage = new IndexedDbResourceStorage(database)
+      expect(await reopenedStorage.getChatReadPositionCache('chat-0')).toMatchObject({
+        key: 'content-0',
+      })
+      await reopenedStorage.setChatReadPositionCache('chat-4', cache(4))
+      expect(await reopenedStorage.getChatReadPositionCache('chat-0')).toMatchObject({
+        key: 'content-0',
+      })
+      expect(await reopenedStorage.getChatReadPositionCache('chat-1')).toBeUndefined()
+      expect(await reopenedStorage.getChatReadPositionCache('chat-4')).toMatchObject({
+        key: 'content-4',
+        checkpoints: [{ floor: 0, byteOffset: 0 }],
+      })
+      await reopenedStorage.deleteChatReadPositionCache('chat-4')
+      expect(await reopenedStorage.getChatReadPositionCache('chat-4')).toBeUndefined()
+    } finally {
+      now.mockRestore()
+      database.close()
+      await database.delete()
+    }
+  })
+
   it('reads background imports without tags without rewriting originals or losing existing tags', async () => {
     const database = new AppDatabase(`background-missing-tags-${crypto.randomUUID()}`)
     try {

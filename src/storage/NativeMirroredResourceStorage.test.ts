@@ -92,6 +92,27 @@ describe('NativeMirroredResourceStorage', () => {
     expect(legacy.listGalleryListSummaries).toBeUndefined()
   })
 
+  it('preserves optional persistent chat positions through the production mirror wrapper', async () => {
+    const backing = delegate(async () => undefined)
+    const cache = { schemaVersion: 1 as const, key: 'identity', stride: 128, checkpoints: [] }
+    backing.getChatReadPositionCache = vi.fn(async () => cache)
+    backing.setChatReadPositionCache = vi.fn(async () => undefined)
+    backing.deleteChatReadPositionCache = vi.fn(async () => undefined)
+    const storage = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    await expect(storage.getChatReadPositionCache?.('chat')).resolves.toEqual(cache)
+    await storage.setChatReadPositionCache?.('chat', cache)
+    await storage.deleteChatReadPositionCache?.('chat')
+    expect(backing.setChatReadPositionCache).toHaveBeenCalledWith('chat', cache)
+    expect(backing.deleteChatReadPositionCache).toHaveBeenCalledWith('chat')
+    const legacy = new NativeMirroredResourceStorage(
+      delegate(async () => undefined),
+      { isEnabled: () => false } as VaultService,
+    )
+    expect(legacy.getChatReadPositionCache).toBeUndefined()
+  })
+
   it('原生文件暂存成功且 IndexedDB 保存成功后才提交镜像', async () => {
     const order: string[] = []
     mirror.stage.mockImplementation(async () => ({

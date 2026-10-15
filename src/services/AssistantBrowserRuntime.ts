@@ -54,7 +54,7 @@ export interface AssistantBrowserSnapshot {
   forkOfTarget?: boolean
   repository?: {
     name: string
-    kind: 'fork'
+    kind: 'fork' | 'owned-source'
     branch?: string
     file?: 'wrangler.jsonc' | 'wrangler.json'
   }
@@ -95,6 +95,7 @@ export interface AssistantBrowserEvent {
     | 'agent-resume'
     | 'capture-bot-secret'
     | 'installation-ready'
+    | 'github-connect'
     | 'browser-resume'
     | 'browser-pause'
     | 'browser-close'
@@ -103,6 +104,7 @@ export interface AssistantBrowserEvent {
   step?: string
   runId?: string
   conversationId?: string
+  petBounds?: { left: number; top: number; viewportWidth: number }
   paused?: boolean
   loading?: boolean
   bytes?: number
@@ -153,6 +155,8 @@ export interface AssistantBrowserRuntime {
     ownerTaskId?: string
     conversationId?: string
     expectedApplicationId?: string
+    githubApi?: boolean
+    githubRepository?: string
   }): Promise<void>
   pauseAgent(options?: { ownerRunId?: string; finished?: boolean }): Promise<void>
   waitReady(): Promise<AssistantBrowserSnapshot>
@@ -177,7 +181,7 @@ export interface AssistantBrowserRuntime {
     tabId: number
     milliseconds: number
   }): Promise<AssistantBrowserSnapshot>
-  cancelWait(options?: { ownerRunId?: string }): Promise<void>
+  cancelWait(options?: { ownerRunId?: string; ownerAgentRunId?: string }): Promise<void>
   inspect(options?: { metadataOnly?: boolean; query?: string }): Promise<AssistantBrowserSnapshot>
   readPage(options: {
     documentId: number

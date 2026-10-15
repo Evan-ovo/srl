@@ -89,7 +89,6 @@ public class NativeFileExportPlugin extends Plugin {
         return bytes;
     }
 
-
     @PluginMethod
     public void chooseDirectory(PluginCall call) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)

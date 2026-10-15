@@ -13,7 +13,7 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   imageAlbum: 2,
   userPersona: 7,
   tavernBridge: 9,
-  assistant: 33,
+  assistant: 34,
 }
 
 /** Existing installed records predate explicit revisions and start at the migration baseline. */

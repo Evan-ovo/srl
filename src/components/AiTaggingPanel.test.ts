@@ -465,7 +465,7 @@ describe('AiTaggingPanel', () => {
       { resourceId: 'r1', tags: ['单人', '古风'] },
     ])
     expect(wrapper.emitted('applied')).toEqual([
-      [{ resourceCount: 1, tagCount: 2, action: 'apply' }],
+      [{ resourceCount: 1, tagCount: 2, resourceIds: ['r1'], action: 'apply' }],
     ])
     expect(mocks.saveUndo).toHaveBeenCalledOnce()
     expect(mocks.clearDraft).toHaveBeenCalledOnce()
@@ -642,7 +642,7 @@ describe('AiTaggingPanel', () => {
     expect(mocks.undoAddedTags).toHaveBeenCalledWith(additions)
     expect(mocks.clearUndo).toHaveBeenCalledOnce()
     expect(wrapper.emitted('applied')).toEqual([
-      [{ resourceCount: 1, tagCount: 1, action: 'undo' }],
+      [{ resourceCount: 1, tagCount: 1, resourceIds: ['r1'], action: 'undo' }],
     ])
     wrapper.unmount()
   })

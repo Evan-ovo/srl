@@ -75,6 +75,71 @@ function makeSource(): Record<string, unknown> {
 }
 
 describe('listPresetSegments', () => {
+  it.each([100001, '100001'])('优先使用酒馆全局排序组 %s，而不是更长的旧组', (id) => {
+    const base = makeBase()
+    base.prompt_order = [
+      {
+        character_id: 100000,
+        order: [
+          { identifier: 'main', enabled: true },
+          { identifier: 'orphan-1', enabled: true },
+          { identifier: 'chatHistory', enabled: false },
+        ],
+      },
+      {
+        character_id: id,
+        order: [
+          { identifier: 'chatHistory', enabled: true },
+          { identifier: 'main', enabled: false },
+        ],
+      },
+    ]
+    const original = JSON.stringify(base)
+    expect(listPresetSegments(base).map((s) => [s.identifier, s.enabled, s.inOrder])).toEqual([
+      ['chatHistory', true, true],
+      ['main', false, true],
+      ['orphan-1', false, false],
+    ])
+    const assembly = buildBaseAssembly(base)
+    expect(assembly.map((s) => s.identifier)).toEqual(['chatHistory', 'main'])
+    const output = stitchPreset(base, assembly).preset
+    expect(
+      (output.prompt_order as { character_id: unknown; order: unknown[] }[]).find(
+        (group) => String(group.character_id) === '100001',
+      )?.order,
+    ).toEqual([
+      { identifier: 'chatHistory', enabled: true },
+      { identifier: 'main', enabled: false },
+    ])
+    expect(JSON.stringify(base)).toBe(original)
+  })
+
+  it('全局组为空时不借用旧组的排序或启停状态', () => {
+    const base = makeBase()
+    base.prompt_order = [
+      { character_id: 100000, order: [{ identifier: 'main', enabled: true }] },
+      { character_id: 100001, order: [] },
+    ]
+    expect(listPresetSegments(base).every((s) => !s.inOrder && !s.enabled)).toBe(true)
+    expect(buildBaseAssembly(base)).toEqual([])
+  })
+
+  it('没有全局组的旧格式使用首个有效组，不按组长度猜测', () => {
+    const base = makeBase()
+    base.prompt_order = [
+      { character_id: 8, order: null },
+      { character_id: 9, order: [{ identifier: 'chatHistory', enabled: true }] },
+      {
+        character_id: 10,
+        order: [
+          { identifier: 'main', enabled: true },
+          { identifier: 'chatHistory', enabled: true },
+        ],
+      },
+    ]
+    expect(buildBaseAssembly(base).map((s) => s.identifier)).toEqual(['chatHistory'])
+  })
+
   it('按 prompt_order 排序，marker 标记为不可缝，孤儿段附在末尾', () => {
     const segments = listPresetSegments(makeBase())
     expect(segments.map((s) => s.identifier)).toEqual(['main', 'chatHistory', 'orphan-1'])

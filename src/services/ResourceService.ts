@@ -3,6 +3,7 @@ import { JSON_RESOURCE_PARSER_VERSION } from '../parser/JsonResourceParser'
 import type { ResourceParserRegistry } from '../parser/ResourceParser'
 import type {
   ResourceListSummaryFilter,
+  ChatReadPositionCache,
   ResourceStorageAdapter,
 } from '../storage/ResourceStorageAdapter'
 import type { ResourceVersionMatchFingerprintCache } from '../storage/ResourceStorageAdapter'
@@ -276,6 +277,18 @@ export class ResourceService {
     return resource
       ? { ...toResourceSummary(resource), originalSource: resource.originalBlob }
       : undefined
+  }
+
+  getChatReadPositionCache(id: string) {
+    return this.storage.getChatReadPositionCache?.(id)
+  }
+
+  setChatReadPositionCache(id: string, cache: ChatReadPositionCache) {
+    return this.storage.setChatReadPositionCache?.(id, cache)
+  }
+
+  deleteChatReadPositionCache(id: string) {
+    return this.storage.deleteChatReadPositionCache?.(id)
   }
 
   async getVersion(id: string): Promise<Resource | undefined> {
@@ -668,7 +681,7 @@ export class ResourceService {
   async mergeDuplicates(keepId: string, removeIds: string[]): Promise<number> {
     return operationsResourceOrganizationOperations.mergeDuplicates(
       this.storage,
-      (id) => this.delete(id),
+      (ids) => this.deleteMany(ids),
       keepId,
       removeIds,
     )
@@ -793,9 +806,10 @@ export class ResourceService {
 
   async upgradeLegacyJsonResources(
     checkpoint = () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+    snapshot?: ResourceSummary[],
   ): Promise<number> {
     await checkpoint()
-    const resources = await this.storage.listSummaries()
+    const resources = snapshot ?? (await this.storage.listSummaries())
     let upgradedCount = 0
 
     let processed = 0
@@ -835,8 +849,11 @@ export class ResourceService {
     return upgradedCount
   }
 
-  backfillCardFingerprints(checkpoint?: () => Promise<void>): Promise<number> {
-    return versionOperations.backfillCardFingerprints(this.storage, checkpoint)
+  backfillCardFingerprints(
+    checkpoint?: () => Promise<void>,
+    snapshot?: ResourceSummary[],
+  ): Promise<number> {
+    return versionOperations.backfillCardFingerprints(this.storage, checkpoint, snapshot)
   }
   loadVersionRecognitionSnapshot(
     checkpoint?: () => Promise<void>,
@@ -980,8 +997,15 @@ export class ResourceService {
         new Set(item.tags.map((tag) => tag.toLocaleLowerCase())),
       ]),
     )
+    if (!selected.size) {
+      onProgress?.({ completed: 0, total: 0, resourceName: '', failed: 0 })
+      return { resourceCount: 0, tagCount: 0, entries: [], failed: 0 }
+    }
     const summaries = new Map(
-      (await this.listResourceListSummaries()).map((item) => [item.id, item]),
+      (await this.listResourceListSummaries({ ids: [...selected.keys()] })).map((item) => [
+        item.id,
+        item,
+      ]),
     )
     const entries: Array<{ resourceId: string; resourceName: string; tags: string[] }> = []
     let completed = 0

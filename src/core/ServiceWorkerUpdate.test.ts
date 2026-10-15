@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 vi.mock('virtual:pwa-register', () => ({ registerSW: vi.fn() }))
 import { relaunchAfterWaitingWorkerControls } from './ServiceWorkerUpdate'
 
@@ -25,6 +26,44 @@ describe('startServiceWorkerUpdateChecks', () => {
     vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibilityState)
   }
 
+  it('shares an unfinished registration check across visible, focus and online events', () => {
+    watchVisibility()
+    let finish!: () => void
+    const update = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    const stop = startServiceWorkerUpdateChecks(registrationWith(update))
+    try {
+      document.dispatchEvent(new Event('visibilitychange'))
+      window.dispatchEvent(new Event('focus'))
+      window.dispatchEvent(new Event('online'))
+      expect(update).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+      finish()
+    }
+  })
+
+  it('releases a failed check for the next event without scheduling an automatic retry', async () => {
+    watchVisibility()
+    const update = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined)
+    const stop = startServiceWorkerUpdateChecks(registrationWith(update))
+    try {
+      window.dispatchEvent(new Event('focus'))
+      expect(update).toHaveBeenCalledOnce()
+      await flushPromises()
+      expect(update).toHaveBeenCalledOnce()
+      window.dispatchEvent(new Event('online'))
+      expect(update).toHaveBeenCalledTimes(2)
+      await flushPromises()
+    } finally {
+      stop()
+    }
+  })
+
   it('注册完成时立即检查一次更新', () => {
     watchVisibility()
     const update = vi.fn(async () => undefined)
@@ -35,10 +74,11 @@ describe('startServiceWorkerUpdateChecks', () => {
     stop()
   })
 
-  it('页面从后台回到前台时立即检查更新', () => {
+  it('页面从后台回到前台时立即检查更新', async () => {
     watchVisibility()
     const update = vi.fn(async () => undefined)
     const stop = startServiceWorkerUpdateChecks(registrationWith(update))
+    await flushPromises()
     update.mockClear()
 
     visibilityState = 'hidden'
@@ -52,15 +92,17 @@ describe('startServiceWorkerUpdateChecks', () => {
     stop()
   })
 
-  it('窗口获得焦点或网络恢复时补查更新', () => {
+  it('窗口获得焦点或网络恢复时补查更新', async () => {
     watchVisibility()
     const update = vi.fn(async () => undefined)
     const stop = startServiceWorkerUpdateChecks(registrationWith(update))
+    await flushPromises()
     update.mockClear()
 
     window.dispatchEvent(new Event('focus'))
     expect(update).toHaveBeenCalledTimes(1)
 
+    await flushPromises()
     window.dispatchEvent(new Event('online'))
     expect(update).toHaveBeenCalledTimes(2)
 

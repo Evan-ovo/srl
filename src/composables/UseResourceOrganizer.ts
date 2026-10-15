@@ -39,6 +39,7 @@ export type DetailTab = 'overview' | 'content' | 'gallery' | 'relations' | 'vers
 export type ResourceOrganizerProps = {
   settingsOpen?: boolean
   initialTab?: DetailTab
+  prepareTab?: (tab: DetailTab) => Promise<void>
   resource: Resource
   resources: ResourceSummary[]
   boundResources: Resource[]
@@ -171,6 +172,46 @@ export function useResourceOrganizer(
   const artworkInput = useTemplateRef<HTMLInputElement>('artworkInput')
 
   const activeTab = ref<DetailTab>(props.initialTab ?? 'overview')
+
+  const preparedTabs = ref(new Set<DetailTab>())
+  const preparingTab = ref<DetailTab>()
+  const preparationError = ref('')
+  let preparationGeneration = 0
+  async function prepareActiveTab() {
+    const generation = ++preparationGeneration,
+      tab = activeTab.value
+    preparationError.value = ''
+    if (preparedTabs.value.has(tab) || !props.prepareTab) {
+      preparedTabs.value.add(tab)
+      preparingTab.value = undefined
+      return
+    }
+    preparingTab.value = tab
+    try {
+      await props.prepareTab(tab)
+      if (generation === preparationGeneration) preparedTabs.value.add(tab)
+    } catch (error) {
+      if (generation === preparationGeneration)
+        preparationError.value = error instanceof Error ? error.message : '详情读取失败'
+    } finally {
+      if (generation === preparationGeneration) preparingTab.value = undefined
+    }
+  }
+  watch(
+    () => [props.resource.id, props.resource.contentHash],
+    (identity, previous) => {
+      if (identity[0] !== previous?.[0]) activeTab.value = props.initialTab ?? 'overview'
+      preparedTabs.value = new Set()
+      void prepareActiveTab()
+    },
+    { immediate: true },
+  )
+  watch(activeTab, () => {
+    void prepareActiveTab()
+  })
+  onUnmounted(() => {
+    preparationGeneration++
+  })
 
   const detailSheet = useTemplateRef<HTMLElement>('detailSheet')
 
@@ -661,6 +702,10 @@ export function useResourceOrganizer(
     handleSubmit,
     visibleDetailTabs,
     activeTab,
+    preparedTabs,
+    preparingTab,
+    preparationError,
+    prepareActiveTab,
     selectTab,
     relatedResourceIds,
     summaryStats,

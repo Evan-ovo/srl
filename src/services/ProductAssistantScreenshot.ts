@@ -1,6 +1,7 @@
 import type { AppearanceScope } from '../core/AppearanceScopes'
 import type { AssistantImage } from './ProductAssistantService'
 import { isAssistantAuthenticationVisible } from '../core/ProductAssistantViewContext'
+import { withAbort } from '../utils/Abortable'
 
 /** Render the real mounted page. Current-view references are masked before rendering. */
 export async function captureAssistantPage(
@@ -9,11 +10,20 @@ export async function captureAssistantPage(
   currentView = false,
 ): Promise<AssistantImage> {
   const assistantTarget = scope.appId === 'assistant'
-  const source = Array.from(document.querySelectorAll<HTMLElement>(scope.selector)).find(
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>(scope.selector)).filter(
     (node) =>
       !node.closest('.assistant-pet-dialog') &&
-      (!currentView || node.getBoundingClientRect().height > 0),
+      (scope.value !== 'features' || node.dataset.featurePage === 'home'),
   )
+  const source =
+    candidates.find((node) => {
+      for (let parent: HTMLElement | null = node; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent)
+        if (style.display === 'none' || style.visibility === 'hidden') return false
+      }
+      const bounds = node.getBoundingClientRect()
+      return bounds.width > 0 && bounds.height > 0
+    }) ?? (currentView ? undefined : candidates[0])
   if (
     !source ||
     (!assistantTarget && source.matches('.feature-hub[data-feature-page="assistant"]'))
@@ -138,7 +148,8 @@ export async function captureAssistantPage(
         opacity: '1',
       })
     }
-    await document.fonts.ready
+    // Capture the current frame; skipFonts already excludes embedding external fonts.
+    // Waiting for every font in the document can block an unrelated CSS edit indefinitely.
     if (signal.aborted) throw new DOMException('截图已停止', 'AbortError')
     if (getComputedStyle(clone).display === 'none' || clone.scrollHeight === 0)
       throw new Error('该区域被样式隐藏，无法截图；可以说“撤销刚才的修改”')
@@ -146,39 +157,46 @@ export async function captureAssistantPage(
       1440,
       Math.ceil(currentView ? frame!.getBoundingClientRect().height : clone.scrollHeight),
     )
-    const { toJpeg } = await import('html-to-image')
-    const dataUrl = await toJpeg(frame ?? clone, {
-      width: currentView ? viewWidth : width,
-      height,
-      pixelRatio: 1,
-      quality: 0.85,
-      skipFonts: true,
-      backgroundColor:
-        getComputedStyle(document.documentElement).getPropertyValue('--color-canvas').trim() ||
-        '#f2f9fa',
-      style: {
-        position: 'relative',
-        left: '0',
-        top: '0',
-        insetInlineStart: '0',
-        insetInlineEnd: 'auto',
-        insetBlockStart: '0',
-        insetBlockEnd: 'auto',
-        opacity: '1',
-        margin: '0',
-        transform: 'none',
-        overflow: 'hidden',
-      },
-      fetchRequestInit: { credentials: 'omit' },
-      imagePlaceholder:
-        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
-      filter: (node) =>
-        !(node instanceof Element) ||
-        (!(node.matches('.product-assistant') && !assistantTarget) &&
-          !node.matches(
-            'script,iframe,video,audio,.account-trigger,.auth-portal,[type="password"],.assistant-pet,.assistant-pet-dialog,.assistant-pet-bubble,.chat-message-menu,.chat-image-viewer,.chat-tool-result,.chat-reasoning-viewer',
-          )),
-    })
+    const { toJpeg } = await withAbort(import('html-to-image'), signal)
+    signal.throwIfAborted()
+    const dataUrl = await withAbort(
+      toJpeg(frame ?? clone, {
+        width: currentView ? viewWidth : width,
+        height,
+        pixelRatio: 1,
+        quality: 0.85,
+        skipFonts: true,
+        backgroundColor:
+          getComputedStyle(document.documentElement).getPropertyValue('--color-canvas').trim() ||
+          '#f2f9fa',
+        style: {
+          position: 'relative',
+          left: '0',
+          top: '0',
+          insetInlineStart: '0',
+          insetInlineEnd: 'auto',
+          insetBlockStart: '0',
+          insetBlockEnd: 'auto',
+          opacity: '1',
+          margin: '0',
+          transform: 'none',
+          overflow: 'hidden',
+        },
+        fetchRequestInit: { credentials: 'omit', signal },
+        get imagePlaceholder() {
+          // The renderer caches fallbacks. Cancellation must not cache a blank image for later captures.
+          signal.throwIfAborted()
+          return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg=='
+        },
+        filter: (node) =>
+          !(node instanceof Element) ||
+          (!(node.matches('.product-assistant') && !assistantTarget) &&
+            !node.matches(
+              'script,iframe,video,audio,.account-trigger,.auth-portal,[type="password"],.assistant-pet,.assistant-pet-dialog,.assistant-pet-bubble,.chat-message-menu,.chat-image-viewer,.chat-tool-result,.chat-reasoning-viewer',
+            )),
+      }),
+      signal,
+    )
     if (signal.aborted) throw new DOMException('截图已停止', 'AbortError')
     return {
       id: crypto.randomUUID(),

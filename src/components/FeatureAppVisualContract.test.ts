@@ -16,7 +16,7 @@ describe('Feature App visual contract', () => {
     expect(persona).toContain('feature-header-action--icon')
     expect(persona).toContain('feature-header-action--primary')
     expect(extensions).toContain('class="feature-header-action external-app-manager__add"')
-    expect(extensions).toContain('<FeatureAppHeader title="扩展"')
+    expect(extensions).toMatch(/<FeatureAppHeader\b[^>]*\btitle="扩展"/u)
     expect(extensions).not.toContain('feature-header-action--primary')
 
     expect(extensions).not.toContain('external-app-manager__guide-trigger')

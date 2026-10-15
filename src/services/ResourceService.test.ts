@@ -1914,6 +1914,31 @@ describe('ResourceService', () => {
 })
 
 describe('mergeDuplicates', () => {
+  it('merges many copies with one shared gallery snapshot and one batch deletion', async () => {
+    const { service, storage } = createServiceWithStorage()
+    await storage.save(duplicate('keep'))
+    for (const id of ['a', 'b', 'c']) await storage.save(duplicate(id))
+    await storage.save(
+      duplicate('image', {
+        contentHash: 'image-hash',
+        metadata: {
+          assetKind: 'resource-gallery-image',
+          galleryOwnerId: 'b',
+          galleryStorage: 'local',
+        },
+      }),
+    )
+    await storage.save(
+      duplicate('related', { contentHash: 'related', relatedResourceIds: ['a', 'b'] }),
+    )
+    const list = vi.spyOn(storage, 'listSummaries')
+    const remove = vi.spyOn(storage, 'deleteMany')
+    expect(await service.mergeDuplicates('keep', ['a', 'b', 'c'])).toBe(3)
+    expect(list).toHaveBeenCalledTimes(3)
+    expect(remove).toHaveBeenCalledExactlyOnceWith(['a', 'b', 'c'], undefined)
+    expect((await storage.get('image'))?.metadata.galleryOwnerId).toBe('keep')
+    expect((await storage.get('related'))?.relatedResourceIds).toEqual(['keep'])
+  })
   function duplicate(id: string, overrides: Partial<Resource> = {}): Resource {
     return {
       id,

@@ -73,6 +73,8 @@ const helpMenuOpen = ref(false)
 const helpAvailable = computed(
   () => hasDiscordSetupBrowser() && assistantHelpContext.value === 'discord-bridge',
 )
+let chatPresentationRequest = 0
+let pendingChatPresentation = 0
 const petVisible = computed(() => !props.hidden && !(open.value && expanded.value))
 const taskChat = computed(
   () => discordSetupSession.active && Boolean(discordSetupSession.assistantConversationId),
@@ -520,6 +522,19 @@ watch(
 )
 function openTaskChat(event?: Event) {
   if (!discordSetupSession.active || !discordSetupSession.assistantConversationId) return
+  const bounds = event instanceof CustomEvent ? event.detail?.petBounds : undefined
+  if (
+    bounds &&
+    Number.isFinite(bounds.left) &&
+    Number.isFinite(bounds.top) &&
+    Number.isFinite(bounds.viewportWidth) &&
+    bounds.viewportWidth > 0
+  ) {
+    const scale = innerWidth / bounds.viewportWidth
+    const x = bounds.left * scale,
+      y = bounds.top * scale
+    if (x >= 0 && x < innerWidth && y >= 0 && y < innerHeight) position.value = { x, y }
+  }
   expanded.value = event instanceof CustomEvent && event.detail?.fullscreen === true
   void showChat()
 }
@@ -586,6 +601,7 @@ function click(event: MouseEvent) {
   const now = performance.now()
   if (
     event.detail !== 0 &&
+    !taskChat.value &&
     helpAvailable.value &&
     visibleAssistantHelpContext() === 'discord-bridge'
   ) {
@@ -656,13 +672,33 @@ async function returnToTaskBrowser() {
   }
 }
 async function syncBrowserPresentation() {
-  if (!taskChat.value || !open.value || !nativeDiscordSetupBrowser.chatPresentation) return
+  if (!taskChat.value || !open.value) return
+  if (!discordSetupSession.webStepActive) {
+    ++chatPresentationRequest
+    delete document.documentElement.dataset.assistantBrowserChat
+    discordSetupSession.chatPresentation = expanded.value ? 'fullscreen' : 'compact'
+    return
+  }
+  if (!nativeDiscordSetupBrowser.chatPresentation) return
   await nextTick()
   if (!alive || !taskChat.value || !open.value || !dialog.value?.open) return
   const fullscreen = expanded.value
   const conversationId = discordSetupSession.assistantConversationId
   const bounds = browserPreview.value?.getBoundingClientRect()
+  const request = ++chatPresentationRequest
+  pendingChatPresentation = request
+  const previous = document.documentElement.dataset.assistantBrowserChat
+  // Prepare the host before native waits for its rendered frame and hides the browser.
+  document.documentElement.dataset.assistantBrowserChat = fullscreen ? 'fullscreen' : 'compact'
   try {
+    await nextTick()
+    if (
+      !alive ||
+      !open.value ||
+      expanded.value !== fullscreen ||
+      request !== chatPresentationRequest
+    )
+      return
     await nativeDiscordSetupBrowser.chatPresentation({
       mode: fullscreen ? 'fullscreen' : 'compact',
       conversationId,
@@ -680,6 +716,7 @@ async function syncBrowserPresentation() {
     })
     if (
       alive &&
+      request === chatPresentationRequest &&
       open.value &&
       expanded.value === fullscreen &&
       discordSetupSession.assistantConversationId === conversationId
@@ -688,18 +725,34 @@ async function syncBrowserPresentation() {
       discordSetupSession.chatPresentation = fullscreen ? 'fullscreen' : 'compact'
     }
   } catch {
-    // Older APKs keep their retained browser and the explicit return button.
+    if (request === chatPresentationRequest && alive && open.value) {
+      if (previous) document.documentElement.dataset.assistantBrowserChat = previous
+      else delete document.documentElement.dataset.assistantBrowserChat
+    }
+    // Older APKs keep their retained browser and the preview's explicit return action.
+  } finally {
+    if (pendingChatPresentation === request) pendingChatPresentation = 0
   }
 }
 watch(
   [open, expanded],
   async ([isOpen], [wasOpen]) => {
     if (isOpen && wasOpen) await syncBrowserPresentation()
-    else {
-      delete document.documentElement.dataset.assistantBrowserChat
-      if (!isOpen) discordSetupSession.chatPresentation = ''
-      if (wasOpen && taskChat.value && !discordSetupSession.browserVisible)
+    else if (!isOpen) {
+      if (
+        wasOpen &&
+        taskChat.value &&
+        discordSetupSession.webStepActive &&
+        (pendingChatPresentation ||
+          (discordSetupSession.chatPresentation && !discordSetupSession.browserVisible))
+      )
         await returnToTaskBrowser()
+      if (!open.value) {
+        ++chatPresentationRequest
+        pendingChatPresentation = 0
+        delete document.documentElement.dataset.assistantBrowserChat
+        discordSetupSession.chatPresentation = ''
+      }
     }
   },
   { flush: 'post' },
@@ -715,6 +768,14 @@ watch(
   () => discordSetupSession.browserVisible,
   (visible) => {
     if (visible) close()
+  },
+)
+watch(
+  () => discordSetupSession.chatPresentation,
+  (presentation) => {
+    // The Owner clears presentation after closing the old native page for a local step.
+    if (!presentation && open.value && taskChat.value && !discordSetupSession.webStepActive)
+      void syncBrowserPresentation()
   },
 )
 watch(
@@ -880,6 +941,7 @@ function forwardAssistantAppearance(
       :class="{
         'assistant-pet-dialog--above': dialogAbove && !expanded,
         'assistant-pet-dialog--expanded': expanded,
+        'assistant-pet-dialog--assistance': assistanceLayer,
       }"
       :style="dialogStyle"
       aria-label="蒜惹菈快捷对话"
@@ -907,16 +969,18 @@ function forwardAssistantAppearance(
             ref="browserPreview"
             class="assistant-browser-preview"
             type="button"
-            aria-label="查看当前网页并返回网页协助"
-            @click="returnToTaskBrowser"
+            aria-label="当前网页，可拖动缩放，双击返回网页协助"
+            @dblclick="returnToTaskBrowser"
+            @keydown.enter.prevent="returnToTaskBrowser"
+            @keydown.space.prevent="returnToTaskBrowser"
           >
             <span>当前网页</span
             ><small>{{
               discordSetupSession.completed
-                ? '任务已完成 · 点此查看网页'
+                ? '任务已完成 · 双击查看网页'
                 : discordSetupSession.agentRunning
-                  ? '助手继续操作中 · 点此返回'
-                  : '已暂停 · 点此返回'
+                  ? '助手操作中 · 双击返回'
+                  : '已暂停 · 双击返回'
             }}</small>
           </button>
         </template>

@@ -5,6 +5,7 @@ import { discordSetupService } from '../core/AppContainer'
 import { discordSetupSession } from '../services/AssistantBrowserRuntime'
 import {
   setupStep,
+  setupContinueLabel,
   type DiscordSetupState,
   type DiscordSetupTask,
 } from '../services/DiscordSetupWorkflow'
@@ -53,7 +54,11 @@ const actions = computed(() =>
     ? modes.filter((action) => task.value !== 'diagnose' || action.id === 'agent')
     : stage.value === 'resume'
       ? [
-          ...resumeActions,
+          ...resumeActions.map((action) =>
+            action.id === 'resume' && previous.value
+              ? { ...action, label: setupContinueLabel(previous.value.step) }
+              : action,
+          ),
           ...(previous.value?.mode === 'agent' && discordSetupSession.agentRunning
             ? [{ id: 'pause', label: '暂停网页协助' }]
             : []),
@@ -174,7 +179,9 @@ async function choose(action: ActionSheetAction) {
           ? '开启配置排查'
           : '选择部署协助模式'
         : stage === 'resume'
-          ? '继续上次配置？'
+          ? previous?.step === 'diagnose'
+            ? '继续上次排查？'
+            : '继续上次配置？'
           : stage === 'experience'
             ? '这次需要怎样的帮助？'
             : '这次更新什么？'
@@ -184,7 +191,7 @@ async function choose(action: ActionSheetAction) {
       (busy
         ? '正在读取配置步骤…'
         : stage === 'resume' && previous
-          ? `上次停在：${setupStep(previous.step).title}。重新开始只重置协助进度，已有数据库、部署与本机参数会保留。`
+          ? `上次停在：${setupStep(previous.step).title}。${previous.step === 'diagnose' ? '先在同一对话检查本机连接；需要网页修复时再打开对应网页。' : ''}重新开始只重置协助进度，已有数据库、部署与本机参数会保留。`
           : undefined)
     "
     :actions="actions"

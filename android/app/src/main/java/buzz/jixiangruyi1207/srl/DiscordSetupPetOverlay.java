@@ -59,6 +59,13 @@ final class DiscordSetupPetOverlay {
     }
     void say(String text) { bubble.setText(text.substring(0, Math.min(160, text.length()))); bubble.setVisibility(text.isEmpty() ? android.view.View.GONE : android.view.View.VISIBLE); pet.post(() -> place(pet.getX(), pet.getY())); }
     void visible(boolean value) { pet.setVisibility(value ? android.view.View.VISIBLE : android.view.View.GONE); }
+    void constrain() { pet.post(() -> place(pet.getX(), pet.getY())); }
+    JSONObject bounds(android.webkit.WebView app) {
+        int[] at = new int[2], origin = new int[2]; image.getLocationOnScreen(at); app.getLocationOnScreen(origin);
+        float density = host.getResources().getDisplayMetrics().density;
+        try { return new JSONObject().put("left", (at[0] - origin[0]) / density).put("top", (at[1] - origin[1]) / density).put("viewportWidth", app.getWidth() / density); }
+        catch (org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
+    }
     void rest() {
         pet.post(() -> place(8, host.getHeight() - host.getPaddingBottom() - pet.getHeight() - Math.round(56 * host.getResources().getDisplayMetrics().density)));
     }

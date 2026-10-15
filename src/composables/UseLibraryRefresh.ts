@@ -44,11 +44,36 @@ export function useLibraryRefresh(getContext: () => LibraryRefreshContext) {
     }
   }
 
-  async function loadResources(): Promise<void> {
+  async function loadResources(ids?: string[]): Promise<void> {
     const context = getContext()
-
+    const previous = context.resources.value
     const current = ++generation
     try {
+      if (ids) {
+        const selected = Array.from(new Set(ids))
+        const replacements = new Map<string, ResourceSummary | undefined>()
+        for (let start = 0; start < selected.length; start += 250) {
+          const batch = selected.slice(start, start + 250)
+          const summaries = await Promise.all(
+            batch.map((id) => resourceService.getResourceListSummary(id)),
+          )
+          if (current !== generation) return
+          for (const [index, id] of batch.entries()) replacements.set(id, summaries[index])
+        }
+        // A concurrent optimistic edit must not be overwritten by our captured list.
+        if (previous !== context.resources.value) return loadResources()
+        publishResources(
+          previous
+            .flatMap((resource) => {
+              if (!replacements.has(resource.id)) return [resource]
+              const next = replacements.get(resource.id)
+              return next ? [next] : []
+            })
+            .sort((left, right) => right.updatedAt - left.updatedAt),
+          current,
+        )
+        return
+      }
       const storedResources = await resourceService.listResourceListSummaries()
       publishResources(storedResources, current)
     } catch (error) {
@@ -98,11 +123,15 @@ export function useLibraryRefresh(getContext: () => LibraryRefreshContext) {
   async function handleAiTagsApplied(details: {
     resourceCount: number
     tagCount: number
+    resourceIds?: string[]
     action: 'apply' | 'undo'
   }): Promise<void> {
     const context = getContext()
 
-    await loadLibrary()
+    // The writer reports committed IDs; old callers without this receipt retain a full reload.
+    if (details.resourceIds) {
+      if (details.resourceIds.length) await loadResources(details.resourceIds)
+    } else await loadLibrary()
     context.showNotice(
       details.action === 'undo'
         ? `已从 ${details.resourceCount} 项资源撤销 ${details.tagCount} 个 AI 新增标签`

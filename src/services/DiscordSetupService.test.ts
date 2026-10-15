@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { taskCenter } from '../core/TaskCenter'
 import { DiscordSetupService } from './DiscordSetupService'
+import { assistantBrowserTaskService } from './AssistantBrowserTaskService'
 import { saveDiscordSourceConnectionSettings } from './DiscordSourceSettingsService'
 import { MissingDiscordSetupCardError, type DiscordSetupParameters } from './DiscordSetupParameters'
 import {
@@ -16,6 +17,9 @@ import {
   type DiscordSetupBrowser,
 } from './AssistantBrowserRuntime'
 import { getAssistantRequestTools } from './ProductAssistantService'
+import type { GitHubAssistantPort } from './GitHubAssistantConnection'
+import { gitHubWranglerSource } from './DiscordSetupGitHub'
+import { assistantDiscordGuidance } from './ProductAssistantDiscordGuidance'
 const permissionConfirm = vi.hoisted(() =>
   vi.fn(async (_options: { title?: string }, _signal?: AbortSignal) => true),
 )
@@ -60,7 +64,7 @@ vi.mock('./DiscordSourceSettingsService', () => ({
     Object.assign(saved, value)
   }),
 }))
-function fixture(state?: DiscordSetupState) {
+function fixture(state?: DiscordSetupState, github?: GitHubAssistantPort) {
   let stored = state
   let listener: (event: DiscordBrowserEvent) => void = () => {}
   const page: DiscordBrowserSnapshot = {
@@ -75,14 +79,14 @@ function fixture(state?: DiscordSetupState) {
     pauseAgent: vi.fn(async () => {}),
     waitReady: vi.fn(async () => ({ ...page })),
     waitStatus: vi.fn(async () => ({ ...page })),
-    back: vi.fn(async () => ({ ...page })),
+    back: vi.fn(async () => ({ ...page, moved: false })),
     listTabs: vi.fn(async () => ({ tabs: [] })),
     switchTab: vi.fn(async () => ({ ...page })),
-    capture: vi.fn(async ({ tabId, documentId }) => ({ dataUrl: '', tabId, documentId })),
+    capture: vi.fn(async () => ({ dataUrl: 'data:image/jpeg;base64,', tabId: 1, documentId: 1 })),
     wait: vi.fn(async () => ({ ...page })),
-    readPage: vi.fn(async () => ({ ...page })),
     cancelWait: vi.fn(async () => {}),
     inspect: vi.fn(async () => ({ ...page })),
+    readPage: vi.fn(async () => ({ ...page })),
     act: vi.fn(async () => ({ ok: true, formatOnly: true })),
     close: vi.fn(async () => {}),
     confirmSuccess: vi.fn(async () => ({ confirmed: true })),
@@ -102,6 +106,18 @@ function fixture(state?: DiscordSetupState) {
     }),
   }
   const parameters = {
+    savedConnectionName: vi.fn(async () => '旧收件箱配置'),
+    listSavedConnections: vi.fn(async () => ({
+      cards: [{ id: 'old-card', name: '旧收件箱配置' }],
+      nextOffset: null,
+    })),
+    readSavedConnection: vi.fn(async () => ({
+      ...saved,
+      applicationId: '2234567890123456789',
+      workerBaseUrl: 'https://old.account.workers.dev',
+      inboxLibraryId: 'old-library',
+      inboxSecret: 'DO_NOT_SEND_INBOX_SECRET',
+    })),
     prepare: vi.fn(async () => {}),
     read: vi.fn(async (_id: string): Promise<DiscordSetupParameters> => ({
       applicationId: saved.applicationId,
@@ -126,7 +142,7 @@ function fixture(state?: DiscordSetupState) {
       },
     ),
   }
-  const service = new DiscordSetupService(storage, browser, parameters)
+  const service = new DiscordSetupService(storage, browser, parameters, github)
   return {
     service,
     page,
@@ -144,6 +160,7 @@ beforeEach(() => {
   saved.publicKey = 'a'.repeat(64)
   saved.botToken = 'TEST_SECRET_NOT_FOR_MODEL'
   discordSetupSession.active = false
+  discordSetupSession.purpose = 'discord-setup'
   discordSetupSession.browserVisible = false
   discordSetupSession.agentRunning = false
   saved.commandRegistered = false
@@ -152,6 +169,270 @@ beforeEach(() => {
   saved.workerBaseUrl = 'https://example.account.workers.dev'
 })
 describe('APK Discord setup workflow', () => {
+  it('releases a general webpage task before restoring the old Discord task, including local steps', async () => {
+    const f = fixture({ task: 'diagnose', mode: 'agent', step: 'diagnose', startedAt: 1 })
+    const close = vi.spyOn(assistantBrowserTaskService, 'close').mockResolvedValue()
+    Object.assign(discordSetupSession, {
+      purpose: 'general',
+      active: true,
+      assistantConversationId: 'general-chat',
+      agentRunning: true,
+    })
+    try {
+      await f.service.open()
+      expect(close).toHaveBeenCalledWith(true, false)
+      expect(discordSetupSession.purpose).toBe('discord-setup')
+      expect(f.browser.close).toHaveBeenCalledOnce()
+      expect(f.browser.open).not.toHaveBeenCalled()
+    } finally {
+      close.mockRestore()
+    }
+  })
+  const githubFixture = (step: DiscordSetupState['step'] = 'wrangler-edit') => {
+    let source = gitHubWranglerSource(
+      {
+        applicationId: saved.applicationId,
+        publicKey: saved.publicKey,
+        databaseId: '12345678-1234-5678-9abc-123456789abc',
+      },
+      saved.applicationId,
+    )
+    const github = {
+      available: () => true,
+      status: vi.fn(async () => ({ connected: true })),
+      authorize: vi.fn(async () => ({ connected: true, login: 'tester' })),
+      execute: vi.fn<GitHubAssistantPort['execute']>(async (operation, options) => {
+        if (operation === 'save') source = options.content!
+        return {
+          connected: true,
+          login: 'tester',
+          forkFound: true,
+          repository: 'tester/renamed-bridge',
+          source,
+          sha: 'a'.repeat(40),
+          revision: 'b'.repeat(40),
+          behindBy: 0,
+          saved: operation === 'save',
+        }
+      }),
+    }
+    const f = fixture(
+      {
+        task: step === 'github-sync' ? 'update-worker' : 'configure',
+        step,
+        mode: 'agent',
+        startedAt: 1,
+        applicationId: saved.applicationId,
+        parameterResourceId: 'parameter-card',
+        forkRepo: 'tester/renamed-bridge',
+        assistantConversationId: 'github-task-chat',
+      },
+      github,
+    )
+    return { ...f, github }
+  }
+  const chooseGitHubApi = async (f: ReturnType<typeof githubFixture>) => {
+    f.emit({ action: 'github-connect' })
+    await vi.waitFor(() => expect(f.github.authorize).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(f.browser.open).toHaveBeenCalledTimes(2))
+  }
+  it('confirms an owner source update using its branch revision even when it has no Wrangler JSON file', async () => {
+    const f = githubFixture('github-sync')
+    await f.service.resume()
+    await chooseGitHubApi(f)
+    f.github.execute.mockResolvedValue({
+      connected: true,
+      login: 'jixiangruyi117',
+      repository: 'jixiangruyi117/SRL-Discord-Bridge',
+      repositoryKind: 'owned-source',
+      branch: 'production',
+      revision: 'f'.repeat(40),
+      behindBy: 0,
+    })
+    const receipt = await f.service.execute(
+      { operation: 'github-inspect', repository: 'jixiangruyi117/SRL-Discord-Bridge' },
+      new AbortController().signal,
+    )
+    expect(receipt).toMatchObject({
+      ok: true,
+      configurationAvailable: false,
+      repositoryKind: 'owned-source',
+    })
+    await f.service.execute(
+      { operation: 'advance-step', from: 'github-sync' },
+      new AbortController().signal,
+    )
+    expect(f.stored()).toMatchObject({
+      step: 'cf-deploy',
+      githubBranch: 'production',
+      githubRevision: 'f'.repeat(40),
+    })
+    await f.service.pauseAgent()
+  })
+  it('repairs the bound GitHub configuration during deployment without changing the tutorial step or taking over another repository', async () => {
+    const f = githubFixture('wrangler-edit')
+    await f.service.resume()
+    await chooseGitHubApi(f)
+    await f.service.select('cf-deploy')
+    await f.service.execute({ operation: 'github-fill' }, new AbortController().signal)
+    await f.service.execute({ operation: 'github-save' }, new AbortController().signal)
+    expect(f.github.execute).toHaveBeenCalledWith(
+      'save',
+      expect.objectContaining({ repository: 'tester/renamed-bridge' }),
+      expect.any(AbortSignal),
+    )
+    expect(f.stored()?.step).toBe('cf-deploy')
+    await expect(
+      f.service.execute(
+        { operation: 'github-save', repository: 'other/bridge' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('目标已变化')
+    await f.service.pauseAgent()
+    await expect(
+      f.service.execute({ operation: 'github-fill' }, new AbortController().signal),
+    ).rejects.toThrow('已暂停')
+  })
+  it('keeps the GitHub webpage visible by default even when API credentials exist', async () => {
+    const f = githubFixture()
+    await f.service.resume()
+    expect(f.browser.open).toHaveBeenCalledWith(expect.objectContaining({ githubApi: false }))
+    const apiResult = await f.service.execute(
+      { operation: 'github-inspect' },
+      new AbortController().signal,
+    )
+    expect(apiResult).toMatchObject({ fallbackAvailable: true, waitingForUser: false })
+    expect(apiResult.hint).toContain('用户点“GitHub连接”')
+    expect(f.github.execute).not.toHaveBeenCalled()
+    await f.service.execute({ operation: 'inspect' }, new AbortController().signal)
+    expect(f.browser.inspect).toHaveBeenCalled()
+    expect(f.browser.open).not.toHaveBeenCalledWith(expect.objectContaining({ githubApi: true }))
+  })
+  it('keeps GitHub proxy on the current webpage until the user explicitly chooses fallback authorization', async () => {
+    const f = githubFixture('github-fork')
+    f.github.status.mockResolvedValue({ connected: false })
+    await f.service.resume()
+
+    const apiResult = await f.service.execute(
+      { operation: 'github-inspect' },
+      new AbortController().signal,
+    )
+    expect(apiResult).toMatchObject({
+      githubConnected: false,
+      fallbackAvailable: true,
+      waitingForUser: false,
+    })
+    expect(apiResult.hint).toContain('用户点“GitHub连接”')
+    expect(f.github.authorize).not.toHaveBeenCalled()
+    await expect(
+      f.service.execute({ operation: 'github-connect' }, new AbortController().signal),
+    ).rejects.toThrow('外部授权是备用入口')
+
+    await f.service.execute({ operation: 'inspect' }, new AbortController().signal)
+    expect(f.browser.inspect).toHaveBeenCalled()
+    expect(f.github.authorize).not.toHaveBeenCalled()
+    await f.service.pauseAgent()
+  })
+  it('switches to the GitHub API panel only after the user chooses GitHub connection', async () => {
+    const f = githubFixture('github-fork')
+    await f.service.resume()
+    expect(f.browser.open).toHaveBeenLastCalledWith(expect.objectContaining({ githubApi: false }))
+
+    await chooseGitHubApi(f)
+
+    expect(f.browser.open).toHaveBeenLastCalledWith(expect.objectContaining({ githubApi: true }))
+    const result = await f.service.execute(
+      { operation: 'github-inspect' },
+      new AbortController().signal,
+    )
+    expect(result).toMatchObject({ githubConnected: true, forkFound: true })
+    expect(JSON.stringify(result)).not.toContain(saved.publicKey)
+    await f.service.pauseAgent()
+  })
+  it('prepares local parameters, advances through checks, and verifies the saved remote configuration', async () => {
+    const f = githubFixture()
+    await f.service.resume()
+    await chooseGitHubApi(f)
+    await f.service.execute({ operation: 'github-fill' }, new AbortController().signal)
+    await f.service.execute(
+      { operation: 'advance-step', from: 'wrangler-edit' },
+      new AbortController().signal,
+    )
+    await f.service.execute(
+      { operation: 'advance-step', from: 'wrangler-check' },
+      new AbortController().signal,
+    )
+    expect(f.stored()?.step).toBe('github-save')
+    await f.service.execute({ operation: 'github-save' }, new AbortController().signal)
+    await f.service.execute(
+      { operation: 'advance-step', from: 'github-save' },
+      new AbortController().signal,
+    )
+    expect(f.stored()?.step).toBe('cf-deploy')
+    expect(f.stored()?.githubRevision).toBe('b'.repeat(40))
+    expect(f.github.execute).toHaveBeenCalledWith(
+      'save',
+      expect.objectContaining({ sha: 'a'.repeat(40), repository: 'tester/renamed-bridge' }),
+      expect.any(AbortSignal),
+    )
+    expect(
+      f.github.execute.mock.calls.find(([operation]) => operation === 'save')![1].content,
+    ).not.toContain(saved.botToken)
+  })
+  it('does not force a conflicting upstream sync or advance the task', async () => {
+    const f = githubFixture('github-sync')
+    await f.service.resume()
+    await chooseGitHubApi(f)
+    f.github.execute.mockRejectedValue(new Error('分支发生冲突'))
+    await expect(
+      f.service.execute({ operation: 'github-sync' }, new AbortController().signal),
+    ).rejects.toThrow('冲突')
+    expect(f.stored()?.step).toBe('github-sync')
+    expect(f.github.execute).toHaveBeenCalledTimes(1)
+  })
+  it('continues from new API progress without treating a retained WebView login page as a handoff', async () => {
+    const f = githubFixture()
+    await f.service.resume()
+    await chooseGitHubApi(f)
+    f.service.takeAssistantRequest()
+    const cursor = f.service.progressCursor()
+    f.browser.inspect = vi.fn(async () => {
+      throw new Error('retained WebView login')
+    })
+    await f.service.execute({ operation: 'github-fill' }, new AbortController().signal)
+    await f.service.continueAfterProgress(f.service.agentRunId(), cursor)
+    expect(f.service.takeAssistantRequest()).toBeDefined()
+    expect(f.browser.inspect).not.toHaveBeenCalled()
+  })
+  it('pausing discards a late GitHub receipt and blocks further writes', async () => {
+    const f = githubFixture('github-sync')
+    await f.service.resume()
+    await chooseGitHubApi(f)
+    let release!: (value: Awaited<ReturnType<GitHubAssistantPort['execute']>>) => void
+    f.github.execute.mockImplementationOnce(
+      async () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const running = f.service.execute({ operation: 'github-sync' }, new AbortController().signal)
+    const rejected = expect(running).rejects.toThrow()
+    await vi.waitFor(() => expect(f.github.execute).toHaveBeenCalledTimes(1))
+    await f.service.pauseAgent()
+    release({
+      connected: true,
+      login: 'tester',
+      repository: 'tester/renamed-bridge',
+      source: '{}',
+      sha: 'c'.repeat(40),
+      revision: 'd'.repeat(40),
+    })
+    await rejected
+    expect(f.stored()?.githubRevision).toBeUndefined()
+    await expect(
+      f.service.execute({ operation: 'github-save' }, new AbortController().signal),
+    ).rejects.toThrow('暂停')
+  })
   it('requires an old-connection backup before changing an update into a new Worker configuration', async () => {
     const f = fixture()
     await f.service.start('update-worker', 'cf-deploy', 'agent')
@@ -182,36 +463,65 @@ describe('APK Discord setup workflow', () => {
     )
     await f.service.pauseAgent()
   })
-  it('opens the existing pet quick chat while a page wait is pending, without cancelling the agent', async () => {
+  it.each([false, true])(
+    'opens the existing pet quick chat during a page wait (shared presentation: %s)',
+    async (shared) => {
+      const f = fixture()
+      if (shared) f.browser.chatPresentation = vi.fn(async () => {})
+      await f.service.start('update-worker', 'github-sync', 'agent')
+      f.service.takeAssistantRequest()
+      let release!: () => void
+      vi.mocked(f.browser.waitReady).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ ...f.page })
+          }),
+      )
+      const waiting = f.service.execute({ operation: 'wait-page' }, new AbortController().signal)
+      await vi.waitFor(() => expect(f.browser.waitReady).toHaveBeenCalled())
+      const open = vi.fn()
+      const navigate = vi.fn()
+      window.addEventListener('srl:discord-setup-quick-chat', open)
+      window.addEventListener('srl:native-deep-link', navigate)
+      try {
+        f.emit({ action: 'quick-chat' })
+        await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
+        if (shared) expect(f.browser.close).not.toHaveBeenCalled()
+        else expect(f.browser.close).toHaveBeenCalledWith({ keepRunning: true })
+        expect(discordSetupSession.agentRunning).toBe(true)
+        expect(f.browser.cancelWait).not.toHaveBeenCalled()
+        expect(navigate).not.toHaveBeenCalled()
+        expect(f.service.takeAssistantRequest()).toBeUndefined()
+      } finally {
+        window.removeEventListener('srl:discord-setup-quick-chat', open)
+        window.removeEventListener('srl:native-deep-link', navigate)
+        release()
+        await waiting
+        await f.service.pauseAgent()
+      }
+    },
+  )
+  it('queues page work without navigating the chat or reopening the page when returning from chat', async () => {
     const f = fixture()
-    await f.service.start('update-worker', 'github-sync', 'agent')
-    f.service.takeAssistantRequest()
-    let release!: () => void
-    vi.mocked(f.browser.waitReady).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          release = () => resolve({ ...f.page })
-        }),
-    )
-    const waiting = f.service.execute({ operation: 'wait-page' }, new AbortController().signal)
-    await vi.waitFor(() => expect(f.browser.waitReady).toHaveBeenCalled())
-    const open = vi.fn()
     const navigate = vi.fn()
-    window.addEventListener('srl:discord-setup-quick-chat', open)
     window.addEventListener('srl:native-deep-link', navigate)
     try {
-      f.emit({ action: 'quick-chat' })
-      await vi.waitFor(() => expect(open).toHaveBeenCalledOnce())
-      expect(f.browser.close).toHaveBeenCalledWith({ keepRunning: true })
-      expect(discordSetupSession.agentRunning).toBe(true)
-      expect(f.browser.cancelWait).not.toHaveBeenCalled()
+      await f.service.start('update-worker', 'github-sync', 'agent')
+      f.service.continueInTaskConversation()
+      expect(f.service.peekAssistantRequest()).toBeTruthy()
       expect(navigate).not.toHaveBeenCalled()
-      expect(f.service.takeAssistantRequest()).toBeUndefined()
+      const run = f.service.agentRunId()
+      f.browser.chatPresentation = vi.fn(async () => {})
+      vi.mocked(f.browser.open).mockClear()
+      await f.service.returnToBrowser()
+      expect(f.browser.chatPresentation).toHaveBeenCalledWith({
+        mode: 'browser',
+        conversationId: discordSetupSession.assistantConversationId,
+      })
+      expect(f.browser.open).not.toHaveBeenCalled()
+      expect(f.service.agentRunId()).toBe(run)
     } finally {
-      window.removeEventListener('srl:discord-setup-quick-chat', open)
       window.removeEventListener('srl:native-deep-link', navigate)
-      release()
-      await waiting
       await f.service.pauseAgent()
     }
   })
@@ -302,6 +612,56 @@ describe('APK Discord setup workflow', () => {
     ).rejects.toThrow('连接配置已变化')
     expect(f.stored()?.step).toBe('diagnose')
     expect(f.browser.open).not.toHaveBeenCalled()
+    await f.service.pauseAgent()
+  })
+  it('updates browser visibility immediately while opening is still in the operation queue', async () => {
+    const f = fixture({
+      task: 'configure',
+      step: 'github-fork',
+      mode: 'agent',
+      startedAt: 1,
+      assistantConversationId: 'visibility-chat',
+    })
+    let opened!: () => void
+    f.browser.open = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          opened = resolve
+        }),
+    )
+    const resuming = f.service.resume()
+    await vi.waitFor(() => expect(f.browser.open).toHaveBeenCalled())
+    f.emit({ action: 'visibility', visible: true, conversationId: 'visibility-chat' })
+    expect(discordSetupSession.browserVisible).toBe(true)
+    f.emit({ action: 'visibility', visible: false, conversationId: 'previous-chat' })
+    expect(discordSetupSession.browserVisible).toBe(true)
+    f.emit({ action: 'quick-chat', conversationId: 'previous-chat' })
+    expect(f.browser.close).not.toHaveBeenCalled()
+    f.emit({ action: 'visibility', visible: false, conversationId: 'visibility-chat' })
+    expect(discordSetupSession.browserVisible).toBe(false)
+    opened()
+    await resuming
+    await f.service.pauseAgent()
+  })
+  it('explicit resume asks to bring the retained webpage back to the foreground', async () => {
+    const f = fixture({
+      task: 'configure',
+      step: 'github-fork',
+      mode: 'agent',
+      startedAt: 1,
+      assistantConversationId: 'resume-chat',
+    })
+    await f.service.resume()
+    expect(f.browser.open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        foreground: true,
+        resumeCurrent: true,
+        conversationId: 'resume-chat',
+      }),
+    )
+    vi.mocked(f.browser.open).mockClear()
+    await f.service.execute({ operation: 'open' }, new AbortController().signal)
+    expect(f.browser.open).not.toHaveBeenCalledWith(expect.objectContaining({ foreground: true }))
     await f.service.pauseAgent()
   })
   it('returns to the retained browser without starting a paused agent or sending a request', async () => {
@@ -1185,7 +1545,7 @@ describe('APK Discord setup workflow', () => {
         branch: 'main',
         revision: 'a'.repeat(40),
         workerName: 'srl-discord-source-bridge',
-        deployCommand: 'npm run deploy',
+        deployCommand: 'npx wrangler d1 migrations apply DB --remote && npx wrangler deploy',
       },
     })
     expect(status.hint).toContain('Hello World')
@@ -1914,6 +2274,37 @@ describe('APK Discord setup workflow', () => {
     await expect(pending).rejects.toThrow('代理任务已停止')
     expect(f.browser.act).not.toHaveBeenCalled()
   })
+  it('operates public forms outside deployment sites in the original workflow and preserves pause', async () => {
+    const f = fixture()
+    await f.service.start('configure', undefined, 'agent')
+    f.page.url = 'https://example.org/form'
+    f.page.pageAccess = 'public'
+    f.page.text = 'Create an application with a valid name'
+    f.page.links = [{ target: '2', label: 'Help', url: 'https://docs.github.com/en' }]
+    f.page.controls = [{ target: '1', label: 'Name', kind: 'input', sensitive: false }]
+    const signal = new AbortController().signal
+    expect(await f.service.execute({ operation: 'inspect' }, signal)).toMatchObject({
+      text: f.page.text,
+      links: f.page.links,
+      waitingForUser: false,
+      browserPage: { host: 'example.org', path: '/form', access: 'public' },
+    })
+    await f.service.execute(
+      { operation: 'fill', document_id: '1', target: '1', value: 'SRL Bridge' },
+      signal,
+    )
+    expect(f.browser.act).toHaveBeenLastCalledWith(
+      expect.objectContaining({ operation: 'fill', value: 'SRL Bridge' }),
+    )
+    await f.service.execute({ operation: 'navigate', url: 'https://docs.github.com/en' }, signal)
+    expect(f.browser.act).toHaveBeenLastCalledWith(
+      expect.objectContaining({ operation: 'navigate', url: 'https://docs.github.com/en' }),
+    )
+    await f.service.pauseAgent()
+    await expect(
+      f.service.execute({ operation: 'navigate', url: 'https://example.org/form' }, signal),
+    ).rejects.toThrow('确认代理权限')
+  })
   it('blocks unapproved/secret fill and untrusted destinations while allowing the authorized sites', async () => {
     const f = fixture()
     await f.service.start('configure', undefined, 'agent')
@@ -1951,7 +2342,7 @@ describe('APK Discord setup workflow', () => {
         operation: 'navigate',
         url: 'https://user:pass@discord.com/developers/applications',
       }),
-    ).rejects.toThrow('已授权')
+    ).rejects.toThrow('公开 HTTPS')
     await execute({ operation: 'navigate', url: '/developers/applications' })
     expect(f.browser.act).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -2095,14 +2486,13 @@ describe('APK Discord setup workflow', () => {
       scopes: [],
       css: {},
       currentScope: '',
-    } as Parameters<typeof getAssistantRequestTools>[0]).find(
-      (item) => item.name === 'configure_discord_browser',
-    )!
+    }).find((item) => item.name === 'configure_discord_browser')!
     expect(tool.parameters.properties).toHaveProperty('query')
     expect(tool.parameters.properties).toHaveProperty('direction')
-    expect(tool.description).toContain('available默认复用')
-    expect(tool.description).toContain('unknown不等于没有App')
-    expect(tool.description).toContain('focus')
+    const guidance = assistantDiscordGuidance('discord-app', 'configure')
+    expect(guidance).toContain('available默认复用')
+    expect(guidance).toContain('unknown不等于没有App')
+    expect(guidance).toContain('focus')
   })
   it('forwards focus and upward scrolling with document binding, rejecting stale targets and invalid directions', async () => {
     const f = fixture({ task: 'configure', mode: 'agent', step: 'discord-app', startedAt: 1 })
@@ -2459,6 +2849,45 @@ describe('APK Discord setup workflow', () => {
     finish({ ...f.page })
     await expect(waiting).rejects.toThrow()
     expect(f.browser.act).not.toHaveBeenCalled()
+  })
+  it('releases the serial queue after stopping even when native wait cancellation rejects', async () => {
+    const f = fixture()
+    await f.service.start('configure', 'cf-deploy', 'agent')
+    const runId = f.service.agentRunId()!
+    let finish!: (value: DiscordBrowserSnapshot) => void
+    vi.mocked(f.browser.waitStatus).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    vi.mocked(f.browser.cancelWait).mockRejectedValueOnce(new Error('obsolete wait'))
+    const waiting = f.service.execute(
+      { operation: 'wait-status', document_id: '1', target: '1' },
+      new AbortController().signal,
+    )
+    const rejected = expect(waiting).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(f.browser.waitStatus).toHaveBeenCalledOnce())
+    await f.service.pauseAgent()
+    await rejected
+    expect(f.browser.cancelWait).toHaveBeenCalledWith({ ownerAgentRunId: runId })
+    expect(
+      await f.service.execute({ operation: 'status' }, new AbortController().signal),
+    ).toMatchObject({ step: 'cf-deploy' })
+    expect(discordSetupSession.agentRunning).toBe(false)
+    finish({ ...f.page })
+    await Promise.resolve()
+    expect(f.service.takeAssistantRequest()).toBeUndefined()
+    expect(f.browser.act).not.toHaveBeenCalled()
+  })
+  it('records logical cancellation even when the native pause acknowledgement fails', async () => {
+    const f = fixture()
+    await f.service.start('configure', 'discord-app', 'agent')
+    const runId = f.service.agentRunId()!
+    vi.mocked(f.browser.pauseAgent).mockRejectedValueOnce(new Error('pause bridge failed'))
+    await expect(f.service.pauseAgent()).rejects.toThrow('pause bridge failed')
+    expect(discordSetupSession.agentRunning).toBe(false)
+    expect(taskCenter.list().find((task) => task.operationId === runId)?.status).toBe('cancelled')
   })
   it('cancels a deployment status wait immediately when the user stops the agent', async () => {
     const f = fixture()
@@ -3705,6 +4134,14 @@ describe('APK Discord setup workflow', () => {
     expect(f.browser.act).not.toHaveBeenCalled()
     expect(f.stored()?.step).toBe('d1-create')
   })
+  it('reports the actual GitHub editing goal rather than shadowing it with a login reminder', async () => {
+    const f = fixture()
+    await f.service.start('configure', 'wrangler-check', 'agent')
+    const status = await f.service.execute({ operation: 'status' }, new AbortController().signal)
+    expect(status.hint).toContain('JSON/JSONC')
+    expect(status.hint).not.toContain('尝试直接登录')
+    await f.service.pauseAgent()
+  })
   it('rejects stale document handles and untrusted sites', async () => {
     const f = fixture({ task: 'configure', step: 'd1-create', startedAt: 1 })
     f.page.url = 'https://dash.cloudflare.com/account/d1'
@@ -3720,8 +4157,73 @@ describe('APK Discord setup workflow', () => {
         { operation: 'fill', document_id: '1', target: '1', field: 'database-name' },
         new AbortController().signal,
       ),
-    ).rejects.toThrow('不属于已授权')
+    ).rejects.toThrow('手动步骤请返回对应配置站点')
     expect(f.browser.act).not.toHaveBeenCalled()
+  })
+  it('dispatches Discord public keys with the same document and target guards as clicks', async () => {
+    const f = fixture()
+    await f.service.start('configure', 'd1-create', 'agent')
+    f.page.url = 'https://dash.cloudflare.com/account/d1'
+    await f.service.execute(
+      { operation: 'press', key: 'Escape', document_id: '1', target: '1' },
+      new AbortController().signal,
+    )
+    expect(f.browser.act).toHaveBeenLastCalledWith(
+      expect.objectContaining({ operation: 'press', documentId: 1, target: '1', key: 'Escape' }),
+    )
+    vi.mocked(f.browser.act).mockClear()
+    await expect(
+      f.service.execute(
+        { operation: 'press', key: 'Escape', document_id: '0', target: '1' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('网页已变化')
+    await expect(
+      f.service.execute(
+        { operation: 'press', key: 'F12', document_id: '1', target: '1' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow()
+    expect(f.browser.act).not.toHaveBeenCalled()
+    await f.service.pauseAgent()
+  })
+  it.each([
+    ['public', '不代表登录或授权未完成'],
+    ['authentication', '当前实际网页是登录或授权页面'],
+    ['protected', '当前实际网页受秘密保护'],
+  ] as const)(
+    'reports the actual paused %s reason without operating the page',
+    async (pageAccess, hint) => {
+      const f = fixture()
+      await f.service.start('configure', 'd1-create', 'agent')
+      Object.assign(f.page, {
+        url: 'https://dash.cloudflare.com/account/d1',
+        paused: true,
+        pageAccess,
+      })
+      expect(
+        await f.service.execute(
+          { operation: 'click', document_id: '1', target: '1' },
+          new AbortController().signal,
+        ),
+      ).toMatchObject({ waitingForUser: true, hint: expect.stringContaining(hint) })
+      expect(f.browser.act).not.toHaveBeenCalled()
+      await f.service.pauseAgent()
+    },
+  )
+  it('does not let Enter on a GitHub form bypass the repository check', async () => {
+    const f = fixture()
+    await f.service.start('configure', 'github-save', 'agent')
+    f.page.url = 'https://github.com/another/unrelated/edit/main/wrangler.jsonc'
+    f.page.controls = [{ target: '1', label: 'Summary', kind: 'input', sensitive: false }]
+    await expect(
+      f.service.execute(
+        { operation: 'press', key: 'Enter', document_id: '1', target: '1' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow()
+    expect(f.browser.act).not.toHaveBeenCalled()
+    await f.service.pauseAgent()
   })
   it('waits for the user while paused and never offers arbitrary secret filling', async () => {
     const f = fixture({ task: 'configure', step: 'd1-create', startedAt: 1 })
@@ -3759,6 +4261,116 @@ describe('APK Discord setup workflow', () => {
         url: 'https://github.com/test-user/SRL-Discord-Bridge/edit/main/wrangler.jsonc',
       }),
     )
+  })
+  it('uses an authenticated owner source repository instead of searching for a nonexistent fork', async () => {
+    const f = fixture()
+    await f.service.start('update-worker', 'github-sync', 'agent')
+    f.page.url = 'https://github.com/jixiangruyi117/SRL-Discord-Bridge/tree/release'
+    f.page.repository = {
+      name: 'jixiangruyi117/SRL-Discord-Bridge',
+      kind: 'owned-source',
+      branch: 'release',
+    }
+    vi.mocked(f.browser.act).mockResolvedValue({
+      ok: true,
+      verified: true,
+      revision: 'c'.repeat(40),
+    })
+    await f.service.execute(
+      { operation: 'advance-step', from: 'github-sync', document_id: '1' },
+      new AbortController().signal,
+    )
+    expect(f.stored()).toMatchObject({
+      step: 'cf-deploy',
+      forkRepo: 'jixiangruyi117/SRL-Discord-Bridge',
+      repositoryKind: 'owned-source',
+      githubBranch: 'release',
+    })
+    expect(f.browser.act).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'verify-step',
+        repositoryKind: 'owned-source',
+        expectedBranch: 'release',
+      }),
+    )
+    expect(f.browser.confirmSuccess).not.toHaveBeenCalled()
+    await f.service.pauseAgent()
+  })
+  it('does not accept a public source page as proof that the current user owns it', async () => {
+    const f = fixture()
+    await f.service.start('update-worker', 'github-sync', 'agent')
+    f.page.url = 'https://github.com/jixiangruyi117/SRL-Discord-Bridge'
+    await expect(
+      f.service.execute(
+        { operation: 'advance-step', from: 'github-sync', document_id: '1' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('核对')
+    expect(f.stored()?.step).toBe('github-sync')
+    expect(f.browser.act).not.toHaveBeenCalled()
+    await f.service.pauseAgent()
+  })
+  it('reuses a saved file on a renamed fork and non-main branch through the edit/check/save goals', async () => {
+    const f = fixture()
+    await f.service.start('configure', 'wrangler-edit', 'agent')
+    f.page.url = 'https://github.com/test-user/renamed-bridge/blob/release/stable/wrangler.json'
+    f.page.forkOfTarget = true
+    f.page.repository = {
+      name: 'test-user/renamed-bridge',
+      kind: 'fork',
+      branch: 'release/stable',
+      file: 'wrangler.json',
+    }
+    vi.mocked(f.browser.act).mockResolvedValue({
+      ok: true,
+      verified: true,
+      formatOnly: true,
+      revision: 'd'.repeat(40),
+    })
+    for (const step of ['wrangler-edit', 'wrangler-check', 'github-save']) {
+      await f.service.execute(
+        { operation: 'advance-step', from: step, document_id: '1' },
+        new AbortController().signal,
+      )
+    }
+    expect(f.stored()).toMatchObject({
+      step: 'cf-deploy',
+      githubBranch: 'release/stable',
+      githubFile: 'wrangler.json',
+      githubRevision: 'd'.repeat(40),
+    })
+    expect(f.browser.act).not.toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'template' }),
+    )
+    await f.service.pauseAgent()
+  })
+  it('uses the original configuration confirmation and leaves the file untouched when declined', async () => {
+    const f = fixture({
+      task: 'configure',
+      step: 'wrangler-edit',
+      mode: 'agent',
+      startedAt: 1,
+      parameterResourceId: 'parameter-card',
+      applicationId: saved.applicationId,
+    })
+    await f.service.resume()
+    f.page.url = 'https://github.com/test-user/renamed-bridge/edit/main/wrangler.jsonc'
+    f.page.forkOfTarget = true
+    vi.mocked(f.browser.act).mockResolvedValue({
+      ok: false,
+      configurationConflict: true,
+      configurationConfirmation: 'e'.repeat(36),
+    })
+    permissionConfirm.mockResolvedValueOnce(false)
+    await expect(
+      f.service.execute(
+        { operation: 'fill-config', document_id: '1' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('未修改')
+    expect(f.browser.act).toHaveBeenCalledOnce()
+    expect(discordSetupSession.agentRunning).toBe(false)
+    expect(f.stored()?.step).toBe('wrangler-edit')
   })
   it('never writes a Wrangler template to the upstream repository', async () => {
     const f = fixture({
@@ -3985,15 +4597,12 @@ describe('APK Discord setup workflow', () => {
         ...context,
         canConfigureDiscordBrowser: true,
         capabilities: ['discord'],
-      }).some(
-        (tool) => tool.name === 'configure_discord_browser',
-      ),
+      }).some((tool) => tool.name === 'configure_discord_browser'),
     ).toBe(true)
     expect(
       getAssistantRequestTools({
         ...context,
         canConfigureDiscordBrowser: true,
-        capabilities: ['discord'],
         toolCallingEnabled: false,
       }),
     ).toEqual([])
@@ -4009,5 +4618,165 @@ describe('APK Discord setup workflow', () => {
       workerUrl: 'https://example.com/?token=secret',
     })
     expect(value).toEqual({ task: 'configure', step: 'd1-uuid', startedAt: 1 })
+  })
+})
+
+describe('explicit saved inbox configuration recovery', () => {
+  it('resumes recovery in the same local diagnosis chat without navigating to settings or reporting a missing webpage', async () => {
+    const f = fixture({
+      task: 'update-worker',
+      step: 'github-sync',
+      mode: 'agent',
+      startedAt: 1,
+      assistantConversationId: 'recovery-task-chat',
+    })
+    await f.service.resume()
+    await f.service.execute(
+      { operation: 'restore-saved-config', resource_id: 'old-card' },
+      new AbortController().signal,
+    )
+    vi.mocked(f.browser.open).mockClear()
+    const navigation = vi.fn(),
+      chat = vi.fn()
+    window.addEventListener('srl:native-deep-link', navigation)
+    window.addEventListener('srl:discord-setup-quick-chat', chat)
+    try {
+      const receipt = await f.service.resume()
+      expect(receipt).toMatchObject({
+        step: 'diagnose',
+        workSurface: 'local',
+        browserRequired: false,
+      })
+      expect(chat).toHaveBeenCalledOnce()
+      expect(navigation).not.toHaveBeenCalled()
+      expect(f.browser.open).not.toHaveBeenCalled()
+      expect(discordSetupSession.assistantConversationId).toBe('recovery-task-chat')
+      expect(discordSetupSession.agentRunning).toBe(true)
+      expect(f.service.takeAssistantRequest()).toContain('本机排查')
+    } finally {
+      window.removeEventListener('srl:native-deep-link', navigation)
+      window.removeEventListener('srl:discord-setup-quick-chat', chat)
+    }
+  })
+  it('finishes restoration and returns its receipt without cancelling its own reply', async () => {
+    const f = fixture({ task: 'update-worker', step: 'github-sync', mode: 'agent', startedAt: 1 })
+    await f.service.resume()
+    discordSetupSession.browserVisible = true
+    const reply = new AbortController()
+    const cancelReply = () => reply.abort()
+    window.addEventListener('srl:discord-setup-stop', cancelReply)
+    try {
+      const receipt = await f.service.execute(
+        { operation: 'restore-saved-config', resource_id: 'old-card' },
+        reply.signal,
+      )
+      expect(receipt).toMatchObject({ restored: true, backupResourceId: 'old-connection-card' })
+      expect(reply.signal.aborted).toBe(false)
+      expect(f.parameters.backupConnection).toHaveBeenCalledOnce()
+      expect(discordSetupSession.agentRunning).toBe(false)
+      expect(f.browser.close).toHaveBeenCalled()
+      expect(f.browser.suspend).toHaveBeenCalled()
+      expect(f.stored()).toMatchObject({ task: 'diagnose', step: 'diagnose' })
+    } finally {
+      window.removeEventListener('srl:discord-setup-stop', cancelReply)
+    }
+  })
+
+  it('exits immediately while recovery confirmation is pending, without restoring credentials', async () => {
+    const f = fixture({ task: 'update-worker', step: 'github-sync', mode: 'agent', startedAt: 1 })
+    await f.service.resume()
+    let finish!: (value: boolean) => void
+    permissionConfirm.mockImplementationOnce(
+      (_options, signal) =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve
+          signal?.addEventListener('abort', () => resolve(false), { once: true })
+        }),
+    )
+    const pending = f.service.execute(
+      { operation: 'restore-saved-config', resource_id: 'old-card' },
+      new AbortController().signal,
+    )
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    f.emit({ action: 'return' })
+    try {
+      await vi.waitFor(() => expect(f.browser.close).toHaveBeenCalled())
+      expect(discordSetupSession.active).toBe(false)
+      expect(f.parameters.readSavedConnection).not.toHaveBeenCalled()
+      expect(f.parameters.backupConnection).not.toHaveBeenCalled()
+    } finally {
+      finish(false)
+      await pending.catch(() => {})
+    }
+  })
+
+  it('suspends the native fullscreen preview before showing a host confirmation', async () => {
+    const f = fixture()
+    discordSetupSession.browserVisible = false
+    discordSetupSession.chatPresentation = 'fullscreen'
+    try {
+      expect(await f.service.suspendForModelConsent()).toBe(true)
+      expect(f.browser.suspend).toHaveBeenCalledOnce()
+    } finally {
+      discordSetupSession.chatPresentation = ''
+    }
+  })
+
+  it('clears stale repository and commit bindings after restoring another connection', async () => {
+    const f = fixture({
+      task: 'update-worker',
+      step: 'github-sync',
+      mode: 'agent',
+      startedAt: 1,
+      forkRepo: 'tester/old-bridge',
+      githubBranch: 'release',
+      githubFile: 'wrangler.json',
+      githubRevision: 'a'.repeat(40),
+    })
+    const result = await f.service.execute(
+      { operation: 'restore-saved-config', resource_id: 'old-card' },
+      new AbortController().signal,
+    )
+    expect(result).toMatchObject({ restored: true })
+    expect(f.stored()).toMatchObject({ task: 'diagnose', step: 'diagnose' })
+    expect(f.stored()?.forkRepo).toBeUndefined()
+    expect(f.stored()?.githubBranch).toBeUndefined()
+    expect(f.stored()?.githubRevision).toBeUndefined()
+  })
+
+  it('lists only card metadata and restores the chosen card with a backup, never emitting either secret', async () => {
+    const f = fixture()
+    const signal = new AbortController().signal
+    expect(await f.service.execute({ operation: 'list-saved-config' }, signal)).toMatchObject({
+      cards: [{ id: 'old-card', name: '旧收件箱配置' }],
+    })
+    const receipt = await f.service.execute(
+      { operation: 'restore-saved-config', resource_id: 'old-card' },
+      signal,
+    )
+    expect(receipt).toMatchObject({
+      restored: true,
+      pairingRestored: true,
+      backupResourceId: 'old-connection-card',
+    })
+    expect(JSON.stringify(receipt)).not.toContain('DO_NOT_SEND_INBOX_SECRET')
+    expect(JSON.stringify(receipt)).not.toContain(saved.botToken)
+    expect(f.parameters.backupConnection).toHaveBeenCalledOnce()
+    expect(f.parameters.readSavedConnection).toHaveBeenCalledWith(
+      'old-card',
+      expect.objectContaining({ aborted: false }),
+    )
+  })
+  it('does not decrypt or switch when the centered recovery confirmation is cancelled', async () => {
+    const f = fixture()
+    permissionConfirm.mockResolvedValueOnce(false)
+    expect(
+      await f.service.execute(
+        { operation: 'restore-saved-config', resource_id: 'old-card' },
+        new AbortController().signal,
+      ),
+    ).toMatchObject({ cancelled: true })
+    expect(f.parameters.readSavedConnection).not.toHaveBeenCalled()
+    expect(f.parameters.backupConnection).not.toHaveBeenCalled()
   })
 })

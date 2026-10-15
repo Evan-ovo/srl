@@ -116,9 +116,10 @@
     if (location.hostname !== 'github.com') return null;
     const match = location.pathname.match(/^\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/);
     if (!match) return null;
-    const name = match[1];
-    if (!forkRelation()) return null;
-    const identity = { name, kind: 'fork' };
+    const name = match[1], login = document.querySelector('meta[name="user-login"]')?.content;
+    const owned = name.toLowerCase() === 'jixiangruyi117/srl-discord-bridge' && login?.toLowerCase() === 'jixiangruyi117';
+    if (!owned && !forkRelation()) return null;
+    const identity = { name, kind: owned ? 'owned-source' : 'fork' };
     const file = location.pathname.match(/\/(?:edit|blob)\/(.+)\/(wrangler\.jsonc?)$/);
     try { if (file) { identity.branch = decodeURIComponent(file[1]); identity.file = file[2]; } } catch { return null; }
     for (const node of document.querySelectorAll('script[type="application/json"][data-target="react-app.embeddedData"]')) {
@@ -722,6 +723,13 @@
         const verified = fields.length === 1 && fields[0].value === payload.value && !dirty && !errors;
         return result(verified, { verified });
       }
+      if (payload.step === 'github-sync' && payload.repositoryKind === 'owned-source') {
+        const identity = repositoryIdentity(), branch = payload.expectedBranch || 'main';
+        const onBranch = identity?.branch === branch || [...document.querySelectorAll('button,a,[role="button"]')].some(node => visible(node) && label(node).trim() === branch);
+        const revision = currentRevision(payload.expectedFork, '', branch);
+        const verified = identity?.kind === 'owned-source' && identity.name === payload.expectedFork && onBranch && !!revision;
+        return result(verified, { verified, ...(verified ? { revision, syncNotApplicable: true } : {}) });
+      }
       const status = payload.statusTarget;
       if (!status || !/^\d{1,10}$/.test(status.target)) return result(false, { errors: ['请选择当前页面的真实结果状态；点击回执不是成功证据'] });
       const matches = document.querySelectorAll('[data-srl-discord-control="' + status.target + '"]');
@@ -944,12 +952,15 @@
     if (!/^\d{1,10}$/.test(payload.target)) return result(false);
     const matches = document.querySelectorAll('[data-srl-discord-control="' + payload.target + '"]');
     const el = matches.length === 1 ? matches[0] : null;
-    if (operation === 'select' && el?.tagName === 'OPTION') {
-      const select = el.parentElement?.tagName === 'SELECT' ? el.parentElement : el.parentElement?.parentElement;
-      if (!select || select.tagName !== 'SELECT' || !visible(select) || select.disabled || el.disabled || (publicSecretControls ? !secretPublicTarget(select) : secret(select) || fieldInfo(select).sensitive) || safe(el.textContent) !== payload.label) return result(false);
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, el.value);
+    if (operation === 'select' && (el?.tagName === 'OPTION' || payload.general && el?.tagName === 'SELECT' && typeof payload.value === 'string')) {
+      const select = el.tagName === 'SELECT' ? el : el.parentElement?.tagName === 'SELECT' ? el.parentElement : el.parentElement?.parentElement;
+      if (!select || select.tagName !== 'SELECT' || !visible(select) || select.disabled || (publicSecretControls ? !secretPublicTarget(select) : secret(select) || fieldInfo(select).sensitive)) return result(false, { errors: ['选项已变化、不可用或属于私密字段'] });
+      const options = el.tagName === 'SELECT' ? [...el.options].filter(option => option.value === payload.value || safe(option.textContent) === payload.value) : [el];
+      const option = options.length === 1 ? options[0] : null;
+      if (!option || option.disabled || option.closest('optgroup')?.disabled || (el.tagName === 'SELECT' ? label(el) : safe(el.textContent)) !== payload.label) return result(false, { errors: ['选项不唯一、已变化或不可用，请观察实际选项后再选择'] });
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, option.value);
       select.dispatchEvent(new Event('input', { bubbles: true })); select.dispatchEvent(new Event('change', { bubbles: true }));
-      return result(el.selected, { filled: el.selected });
+      return result(option.selected, { filled: option.selected });
     }
     const currentLabel = el && ['INPUT','TEXTAREA'].includes(el.tagName) ? fieldInfo(el).label || label(el) : el && label(el);
     if (operation === 'focus') {
@@ -977,7 +988,7 @@
     const repositoryRemoval = repositoryAuthorization() && /remove.*repository|移除.*仓库/i.test(payload.label);
     if ((publicSecretControls ? !secretPublicTarget(el) : secret(el) || fieldInfo(el).sensitive) || /reset token|discard|delete|sign in|log in|登录|永久删除|重置令牌/i.test(payload.label) || /remove/i.test(payload.label) && !repositoryRemoval || /authorize|授权/i.test(payload.label) && !appAuthorization && !consentAuthorization) return result(false, { waitingForUser: true });
     if (operation === 'press') {
-      if (!payload.general || !el || secret(el) || fieldInfo(el).sensitive || disabled(el) || !['INPUT','TEXTAREA','BUTTON','A','SELECT'].includes(el.tagName)) return result(false, { errors: ['按键目标已变化或属于私密控件'] });
+      if (!el || secret(el) || fieldInfo(el).sensitive || disabled(el) || !['INPUT','TEXTAREA','BUTTON','A','SELECT'].includes(el.tagName)) return result(false, { errors: ['按键目标已变化或属于私密控件'] });
       el.focus({ preventScroll: true });
       if (payload.nativeKey) return result(true, { keyDispatch: true });
       const init = { key: payload.key, bubbles: true, cancelable: true };

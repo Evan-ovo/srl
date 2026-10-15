@@ -180,6 +180,9 @@
   padding-left: max(12px, var(--safe-left));
   box-shadow: none;
 }
+.assistant-pet-dialog--assistance {
+  z-index: 1201;
+}
 html[data-assistant-browser-chat='compact'],
 html[data-assistant-browser-chat='compact'] body {
   background: transparent;
@@ -188,7 +191,7 @@ html[data-assistant-browser-chat='compact'] .app-shell {
   visibility: hidden;
 }
 .assistant-browser-preview {
-  width: min(180px, 48vw);
+  width: min(180px, calc(100vw - 24px));
   height: 150px;
   display: flex;
   flex-direction: column;
@@ -200,17 +203,8 @@ html[data-assistant-browser-chat='compact'] .app-shell {
   background: var(--dialog-background, var(--color-surface));
   color: var(--color-ink);
 }
-.assistant-browser-preview-row {
-  display: flex;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  margin-block: 4px;
-}
-.assistant-browser-preview-row:empty {
-  display: none;
-}
 .assistant-browser-preview small {
-  font-size: 11px;
+  font-size: 12px;
 }
 .assistant-pet-dialog .appearance-studio--chat {
   flex: 1;

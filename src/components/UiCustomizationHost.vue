@@ -3,6 +3,7 @@ import recoveryCss from '../styles/RecoveryControls.css?inline'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { appearanceScopes } from '../core/AppearanceScopes'
 import { createProtectedHost } from '../core/AppearanceSafety'
+import { installUiRecoveryGesture } from '../core/UiRecoveryGesture'
 import { BrowserStorageService } from '../services/BrowserStorageService'
 import { createUiDomSession, UI_PRIVATE_SELECTOR } from '../services/UiViewDom'
 import { readUiViewPreviewCss } from '../core/UiViewPreview'
@@ -28,6 +29,7 @@ let stylesObserver: MutationObserver | undefined
 let themeObserver: MutationObserver | undefined
 let sizeObserver: ResizeObserver | undefined
 let rescue: HTMLDivElement | undefined
+let stopRecoveryGesture: (() => void) | undefined
 let disposed = false
 let queued = false
 const nativeStyles = new Map<HTMLElement, string | null>()
@@ -141,11 +143,18 @@ function hideController() {
     }
     root.value.style.setProperty('position', 'relative')
   }
+}
+function revealRecovery() {
+  if (!ready.value || failed.value || !view.value?.enabled) return
   if (!rescue) {
     const layer = createProtectedHost('srl-custom-ui-rescue')
     rescue = layer.host
-    layer.root.innerHTML = `<style>${recoveryCss}</style><button type="button" class="ui-recovery-button">恢复原界面</button>`
-    layer.root.querySelector('button')!.addEventListener('click', disableCurrent)
+    layer.root.innerHTML = `<style>${recoveryCss}</style><div class="actions"><button type="button" class="ui-recovery-button">恢复原界面</button><button type="button" data-dismiss>收起</button></div>`
+    layer.root.querySelector('.ui-recovery-button')!.addEventListener('click', disableCurrent)
+    layer.root.querySelector('[data-dismiss]')!.addEventListener('click', () => {
+      rescue?.remove()
+      rescue = undefined
+    })
   }
 }
 function disableCurrent() {
@@ -248,7 +257,27 @@ watch([() => JSON.stringify(view.value), () => previewPolicy.value.allowRemoteRe
   restore()
   refreshStyles()
 })
-watch([ready, failed], hideController)
+watch([ready, failed], () => {
+  stopRecoveryGesture?.()
+  stopRecoveryGesture = undefined
+  hideController()
+  if (ready.value && !failed.value)
+    stopRecoveryGesture = installUiRecoveryGesture(
+      document,
+      revealRecovery,
+      (event) =>
+        ready.value &&
+        !failed.value &&
+        !!view.value?.enabled &&
+        !event
+          .composedPath()
+          .some(
+            (node) =>
+              node instanceof HTMLElement &&
+              ['srl-custom-ui-rescue', 'srl-appearance-safe-layer'].includes(node.id),
+          ),
+    )
+})
 function escape(event: KeyboardEvent) {
   if (event.altKey && event.shiftKey && event.code === 'Digit0') disableCurrent()
 }
@@ -287,6 +316,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  stopRecoveryGesture?.()
   restore()
   observer?.disconnect()
   stateObserver?.disconnect()
@@ -314,6 +344,8 @@ onBeforeUnmount(() => {
         :snapshot="state"
         :css="css"
         :invoke="invoke"
+        recovery
+        @recovery="revealRecovery"
         @ready="ready = true"
         @error="failed = true"
         @native="placeNative"

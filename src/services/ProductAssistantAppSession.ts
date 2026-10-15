@@ -195,9 +195,6 @@ export class ProductAssistantAppSession {
       if (!value || typeof value !== 'object' || Array.isArray(value))
         throw new Error('files 必须是路径到文本的 JSON 对象')
       const source = value as Record<string, string>
-      if (!source['icon.svg'])
-        source['icon.svg'] =
-          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#5b7d71"/><path d="M19 21h26M19 32h19M19 43h13" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>'
       this.validateSource(source)
       const permissions: unknown = JSON.parse(args.permissions!)
       if (
@@ -216,7 +213,7 @@ export class ProductAssistantAppSession {
           description: args.description!,
           version: '1.0.0',
           entry: 'index.html',
-          icon: 'icon.svg',
+          ...(source['icon.svg'] ? { icon: 'icon.svg' } : {}),
           permissions: permissions as ExternalAppPermission[],
         },
         source,

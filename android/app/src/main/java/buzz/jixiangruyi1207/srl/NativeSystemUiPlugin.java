@@ -2,6 +2,8 @@ package buzz.jixiangruyi1207.srl;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.os.Build;
+import android.view.HapticFeedbackConstants;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -54,6 +56,36 @@ public class NativeSystemUiPlugin extends Plugin {
             applySystemBars(getActivity(), show);
             JSObject result = new JSObject();
             result.put("showStatusBar", show);
+            call.resolve(result);
+        });
+    }
+
+    @PluginMethod
+    public void performHaptic(PluginCall call) {
+        String kind = call.getString("kind", "");
+        final int feedback;
+        if ("success".equals(kind)) {
+            feedback = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.VIRTUAL_KEY;
+        } else if ("confirm".equals(kind)) {
+            feedback = HapticFeedbackConstants.CONTEXT_CLICK;
+        } else if ("warning".equals(kind)) {
+            feedback = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ? HapticFeedbackConstants.REJECT : HapticFeedbackConstants.LONG_PRESS;
+        } else {
+            call.reject("触觉反馈类型无效");
+            return;
+        }
+
+        Activity activity = getActivity();
+        if (activity == null) {
+            call.reject("系统触觉反馈不可用");
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            boolean performed = activity.getWindow().getDecorView().performHapticFeedback(feedback);
+            JSObject result = new JSObject();
+            result.put("performed", performed);
             call.resolve(result);
         });
     }

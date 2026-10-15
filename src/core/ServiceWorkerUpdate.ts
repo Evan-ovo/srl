@@ -21,6 +21,7 @@ function createUpdateState() {
   let stopAutomaticUpdateChecks: (() => void) | undefined
   let stopPendingRelaunch: (() => void) | undefined
   let relaunchRequested = false
+  let registrationFailed = false
 
   function relaunchOnce(): void {
     if (relaunchRequested) return
@@ -42,7 +43,10 @@ function createUpdateState() {
     stopPendingRelaunch = relaunchAfterWaitingWorkerControls(
       navigator.serviceWorker,
       waiting,
-      () => applyUpdateRef?.(true),
+      () => {
+        if (applyUpdateRef) applyUpdateRef(true)
+        else waiting.postMessage({ type: 'SKIP_WAITING' })
+      },
       relaunchOnce,
     )
   }
@@ -98,12 +102,28 @@ function createUpdateState() {
    */
   async function manualCheckForUpdate(): Promise<string> {
     if (isCapacitorApp()) return 'APK 中不使用网页更新，请使用“检查 APK 版本更新”'
-    if (!activeRegistration) return 'Service Worker 未注册，请用强制刷新'
+    if (!activeRegistration) {
+      if (!('serviceWorker' in navigator))
+        return '当前环境不支持网页更新，请使用支持 PWA 的浏览器通过 HTTPS 打开应用'
+      try {
+        // The browser may already have a registration before this page's deferred
+        // Workbox callback runs, especially immediately after a PWA update.
+        const registration = await navigator.serviceWorker.getRegistration()
+        activeRegistration ??= registration
+        if (activeRegistration) registrationFailed = false
+      } catch {
+        return '暂时无法读取网页更新状态，请稍后重试'
+      }
+      if (!activeRegistration)
+        return registrationFailed
+          ? '网页更新注册失败，请确认网络连接后重新打开 PWA'
+          : '网页更新正在初始化，请稍后再检查'
+    }
 
     try {
       await activeRegistration.update()
       if (activeRegistration.waiting) {
-        if (applyUpdateRef) showUpdateBanner(applyUpdateAndRelaunch)
+        showUpdateBanner(applyUpdateAndRelaunch)
         return '发现新版本，点击上方"立即刷新"使用'
       }
       if (activeRegistration.installing) return '正在下载新版本，请稍候…'
@@ -130,9 +150,9 @@ function createUpdateState() {
       }
       // SRL-PUBLIC-SYNC: END REPLACE id=service-worker-version-fallback
 
-      return '未检测到更新，可尝试强制刷新'
+      return '暂未发现可用更新'
     } catch {
-      return '自动检测失败，请用强制刷新'
+      return '网页更新检查失败，请确认网络连接后重试'
     }
   }
 
@@ -166,9 +186,13 @@ function createUpdateState() {
       onNeedReload: relaunchOnce,
       onNeedRefresh: () => showUpdateBanner(applyUpdateAndRelaunch),
       onOfflineReady: showOfflineReadyBanner,
+      onRegisterError: () => {
+        registrationFailed = true
+      },
       onRegisteredSW: (_workerUrl, registration) => {
         stopAutomaticUpdateChecks?.()
         activeRegistration = registration ?? undefined
+        registrationFailed = false
         applyUpdateRef = applyUpdate
         stopAutomaticUpdateChecks = registration
           ? startServiceWorkerUpdateChecks(registration)

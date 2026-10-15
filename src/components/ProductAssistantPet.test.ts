@@ -60,6 +60,7 @@ vi.mock('./AppearanceStudio.vue', () => ({
   },
 }))
 import ProductAssistantPet from './ProductAssistantPet.vue'
+import { discordSetupService } from '../core/AppContainer'
 const preferences = ref({
   name: '蒜惹菈',
   desktopPet: true,
@@ -156,6 +157,54 @@ it('reuses the existing compact pet dialog for browser chat and closes it when r
     discordSetupSession.browserVisible = false
   }
 })
+it('returns to the live browser when compact chat closes, but never after explicit setup exit', async () => {
+  discordSetupSession.active = true
+  discordSetupSession.assistantConversationId = 'close-task-chat'
+  discordSetupSession.webStepActive = true
+  renderPet()
+  window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+  await flushPromises()
+  const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
+  dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+  await flushPromises()
+  expect(discordSetupSession.browserVisible).toBe(true)
+  discordSetupSession.browserVisible = false
+  window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+  await flushPromises()
+  expect(dialog.open).toBe(true)
+  discordSetupSession.active = false
+  discordSetupSession.chatPresentation = ''
+  dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+  await flushPromises()
+  expect(discordSetupSession.browserVisible).toBe(false)
+})
+it('returns to the browser when chat closes before the native presentation acknowledges', async () => {
+  discordSetupSession.active = true
+  discordSetupSession.assistantConversationId = 'opening-task-chat'
+  discordSetupSession.webStepActive = true
+  discordSetupSession.browserVisible = true
+  let acknowledge!: () => void
+  vi.mocked(nativeDiscordSetupBrowser.chatPresentation!).mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        acknowledge = resolve
+      }),
+  )
+  const returns = vi.mocked(discordSetupService.returnToBrowser).mock.calls.length
+  renderPet()
+  window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+  await flushPromises()
+  const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
+  expect(discordSetupSession.chatPresentation).toBe('')
+  dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+  await flushPromises()
+  expect(discordSetupService.returnToBrowser).toHaveBeenCalledTimes(returns + 1)
+  acknowledge()
+  await flushPromises()
+  expect(dialog.open).toBe(false)
+  expect(discordSetupSession.chatPresentation).toBe('')
+  expect(document.documentElement.dataset.assistantBrowserChat).toBeUndefined()
+})
 it('rests and walks only while idle, pauses for chat and shows actual generation activity', async () => {
   vi.useFakeTimers()
   const pet = renderPet()
@@ -232,6 +281,98 @@ it('offers contextual help after three taps and opens the route chooser only on 
     setAssistantHelpSurface(owner)
   }
 })
+it('opens the restored task chat on two tutorial taps without creating another help request', async () => {
+  const owner = Symbol('restored-task-tutorial')
+  const tutorial = document.createElement('section')
+  tutorial.dataset.assistantHelpContext = 'discord-bridge'
+  document.body.append(tutorial)
+  vi.spyOn(tutorial, 'getClientRects').mockReturnValue([
+    new DOMRect(0, 0, 320, 500),
+  ] as unknown as DOMRectList)
+  setAssistantHelpSurface(owner, 'discord-bridge')
+  discordSetupSession.active = true
+  discordSetupSession.assistantConversationId = 'restored-task-chat'
+  discordSetupSession.webStepActive = false
+  discordSetupSession.agentRunning = false
+  try {
+    const pet = renderPet()
+    for (let i = 0; i < 2; i++) {
+      pet.dispatchEvent(new MouseEvent('click', { detail: 1, bubbles: true }))
+      await flushPromises()
+    }
+    const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
+    expect(dialog.open).toBe(true)
+    expect(dialog.querySelector('[data-compact="true"]')).not.toBeNull()
+    expect(document.querySelector('.assistant-pet-help-question')).toBeNull()
+    expect(nativeDiscordSetupBrowser.chatPresentation).not.toHaveBeenCalled()
+    expect(discordSetupSession.agentRunning).toBe(false)
+    expect(discordSetupSession.assistantConversationId).toBe('restored-task-chat')
+  } finally {
+    setAssistantHelpSurface(owner)
+  }
+})
+it('keeps the reply open after native recovery closes the page, and removes stale transparency for local diagnosis', async () => {
+  discordSetupSession.active = true
+  discordSetupSession.assistantConversationId = 'live-recovery-chat'
+  discordSetupSession.webStepActive = true
+  renderPet()
+  window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+  await flushPromises()
+  expect(document.documentElement.dataset.assistantBrowserChat).toBe('compact')
+  const calls = vi.mocked(nativeDiscordSetupBrowser.chatPresentation!).mock.calls.length
+  discordSetupSession.webStepActive = false
+  discordSetupSession.chatPresentation = ''
+  await flushPromises()
+  expect(document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!.open).toBe(true)
+  expect(document.documentElement.dataset.assistantBrowserChat).toBeUndefined()
+  expect(discordSetupSession.chatPresentation).toBe('compact')
+  expect(nativeDiscordSetupBrowser.chatPresentation).toHaveBeenCalledTimes(calls)
+})
+it('prepares transparency before the native switch and keeps it until the browser return is acknowledged', async () => {
+  discordSetupSession.active = true
+  discordSetupSession.assistantConversationId = 'paint-task-chat'
+  discordSetupSession.webStepActive = true
+  let ready!: () => void
+  vi.mocked(nativeDiscordSetupBrowser.chatPresentation!).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        ready = resolve
+      }),
+  )
+  const pet = renderPet()
+  window.dispatchEvent(
+    new CustomEvent('srl:discord-setup-quick-chat', {
+      detail: { petBounds: { left: 24, top: 320, viewportWidth: innerWidth } },
+    }),
+  )
+  await flushPromises()
+  expect(document.documentElement.dataset.assistantBrowserChat).toBe('compact')
+  expect(pet.style.left).toBe('24px')
+  expect(pet.style.top).toBe('320px')
+  ready()
+  await flushPromises()
+  expect(pet.style.display).not.toBe('none')
+  let returned!: () => void
+  vi.mocked(discordSetupService.returnToBrowser).mockImplementationOnce(
+    () =>
+      new Promise<undefined>((resolve) => {
+        returned = () => {
+          discordSetupSession.browserVisible = true
+          resolve(undefined)
+        }
+      }),
+  )
+  document
+    .querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
+    .dispatchEvent(new Event('cancel', { cancelable: true }))
+  await flushPromises()
+  expect(document.documentElement.dataset.assistantBrowserChat).toBe('compact')
+  returned()
+  await flushPromises()
+  expect(document.documentElement.dataset.assistantBrowserChat).toBeUndefined()
+  expect(pet.style.left).toBe('24px')
+  expect(pet.style.top).toBe('320px')
+})
 it('keeps the operation pet hidden in full chat instead of overriding its visibility', async () => {
   const pet = renderPet()
   await wrapper!.setProps({ hidden: true })
@@ -281,7 +422,12 @@ it('mounts the task chat in the background, expands the same instance with a web
     }),
   )
   expect(discordSetupSession.agentRunning).toBe(true)
-  document.querySelector<HTMLButtonElement>('.assistant-browser-preview')!.click()
+  const preview = document.querySelector<HTMLButtonElement>('.assistant-browser-preview')!
+  preview.click()
+  await flushPromises()
+  expect(dialog.open).toBe(true)
+  expect(discordSetupSession.chatPresentation).toBe('fullscreen')
+  preview.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
   await flushPromises()
   expect(dialog.open).toBe(false)
   expect(discordSetupSession.chatPresentation).toBe('')

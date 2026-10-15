@@ -30,6 +30,7 @@ import {
 } from './ExternalAppPackage'
 import {
   iconDataUrl,
+  externalAppPresentationIcon,
   buildRuntimeHtml,
   inspectCompatibility,
   RUNTIME_BRIDGE_MARKER,
@@ -95,7 +96,9 @@ export class ExternalAppService {
   }
 
   async list(): Promise<InstalledExternalAppSummary[]> {
-    return (await this.storage.list()).filter((app) => app.id !== CHAT_READER_APP_ID)
+    return (await this.storage.list())
+      .filter((app) => app.id !== CHAT_READER_APP_ID)
+      .map((app) => ({ ...app, iconDataUrl: externalAppPresentationIcon(app.iconDataUrl) }))
   }
 
   /** The manifest is the registry; no parallel tool database or source copy. */
@@ -342,7 +345,9 @@ export class ExternalAppService {
         0,
       ),
       packageFiles: packageFiles.files,
-      iconDataUrl: iconDataUrl(packageFiles.files, packageFiles.manifest),
+      iconDataUrl: externalAppPresentationIcon(
+        iconDataUrl(packageFiles.files, packageFiles.manifest),
+      ),
     }
   }
 
@@ -631,9 +636,6 @@ export class ExternalAppService {
       'app.js': TEXT_ENCODER.encode(
         `(async()=>{await window.srlApp.ready();document.querySelector('#status').textContent='已连接 SRL';document.querySelector('#save').onclick=async()=>{await window.srlApp.storage.set('example',{savedAt:Date.now()});await window.srlApp.notify('示例数据已保存')}})()`,
       ),
-      'icon.svg': TEXT_ENCODER.encode(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="24" fill="#237f87"/><circle cx="48" cy="48" r="22" fill="#fff" opacity=".9"/></svg>',
-      ),
     }
     const manifest: ExternalAppManifest = {
       schemaVersion: EXTERNAL_APP_SCHEMA_VERSION,
@@ -643,8 +645,6 @@ export class ExternalAppService {
       version: '1.0.0',
       entry: 'index.html',
       description: '可直接修改并导入的最小第三方 APP 模板。',
-      icon: 'icon.svg',
-      splashColor: '#237f87',
       orientation: 'auto',
       immersive: false,
       permissions: [EXTERNAL_APP_PERMISSION.STORAGE],

@@ -203,7 +203,7 @@ describe('Discord help route choices', () => {
       expect(wrapper.text()).toContain('上次停在：检查 Wrangler 格式')
       await wrapper
         .findAll('button')
-        .find((button) => button.text() === '继续上次配置')!
+        .find((button) => button.text() === '继续网页协助')!
         .trigger('click')
       await flushPromises()
       expect(resume).toHaveBeenCalledOnce()

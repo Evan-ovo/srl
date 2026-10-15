@@ -7,6 +7,29 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 public class DiscordSetupBrowserPayloadTest {
+    @Test public void exitBackStopsTheNativeRunAndReturnsWithoutDiscardingTaskState() throws Exception {
+        java.util.ArrayList<JSObject> events = new java.util.ArrayList<>();
+        AssistantBrowserWindow window = new AssistantBrowserWindow(null, events::add);
+        window.step = "github-sync"; window.agentRunId = "active-run"; window.paused = false;
+        window.template = "retained-template";
+        java.lang.reflect.Method back = AssistantBrowserWindow.class.getDeclaredMethod("back");
+        back.setAccessible(true); back.invoke(window);
+        assertTrue(window.paused); assertEquals("", window.agentRunId);
+        assertEquals("github-sync", window.step); assertEquals("retained-template", window.template);
+        assertEquals(2, events.size());
+        assertEquals("visibility", events.get(0).optString("action"));
+        assertFalse(events.get(0).optBoolean("visible"));
+        assertEquals("return", events.get(1).optString("action"));
+    }
+    @Test public void previousPageWithoutHistoryDoesNotExitOrInterruptTheRun() throws Exception {
+        java.util.ArrayList<JSObject> events = new java.util.ArrayList<>();
+        AssistantBrowserWindow window = new AssistantBrowserWindow(null, events::add);
+        window.agentRunId = "active-run"; window.paused = false;
+        java.lang.reflect.Method previous = AssistantBrowserWindow.class.getDeclaredMethod("goBack");
+        previous.setAccessible(true); previous.invoke(window);
+        assertTrue(events.isEmpty()); assertFalse(window.paused);
+        assertEquals("active-run", window.agentRunId);
+    }
     @Test public void agentPetOpensExistingQuickChatWithoutResumingOrPausing() throws Exception {
         java.util.ArrayList<JSObject> events = new java.util.ArrayList<>();
         AssistantBrowserWindow window = new AssistantBrowserWindow(null, events::add);

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import '../styles/ConfirmDialog.css'
 
 import type { NativeExportDestination } from '../core/NativeFileExport'
 
@@ -18,6 +19,26 @@ const emit = defineEmits<{
 const destination = ref<NativeExportDestination>(props.isImage ? 'pictures' : 'downloads')
 const remember = ref(false)
 const title = computed(() => (props.isImage ? '保存角色卡图片' : '保存原始文件'))
+const modal = ref<HTMLDialogElement>()
+
+onMounted(() => {
+  const element = modal.value
+  if (!element) return
+  // Exports can originate inside another modal (including the CSS reference).
+  // The top layer follows opening order rather than the originating page's z-index.
+  try {
+    element.showModal()
+    if (element.open) return
+  } catch {
+    /* Older embedded WebViews use the existing confirmation fallback. */
+  }
+  element.classList.add(
+    'confirm-dialog__overlay--safety-layer',
+    'confirm-dialog__overlay--fallback',
+  )
+  element.setAttribute('open', '')
+})
+onBeforeUnmount(() => modal.value?.close?.())
 
 function save(): void {
   emit('save', destination.value, remember.value)
@@ -26,9 +47,10 @@ function save(): void {
 
 <template>
   <Teleport to="body">
-    <div
-      class="editor-overlay native-export-overlay"
-      role="presentation"
+    <dialog
+      ref="modal"
+      class="editor-overlay confirm-dialog__overlay native-export-overlay"
+      @cancel.prevent="emit('close')"
       @click.self="emit('close')"
     >
       <section
@@ -88,16 +110,13 @@ function save(): void {
           </button>
         </footer>
       </section>
-    </div>
+    </dialog>
   </Teleport>
 </template>
 
 <style scoped>
 .native-export-sheet {
   width: min(100% - 24px, 440px);
-}
-.native-export-overlay {
-  z-index: 30;
 }
 .native-export-sheet__destinations {
   display: grid;

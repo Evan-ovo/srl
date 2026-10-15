@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import { AssistantBrowserTaskService } from './AssistantBrowserTaskService'
 import {
   assistantBrowserSession,
@@ -18,7 +19,9 @@ function fixture() {
   let event: (value: AssistantBrowserEvent) => void = () => {}
   const browser = {
     open: vi.fn(async (_options: Parameters<AssistantBrowserRuntime['open']>[0]) => {}),
-    inspect: vi.fn(async () => ({ ...page })),
+    inspect: vi.fn(async (_options?: Parameters<AssistantBrowserRuntime['inspect']>[0]) => ({
+      ...page,
+    })),
     waitReady: vi.fn(async () => ({ ...page })),
     addListener: vi.fn(async (_name, callback) => {
       event = callback
@@ -128,6 +131,273 @@ describe('shared browser task lifecycle', () => {
     expect(assistantBrowserSession.agentRunning).toBe(false)
     expect(assistantBrowserSession.active).toBe(false)
   })
+  it.each(['pause', 'close', 'model'] as const)(
+    'releases a pending resume on %s without waiting for a native open receipt',
+    async (stop) => {
+      const f = fixture()
+      await f.execute('open', { url: page.url })
+      await f.owner.pause()
+      let finish!: () => void
+      f.browser.open.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve
+          }),
+      )
+      let settled = false
+      const resuming = stop === 'model' ? f.execute('resume') : f.owner.resume('chat-a')
+      const outcome = resuming.then(
+        () => {
+          settled = true
+          return 'unexpected success'
+        },
+        (error: unknown) => {
+          settled = true
+          return error
+        },
+      )
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      if (stop === 'model') f.controller.abort()
+      else await f.owner[stop]()
+      try {
+        await vi.waitFor(() => expect(settled).toBe(true))
+      } finally {
+        finish()
+        expect(await outcome).toMatchObject({ name: 'AbortError' })
+        await f.owner.close()
+      }
+      expect(assistantBrowserSession.agentRunning).toBe(false)
+      expect(f.browser.inspect).not.toHaveBeenCalled()
+    },
+  )
+  it('can inspect and list tabs while paused without restarting or allowing mutations', async () => {
+    const f = fixture()
+    await f.execute('open', { url: page.url })
+    await f.owner.pause()
+    await expect(f.execute('inspect')).resolves.toMatchObject({ documentId: page.documentId })
+    await expect(f.execute('list-tabs')).resolves.toMatchObject({ tabs: [] })
+    expect(f.browser.inspect.mock.lastCall?.[0]).not.toHaveProperty('ownerAgentRunId')
+    await expect(
+      f.execute('click', { document_id: '7', tab_id: '2', target: 'button' }),
+    ).rejects.toThrow('暂停')
+    expect(f.browser.act).not.toHaveBeenCalled()
+    expect(f.browser.open).toHaveBeenCalledOnce()
+    expect(assistantBrowserSession.agentRunning).toBe(false)
+    await f.owner.close()
+  })
+  it('cancels the resumed observation and never returns its late page as success', async () => {
+    const f = fixture()
+    await f.execute('open', { url: page.url })
+    await f.owner.pause()
+    let finish!: (value: typeof page) => void
+    f.browser.inspect.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const resuming = f.execute('resume')
+    const rejected = expect(resuming).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    f.controller.abort()
+    await rejected
+    finish(page)
+    await Promise.resolve()
+    expect(assistantBrowserSession.agentRunning).toBe(false)
+    await f.owner.close()
+  })
+  it('does not reopen a running task or permit actions after a failed explicit resume', async () => {
+    const f = fixture()
+    await f.execute('open', { url: page.url })
+    const run = f.browser.open.mock.lastCall![0]!.agentRunId
+    await f.owner.resume('chat-a')
+    expect(f.browser.open).toHaveBeenCalledOnce()
+    expect(f.browser.open.mock.lastCall![0]!.agentRunId).toBe(run)
+    await f.owner.pause()
+    f.browser.open.mockRejectedValueOnce(new Error('open unavailable'))
+    await expect(f.owner.resume('chat-a')).rejects.toThrow('open unavailable')
+    expect(assistantBrowserSession.agentRunning).toBe(false)
+    await expect(
+      f.execute('click', { document_id: '7', tab_id: '2', target: 'button' }),
+    ).rejects.toThrow('暂停')
+    expect(f.browser.act).not.toHaveBeenCalled()
+    await f.owner.close()
+  })
+  it('does not adopt a native task from a cancelled recovery lookup', async () => {
+    const f = fixture()
+    type CurrentTask = Awaited<ReturnType<NonNullable<AssistantBrowserRuntime['currentTask']>>>
+    let finish!: (value: CurrentTask) => void
+    Object.assign(f.browser, {
+      currentTask: vi.fn(
+        () =>
+          new Promise<CurrentTask>((resolve) => {
+            finish = resolve
+          }),
+      ),
+    })
+    let settled = false
+    const outcome = f.execute('resume').then(
+      () => {
+        settled = true
+        return 'unexpected success'
+      },
+      (error: unknown) => {
+        settled = true
+        return error
+      },
+    )
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    f.controller.abort()
+    try {
+      await vi.waitFor(() => expect(settled).toBe(true))
+    } finally {
+      finish({
+        ...page,
+        active: true,
+        purpose: 'general',
+        runId: 'retained-run',
+        conversationId: 'chat-a',
+        finished: false,
+      })
+      expect(await outcome).toMatchObject({ name: 'AbortError' })
+      expect(f.owner.owns('chat-a')).toBe(false)
+      expect(f.browser.addListener).not.toHaveBeenCalled()
+    }
+  })
+  it('closes before a pending listener returns and removes the late registration', async () => {
+    const f = fixture()
+    const remove = vi.fn(async () => {})
+    let resolve!: (handle: { remove: typeof remove }) => void
+    f.browser.addListener.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        }),
+    )
+    const opening = f.execute('open', { url: page.url })
+    const rejected = expect(opening).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(f.browser.addListener).toHaveBeenCalledOnce())
+    await f.owner.close()
+    expect(f.browser.close).toHaveBeenCalledOnce()
+    expect(f.tasks.list()[0]?.status).toBe('cancelled')
+    resolve({ remove })
+    await rejected
+    expect(remove).toHaveBeenCalledOnce()
+    expect(f.browser.open).not.toHaveBeenCalled()
+  })
+  it.each(['pause', 'close'] as const)(
+    'still releases the native window during %s when cancelling a wait fails',
+    async (operation) => {
+      const f = fixture()
+      const remove = vi.fn(async () => {})
+      f.browser.addListener.mockResolvedValueOnce({ remove })
+      await f.execute('open', { url: page.url })
+      f.browser.cancelWait.mockRejectedValueOnce(new Error('cancel bridge failed'))
+      await (operation === 'pause' ? f.owner.pause() : f.owner.close())
+      expect(assistantBrowserSession.agentRunning).toBe(false)
+      if (operation === 'pause') {
+        expect(f.browser.pauseAgent).toHaveBeenCalledOnce()
+        expect(f.tasks.list()[0]?.phase).toContain('已暂停')
+        await f.owner.close()
+      } else {
+        expect(f.browser.close).toHaveBeenCalledOnce()
+        expect(remove).toHaveBeenCalledOnce()
+        expect(f.tasks.list()[0]?.status).toBe('cancelled')
+      }
+    },
+  )
+  it('does not wait for a stalled cancellation or listener removal when closing', async () => {
+    const f = fixture()
+    let finishRemove!: () => void
+    const remove = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRemove = resolve
+        }),
+    )
+    f.browser.addListener.mockResolvedValueOnce({ remove })
+    await f.execute('open', { url: page.url })
+    f.browser.cancelWait.mockImplementationOnce(() => new Promise(() => {}))
+    await f.owner.close()
+    expect(f.browser.close).toHaveBeenCalledOnce()
+    expect(f.tasks.list()[0]?.status).toBe('cancelled')
+    expect(remove).toHaveBeenCalledOnce()
+    finishRemove()
+    await Promise.resolve()
+  })
+  it('does not claim native pause is confirmed when its primary acknowledgement fails', async () => {
+    const f = fixture()
+    await f.execute('open', { url: page.url })
+    f.browser.pauseAgent.mockRejectedValueOnce(new Error('pause unavailable'))
+    await expect(f.owner.pause()).rejects.toThrow('pause unavailable')
+    expect(f.tasks.list()[0]?.phase).toContain('回执未确认')
+    await f.owner.pause()
+    expect(f.browser.pauseAgent).toHaveBeenCalledTimes(2)
+    expect(f.tasks.list()[0]?.phase).toContain('已暂停')
+    expect(assistantBrowserSession.agentRunning).toBe(false)
+    await f.owner.close()
+  })
+  it('does not overwrite a resumed task phase with a late pause acknowledgement', async () => {
+    const f = fixture()
+    await f.execute('open', { url: page.url })
+    let finish!: () => void
+    f.browser.pauseAgent.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    const stopping = f.owner.pause()
+    await f.owner.resume('chat-a')
+    finish()
+    await stopping
+    expect(assistantBrowserSession.agentRunning).toBe(true)
+    expect(f.tasks.list()[0]?.phase).toContain('已继续')
+    await f.owner.close()
+  })
+  it('shares one pause receipt across the model cancellation and visible stop action', async () => {
+    const f = fixture()
+    await f.execute('open', { url: page.url })
+    let finish!: () => void
+    f.browser.pauseAgent.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+    const first = f.owner.pause()
+    const second = f.owner.pause()
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    expect(f.browser.pauseAgent).toHaveBeenCalledOnce()
+    finish()
+    await Promise.all([first, second])
+    await f.owner.pause()
+    expect(f.browser.pauseAgent).toHaveBeenCalledOnce()
+    await f.owner.close()
+  })
+  it('does not display an old event failure over the current resumed task', async () => {
+    const f = fixture()
+    await f.execute('open', { url: page.url })
+    let fail!: (error: Error) => void
+    f.browser.pauseAgent.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = reject
+        }),
+    )
+    f.event({
+      action: 'agent-pause',
+      runId: f.browser.open.mock.lastCall![0]!.ownerTaskId!,
+      conversationId: 'chat-a',
+    })
+    await vi.waitFor(() => expect(fail).toBeTypeOf('function'))
+    await f.owner.resume('chat-a')
+    fail(new Error('old pause failed'))
+    await flushPromises()
+    expect(f.tasks.list()[0]?.phase).toContain('已继续')
+    expect(assistantBrowserSession.agentRunning).toBe(true)
+    await f.owner.close()
+  })
   it('renews the execution generation on explicit resume while retaining task and conversation identity', async () => {
     const f = fixture()
     await f.execute('open', { url: page.url })
@@ -230,9 +500,10 @@ describe('shared browser task lifecycle', () => {
         }),
     )
     const reading = f.execute('inspect')
+    const rejected = expect(reading).rejects.toMatchObject({ name: 'AbortError' })
     await f.owner.pause()
+    await rejected
     resolve(page)
-    await expect(reading).rejects.toMatchObject({ name: 'AbortError' })
     f.event({ action: 'page-ready', runId: id, conversationId: 'chat-a' })
     expect(assistantBrowserSession.agentRunning).toBe(false)
     await expect(

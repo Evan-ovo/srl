@@ -23,6 +23,11 @@ final class AssistantBrowserPolicy {
     static boolean generalNavigationAllowed(String current, String destination) {
         return browseAllowed(current) && browseAllowed(destination);
     }
+    // Page navigation is independent of permission to inspect or operate that page.
+    // Login providers may use another HTTPS origin or an initial empty popup.
+    static boolean browserNavigationAllowed(String destination) {
+        return browseAllowed(destination) || "about:blank".equals(destination) || "about:srcdoc".equals(destination);
+    }
     static boolean generalAgentNavigationAllowed(String run, boolean paused, boolean loading, boolean failed, String current, String destination) {
         return run != null && !run.isEmpty() && !loading && generalNavigationAllowed(current, destination)
             && (failed ? !URI.create(current).equals(URI.create(destination)) : !paused);
@@ -41,7 +46,8 @@ final class AssistantBrowserPolicy {
         try { URI uri = URI.create(value); return new URI("https", null, uri.getHost(), -1, uri.getPath(), null, null).toString(); }
         catch (Exception error) { return ""; }
     }
-    static boolean allowed(String value) {
+    // Deployment evidence and fixed secret-transfer targets; not public-web action authority.
+    static boolean deploymentPageAllowed(String value) {
         try {
             URI uri = URI.create(value);
             String host = uri.getHost();
@@ -52,21 +58,28 @@ final class AssistantBrowserPolicy {
     }
     static boolean authentication(String value) {
         try {
-            return !repositoryAuthorization(value) && !connectionConsent(value) && URI.create(value).getPath().matches("(?i).*/(login|signin|sign-in|sessions|oauth|authorize|register)(/.*)?");
+            URI uri = URI.create(value);
+            return "accounts.google.com".equals(uri.getHost()) || !repositoryAuthorization(value) && !connectionConsent(value) && uri.getPath().matches("(?i).*/(login|signin|sign-in|sessions|oauth2?|authorize|register)(/.*)?");
         } catch (RuntimeException error) { return true; }
     }
+    static boolean githubLogin(String value) {
+        try {
+            URI uri = URI.create(value);
+            return deploymentPageAllowed(value) && "github.com".equals(uri.getHost()) && uri.getPath().matches("/login/?");
+        } catch (RuntimeException error) { return false; }
+    }
     static boolean connectionConsent(String value) {
-        try { URI uri = URI.create(value); return allowed(value) && "github.com".equals(uri.getHost()) && uri.getPath().matches("/login/oauth/authorize/?"); }
+        try { URI uri = URI.create(value); return deploymentPageAllowed(value) && "github.com".equals(uri.getHost()) && uri.getPath().matches("/login/oauth/authorize/?"); }
         catch (RuntimeException error) { return false; }
     }
     static boolean repositoryAuthorization(String value) {
         try {
             URI uri = URI.create(value);
-            return allowed(value) && "github.com".equals(uri.getHost()) && uri.getPath().matches("/(apps/[^/]+/installations|settings/installations|organizations/[^/]+/settings/installations)(/.*)?");
+            return deploymentPageAllowed(value) && "github.com".equals(uri.getHost()) && uri.getPath().matches("/(apps/[^/]+/installations|settings/installations|organizations/[^/]+/settings/installations)(/.*)?");
         } catch (RuntimeException error) { return false; }
     }
     static boolean navigationAllowed(String current, String destination) {
-        try { return allowed(current) && allowed(destination); }
+        try { return browseAllowed(current) && browseAllowed(destination); }
         catch (RuntimeException error) { return false; }
     }
     static boolean agentNavigationAllowed(String mode, String run, boolean paused, boolean loading, boolean failed, String step, String current, String destination) {
@@ -89,14 +102,16 @@ final class AssistantBrowserPolicy {
             && ("https://discord.com/developers/applications/" + applicationId + "/bot").equals(url);
     }
     static boolean blocksUserInput(String mode, String run, boolean paused, boolean loading, boolean failed, String step, String url) {
-        return "agent".equals(mode) && run != null && !run.isEmpty() && !failed
-            && !userOnly(step, url) && (loading || !paused);
+        // A loading page may already show an interactive login/challenge before its
+        // final redirect/onPageFinished. Loading pauses the agent, not the user.
+        return "agent".equals(mode) && run != null && !run.isEmpty() && !failed && !loading
+            && !userOnly(step, url) && !paused;
     }
     static boolean statusWaitAllowed(String mode, String run, boolean paused, boolean loading, boolean failed, String step, String url) {
         return !loading && blocksUserInput(mode, run, paused, loading, failed, step, url);
     }
     static boolean installLink(String value, String applicationId) {
-        if (applicationId == null || !applicationId.matches("[0-9]{17,20}") || !allowed(value)) return false;
+        if (applicationId == null || !applicationId.matches("[0-9]{17,20}") || !deploymentPageAllowed(value)) return false;
         try {
             URI uri = URI.create(value);
             if (!"discord.com".equals(uri.getHost()) || !("/oauth2/authorize".equals(uri.getPath()) || "/api/oauth2/authorize".equals(uri.getPath())) || uri.getRawFragment() != null || uri.getRawQuery() == null) return false;
@@ -114,7 +129,7 @@ final class AssistantBrowserPolicy {
         } catch (Exception error) { return false; }
     }
     static boolean installationResultPage(String value, String applicationId, boolean started) {
-        if (!allowed(value) || applicationId == null || !applicationId.matches("[0-9]{17,20}")) return false;
+        if (!deploymentPageAllowed(value) || applicationId == null || !applicationId.matches("[0-9]{17,20}")) return false;
         try {
             URI uri = URI.create(value);
             if (!"discord.com".equals(uri.getHost()) || !uri.getPath().matches("/(api/)?oauth2/(authorize|authorized)/?")) return false;
@@ -131,11 +146,12 @@ final class AssistantBrowserPolicy {
     static String publicUrl(String value) {
         try {
             URI uri = URI.create(value);
-            return new URI("https", null, uri.getHost(), -1, allowed(value) ? uri.getPath() : "/", null, null).toString();
+            return new URI("https", null, uri.getHost(), -1, browseAllowed(value) ? uri.getPath() : "/", null, null).toString();
         } catch (Exception error) { return ""; }
     }
     static boolean userOnly(String step, String url) {
-        if (authentication(url) || !allowed(url)) return true;
+        if (authentication(url) || !browseAllowed(url)) return true;
+        if (!deploymentPageAllowed(url)) return generalUserOnly(url);
         URI uri = URI.create(url);
         return ("discord.com".equals(uri.getHost()) && uri.getPath().matches("/developers/applications/[^/]+/bot(?:/.*)?"))
             || ("dash.cloudflare.com".equals(uri.getHost()) && (uri.getPath().matches(".*/(api-tokens|tokens|security)(/.*)?")
@@ -144,7 +160,7 @@ final class AssistantBrowserPolicy {
     }
     static String pageAccess(String step, String url) {
         if (authentication(url)) return "authentication";
-        if (!allowed(url)) return "external";
+        if (!browseAllowed(url)) return "external";
         return userOnly(step, url) ? "protected" : "public";
     }
     static String handoffReason(String step, String url) {
@@ -164,7 +180,7 @@ final class AssistantBrowserPolicy {
         }
     }
     static String secretScope(String url) {
-        if (!allowed(url) || authentication(url)) return null;
+        if (!deploymentPageAllowed(url) || authentication(url)) return null;
         URI uri = URI.create(url);
         if (!"dash.cloudflare.com".equals(uri.getHost()) || !uri.getPath().matches("/[^/]+/workers/services/view/[^/]+(?:/(?:production|settings)(?:/.*)?)?")) return null;
         String[] segments = uri.getPath().split("/");
@@ -195,7 +211,7 @@ final class AssistantBrowserPolicy {
     /** Human evidence, never inferred from a dispatched click or a generic success label. */
     static String successChecklist(String step) {
         switch (step) {
-            case "github-sync": return "1. 当前 Fork 和部署分支已核对。\n2. Fork 已核验与上游同步（up to date）；已有最新结果直接复用。\n3. 没有冲突或错误，自己的 Wrangler 配置仍保留。";
+            case "github-sync": return "1. 当前仓库/部署分支已核对；若当前账号拥有源仓库，无需 Fork 同步。\n2. Fork 已核验与上游同步（up to date），或源仓库已核验当前提交；已有最新结果直接复用。\n3. 没有冲突或错误，自己的 Wrangler 配置仍保留。";
             case "github-save": return "1. 目标仓库/部署分支的 Wrangler 文件已保存；无需固定 main 或制造新提交。\n2. 实际已提交文件满足本次三个参数；已有正确的最新提交直接复用，不为制造差异重写。\n3. 没有提交失败或未保存提示。";
             case "cf-deploy": return "1. 当前是本次配置的 Worker。\n2. 页面显示当前生产部署成功，没有失败或仍在排队；只有 Build successful 不算部署成功。\n3. 不要求仓库名称、分支和提交号一致；Secret 与连接健康在后续步骤检查。";
             case "cf-secret": return "1. 当前是本次配置的 Worker。\n2. DISCORD_BOT_TOKEN 类型为 Secret，已保存并重新部署。\n3. 最新生产部署已生效，没有失败提示。不要在这里输入或展示 Token。";
@@ -205,7 +221,7 @@ final class AssistantBrowserPolicy {
         }
     }
     static boolean successLocation(String step, String url) {
-        if (!allowed(url) || authentication(url)) return false;
+        if (!deploymentPageAllowed(url) || authentication(url)) return false;
         URI uri = URI.create(url);
         String path = uri.getPath();
         if (step.startsWith("github-")) return "github.com".equals(uri.getHost());

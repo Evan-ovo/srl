@@ -2,6 +2,35 @@ package buzz.jixiangruyi1207.srl;
 import static org.junit.Assert.*;
 import org.junit.Test;
 public class AssistantBrowserPolicyTest {
+    @Test public void loginNavigationDoesNotGrantAgentAccessToAnotherOrigin() {
+        String google = "https://accounts.google.com/v3/signin/identifier";
+        assertTrue(AssistantBrowserPolicy.browserNavigationAllowed(google));
+        assertTrue(AssistantBrowserPolicy.browserNavigationAllowed("https://challenges.cloudflare.com/"));
+        assertFalse(AssistantBrowserPolicy.deploymentPageAllowed(google));
+        assertTrue(AssistantBrowserPolicy.userOnly("cf-deploy", google));
+        assertFalse(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", false, false, false, "cf-deploy", "https://dash.cloudflare.com/login", google));
+        for (String transientPage : new String[] { "about:blank", "about:srcdoc" }) {
+            assertTrue(AssistantBrowserPolicy.browserNavigationAllowed(transientPage));
+            assertTrue(AssistantBrowserPolicy.userOnly("cf-deploy", transientPage));
+            assertFalse(AssistantBrowserPolicy.deploymentPageAllowed(transientPage));
+        }
+        for (String unsafe : new String[] { "javascript:alert(1)", "file:///etc/passwd", "content://private", "http://example.org/", "https://127.0.0.1/", "https://localhost/", "https://user@example.org/" })
+            assertFalse(unsafe, AssistantBrowserPolicy.browserNavigationAllowed(unsafe));
+    }
+    @Test public void workflowAgentCanOperatePublicPagesOutsideDeploymentOrigins() {
+        for (String url : new String[] { "https://example.org/form", "https://developers.cloudflare.com/turnstile/", "https://docs.github.com/en/get-started" }) {
+            assertTrue(AssistantBrowserPolicy.navigationAllowed("https://dash.cloudflare.com/account/workers-and-pages/create", url));
+            assertTrue(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", false, false, false, "cf-deploy", "https://dash.cloudflare.com/account/workers-and-pages/create", url));
+            assertFalse(AssistantBrowserPolicy.userOnly("cf-deploy", url));
+            assertEquals("public", AssistantBrowserPolicy.pageAccess("cf-deploy", url));
+            assertEquals(url, AssistantBrowserPolicy.publicUrl(url));
+            assertTrue(AssistantBrowserPolicy.blocksUserInput("agent", "run", false, false, false, "cf-deploy", url));
+            assertFalse(AssistantBrowserPolicy.blocksUserInput("agent", "run", true, false, false, "cf-deploy", url));
+        }
+        assertTrue(AssistantBrowserPolicy.userOnly("cf-deploy", "https://accounts.google.com/"));
+        assertTrue(AssistantBrowserPolicy.authentication("https://accounts.google.com/o/oauth2/v2/auth"));
+        assertFalse(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", false, false, false, "cf-deploy", "https://accounts.google.com/", "https://example.org/form"));
+    }
     @Test public void sharedBrowserAcceptsPublicHttpsPagesWithoutDiscordHostAllowlist() {
         assertTrue(AssistantBrowserPolicy.browseAllowed("https://example.org/articles?q=public"));
         assertTrue(AssistantBrowserPolicy.generalNavigationAllowed("https://example.org/", "https://docs.example.net/guide"));
@@ -44,21 +73,22 @@ public class AssistantBrowserPolicyTest {
         assertFalse(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", true, false, false, "cf-deploy", preview, dashboard));
         assertFalse(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", true, false, true, "cf-deploy", "https://github.com/login", dashboard));
         assertTrue(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", true, false, true, "cf-secret", dashboard + "/settings/variables", dashboard));
-        assertFalse(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", true, false, true, "cf-deploy", preview, "https://example.com/"));
+        assertTrue(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", true, false, true, "cf-deploy", preview, "https://example.com/"));
+        assertFalse(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", true, false, true, "cf-deploy", preview, "http://example.com/"));
         assertTrue(AssistantBrowserPolicy.agentNavigationAllowed("agent", "run", false, false, false, "cf-deploy", preview, dashboard));
     }
     @Test public void workerPreviewIsPublicAndCanReturnToTheDeploymentDashboard() {
         String dashboard = "https://dash.cloudflare.com/account/workers/services/view/bridge/production";
         for (String path : new String[] { "/", "/interactions", "/health" }) {
             String preview = "https://preview-abc.bridge.account.workers.dev" + path;
-            assertTrue(AssistantBrowserPolicy.allowed(preview));
+            assertTrue(AssistantBrowserPolicy.deploymentPageAllowed(preview));
             assertFalse(AssistantBrowserPolicy.userOnly("cf-deploy", preview));
             assertEquals("public", AssistantBrowserPolicy.pageAccess("cf-deploy", preview));
             assertTrue(AssistantBrowserPolicy.navigationAllowed(preview, dashboard));
             assertTrue(AssistantBrowserPolicy.navigationAllowed(dashboard, preview));
             assertFalse(AssistantBrowserPolicy.successLocation("cf-deploy", preview));
         }
-        for (String url : new String[] { "https://workers.dev/", "https://bridge.account.workers.dev.example/", "https://credential@bridge.account.workers.dev/", "http://bridge.account.workers.dev/", "https://bridge.account.workers.dev:444/" }) assertFalse(url, AssistantBrowserPolicy.allowed(url));
+        for (String url : new String[] { "https://workers.dev/", "https://bridge.account.workers.dev.example/", "https://credential@bridge.account.workers.dev/", "http://bridge.account.workers.dev/", "https://bridge.account.workers.dev:444/" }) assertFalse(url, AssistantBrowserPolicy.deploymentPageAllowed(url));
         assertEquals("authentication", AssistantBrowserPolicy.pageAccess("cf-deploy", "https://bridge.account.workers.dev/login"));
     }
     @Test public void handoffMessageMatchesActualAccessInsteadOfInventingLogin() {
@@ -66,9 +96,10 @@ public class AssistantBrowserPolicyTest {
         String google = "https://accounts.google.com/v3/signin/identifier";
         assertEquals("authentication", AssistantBrowserPolicy.pageAccess("cf-deploy", google));
         assertTrue(AssistantBrowserPolicy.handoffReason("cf-deploy", google).contains("登录"));
-        assertFalse(AssistantBrowserPolicy.allowed(google));
+        assertFalse(AssistantBrowserPolicy.deploymentPageAllowed(google));
         assertTrue(AssistantBrowserPolicy.handoffReason("cf-deploy", "https://discord.com/developers/applications/1234567890123456789/bot").contains("秘密"));
-        String external = AssistantBrowserPolicy.handoffReason("cf-deploy", "https://example.com/");
+        assertEquals("public", AssistantBrowserPolicy.pageAccess("cf-deploy", "https://example.com/"));
+        String external = AssistantBrowserPolicy.handoffReason("cf-deploy", "http://example.com/");
         assertTrue(external.contains("外部网页"));
         assertFalse(external.contains("登录"));
         assertFalse(external.contains("授权"));
@@ -127,7 +158,7 @@ public class AssistantBrowserPolicyTest {
         assertEquals("authentication", AssistantBrowserPolicy.pageAccess("cf-deploy", "https://github.com/login"));
         assertEquals("public", AssistantBrowserPolicy.pageAccess("cf-deploy", "https://github.com/apps/cloudflare-workers-and-pages/installations/new/permissions/authorize"));
         assertEquals("protected", AssistantBrowserPolicy.pageAccess("cf-deploy", "https://discord.com/developers/applications/1234567890123456789/bot"));
-        assertEquals("external", AssistantBrowserPolicy.pageAccess("cf-deploy", "https://accounts.google.com/"));
+        assertEquals("authentication", AssistantBrowserPolicy.pageAccess("cf-deploy", "https://accounts.google.com/"));
     }
     @Test public void publicConfigurationAuthorityCoversTheEntirePathIncludingGithubAndWorkerDeployment() {
         String[][] pages = {
@@ -153,7 +184,7 @@ public class AssistantBrowserPolicyTest {
             { "discord-install", "https://discord.com/developers/applications/1234567890123456789/installation" }
         };
         for (String[] page : pages) {
-            assertTrue(page[1], AssistantBrowserPolicy.allowed(page[1]));
+            assertTrue(page[1], AssistantBrowserPolicy.deploymentPageAllowed(page[1]));
             assertFalse(page[1], AssistantBrowserPolicy.userOnly(page[0], page[1]));
             assertTrue(page[1], AssistantBrowserPolicy.blocksUserInput("agent", "run", false, false, false, page[0], page[1]));
             assertFalse(page[1], AssistantBrowserPolicy.blocksUserInput("agent", "", true, false, false, page[0], page[1]));
@@ -161,12 +192,19 @@ public class AssistantBrowserPolicyTest {
         assertTrue(AssistantBrowserPolicy.userOnly("d1-uuid", "https://dash.cloudflare.com/account/d1/databases/db/api-tokens"));
         assertFalse(AssistantBrowserPolicy.userOnly("cf-deploy", "https://dash.cloudflare.com/account/workers/services/view/srl-discord-source-bridge/settings/variables"));
     }
+    @Test public void loadingDoesNotBlockAChallengeBeforeTheLoginRedirect() {
+        String dashboard = "https://dash.cloudflare.com/";
+        assertFalse(AssistantBrowserPolicy.blocksUserInput("agent", "run", true, true, false, "d1-create", dashboard));
+        assertFalse(AssistantBrowserPolicy.blocksUserInput("agent", "run", false, true, false, "d1-create", dashboard));
+        assertTrue(AssistantBrowserPolicy.blocksUserInput("agent", "run", false, false, false, "d1-create", dashboard));
+        assertFalse(AssistantBrowserPolicy.blocksUserInput("agent", "run", true, false, false, "d1-create", dashboard));
+    }
     @Test public void allowsPublicHttpsLoginBrowsingWithoutGrantingAgentAuthority() {
         String google = "https://accounts.google.com/v3/signin/identifier?code=PRIVATE";
         assertTrue(AssistantBrowserPolicy.browseAllowed(google));
-        assertFalse(AssistantBrowserPolicy.allowed(google));
+        assertFalse(AssistantBrowserPolicy.deploymentPageAllowed(google));
         assertTrue(AssistantBrowserPolicy.userOnly("discord-app", google));
-        assertEquals("https://accounts.google.com/", AssistantBrowserPolicy.publicUrl(google));
+        assertEquals("https://accounts.google.com/v3/signin/identifier", AssistantBrowserPolicy.publicUrl(google));
         for (String url : new String[] { "http://accounts.google.com/", "https://user@accounts.google.com/", "https://127.0.0.1/", "https://app.local/", "file:///foo", "javascript:alert(1)" }) assertFalse(url, AssistantBrowserPolicy.browseAllowed(url));
     }
     @Test public void locksOnlyActivePublicAgentWorkAndAllowsExplicitUserHandoffs() {
@@ -235,11 +273,11 @@ public class AssistantBrowserPolicyTest {
         assertTrue(AssistantBrowserPolicy.successLocation("discord-endpoint", "https://discord.com/developers/applications/1234567890123456789/general-information"));
     }
     @Test public void admitsOnlyExactOfficialHttpsHosts() {
-        assertTrue(AssistantBrowserPolicy.allowed("https://github.com/test/repo"));
-        assertTrue(AssistantBrowserPolicy.allowed("https://dash.cloudflare.com/login"));
-        assertTrue(AssistantBrowserPolicy.allowed("https://discord.com/developers/applications"));
-        assertTrue(AssistantBrowserPolicy.allowed("https://github.com:443/"));
-        for (String url : new String[] { "http://github.com/", "https://github.com.evil.example/", "https://token@github.com/", "https://github.com:8443/", "file:///storage/file", "javascript:alert(1)", "https://127.0.0.1/" }) assertFalse(url, AssistantBrowserPolicy.allowed(url));
+        assertTrue(AssistantBrowserPolicy.deploymentPageAllowed("https://github.com/test/repo"));
+        assertTrue(AssistantBrowserPolicy.deploymentPageAllowed("https://dash.cloudflare.com/login"));
+        assertTrue(AssistantBrowserPolicy.deploymentPageAllowed("https://discord.com/developers/applications"));
+        assertTrue(AssistantBrowserPolicy.deploymentPageAllowed("https://github.com:443/"));
+        for (String url : new String[] { "http://github.com/", "https://github.com.evil.example/", "https://token@github.com/", "https://github.com:8443/", "file:///storage/file", "javascript:alert(1)", "https://127.0.0.1/" }) assertFalse(url, AssistantBrowserPolicy.deploymentPageAllowed(url));
     }
     @Test public void hidesOauthCodesAndLoginSecrets() {
         assertEquals("https://github.com/login", AssistantBrowserPolicy.publicUrl("https://github.com/login?code=PRIVATE#token"));

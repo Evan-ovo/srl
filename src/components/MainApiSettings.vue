@@ -645,7 +645,7 @@ async function loadModels(): Promise<void> {
   padding: 0;
   border: 0;
   font-size: 0.875rem;
-  color: var(--color-ink);
+  color: var(--button-color, var(--color-ink));
   background: transparent;
   box-shadow: none;
 }

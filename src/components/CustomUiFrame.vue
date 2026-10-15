@@ -16,11 +16,13 @@ const props = defineProps<{
   css?: string
   invoke?: (action: UiViewAction) => void | Promise<void>
   prepared?: { key: string; source: string }
+  recovery?: boolean
 }>()
 const emit = defineEmits<{
   ready: []
   error: [message: string]
   native: [regions: UiNativePlacement[]]
+  recovery: []
 }>()
 const previewPolicy = usePreviewPolicy()
 const frame = ref<HTMLIFrameElement>()
@@ -103,10 +105,12 @@ function connect(event: MessageEvent) {
     if (data.type === 'ready') {
       post('styles', { css: props.css || '' })
       post('state', { state: props.snapshot })
+      post('recovery-gesture', { enabled: props.recovery === true })
     } else if (data.type === 'rendered' && !rendered) {
       rendered = true
       emit('ready')
-    } else if (data.type === 'native' && Array.isArray(data.regions)) emit('native', data.regions)
+    } else if (data.type === 'reveal-recovery' && rendered && props.recovery) emit('recovery')
+    else if (data.type === 'native' && Array.isArray(data.regions)) emit('native', data.regions)
     else if (data.type === 'error') fail('自定义界面运行失败，原界面仍保留')
     else if (
       data.type === 'action' &&

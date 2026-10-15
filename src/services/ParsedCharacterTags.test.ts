@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ResourceService } from './ResourceService'
 import { ResourceParserRegistry } from '../parser/ResourceParser'
-import { RESOURCE_TYPE, toResourceListSummary, type Resource } from '../types/Resource'
+import {
+  RESOURCE_TYPE,
+  toResourceListSummary,
+  toResourceSummary,
+  type Resource,
+} from '../types/Resource'
 import type { ResourceStorageAdapter } from '../storage/ResourceStorageAdapter'
 
 function fixture() {
@@ -29,6 +34,7 @@ function fixture() {
   }))
   const storage = {
     get,
+    getSummary: vi.fn(async () => toResourceSummary(card)),
     update,
     saveMany: vi.fn(),
     listResourceListSummaries: async () => [toResourceListSummary(card)],
@@ -47,6 +53,18 @@ function fixture() {
 }
 
 describe('解析标签清理', () => {
+  it('requests only the selected summaries after scanning, and an empty selection reads nothing', async () => {
+    const { service, storage } = fixture()
+    await service.findParsedCharacterTags()
+    const list = vi.spyOn(storage, 'listResourceListSummaries')
+    expect(
+      (await service.removeParsedCharacterTags([{ resourceId: 'card', tags: ['原生'] }])).tagCount,
+    ).toBe(1)
+    expect(list).toHaveBeenCalledExactlyOnceWith({ ids: ['card'] })
+    list.mockClear()
+    expect((await service.removeParsedCharacterTags([])).resourceCount).toBe(0)
+    expect(list).not.toHaveBeenCalled()
+  })
   it('清理删除资源的反向关联时只更新摘要，不读取其它大原件', async () => {
     const { service, storage, card, get, update } = fixture()
     card.relatedResourceIds = ['removed', 'kept']

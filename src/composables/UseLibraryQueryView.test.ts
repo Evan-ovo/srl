@@ -115,6 +115,48 @@ describe('UseLibraryQueryView folder counts', () => {
     expect(view.resourceFilterCounts.value.get('all')).toBe(5000)
   })
 
+  it.each([10000, 30000, 50000])(
+    'reuses deep ordering at %i rows and invalidates changed sort keys',
+    (size) => {
+      const rows = Array.from({ length: size }, (_, i) =>
+        resource(`r-${i}`, { name: `角色${(i * 48271) % size}` }),
+      )
+      const { context, view } = setup(rows)
+      let comparisons = 0
+      const nativeCompare = context.resourceNameCollator.compare
+      const compare = (a: string, b: string) => {
+        comparisons++
+        return nativeCompare(a, b)
+      }
+      Object.defineProperty(context.resourceNameCollator, 'compare', { value: compare })
+      context.sortValue.value = 'name'
+      context.currentPage.value = Math.floor(size / 20)
+      const expected = rows.slice().sort((a, b) => compare(a.name, b.name))
+      expect(view.paginatedResources.value.map((r) => r.id)).toEqual(
+        expected.slice(-20).map((r) => r.id),
+      )
+      comparisons = 0
+      context.currentPage.value--
+      expect(view.paginatedResources.value.map((r) => r.id)).toEqual(
+        expected.slice(-40, -20).map((r) => r.id),
+      )
+      expect(comparisons).toBe(0)
+      expect(view.filteredResources.value.map((r) => r.id)).toEqual(expected.map((r) => r.id))
+      expect(comparisons).toBe(0)
+      // Deep refs used by callers/tests must retain Vue's sort-key invalidation semantics.
+      context.resources.value[0]!.name = 'ZZZ changed'
+      expect(view.filteredResources.value.map((r) => r.id)).toEqual(
+        rows
+          .slice()
+          .sort((a, b) => nativeCompare(a.name, b.name))
+          .map((r) => r.id),
+      )
+      expect(comparisons).toBeGreaterThan(0)
+      context.activeFilter.value = 'favorites'
+      expect(view.paginatedResources.value).toEqual([])
+    },
+  )
+
   it('counts each resource once per folder and preserves all, favorites and type filters', () => {
     const { context, view } = setup([
       resource('multi', {

@@ -1,51 +1,33 @@
 import { describe, expect, it, vi } from 'vitest'
 import { appearanceScopes } from '../core/AppearanceScopes'
-import { captureAssistantComparison } from './ProductAssistantAppearanceComparison'
+import { applyAssistantComparison } from './ProductAssistantAppearanceComparison'
 import { captureAssistantPage } from './ProductAssistantScreenshot'
 vi.mock('./ProductAssistantScreenshot', () => ({ captureAssistantPage: vi.fn() }))
 const scope = appearanceScopes()[0]!
-describe('actual appearance comparison around the CSS owner', () => {
-  it('captures each side around the single existing write', async () => {
-    const order: string[] = []
-    vi.mocked(captureAssistantPage).mockImplementation(async () => {
-      order.push('capture')
-      return {
-        id: String(order.length),
-        name: '实际截图',
-        dataUrl: 'data:image/jpeg;base64,AA',
-        result: true,
-      }
-    })
-    const result = await captureAssistantComparison(
-      scope,
-      new AbortController().signal,
-      async () => {
-        order.push('write')
-      },
-    )
-    expect(order).toEqual(['capture', 'write', 'capture'])
-    expect(result.before?.id).toBe('1')
-    expect(result.after?.id).toBe('3')
-  })
-  it('keeps a successful write visible when after-capture fails, and never writes after cancellation', async () => {
-    vi.mocked(captureAssistantPage)
-      .mockResolvedValueOnce({
-        id: 'before',
-        name: '实际截图',
-        dataUrl: 'data:image/jpeg;base64,AA',
-      })
-      .mockRejectedValueOnce(new Error('渲染失败'))
+
+describe('appearance write record without automatic screenshots', () => {
+  it('performs the original write once and records keep/undo without rendering', async () => {
     const apply = vi.fn(async () => {})
-    const result = await captureAssistantComparison(scope, new AbortController().signal, apply)
+    const result = await applyAssistantComparison(scope, new AbortController().signal, apply)
     expect(apply).toHaveBeenCalledOnce()
+    expect(captureAssistantPage).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ scope: scope.value, state: 'applied' })
+    expect(result.before).toBeUndefined()
     expect(result.after).toBeUndefined()
-    expect(result.captureError).toContain('渲染失败')
+    expect(result.captureError).toBeUndefined()
+  })
+  it('does not write after cancellation or claim success after a failed write', async () => {
     const controller = new AbortController()
     controller.abort()
-    apply.mockClear()
-    await expect(captureAssistantComparison(scope, controller.signal, apply)).rejects.toThrow(
-      '已停止',
-    )
+    const apply = vi.fn(async () => {})
+    await expect(applyAssistantComparison(scope, controller.signal, apply)).rejects.toMatchObject({
+      name: 'AbortError',
+    })
     expect(apply).not.toHaveBeenCalled()
+    apply.mockRejectedValueOnce(new Error('write failed'))
+    await expect(
+      applyAssistantComparison(scope, new AbortController().signal, apply),
+    ).rejects.toThrow('write failed')
+    expect(captureAssistantPage).not.toHaveBeenCalled()
   })
 })

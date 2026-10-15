@@ -52,7 +52,14 @@ export type AiTaggingPanelProps = {
 export type AiTaggingPanelEvents = {
   close: []
   openResource: [resource: ResourceSummary]
-  applied: [details: { resourceCount: number; tagCount: number; action: 'apply' | 'undo' }]
+  applied: [
+    details: {
+      resourceCount: number
+      tagCount: number
+      resourceIds: string[]
+      action: 'apply' | 'undo'
+    },
+  ]
 }
 
 export function useAiTaggingPanel(
@@ -614,6 +621,7 @@ export function useAiTaggingPanel(
       emit('applied', {
         resourceCount: result.resourceCount,
         tagCount: result.tagCount,
+        resourceIds: result.entries.map((entry) => entry.resourceId),
         action: 'apply',
       })
       emit('close')
@@ -802,6 +810,7 @@ export function useAiTaggingPanel(
       emit('applied', {
         resourceCount: result.resourceCount,
         tagCount: result.tagCount,
+        resourceIds: result.entries.map((entry) => entry.resourceId),
         action: 'undo',
       })
     } catch (error) {

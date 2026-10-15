@@ -163,8 +163,16 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
     await maintenanceCheckpoint(true)
     const thumbnailRepairCount = await resourceService.repairThumbnailAssets()
     await maintenanceCheckpoint()
-    const upgradedCount = await resourceService.upgradeLegacyJsonResources(maintenanceCheckpoint)
-    const backfilledCount = await resourceService.backfillCardFingerprints(maintenanceCheckpoint)
+    const snapshot = await resourceService.listSummaries()
+    const upgradedCount = await resourceService.upgradeLegacyJsonResources(
+      maintenanceCheckpoint,
+      snapshot,
+    )
+    // A real upgrade changed content/metadata: backfill must obtain the committed new snapshot.
+    const backfilledCount = await resourceService.backfillCardFingerprints(
+      maintenanceCheckpoint,
+      upgradedCount ? undefined : snapshot,
+    )
     if (thumbnailRepairCount > 0 || upgradedCount > 0 || backfilledCount > 0) {
       await context.loadResources()
     }
@@ -256,8 +264,8 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
       .catch(() => {
         if (!disposed) context.showNotice('暂时无法读取云恢复检查点，可在云备份中重试。')
       })
-    void syncNativeResourceFiles()
-      .then(() => cloudBackupService.reconcileNativeJob())
+    // Settle completed receipts independently; starting a backup still requires both checks.
+    void Promise.all([cloudBackupService.reconcileNativeJob(), syncNativeResourceFiles()])
       .then(() => cloudBackupService.runDueBackup())
       .catch((error) => {
         context.showNotice(

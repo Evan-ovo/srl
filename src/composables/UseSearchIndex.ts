@@ -7,6 +7,12 @@ import { resourceAuthorSearchText } from '../utils/ResourceAuthors'
 const SEARCH_HISTORY_LIMIT = 10
 export type SearchScope = 'name' | 'content' | 'author'
 
+interface ContentSearchResult {
+  matchedIds: string[]
+  indexedHashes: string[]
+  evictedHashes?: string[]
+}
+
 /**
  * 搜索状态与正文索引。
  *
@@ -27,6 +33,49 @@ export function useSearchIndex(resources: Ref<ResourceSummary[]>, isVaultEnabled
   const indexedHashes = new Set<string>()
   let worker: Worker | undefined
   let cancelWorkerRequest: (() => void) | undefined
+  const readCache = new Map<string, Blob>()
+  const pendingReads = new Map<string, Promise<Blob | undefined>>()
+  let readCacheBytes = 0
+  let readCacheGeneration = 0
+  function dropRead(hash: string): void {
+    const blob = readCache.get(hash)
+    if (blob) readCacheBytes -= blob.size ?? 0
+    readCache.delete(hash)
+  }
+  function clearReads(): void {
+    readCacheGeneration++
+    readCache.clear()
+    pendingReads.clear()
+    readCacheBytes = 0
+  }
+  function readOriginal(resource: ResourceSummary): Promise<Blob | undefined> {
+    const hash = resource.contentHash
+    const cached = readCache.get(hash)
+    if (cached) return Promise.resolve(cached)
+    const existing = pendingReads.get(hash)
+    if (existing) return existing
+    const epoch = readCacheGeneration
+    const pending = resourceService
+      .get(resource.id)
+      .then((stored) => {
+        if (epoch !== readCacheGeneration || (stored?.contentHash && stored.contentHash !== hash))
+          return undefined
+        const blob = stored?.originalBlob
+        if (blob && (blob.size ?? 0) <= 8 * 1024 * 1024) {
+          readCache.set(hash, blob)
+          readCacheBytes += blob.size ?? 0
+          while (readCache.size > 64 || readCacheBytes > 8 * 1024 * 1024)
+            dropRead(readCache.keys().next().value!)
+        }
+        return blob
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (pendingReads.get(hash) === pending) pendingReads.delete(hash)
+      })
+    pendingReads.set(hash, pending)
+    return pending
+  }
   function cancelSearch(): void {
     searchIndexGeneration += 1
     cancelWorkerRequest?.()
@@ -44,6 +93,7 @@ export function useSearchIndex(resources: Ref<ResourceSummary[]>, isVaultEnabled
   )
   onScopeDispose(() => {
     cancelSearch()
+    clearReads()
     worker?.terminate()
   })
 
@@ -90,37 +140,31 @@ export function useSearchIndex(resources: Ref<ResourceSummary[]>, isVaultEnabled
     }
     isSearchIndexing.value = true
     try {
-      const candidates: Array<{ id: string; contentHash: string; blob?: Blob }> = []
-      for (const resource of items) {
-        if (generation !== searchIndexGeneration) return
-        let blob: Blob | undefined
-        if (
-          !indexedHashes.has(resource.contentHash) &&
-          (resource.mimeType === 'application/json' ||
-            resource.fileName.toLocaleLowerCase().endsWith('.json'))
-        ) {
-          try {
-            blob = (await resourceService.get(resource.id))?.originalBlob
-          } catch {
-            blob = undefined
-          }
+      const matchedIds: string[] = []
+      for (let start = 0; start < items.length; start += 32) {
+        const candidates: Array<{ id: string; contentHash: string; blob?: Blob }> = []
+        for (const resource of items.slice(start, start + 32)) {
+          if (generation !== searchIndexGeneration) return
+          const blob =
+            !indexedHashes.has(resource.contentHash) &&
+            (resource.mimeType === 'application/json' ||
+              resource.fileName.toLocaleLowerCase().endsWith('.json'))
+              ? await readOriginal(resource)
+              : undefined
+          if (generation !== searchIndexGeneration) return
+          candidates.push({ id: resource.id, contentHash: resource.contentHash, blob })
         }
-        candidates.push({ id: resource.id, contentHash: resource.contentHash, blob })
-      }
-      if (generation !== searchIndexGeneration) return
-
-      let matchedIds: string[]
-      if (worker) {
-        const searchWorker = worker
-        const currentRequestId = ++requestId
-        const result = await new Promise<{ matchedIds: string[]; indexedHashes: string[] }>(
-          (resolve, reject) => {
+        if (worker) {
+          const searchWorker = worker
+          const currentRequestId = ++requestId
+          const result = await new Promise<ContentSearchResult>((resolve, reject) => {
             const handleMessage = (
               event: MessageEvent<{
                 type: string
                 requestId: number
                 matchedIds: string[]
                 indexedHashes: string[]
+                evictedHashes?: string[]
               }>,
             ) => {
               if (event.data.type !== 'result' || event.data.requestId !== currentRequestId) return
@@ -148,17 +192,23 @@ export function useSearchIndex(resources: Ref<ResourceSummary[]>, isVaultEnabled
               query,
               items: candidates,
             })
-          },
-        )
-        if (generation !== searchIndexGeneration) return
-        for (const hash of result.indexedHashes) indexedHashes.add(hash)
-        matchedIds = result.matchedIds
-      } else {
-        matchedIds = []
-        for (const candidate of candidates) {
+          })
           if (generation !== searchIndexGeneration) return
-          if (candidate.blob && (await candidate.blob.text()).toLocaleLowerCase().includes(query)) {
-            matchedIds.push(candidate.id)
+          for (const hash of result.indexedHashes) {
+            indexedHashes.add(hash)
+            dropRead(hash)
+          }
+          for (const hash of result.evictedHashes ?? []) indexedHashes.delete(hash)
+          matchedIds.push(...result.matchedIds)
+        } else {
+          for (const candidate of candidates) {
+            if (generation !== searchIndexGeneration) return
+            if (
+              candidate.blob &&
+              (await candidate.blob.text()).toLocaleLowerCase().includes(query)
+            ) {
+              matchedIds.push(candidate.id)
+            }
           }
         }
       }
@@ -234,6 +284,7 @@ export function useSearchIndex(resources: Ref<ResourceSummary[]>, isVaultEnabled
     contentSearchMatchIds.value = new Set()
     contentSearchQuery.value = ''
     indexedHashes.clear()
+    clearReads()
     worker?.postMessage({ type: 'reset' })
     searchIndexGeneration += 1
   }

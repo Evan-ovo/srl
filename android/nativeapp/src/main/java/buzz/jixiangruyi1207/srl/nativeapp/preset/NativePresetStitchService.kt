@@ -39,7 +39,7 @@ class NativePresetStitchService(private val store: NativeResourceStore) {
             val prompt = prompts.optJSONObject(index) ?: continue
             promptById[prompt.optString("identifier")] = prompt
         }
-        val order = dominantOrder(root)
+        val order = readPresetOrder(root)
         val seen = mutableSetOf<String>()
         val result = mutableListOf<NativePresetSegment>()
         for (index in 0 until order.length()) {
@@ -101,8 +101,8 @@ class NativePresetStitchService(private val store: NativeResourceStore) {
     }
 
     private fun rebuildOrders(preset: JSONObject, base: JSONObject, picks: List<Pair<NativePresetSegment, String>>) {
-        val baseOrder = dominantOrder(base)
-        val dominantIds = (0 until baseOrder.length()).mapNotNull { baseOrder.optJSONObject(it)?.optString("identifier") }.toSet()
+        val baseOrder = readPresetOrder(base)
+        val baseOrderIds = (0 until baseOrder.length()).mapNotNull { baseOrder.optJSONObject(it)?.optString("identifier") }.toSet()
         val groups = preset.optJSONArray("prompt_order")
         if (groups == null || groups.length() == 0) {
             val order = JSONArray()
@@ -126,7 +126,7 @@ class NativePresetStitchService(private val store: NativeResourceStore) {
             picks.forEach { (entry, identifier) -> rebuilt.put(JSONObject().put("identifier", identifier).put("enabled", entry.enabled)) }
             for (index in 0 until oldOrder.length()) {
                 val item = oldOrder.optJSONObject(index) ?: continue
-                if (item.optString("identifier") !in dominantIds) rebuilt.put(JSONObject(item.toString()))
+                if (item.optString("identifier") !in baseOrderIds) rebuilt.put(JSONObject(item.toString()))
             }
             group.put("order", rebuilt)
         }
@@ -163,14 +163,19 @@ class NativePresetStitchService(private val store: NativeResourceStore) {
         return root
     }
 
-    private fun dominantOrder(root: JSONObject): JSONArray {
-        val groups = root.optJSONArray("prompt_order") ?: return JSONArray()
-        var dominant = JSONArray()
-        for (index in 0 until groups.length()) {
-            val order = groups.optJSONObject(index)?.optJSONArray("order") ?: continue
-            if (order.length() > dominant.length()) dominant = order
+    companion object {
+        // 与 Web 的 PresetStitcher 一致：使用酒馆全局组，旧文件才取首个有效组。
+        internal fun readPresetOrder(root: JSONObject): JSONArray {
+            val groups = root.optJSONArray("prompt_order") ?: return JSONArray()
+            var firstOrder: JSONArray? = null
+            for (index in 0 until groups.length()) {
+                val group = groups.optJSONObject(index) ?: continue
+                val order = group.optJSONArray("order") ?: continue
+                if (group.optString("character_id") == "100001") return order
+                if (firstOrder == null) firstOrder = order
+            }
+            return firstOrder ?: JSONArray()
         }
-        return dominant
     }
 
     private fun regexScripts(root: JSONObject): JSONArray = root.optJSONObject("extensions")?.optJSONArray("regex_scripts") ?: JSONArray()

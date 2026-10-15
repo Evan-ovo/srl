@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import previewSampleCss from '../styles/AppearancePreview.css?inline'
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-vue-lifecycle-imports
 import { computed, onMounted, ref, watch } from 'vue'
 // SRL-PUBLIC-SYNC: END REPLACE id=appearance-vue-lifecycle-imports
@@ -27,14 +26,14 @@ import { isSafeModeActive } from '../core/SafeStartup'
 import { ASSISTANT_FEATURE_GUIDES } from '../core/ProductAssistantKnowledge'
 import { getAssistantVisibleScope } from '../core/ProductAssistantViewContext'
 import { captureAssistantPage } from '../services/ProductAssistantScreenshot'
-import { captureAssistantComparison } from '../services/ProductAssistantAppearanceComparison'
+import { applyAssistantComparison } from '../services/ProductAssistantAppearanceComparison'
 import {
   inspectAssistantAppearance,
   verifyAssistantAppearance,
 } from '../services/ProductAssistantAppearanceInspection'
 
 import { confirmAction } from '../composables/UseConfirmDialog'
-import { usePreviewBudget } from '../composables/UsePreviewBudget'
+import { useCustomUiViews } from '../composables/UseCustomUiViews'
 import { usePreviewPolicy } from '../composables/UsePreviewPolicy'
 import FeatureAppHeader from './FeatureAppHeader.vue'
 import AppearanceOriginalCssActions from './AppearanceOriginalCssActions.vue'
@@ -61,7 +60,6 @@ import {
   type UiFontScale,
 } from '../services/BrowserStorageService'
 import { downloadBlob } from '../utils/LibraryFormatting'
-import { sanitizeCssForPreview } from '../utils/PreviewSafety'
 import { runAssistantPageScript } from '../services/ProductAssistantScript'
 
 const props = withDefaults(
@@ -131,9 +129,7 @@ onBeforeUnmount(() => emit('assistant-visibility', false))
 // SRL-PUBLIC-SYNC: END REPLACE id=appearance-assistant-layout-state
 const previewPolicy = usePreviewPolicy()
 const copyStatus = ref('')
-const isPreviewOpen = ref(false)
-const previewHost = ref<HTMLElement>()
-const { previewEnabled } = usePreviewBudget('appearance-preview', isPreviewOpen, previewHost)
+const appliedViews = useCustomUiViews()
 const importInput = ref<HTMLInputElement>()
 const cabinetColumns = ref<CabinetColumns>(storage.getCabinetColumns())
 const isCardOrientationDialogOpen = ref(false)
@@ -275,6 +271,15 @@ function clonePreset(value: CustomCssPreset): CustomCssPreset {
   }
 }
 
+function presetCssScope(preset: CustomCssPreset): CustomCssScope {
+  return (Object.entries(preset.scopedCss).find(([, css]) => css?.trim())?.[0] ??
+    'library') as CustomCssScope
+}
+
+function hasScopedCss(preset: CustomCssPreset): boolean {
+  return Object.values(preset.scopedCss).some((css) => css?.trim())
+}
+
 const storedPresets = storage.getCustomUiPresets()
 const activeStoredId = storage.getActiveCustomUiPresetId()
 const initialPreset =
@@ -284,8 +289,13 @@ const initialPreset =
 const presets = ref(storedPresets)
 const activePresetId = ref(initialPreset.id)
 const draft = ref(clonePreset(initialPreset))
-const activeScope = ref<CustomCssScope>('library')
-const previewCss = ref(props.customCss)
+const activeScope = ref<CustomCssScope>(presetCssScope(initialPreset))
+const scopedEditorOpen = ref(hasScopedCss(initialPreset))
+
+function showPresetCss(preset: CustomCssPreset): void {
+  activeScope.value = presetCssScope(preset)
+  scopedEditorOpen.value = hasScopedCss(preset)
+}
 
 const activeScopedCss = computed({
   get: () => draft.value.scopedCss[activeScope.value] ?? '',
@@ -293,6 +303,7 @@ const activeScopedCss = computed({
     draft.value.scopedCss[activeScope.value] = value
   },
 })
+
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-official-scope-availability
 const installedIds = ref(new Set<string>())
 const installationsLoaded = ref(false)
@@ -312,7 +323,10 @@ onMounted(() => void refreshInstalledIds())
 watch(
   () => props.active,
   (active, previous) => {
-    if (active && previous === false) void refreshInstalledIds()
+    if (active && previous === false) {
+      refreshPresets()
+      void refreshInstalledIds()
+    }
   },
 )
 function available(scope: AppearanceScope): boolean {
@@ -350,14 +364,38 @@ const hasUnsavedChanges = computed(() => {
 const presetState = computed(() => {
   if (!savedDraft.value) return '未保存'
   if (hasUnsavedChanges.value) return '待保存'
+  if (needsReapply.value) return '已保存 · 未应用'
   return '已保存'
 })
+const needsReapply = computed(
+  () =>
+    compileAppearancePreset(draft.value) !== props.customCss ||
+    JSON.stringify(normalizeUiViews(draft.value.views)) !== JSON.stringify(appliedViews.value),
+)
 const hasCssContent = computed(
   () =>
     Boolean(draft.value.globalCss.trim()) ||
     Object.values(draft.value.scopedCss ?? {}).some((value) => Boolean(value?.trim())) ||
     Object.keys(draft.value.views ?? {}).length > 0,
 )
+
+function refreshPresets(): void {
+  const preserveDraft =
+    hasUnsavedChanges.value &&
+    (Boolean(savedDraft.value) || hasCssContent.value || draft.value.name !== initialPreset.name)
+  const latest = storage.getCustomUiPresets()
+  presets.value = latest
+  if (preserveDraft) return
+  const activeId = storage.getActiveCustomUiPresetId()
+  const selected =
+    latest.find((item) => item.id === activeId) ??
+    latest.find((item) => item.id === activePresetId.value) ??
+    latest[0]
+  if (!selected || JSON.stringify(selected) === JSON.stringify(draft.value)) return
+  activePresetId.value = selected.id
+  draft.value = clonePreset(selected)
+  showPresetCss(selected)
+}
 
 const compilePreset = compileAppearancePreset
 
@@ -392,6 +430,7 @@ async function selectPreset(event: Event): Promise<void> {
   }
   activePresetId.value = id
   draft.value = clonePreset(selected)
+  showPresetCss(selected)
   storage.setActiveCustomUiPresetId(id)
   applyPreset(selected, compilePreset(selected))
   flash(`已切换到「${selected.name}」`)
@@ -417,6 +456,7 @@ async function newPreset(): Promise<void> {
   const next = createPreset(`新样式 ${presets.value.length + 1}`)
   activePresetId.value = next.id
   draft.value = next
+  showPresetCss(next)
   flash('已新建草稿，保存后才会加入预设库')
 }
 
@@ -601,14 +641,14 @@ async function applyAssistantVue(
   // The native preview must leave the top layer before showing the protected live trial.
   vueTools.dismiss()
   await nextTick()
-  const comparison = await captureAssistantComparison(scope, signal, async () => {
+  const comparison = await applyAssistantComparison(scope, signal, async () => {
     if (signal.aborted) throw new DOMException('已停止', 'AbortError')
     if (
       (await vueTools.revision(scope.value)) !== revision ||
       storage.getCustomUiCss() !== previous.before ||
       JSON.stringify(storage.getCustomUiViews()) !== JSON.stringify(beforeViews)
     )
-      throw new Error('确认或截图期间外观已变化，未覆盖其它修改')
+      throw new Error('确认期间外观已变化，未覆盖其它修改')
     if (signal.aborted) throw new DOMException('已停止', 'AbortError')
     emit('save-assistant-css', previous.after, { views: nextViews })
     if (
@@ -853,8 +893,10 @@ async function executeAssistantReply(
   if (reply.action === 'global-style') {
     if (request.globalCss !== draft.value.globalCss)
       throw new Error('全局 CSS 草稿已变化，未覆盖手动修改；请重新发送需求')
-    const scope = activeScopes.value.find((item) => item.value === request.currentScope)
-    if (!scope) throw new Error('请先打开一个可识别的界面，再应用全局样式以便对比效果')
+    const scope =
+      activeScopes.value.find((item) => item.value === request.currentScope) ??
+      activeScopes.value.find((item) => item.value === 'shell')
+    if (!scope) throw new Error('当前缺少全局样式区域定义')
     const candidate = clonePreset(draft.value)
     candidate.globalCss = reply.css === '' ? '' : validateAssistantCss(reply.css, { global: true })
     const compiled = compilePreset(candidate)
@@ -865,12 +907,12 @@ async function executeAssistantReply(
       beforeViews: storage.getCustomUiViews(),
       afterViews: storage.getCustomUiViews(),
     }
-    const comparison = await captureAssistantComparison(scope, signal, async () => {
+    const comparison = await applyAssistantComparison(scope, signal, async () => {
       if (
         storage.getCustomUiCss() !== previous.before ||
         draft.value.globalCss !== request.globalCss
       )
-        throw new Error('截图期间样式已变化，未覆盖新的修改')
+        throw new Error('应用期间样式已变化，未覆盖新的修改')
       if (compiled !== previous.before) {
         emit('save-assistant-css', compiled)
         if (storage.getCustomUiCss() !== compiled)
@@ -880,6 +922,10 @@ async function executeAssistantReply(
       draft.value = candidate
       await nextTick()
     })
+    if (storage.getCustomUiCss() !== compiled)
+      throw new Error(
+        '应用期间试用样式已恢复或被其它操作修改；当前未应用这次修改，请重新读取，不覆盖现有样式',
+      )
     if (compiled !== previous.before && assistantUndo.value)
       assistantUndo.value.comparisonId = comparison.id
     return {
@@ -934,12 +980,12 @@ async function executeAssistantReply(
       beforeViews: storage.getCustomUiViews(),
       afterViews: storage.getCustomUiViews(),
     }
-    const comparison = await captureAssistantComparison(scope, signal, async () => {
+    const comparison = await applyAssistantComparison(scope, signal, async () => {
       if (
         storage.getCustomUiCss() !== previous.before ||
         JSON.stringify(request.css) !== JSON.stringify(getAssistantContext().css)
       )
-        throw new Error('截图期间样式已变化，未覆盖新的修改')
+        throw new Error('应用期间样式已变化，未覆盖新的修改')
       if (compiled !== previous.before) {
         emit('save-assistant-css', compiled)
         if (storage.getCustomUiCss() !== compiled)
@@ -950,6 +996,10 @@ async function executeAssistantReply(
       activeScope.value = scope.value
       await nextTick()
     })
+    if (storage.getCustomUiCss() !== compiled)
+      throw new Error(
+        '应用期间试用样式已恢复或被其它操作修改；当前未应用这次修改，请重新读取，不覆盖现有样式',
+      )
     if (compiled !== previous.before && assistantUndo.value)
       assistantUndo.value.comparisonId = comparison.id
     status = `已应用到${scope.title}`
@@ -997,6 +1047,7 @@ async function deletePreset(): Promise<void> {
     const next = presets.value[0] ?? createPreset()
     activePresetId.value = next.id
     draft.value = clonePreset(next)
+    showPresetCss(next)
     flash('未保存草稿已放弃')
     return
   }
@@ -1012,14 +1063,16 @@ async function deletePreset(): Promise<void> {
   const next = presets.value[0] ?? createPreset()
   activePresetId.value = next.id
   draft.value = clonePreset(next)
+  showPresetCss(next)
   storage.setActiveCustomUiPresetId(presets.value.length ? next.id : '')
   applyPreset(next, presets.value.length ? compilePreset(next) : '')
   flash('预设已删除')
 }
 
-function preview(): void {
-  previewCss.value = compilePreset(draft.value)
-  isPreviewOpen.value = true
+async function preview(): Promise<void> {
+  if (!(await confirmViewScripts(draft.value.views))) return
+  applyPreset(draft.value, compilePreset(draft.value))
+  flash('已在真实界面试用草稿；可切换到目标页面查看，在保护提示中保留或恢复。预设尚未保存')
 }
 
 async function clearDraft(): Promise<void> {
@@ -1089,6 +1142,7 @@ async function importPresets(event: Event): Promise<void> {
     presets.value.push(imported)
     activePresetId.value = imported.id
     draft.value = clonePreset(imported)
+    showPresetCss(imported)
   }
   if (files.length) {
     storage.setCustomUiPresets(presets.value)
@@ -1102,26 +1156,10 @@ async function importPresets(event: Event): Promise<void> {
   }
   input.value = ''
 }
-
-const previewDocument = computed(() => {
-  const css = sanitizeCssForPreview(previewCss.value, {
-    allowExternalResources: previewPolicy.value.allowRemoteResources,
-    preserveLength: true,
-  })
-  const csp = previewPolicy.value.allowRemoteResources
-    ? "default-src 'none'; style-src 'unsafe-inline' https: http:; img-src data: https: http:; font-src data: https: http:; script-src 'none'"
-    : "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; script-src 'none'"
-  const featurePage = selectedScope.value?.appId ?? 'home'
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${previewSampleCss}${css}</style></head><body><div class="app-shell"><aside class="sidebar"><strong>SRL</strong><span>全部资源</span><span>角色卡</span><span>世界书</span></aside><main class="library resource-detail-sheet feature-hub layout-settings-page" data-feature-page="${featurePage}"><span hidden data-official-app-ready="${featurePage}"></span><div class="toolbar"><input value="搜索名称或文件名"><button>导入</button></div><section class="resource-grid"><article class="resource-card"><i></i><strong>示例角色</strong><small>角色卡 · 收藏</small></article><article class="resource-card"><i></i><strong>城市设定</strong><small>世界书 · 12 条</small></article><article class="resource-card"><strong>界面正则</strong><small>正则 · HTML / CSS</small></article></section></main></div></body></html>`
-})
 </script>
 
 <template>
-  <section
-    ref="previewHost"
-    class="appearance-studio"
-    :class="{ 'appearance-studio--chat': assistantOpen }"
-  >
+  <section class="appearance-studio" :class="{ 'appearance-studio--chat': assistantOpen }">
     <FeatureAppHeader v-if="!assistantOpen" title="外观" @back="backFromAppearance">
       <template #status>
         <span class="feature-header-status">本机生效</span>
@@ -1345,7 +1383,11 @@ const previewDocument = computed(() => {
           ></textarea>
         </label>
 
-        <details class="appearance-advanced">
+        <details
+          class="appearance-advanced"
+          :open="scopedEditorOpen"
+          @toggle="scopedEditorOpen = ($event.target as HTMLDetailsElement).open"
+        >
           <summary data-assistant-focus="appearance-css">
             <span><strong>按界面编辑 CSS / 源码</strong></span>
           </summary>
@@ -1369,7 +1411,11 @@ const previewDocument = computed(() => {
           </div>
           <p v-if="installationError" role="status">{{ installationError }}</p>
           <p v-else-if="!installationsLoaded" role="status">正在读取 APP 安装状态…</p>
-          <details v-if="inactiveScopes.length" class="appearance-inactive-scopes">
+          <details
+            v-if="inactiveScopes.length"
+            class="appearance-inactive-scopes"
+            :open="inactiveScopes.some((scope) => scope.value === activeScope)"
+          >
             <summary>
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="4" y="4" width="16" height="16" rx="4" />
@@ -1418,7 +1464,7 @@ const previewDocument = computed(() => {
         <div class="appearance-code-actions">
           <span role="status">{{ copyStatus }}</span>
           <button type="button" class="appearance-action-hit" @click="preview">
-            <span class="appearance-action-face">保存前预览</span>
+            <span class="appearance-action-face">预览并试用</span>
           </button>
           <button type="button" class="appearance-action-hit" @click="clearDraft">
             <span class="appearance-action-face">清空草稿</span>
@@ -1437,33 +1483,15 @@ const previewDocument = computed(() => {
           <button
             class="button--primary appearance-action-hit"
             type="button"
-            :disabled="!hasUnsavedChanges"
+            :disabled="!hasUnsavedChanges && !needsReapply"
             data-assistant-focus="appearance-save"
             @click="savePreset"
           >
             <span class="appearance-action-face">{{
-              hasUnsavedChanges ? '保存并应用' : '已保存'
+              hasUnsavedChanges ? '保存并应用' : needsReapply ? '重新应用' : '已保存'
             }}</span>
           </button>
         </div>
-      </section>
-
-      <section v-if="isPreviewOpen" class="appearance-panel appearance-panel--preview">
-        <header>
-          <div>
-            <small>PREVIEW</small>
-            <h2>保存前预览</h2>
-          </div>
-          <button type="button" @click="isPreviewOpen = false">关闭预览</button>
-        </header>
-        <iframe
-          v-if="previewEnabled"
-          :key="previewCss"
-          :srcdoc="previewDocument"
-          sandbox=""
-          title="自定义 CSS 隔离预览"
-        ></iframe>
-        <p v-else role="status">预览资源已暂停，回到当前区域后恢复。</p>
       </section>
     </div>
 

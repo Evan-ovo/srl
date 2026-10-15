@@ -40,7 +40,6 @@ const coverContent = useTemplateRef<{
   restoreDefault: () => Promise<void>
 }>('coverContent')
 const galleryVisited = ref(props.initialTab === 'gallery')
-const contentVisited = ref(props.initialTab === 'content')
 watch(
   () => props.resource.id,
   () => {
@@ -51,7 +50,6 @@ watch(
   () => controller.activeTab.value,
   (tab) => {
     if (tab === 'gallery') galleryVisited.value = true
-    if (tab === 'content') contentVisited.value = true
   },
 )
 const personalContent = useTemplateRef<{ editing: boolean; requestBack: () => void }>(
@@ -81,6 +79,10 @@ const {
   handleSubmit,
   visibleDetailTabs,
   activeTab,
+  preparedTabs,
+  preparingTab,
+  preparationError,
+  prepareActiveTab,
   selectTab,
   relatedResourceIds,
   summaryStats,
@@ -256,6 +258,13 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
               class="editor-form resource-detail__form"
               @submit.prevent="handleSubmit"
             >
+              <p v-if="preparingTab" role="status">正在读取详情…</p>
+              <p v-if="preparationError" role="alert">
+                {{ preparationError }}
+                <button class="button button--quiet" type="button" @click="prepareActiveTab">
+                  重试读取
+                </button>
+              </p>
               <nav
                 v-show="!isContentEditing"
                 ref="detailTabs"
@@ -403,7 +412,7 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
               </section>
 
               <section
-                v-if="contentVisited"
+                v-if="preparedTabs.has('content')"
                 v-show="activeTab === 'content'"
                 id="resource-panel-content"
                 class="resource-detail__tab-panel resource-detail__tab-panel--content"
@@ -655,6 +664,7 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
               </section>
 
               <section
+                v-if="preparedTabs.has('versions')"
                 v-show="activeTab === 'versions'"
                 id="resource-panel-versions"
                 class="resource-detail__tab-panel"

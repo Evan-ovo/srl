@@ -1,5 +1,7 @@
 import { confirmAction } from '../composables/UseConfirmDialog'
 import { taskCenter, type TaskCenter } from '../core/TaskCenter'
+import { isAssistantBrowserUrl } from './AssistantBrowserUrl'
+import { withAbort } from '../utils/Abortable'
 import {
   assistantBrowserSession,
   nativeAssistantBrowser,
@@ -20,6 +22,7 @@ export class AssistantBrowserTaskService {
   }
   private revision = 0
   private activeCalls = 0
+  private pauseReceipt?: { controller: AbortController; promise: Promise<void> }
   private listener?: Awaited<ReturnType<AssistantBrowserRuntime['addListener']>>
   private listening?: Promise<void>
   private listenerGeneration = 0
@@ -38,11 +41,14 @@ export class AssistantBrowserTaskService {
   owns(conversationId: string) {
     return this.task?.conversationId === conversationId
   }
-  async recover(conversationId: string, sharedChat = true) {
+  async recover(conversationId: string, sharedChat = true, signal?: AbortSignal) {
+    signal?.throwIfAborted()
     if (this.task) return this.owns(conversationId)
     if (!this.browser.currentTask) return false
     const revision = this.revision
-    const page = await this.browser.currentTask()
+    const lookup = this.browser.currentTask()
+    const page = signal ? await withAbort(lookup, signal) : await lookup
+    signal?.throwIfAborted()
     if (
       !page.active ||
       page.purpose !== 'general' ||
@@ -74,8 +80,16 @@ export class AssistantBrowserTaskService {
       action: { label: '查看原网页', run: () => this.returnToBrowser() },
     })
     if (page.finished) this.tasks.complete(task.id)
-    await this.listen()
-    return true
+    try {
+      const listening = this.listen()
+      if (signal) await withAbort(listening, signal)
+      else await listening
+      signal?.throwIfAborted()
+      return true
+    } catch (error) {
+      if (signal?.aborted && this.task === task) void this.pause().catch(() => undefined)
+      throw error
+    }
   }
   async showProgress(text: string) {
     if (!this.task || this.task.finished || this.task.controller.signal.aborted) return
@@ -97,9 +111,10 @@ export class AssistantBrowserTaskService {
     const generation = this.listenerGeneration
     const registration = this.browser
       .addListener('browserAction', (event) => {
+        const controller = this.task?.controller
         void this.onEvent(event).catch((error: unknown) => {
           const task = this.task
-          if (!task || task.id !== event.runId) return
+          if (!task || task.id !== event.runId || task.controller !== controller) return
           this.tasks.update(task.id, {
             phase: error instanceof Error ? error.message : '网页操作未成功，可查看原因后继续',
           })
@@ -141,7 +156,7 @@ export class AssistantBrowserTaskService {
       }
       window.dispatchEvent(
         new CustomEvent('srl:assistant-browser-chat', {
-          detail: { fullscreen: event.action === 'fullscreen' },
+          detail: { fullscreen: event.action === 'fullscreen', petBounds: event.petBounds },
         }),
       )
     } else if (event.action === 'download-progress') {
@@ -195,8 +210,24 @@ export class AssistantBrowserTaskService {
   }
   async pause() {
     const task = this.task
-    if (!task || task.finished || task.controller.signal.aborted) return
-    ++this.revision
+    if (!task || task.finished) return
+    if (this.pauseReceipt?.controller === task.controller) return this.pauseReceipt.promise
+    const revision = ++this.revision
+    const controller = task.controller
+    const promise = Promise.resolve().then(async () => {
+      try {
+        await this.browser.pauseAgent({ ownerRunId: task.id })
+        if (this.task === task && this.revision === revision)
+          this.tasks.update(task.id, { phase: '已暂停，可操作网页或明确继续' })
+      } catch (error) {
+        if (this.pauseReceipt?.controller === controller) this.pauseReceipt = undefined
+        if (this.task === task && this.revision === revision)
+          this.tasks.update(task.id, { phase: '已停止继续操作，网页暂停回执未确认' })
+        throw error
+      }
+    })
+    // Cancellation and the visible stop button can arrive together; share their primary receipt.
+    this.pauseReceipt = { controller, promise }
     task.controller.abort(new DOMException('用户已暂停网页操作', 'AbortError'))
     this.publish(false)
     window.dispatchEvent(
@@ -204,34 +235,56 @@ export class AssistantBrowserTaskService {
         detail: { conversationId: task.conversationId },
       }),
     )
-    await this.browser.cancelWait({ ownerRunId: task.id })
-    await this.browser.pauseAgent({ ownerRunId: task.id })
-    this.tasks.update(task.id, { phase: '已暂停，可操作网页或明确继续' })
+    // Older runtimes benefit from cancelWait; the primary pause also clears all native waits.
+    void this.browser.cancelWait({ ownerRunId: task.id }).catch(() => undefined)
+    return promise
   }
-  async resume(conversationId: string) {
+  async resume(conversationId: string, modelSignal?: AbortSignal) {
+    modelSignal?.throwIfAborted()
     const task = this.task
     if (!task || task.conversationId !== conversationId || task.finished)
       throw new Error('网页任务已结束或不属于当前聊天')
     if (assistantBrowserSession.purpose !== 'general')
       throw new Error('网页已交给另一任务，不恢复旧任务')
+    if (assistantBrowserSession.agentRunning && !task.controller.signal.aborted) return
     const revision = ++this.revision
-    task.controller = new AbortController()
+    this.pauseReceipt = undefined
+    task.controller.abort(new DOMException('续接请求已被替代', 'AbortError'))
+    const controller = new AbortController()
+    task.controller = controller
     task.agentRunId = crypto.randomUUID()
-    await this.browser.open(this.options(task))
-    if (this.task !== task || this.revision !== revision || task.controller.signal.aborted)
-      throw new DOMException('继续请求已过期，不恢复旧操作', 'AbortError')
-    this.publish(true)
-    this.tasks.update(task.id, { phase: '已继续，请重新观察页面' })
+    const stop = () => {
+      if (this.task === task && task.controller === controller)
+        void this.pause().catch(() => undefined)
+    }
+    modelSignal?.addEventListener('abort', stop, { once: true })
+    try {
+      await withAbort(this.browser.open(this.options(task)), controller.signal)
+      modelSignal?.throwIfAborted()
+      if (this.task !== task || this.revision !== revision || controller.signal.aborted)
+        throw new DOMException('继续请求已过期，不恢复旧操作', 'AbortError')
+      this.publish(true)
+      this.tasks.update(task.id, { phase: '已继续，请重新观察页面' })
+    } catch (error) {
+      if (this.task === task && this.revision === revision) {
+        controller.abort(new DOMException('续接未成功', 'AbortError'))
+        this.publish(false)
+        this.tasks.update(task.id, { phase: '未能继续网页任务，可查看原因后明确继续' })
+      }
+      throw error
+    } finally {
+      modelSignal?.removeEventListener('abort', stop)
+    }
   }
   async close(closeWindow = true, stopModel = true) {
     const task = this.task
     if (!task) return
     ++this.listenerGeneration
-    const registering = this.listening,
-      listener = this.listener
+    const listener = this.listener
     this.listening = undefined
     this.listener = undefined
     this.task = undefined
+    this.pauseReceipt = undefined
     ++this.revision
     task.controller.abort(new DOMException('网页任务已关闭', 'AbortError'))
     this.publish(false)
@@ -243,14 +296,19 @@ export class AssistantBrowserTaskService {
       )
     if (assistantBrowserSession.purpose === 'general')
       assistantBrowserSession.browserVisible = false
-    if (assistantBrowserSession.purpose === 'general') {
-      await this.browser.cancelWait({ ownerRunId: task.id })
-      if (closeWindow) await this.browser.close({ ownerRunId: task.id })
+    try {
+      if (assistantBrowserSession.purpose === 'general') {
+        void this.browser.cancelWait({ ownerRunId: task.id }).catch(() => undefined)
+        if (closeWindow) await this.browser.close({ ownerRunId: task.id })
+      }
+    } finally {
+      if (!task.finished) this.tasks.cancelled(task.id)
+      this.tasks.setAction(task.id, undefined)
+      // A late registration already removes itself through listenerGeneration in listen().
+      // Closing must not wait for a bridge registration that has not returned.
+      // Retired callbacks are rejected by run/conversation identity, even if removal is delayed.
+      void listener?.remove().catch(() => undefined)
     }
-    if (!task.finished) this.tasks.cancelled(task.id)
-    this.tasks.setAction(task.id, undefined)
-    await registering
-    await listener?.remove()
   }
   async execute(
     args: Record<string, string>,
@@ -265,7 +323,11 @@ export class AssistantBrowserTaskService {
       --this.activeCalls
     }
   }
-  private bound(task: NonNullable<AssistantBrowserTaskService['task']>): AssistantBrowserRuntime {
+  private bound(
+    task: NonNullable<AssistantBrowserTaskService['task']>,
+    signal = task.controller.signal,
+  ): AssistantBrowserRuntime {
+    const agentRunId = task.controller.signal.aborted ? undefined : task.agentRunId
     const identityMethods = new Set([
       'inspect',
       'listTabs',
@@ -282,12 +344,16 @@ export class AssistantBrowserTaskService {
       get: (target, key) => {
         const method = Reflect.get(target, key)
         if (typeof method !== 'function' || !identityMethods.has(String(key))) return method
-        return (options?: object) =>
-          method.call(target, {
+        return (options?: object) => {
+          if (key !== 'pauseAgent') signal.throwIfAborted()
+          const result = method.call(target, {
             ...options,
             ownerRunId: task.id,
-            ...(task.controller.signal.aborted ? {} : { ownerAgentRunId: task.agentRunId }),
+            ...(task.controller.signal.aborted ? {} : { ownerAgentRunId: agentRunId }),
           })
+          // Finish and cleanup intentionally run after the operation lease has been aborted.
+          return key === 'pauseAgent' ? result : withAbort(result, signal)
+        }
       },
     })
   }
@@ -298,12 +364,12 @@ export class AssistantBrowserTaskService {
     sharedChat: boolean,
   ): Promise<Record<string, unknown>> {
     modelSignal.throwIfAborted()
-    const operation = args.operation ?? ''
-    if (operation === 'resume' && !this.task) await this.recover(conversationId, sharedChat)
+    let operation = args.operation ?? ''
+    if (operation === 'resume' && !this.task)
+      await this.recover(conversationId, sharedChat, modelSignal)
     if (operation === 'open' && (!this.owns(conversationId) || this.task?.finished)) {
       const url = new URL(args.url ?? '')
-      if (url.protocol !== 'https:' || !url.hostname.includes('.') || url.username || url.password)
-        throw new Error('请提供公开 HTTPS 地址')
+      if (!isAssistantBrowserUrl(url)) throw new Error('请提供公开 HTTPS 地址')
       if (assistantBrowserSession.active && assistantBrowserSession.purpose !== 'general')
         throw new Error('Discord 配置仍在使用网页，请先关闭或完成该任务')
       const previousTask = this.task,
@@ -345,22 +411,20 @@ export class AssistantBrowserTaskService {
         action: { label: '查看网页任务', run: () => this.returnToBrowser() },
       })
       try {
-        await this.listen()
-        if (this.task !== task || this.revision !== revision)
-          throw new DOMException('打开任务已取消', 'AbortError')
-        modelSignal.throwIfAborted()
         const stop = () => {
-          void this.pause().catch((error: unknown) => {
-            if (this.task === task)
-              this.tasks.update(task.id, {
-                phase: error instanceof Error ? error.message : '网页操作已停止',
-              })
-          })
+          void (this.listener ? this.pause() : this.close()).catch(() => undefined)
         }
         modelSignal.addEventListener('abort', stop, { once: true })
         try {
-          await this.browser.open({ ...this.options(task), url: url.href, resumeCurrent: false })
-          const page = await this.browser.waitReady()
+          await withAbort(this.listen(), task.controller.signal)
+          if (this.task !== task || this.revision !== revision)
+            throw new DOMException('打开任务已取消', 'AbortError')
+          modelSignal.throwIfAborted()
+          await withAbort(
+            this.browser.open({ ...this.options(task), url: url.href, resumeCurrent: false }),
+            task.controller.signal,
+          )
+          const page = await withAbort(this.browser.waitReady(), task.controller.signal)
           if (this.task !== task || this.revision !== revision || modelSignal.aborted)
             throw new DOMException('打开任务已取消', 'AbortError')
           return { ok: true, ...page }
@@ -409,13 +473,16 @@ export class AssistantBrowserTaskService {
       )
         return { ok: false, paused: true }
       modelSignal.throwIfAborted()
-      await this.resume(conversationId)
-      return { ok: true, ...(await this.browser.inspect()) }
+      await this.resume(conversationId, modelSignal)
+      operation = 'inspect'
     }
     if (task.finished) throw new Error('任务已结束，不能执行迟到动作；新任务请重新打开网站')
     if (task.controller.signal.aborted && !['inspect', 'list-tabs'].includes(operation))
       throw new Error('用户已接手或暂停；需要明确继续后再操作')
-    const browser = this.bound(task)
+    const browser = this.bound(
+      task,
+      task.controller.signal.aborted ? modelSignal : task.controller.signal,
+    )
     const revision = this.revision
     const check = () => {
       modelSignal.throwIfAborted()
@@ -428,12 +495,7 @@ export class AssistantBrowserTaskService {
         throw new DOMException('网页已交给另一任务，旧结果已丢弃', 'AbortError')
     }
     const stop = () => {
-      void this.pause().catch((error: unknown) => {
-        if (this.task === task)
-          this.tasks.update(task.id, {
-            phase: error instanceof Error ? error.message : '网页操作已停止',
-          })
-      })
+      void this.pause().catch(() => undefined)
     }
     modelSignal.addEventListener('abort', stop, { once: true })
     try {

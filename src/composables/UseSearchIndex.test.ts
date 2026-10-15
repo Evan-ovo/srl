@@ -33,6 +33,48 @@ function summary(overrides: Partial<ResourceSummary> = {}): ResourceSummary {
 }
 
 describe('useSearchIndex', () => {
+  it('shares an in-flight original across changed queries without reading it twice', async () => {
+    let release!: (value: unknown) => void
+    resources.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const items = [summary({ fileName: 'one.json' })]
+    const search = useSearchIndex(ref(items), () => false)
+    search.searchQuery.value = 'old'
+    const old = search.refreshSearchContentIndex(items)
+    search.searchQuery.value = 'new'
+    const next = search.refreshSearchContentIndex(items)
+    expect(resources.get).toHaveBeenCalledTimes(1)
+    release({ originalBlob: { size: 7, text: async () => 'old new' } })
+    await Promise.all([old, next])
+    expect(search.contentSearchQuery.value).toBe('new')
+    expect(search.contentSearchMatchIds.value.has('r1')).toBe(true)
+    expect(resources.get).toHaveBeenCalledTimes(1)
+  })
+  it('locking during a pending read does not restore the read cache', async () => {
+    let release!: (value: unknown) => void
+    resources.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const items = [summary({ fileName: 'one.json' })]
+    const search = useSearchIndex(ref(items), () => true)
+    search.searchQuery.value = 'secret'
+    const old = search.refreshSearchContentIndex(items)
+    search.resetSearchState()
+    release({ originalBlob: { size: 6, text: async () => 'secret' } })
+    await old
+    resources.get.mockResolvedValue({ originalBlob: { size: 3, text: async () => 'new' } })
+    search.searchQuery.value = 'new'
+    await search.refreshSearchContentIndex(items)
+    expect(resources.get).toHaveBeenCalledTimes(2)
+    expect(search.contentSearchMatchIds.value.has('r1')).toBe(true)
+  })
   it('输入改变即停止旧任务，等待中的一次读取结束后不继续遍历其余资源', async () => {
     let release!: (value: unknown) => void
     resources.get.mockImplementationOnce(
@@ -54,6 +96,7 @@ describe('useSearchIndex', () => {
     expect(resources.get).toHaveBeenCalledTimes(1)
     expect(search.contentSearchQuery.value).toBe('')
     expect(search.isSearchIndexing.value).toBe(false)
+    items[0]!.contentHash = 'changed-content'
     resources.get.mockResolvedValue({ originalBlob: { text: async () => 'new' } })
     await search.refreshSearchContentIndex(items.slice(0, 1))
     expect(search.contentSearchMatchIds.value.has('0')).toBe(true)

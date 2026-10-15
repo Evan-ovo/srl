@@ -72,6 +72,16 @@ public final class NativeAppDatabasePlugin extends Plugin {
         });
     }
 
+    @PluginMethod public void getRecentRecordsByIndex(PluginCall call) {
+        runIo(call, () -> {
+            JSObject result = new JSObject();
+            result.put("rows", database.getRecentRecordsByIndex(
+                required(call, "store"), required(call, "indexName"), call.getInt("limit", 100),
+                call.getString("filterIndex"), call.getString("filterKey")));
+            call.resolve(result);
+        });
+    }
+
     @PluginMethod public void getRecordKeys(PluginCall call) {
         runIo(call, () -> {
             String store = required(call, "store");

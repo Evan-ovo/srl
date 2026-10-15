@@ -6,6 +6,15 @@ import { useLibraryLifecycle } from './UseLibraryLifecycle'
 import type { SharedFileBatch } from '../utils/ShareTargetIntake'
 
 const intake = vi.hoisted(() => ({ take: vi.fn(), retry: vi.fn(), complete: vi.fn() }))
+const startup = vi.hoisted(() => ({
+  initializeVaultOnce: vi.fn(() => new Promise<never>(() => undefined)),
+  syncNativeResourceFiles: vi.fn((): Promise<void> => Promise.resolve()),
+  reconcileNativeJob: vi.fn(async () => undefined),
+  runDueBackup: vi.fn(async () => undefined),
+  listSummaries: vi.fn(async (): Promise<never[]> => []),
+  upgrade: vi.fn(async () => 0),
+  backfill: vi.fn(async () => 0),
+}))
 vi.mock('../utils/ShareTargetIntake', () => ({
   takeSharedFileBatches: intake.take,
   clearShareTargetQuery: vi.fn(),
@@ -13,18 +22,23 @@ vi.mock('../utils/ShareTargetIntake', () => ({
   forgetCompletedDiscordAttachment: intake.complete,
 }))
 vi.mock('../core/LibraryContainer', () => ({
-  initializeVaultOnce: () => new Promise(() => undefined),
+  initializeVaultOnce: startup.initializeVaultOnce,
   greetingResourceService: { onSaved: () => () => undefined },
-  resourceService: {},
+  resourceService: {
+    listSummaries: startup.listSummaries,
+    repairThumbnailAssets: vi.fn(async () => 0),
+    upgradeLegacyJsonResources: startup.upgrade,
+    backfillCardFingerprints: startup.backfill,
+  },
   browserStorageService: {},
   cloudBackupService: {},
-  syncNativeResourceFiles: vi.fn(),
+  syncNativeResourceFiles: startup.syncNativeResourceFiles,
 }))
 vi.mock('../core/AppContainer', () => ({
   cloudBackupService: {
     pendingNativeRestores: vi.fn(async () => []),
-    reconcileNativeJob: vi.fn(async () => undefined),
-    runDueBackup: vi.fn(async () => undefined),
+    reconcileNativeJob: startup.reconcileNativeJob,
+    runDueBackup: startup.runDueBackup,
   },
 }))
 vi.mock('../core/SafeStartup', () => ({ markStartupReady: vi.fn() }))
@@ -103,6 +117,97 @@ function attachment(index: number): SharedFileBatch {
 }
 
 describe('系统分享待处理队列', () => {
+  it.each([0, 1])(
+    'shares the maintenance snapshot only when no content upgrade committed (%i)',
+    async (upgraded) => {
+      const snapshot = [{ id: 'snapshot' }] as never[]
+      startup.initializeVaultOnce.mockImplementation(async () => ({ locked: false }) as never)
+      startup.listSummaries.mockReset().mockResolvedValue(snapshot)
+      startup.upgrade.mockReset().mockResolvedValue(upgraded)
+      startup.backfill.mockReset().mockResolvedValue(0)
+      intake.take.mockResolvedValue([])
+      const { wrapper } = mountLifecycle()
+      try {
+        await vi.waitFor(() => expect(startup.backfill).toHaveBeenCalledOnce())
+        expect(startup.listSummaries).toHaveBeenCalledOnce()
+        expect(startup.upgrade.mock.calls[0]).toEqual([expect.any(Function), snapshot])
+        expect(startup.backfill.mock.calls[0]).toEqual([
+          expect.any(Function),
+          upgraded ? undefined : snapshot,
+        ])
+      } finally {
+        wrapper.unmount()
+        startup.initializeVaultOnce
+          .mockReset()
+          .mockImplementation(() => new Promise<never>(() => undefined))
+        startup.upgrade.mockReset().mockResolvedValue(0)
+        startup.backfill.mockReset().mockResolvedValue(0)
+        startup.listSummaries.mockReset().mockResolvedValue([])
+        startup.syncNativeResourceFiles.mockClear()
+        startup.reconcileNativeJob.mockClear()
+        startup.runDueBackup.mockClear()
+        intake.take.mockReset()
+      }
+    },
+  )
+
+  it.each(['sync', 'receipt'])('回执与对账独立开始，自动备份等待 %s 完成', async (pending) => {
+    let finishSync!: () => void
+    startup.initializeVaultOnce.mockImplementation(async () => ({ locked: false }) as never)
+    const deferred =
+      pending === 'sync' ? startup.syncNativeResourceFiles : startup.reconcileNativeJob
+    deferred.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSync = resolve
+        }),
+    )
+    startup.reconcileNativeJob.mockClear()
+    startup.runDueBackup.mockClear()
+    intake.take.mockResolvedValue([])
+    const { wrapper } = mountLifecycle()
+    try {
+      await vi.waitFor(() => expect(startup.syncNativeResourceFiles).toHaveBeenCalledTimes(1))
+      expect(startup.reconcileNativeJob).toHaveBeenCalledTimes(1)
+      expect(startup.runDueBackup).not.toHaveBeenCalled()
+      finishSync()
+      await vi.waitFor(() => expect(startup.runDueBackup).toHaveBeenCalledTimes(1))
+    } finally {
+      wrapper.unmount()
+      startup.initializeVaultOnce
+        .mockReset()
+        .mockImplementation(() => new Promise<never>(() => undefined))
+      startup.syncNativeResourceFiles.mockReset().mockResolvedValue(undefined)
+      startup.reconcileNativeJob.mockReset().mockResolvedValue(undefined)
+      startup.runDueBackup.mockReset().mockResolvedValue(undefined)
+      intake.take.mockReset()
+    }
+  })
+
+  it.each(['sync', 'receipt'])('启动 %s 失败时不启动自动备份', async (failed) => {
+    startup.initializeVaultOnce.mockImplementation(async () => ({ locked: false }) as never)
+    const operation =
+      failed === 'sync' ? startup.syncNativeResourceFiles : startup.reconcileNativeJob
+    operation.mockRejectedValueOnce(new Error('startup fixture failure'))
+    intake.take.mockResolvedValue([])
+    const { wrapper, notice } = mountLifecycle()
+    try {
+      await vi.waitFor(() =>
+        expect(notice).toHaveBeenCalledWith(expect.stringContaining('startup fixture failure')),
+      )
+      expect(startup.runDueBackup).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      startup.initializeVaultOnce
+        .mockReset()
+        .mockImplementation(() => new Promise<never>(() => undefined))
+      startup.syncNativeResourceFiles.mockReset().mockResolvedValue(undefined)
+      startup.reconcileNativeJob.mockReset().mockResolvedValue(undefined)
+      startup.runDueBackup.mockReset().mockResolvedValue(undefined)
+      intake.take.mockReset()
+    }
+  })
+
   it('首次渲染前应用已保存的全局 CSS', () => {
     intake.take.mockReset()
     intake.retry.mockReset()

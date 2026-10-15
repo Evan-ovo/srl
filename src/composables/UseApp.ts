@@ -167,6 +167,7 @@ export function useApp() {
   const {
     openResourceDetail,
     copyResourceDeepLink,
+    prepareResourceDetail,
     closeResourceDetail,
     openResourceFromLayout,
     handleFavorite,
@@ -1524,6 +1525,7 @@ export function useApp() {
     organizingResource,
     organizingInitialTab,
     organizingBoundResources,
+    prepareResourceDetail,
     isOrganizing,
     closeResourceDetail,
     handleRelatedDownload,

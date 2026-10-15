@@ -1,10 +1,13 @@
+import { installUiRecoveryGesture } from '../core/UiRecoveryGesture'
+
 /** Runs exclusively inside sandbox=allow-scripts. The host never evaluates author code. */
-function installUiViewBridge() {
+function installUiViewBridge(installRecoveryGesture: typeof installUiRecoveryGesture) {
   let port: MessagePort | undefined
   let nonce = ''
   let sequence = 0
   let state: unknown
   let failed = false
+  let stopRecoveryGesture: (() => void) | undefined
   const listeners = new Set<(value: unknown) => void>()
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>()
   const regions = new Map<Element, string>()
@@ -125,10 +128,18 @@ function installUiViewBridge() {
             }
           }
           observeRegions()
-          requestAnimationFrame(() => {
-            if (!failed) port?.postMessage({ type: 'rendered', nonce })
-          })
+          // Vue's state-triggered DOM flush precedes this microtask. A hidden frame may
+          // never paint until the host receives readiness, so do not wait for a paint.
+          if (!failed) port?.postMessage({ type: 'rendered', nonce })
         })
+      } else if (data.type === 'recovery-gesture') {
+        stopRecoveryGesture?.()
+        stopRecoveryGesture =
+          data.enabled === true
+            ? installRecoveryGesture(document, () =>
+                port?.postMessage({ type: 'reveal-recovery', nonce }),
+              )
+            : undefined
       } else if (data.type === 'styles') {
         const style = document.getElementById('srl-ui-host-styles')!
         style.textContent = data.css
@@ -198,6 +209,7 @@ function installUiViewBridge() {
   )
   const reportError = () => {
     failed = true
+    stopRecoveryGesture?.()
     port?.postMessage({ type: 'error', nonce })
   }
   window.addEventListener('error', reportError)
@@ -236,6 +248,6 @@ export function createUiViewDocument(source: string, allowNetwork: boolean): str
     "base-uri 'none'",
     "form-action 'none'",
   ].join('; ')
-  const inner = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><style id="srl-ui-host-styles"></style><style>html,body{margin:0;min-height:100%}#app{min-height:100%}</style></head><body><script>(${installUiViewBridge.toString()})()</script><div id="app">${source}</div></body></html>`
+  const inner = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><style id="srl-ui-host-styles"></style><style>html,body{margin:0;min-height:100%}#app{min-height:100%}</style></head><body><script>(${installUiViewBridge.toString()})(${installUiRecoveryGesture.toString()})</script><div id="app">${source}</div></body></html>`
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy.replace("frame-src 'none'", 'frame-src about:')}"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style></head><body><iframe id="srl-ui-author-frame" title="界面源码内容" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe><script>(${installUiContainer.toString()})(${JSON.stringify(inner).replace(/</gu, '\\u003c')})</script></body></html>`
 }

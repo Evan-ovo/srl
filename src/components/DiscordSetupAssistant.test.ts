@@ -51,7 +51,7 @@ describe('compact APK setup entry', () => {
       await flushPromises()
       await wrapper
         .findAll('button')
-        .find((button) => button.text() === '继续')!
+        .find((button) => button.text() === '继续本机配置')!
         .trigger('click')
       await flushPromises()
       expect(wrapper.text()).toContain('继续上次配置？')

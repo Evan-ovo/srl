@@ -59,6 +59,13 @@ interface NativeAppDatabasePlugin {
     rows: Array<{ key: string; value: Record<string, unknown> }>
     nextKey?: string | null
   }>
+  getRecentRecordsByIndex(options: {
+    store: string
+    indexName: string
+    limit: number
+    filterIndex?: string
+    filterKey?: string
+  }): Promise<{ rows: Array<{ key: string; value: Record<string, unknown> }> }>
   getRecordKeys(options: { store: string; afterKey?: string; limit: number }): Promise<{
     keys: string[]
     nextKey?: string | null
@@ -244,6 +251,25 @@ export const nativeAppDatabase = {
   }> {
     assertAndroidDatabase()
     return databasePlugin.getRecords({ store, afterKey, limit, ...(fields ? { fields } : {}) })
+  },
+
+  async getRecentRecordsByIndex(
+    store: NativeAppDatabaseStore,
+    indexName: string,
+    limit: number,
+    filterIndex?: string,
+    filterKey?: string,
+  ): Promise<Array<{ key: string; value: Record<string, unknown> }>> {
+    assertAndroidDatabase()
+    return (
+      await databasePlugin.getRecentRecordsByIndex({
+        store,
+        indexName,
+        limit,
+        filterIndex,
+        filterKey,
+      })
+    ).rows
   },
 
   async getRecordKeys(

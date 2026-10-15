@@ -7,11 +7,10 @@ interface LibraryFolderOperationsContext {
   isSettingsOpen: Ref<boolean, boolean>
   isCategoryManagerOpen: Ref<boolean, boolean>
   isFolderViewBusy: Ref<boolean, boolean>
-  loadResources: () => Promise<void>
+  loadResources: (ids?: string[]) => Promise<void>
   cabinetResourceIds: Ref<string[], string[]>
   categories: Ref<Category[]>
   showNotice: (message: string, duration?: number, preserveRecycleUndo?: boolean) => void
-  loadLibrary: () => Promise<void>
   resources: Ref<ResourceSummary[]>
 }
 
@@ -34,7 +33,7 @@ export function useLibraryFolderOperations(getContext: () => LibraryFolderOperat
     context.isFolderViewBusy.value = true
     try {
       await resourceService.moveManyToCategory(details.resourceIds, details.categoryId)
-      await context.loadResources()
+      await context.loadResources(details.resourceIds)
       if (details.removeFromCabinet) {
         const movedIds = new Set(details.resourceIds)
         context.cabinetResourceIds.value = context.cabinetResourceIds.value.filter(
@@ -71,7 +70,7 @@ export function useLibraryFolderOperations(getContext: () => LibraryFolderOperat
           ? normalizeFolderCoverUrl(details.coverUrl)
           : undefined
       await categoryService.setCover(details.category, coverImage)
-      await context.loadLibrary()
+      context.categories.value = await categoryService.list()
       context.showNotice(coverImage ? '文件夹封面已保存' : '已恢复自动文件夹封面')
     } catch (error) {
       context.showNotice(error instanceof Error ? error.message : '文件夹封面保存失败')
@@ -130,7 +129,7 @@ export function useLibraryFolderOperations(getContext: () => LibraryFolderOperat
         name: details.name,
         coverImage,
       })
-      await context.loadLibrary()
+      context.categories.value = await categoryService.list()
       context.showNotice(details.coverChanged ? '文件夹名称和封面已更新' : '文件夹名称已更新')
     } catch (error) {
       context.showNotice(error instanceof Error ? error.message : '文件夹信息更新失败')
@@ -146,7 +145,7 @@ export function useLibraryFolderOperations(getContext: () => LibraryFolderOperat
     context.isFolderViewBusy.value = true
     try {
       await categoryService.reorder(categoryIds)
-      await context.loadLibrary()
+      context.categories.value = await categoryService.list()
       context.showNotice('文件夹位置已保存')
     } catch {
       context.showNotice('文件夹位置保存失败')

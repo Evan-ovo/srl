@@ -1,3 +1,5 @@
+import { isAssistantBrowserUrl } from './AssistantBrowserUrl'
+
 export type DiscordSetupTask =
   'configure' | 'update-worker' | 'update-commands' | 'update-commands-only' | 'diagnose'
 export const DISCORD_SETUP_STEPS = [
@@ -11,49 +13,49 @@ export const DISCORD_SETUP_STEPS = [
     id: 'discord-app',
     title: '保存 Discord App ID 与公钥',
     site: 'discord',
-    hint: '登录 Discord Developer Portal，先看应用列表；有自己的目标 App 就复用，没有则创建一个 App，多个且不确定时先选目标。在 General Information 保存 Application ID、Public Key；在 Bot 页面保存 Bot Token。Token 不要发到聊天。',
+    hint: '登录 Discord Developer Portal，先看应用列表；有自己的目标 App 就复用，没有则创建一个 App，多个且不确定时先选目标。在 General Information 保存 Application ID、Public Key；完成后下一步处理 Bot Token，不把秘密发到聊天。',
   },
   {
     id: 'discord-token',
     title: '保存 Discord Bot Token',
     site: 'discord',
-    hint: '已保存 App ID 和公钥。现在在同一个 App 的 Bot 页面完成网站验证并显示 Token，点桌宠“加密保存当前 Bot Token”。软件只在本机加密保存，模型看不到；也可以自行保存后明确选择继续。完成后再创建 Cloudflare D1。',
+    hint: '已保存 App ID 和公钥。在同一个 App 的 Bot 页面保存 Token，已有本机有效值可复用，不强制重置；需要显示或重置时由你完成网站要求的验证，再点桌宠“加密保存当前 Bot Token”。软件只在本机加密保存，模型看不到；也可自行保存后明确选择继续。完成后再处理 Cloudflare D1。',
   },
   {
     id: 'd1-create',
     title: '创建 D1 数据库',
     site: 'cloudflare',
-    hint: '登录自己的 Cloudflare，进入存储与数据库 → D1，创建 srl-discord-source-handoff。已有该数据库时继续使用，不重复创建。',
+    hint: '登录自己的 Cloudflare，进入存储与数据库 → D1，先核对本次要使用的数据库；已有匹配库就复用，无法确定时选择目标。没有才创建，建议名 srl-discord-source-handoff，合法自定义名称可保留。',
   },
   {
     id: 'd1-uuid',
     title: '记下 D1 Database ID',
     site: 'cloudflare',
-    hint: '打开刚创建的 D1 数据库，找到 Database ID（UUID）并记住。数据库名称不是 UUID；后面 Wrangler 模板第一个空使用这个值。',
+    hint: '在 D1 列表或数据库详情核对同一个数据库的 Database ID（UUID），也可从该库详情链接确认，不要求详情页面显示 UUID。数据库名称不是 UUID；后面 Wrangler 的 database_id 使用这个值。',
   },
   {
     id: 'github-fork',
     title: 'Fork 指定仓库',
     site: 'github',
-    hint: '登录 GitHub，把 jixiangruyi117/SRL-Discord-Bridge Fork 到自己的账号。进入自己的 Fork 首页，再点本步完成；已 Fork 可直接进入自己的仓库。',
+    hint: '登录 GitHub，核对 jixiangruyi117/SRL-Discord-Bridge 与当前账号的关系；拥有源仓库则直接复用，已有自己的 Fork 也复用，否则 Fork 到自己的账号。多份候选按本次目标选择，不反复新建或查找不存在的 Fork。',
   },
   {
     id: 'wrangler-edit',
     title: '编辑 Wrangler 三个空',
     site: 'github',
-    hint: '在自己的 Fork 打开 wrangler.jsonc 并编辑。使用“粘贴教程模板”，自己填写 D1 UUID、Application ID、Public Key。不要写 Bot Token；粘贴会替换当前文件内容。',
+    hint: '在已核对的部署仓库与分支打开实际 wrangler.jsonc 或 wrangler.json。已有正确配置就保留核验；否则填写 D1 UUID、Application ID、Public Key，代理可用本机参数回填。教程模板会替换当前文件，不直接覆盖无关配置；不要写 Bot Token。',
   },
   {
     id: 'wrangler-check',
     title: '检查 Wrangler 格式',
     site: 'github',
-    hint: '保持编辑页面，点击“检查格式”。检查 JSON、UUID、Application ID、公钥和固定配置。这里只检查格式，不能证明三个值来自同一个账号。',
+    hint: '保持当前配置页面，点击“检查格式”。检查 JSON/JSONC、UUID、Application ID、公钥及实际绑定，保留合法自定义名称和附加配置。格式检查不能替代真实连接与命令核验。',
   },
   {
     id: 'github-save',
     title: '保存 GitHub 配置',
     site: 'github',
-    hint: '格式检查通过后 Commit changes，保存到自己的 Fork。提交会触发已绑定的自动部署；保存失败留在本步。',
+    hint: '配置检查通过且有修改后 Commit changes，保存到已核对的部署仓库与分支；没有差异就核验已保存文件。是否触发自动部署取决于实际绑定和构建设置，不为触发部署制造提交；保存失败留在本步。',
   },
   {
     id: 'github-sync',
@@ -65,13 +67,13 @@ export const DISCORD_SETUP_STEPS = [
     id: 'cf-deploy',
     title: '部署并确认 Worker 成功',
     site: 'cloudflare',
-    hint: 'Cloudflare → Workers & Pages，部署本次 Bridge Worker；部署命令使用 npm run deploy（包含 D1 迁移）。确认当前 Worker 的生产部署成功即可继续，既有成功部署也可复用；仓库没有新提交不会自动产生新部署记录，不因此停住或制造提交。没有成功部署时检查实际构建/部署错误并处理原 Worker，只有正在构建或排队才等待。不要求仓库名、分支和提交号逐一匹配；Secret 与实际连接在后续步骤检查。',
+    hint: 'Cloudflare → Workers & Pages，核对本次 Bridge Worker 与实际项目的构建/部署脚本；部署需迁移 D1 并发布 Worker，不能假定 npm run deploy 适用所有库名。确认当前 Worker 的生产部署成功即可继续，既有成功部署可复用；没有新提交不等待新部署记录或制造提交。没有成功结果时查实际错误并处理原 Worker，只有正在构建或排队才等待。不要求仓库名、分支和提交号逐一匹配；Secret 与实际连接后续检查。',
   },
   {
     id: 'cf-secret',
     title: '填写 Cloudflare Bot Secret',
     site: 'cloudflare',
-    hint: '自己的 Worker → Settings → Variables and Secrets，添加 DISCORD_BOT_TOKEN，类型选 Secret。值由你填写；然后保存并部署。不要把它放进 GitHub 或聊天。',
+    hint: '在本次 Worker 的 Variables and Secrets 核对 DISCORD_BOT_TOKEN，类型为 Secret。已有值先核验，不重复添加；需要替换先处理冲突确认，再由你手填或授权本机盲填，保存并部署。表单关闭后核验实际列表与健康结果，不凭窗口消失判定失败；不要把秘密放进 GitHub 或聊天。',
   },
   {
     id: 'worker-url',
@@ -95,7 +97,7 @@ export const DISCORD_SETUP_STEPS = [
     id: 'local-settings',
     title: '填写资源库连接参数',
     site: 'local',
-    hint: '回到资源库连接设置，自己填写 Application ID、Public Key、Bot Token 和 Worker 根链接，并保存。Bot Token 沿原本机受保护存储保存。',
+    hint: '回到资源库原连接设置，保存 Application ID、Public Key、Bot Token 和 Worker 根链接。代理可回填已核对的本机参数与加密 Token，缺少秘密才由你手填；与已有连接冲突先确认备份，不静默覆盖。',
   },
   {
     id: 'register',
@@ -162,7 +164,8 @@ export interface DiscordSetupState {
   step: DiscordSetupStep
   startedAt: number
   forkRepo?: string
-  repositoryKind?: 'fork'
+  /** Legacy forkRepo remains the bound repository, including an authenticated owner's source. */
+  repositoryKind?: 'fork' | 'owned-source'
   githubBranch?: string
   githubFile?: 'wrangler.jsonc' | 'wrangler.json'
   applicationId?: string
@@ -172,6 +175,13 @@ export interface DiscordSetupState {
 }
 export function setupStep(id: DiscordSetupStep) {
   return DISCORD_SETUP_STEPS.find((step) => step.id === id)!
+}
+export function setupContinueLabel(id: DiscordSetupStep) {
+  return id === 'diagnose'
+    ? '继续排查'
+    : setupStep(id).site === 'local'
+      ? '继续本机配置'
+      : '继续网页协助'
 }
 export function normalizeDiscordSetupState(value: unknown): DiscordSetupState | undefined {
   if (!value || typeof value !== 'object') return
@@ -221,7 +231,8 @@ export function normalizeDiscordSetupState(value: unknown): DiscordSetupState | 
     /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u.test(input.forkRepo)
   )
     state.forkRepo = input.forkRepo
-  if (input.repositoryKind === 'fork') state.repositoryKind = input.repositoryKind
+  if (input.repositoryKind === 'fork' || input.repositoryKind === 'owned-source')
+    state.repositoryKind = input.repositoryKind
   if (typeof input.githubBranch === 'string' && validSetupBranch(input.githubBranch))
     state.githubBranch = input.githubBranch
   if (input.githubFile === 'wrangler.jsonc' || input.githubFile === 'wrangler.json')
@@ -242,14 +253,7 @@ export function normalizeDiscordSetupState(value: unknown): DiscordSetupState | 
   return state
 }
 export function isSetupAgentUrl(url: URL): boolean {
-  return (
-    url.protocol === 'https:' &&
-    !url.username &&
-    !url.password &&
-    !url.port &&
-    (['discord.com', 'github.com', 'dash.cloudflare.com'].includes(url.hostname) ||
-      url.hostname.endsWith('.workers.dev'))
-  )
+  return isAssistantBrowserUrl(url)
 }
 export function isSetupForkPage(url: URL, repo?: string): boolean {
   return (

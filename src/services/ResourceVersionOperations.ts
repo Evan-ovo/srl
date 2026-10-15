@@ -63,8 +63,9 @@ export async function listVersions(
 export async function backfillCardFingerprints(
   storage: ResourceStorageAdapter,
   checkpoint = () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+  snapshot?: ResourceSummary[],
 ): Promise<number> {
-  return (await loadVersionRecognitionSnapshot(storage, checkpoint)).backfilled
+  return (await loadVersionRecognitionSnapshot(storage, checkpoint, snapshot)).backfilled
 }
 
 export interface VersionRecognitionSnapshot {
@@ -77,10 +78,11 @@ export interface VersionRecognitionSnapshot {
 export async function loadVersionRecognitionSnapshot(
   storage: ResourceStorageAdapter,
   checkpoint = () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+  snapshot?: ResourceSummary[],
 ): Promise<VersionRecognitionSnapshot> {
   await checkpoint()
   const [summaries, versionSummaries] = await Promise.all([
-    storage.listSummaries(),
+    snapshot ?? storage.listSummaries(),
     storage.listVersionSummaries(),
   ])
   let backfilled = 0

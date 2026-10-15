@@ -374,6 +374,11 @@ describe('FrontendWorkshopSourceComponentLibrary', () => {
     await flushPromises()
 
     expect(mocks.createPortablePackage).toHaveBeenCalledWith(saved.id)
+    expect(wrapper.find('[aria-label="公开分享"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="组件分享链接"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('发布分享')
+    expect(wrapper.text()).not.toContain('更新分享')
+    expect(wrapper.text()).not.toContain('撤销分享')
     expect(mocks.downloadBlob).toHaveBeenCalledWith(blob, '人物卡.srlcomponent.zip')
     expect(wrapper.emitted('status')).toEqual([['已导出组件“人物卡”。']])
   })

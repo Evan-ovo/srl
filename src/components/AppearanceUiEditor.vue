@@ -141,7 +141,7 @@ const previewCss = computed(() =>
         >
           <path d="m9 6 6 6-6 6" />
         </svg>
-        <span>高级：Vue 自定义</span><small>{{ current?.enabled ? '已启用' : '未启用' }}</small>
+        <span>高级：Vue 自定义</span><small>{{ current?.enabled ? '随预设启用' : '不启用' }}</small>
       </summary>
       <p>当前界面：{{ title }}。通常只需修改上方 CSS；需要改文字、结构或交互时，再使用 Vue。</p>
       <button
@@ -160,7 +160,7 @@ const previewCss = computed(() =>
               type="checkbox"
               :checked="current.enabled"
               @change="update({ ...current, enabled: ($event.target as HTMLInputElement).checked })"
-            />启用此界面的 Vue</label
+            />应用时启用此界面的 Vue</label
           >
         </div>
         <label
@@ -178,7 +178,8 @@ const previewCss = computed(() =>
         <p v-else-if="file" class="appearance-ui-editor__binary">{{ file.path }} · 素材文件</p>
         <p>
           可直接修改模板里的标题、按钮和交互；原列表、表单由 Region
-          持续更新。保存前预览用于试用和撤销。
+          持续更新。“预览并试用”在真实界面运行草稿，可保留或恢复。运行后长按界面 5
+          秒可显示“恢复原界面”。
         </p>
         <div class="appearance-ui-editor__project-actions">
           <button type="button" class="appearance-action-hit" @click="previewSource">

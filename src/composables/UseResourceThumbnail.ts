@@ -91,7 +91,19 @@ export function useResourceThumbnail(
         coverId: resource ? resourceCoverId(resource) : '',
       }
     },
-    ({ resource, blob, assetId, ready, coverId }) => {
+    ({ resource, blob, assetId, ready, coverId }, previous) => {
+      if (
+        !coverId &&
+        thumbnail.value instanceof Blob &&
+        previous &&
+        previous.resource?.id === resource?.id &&
+        previous.blob === blob &&
+        previous.assetId === assetId &&
+        previous.contentHash === resource?.contentHash &&
+        previous.ready === ready &&
+        !previous.coverId
+      )
+        return
       cancelQueued()
       const currentGeneration = generation
       if (!ready) return

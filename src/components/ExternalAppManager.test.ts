@@ -131,6 +131,27 @@ afterEach(() => {
 })
 
 describe('ExternalAppManager', () => {
+  it('keeps embedded installation preview inside its modal', async () => {
+    const sharedFiles = [new File(['package'], 'counter.srlapp')]
+    const wrapper = mount(ExternalAppManager, {
+      attachTo: document.body,
+      props: { embedded: true, sharedFiles },
+    })
+    wrappers.push(wrapper)
+    await flushPromises()
+    expect(wrapper.find('[aria-label="安装确认"]').exists()).toBe(true)
+    expect(wrapper.get('[aria-label="安装确认"]').element.closest('.external-app-manager')).toBe(
+      wrapper.element,
+    )
+    expect(wrapper.text()).not.toContain('返回功能桌面')
+    expect(service.install).not.toHaveBeenCalled()
+    await button(wrapper, '安装 APP').trigger('click')
+    await flushPromises()
+    expect(service.install).toHaveBeenCalledWith(
+      expect.objectContaining({ packageFingerprint: 'app-test' }),
+      'isolated',
+    )
+  })
   it('inspects without running or installing, then keeps a success result and an explicit open action', async () => {
     const wrapper = render()
     await inspect(wrapper)

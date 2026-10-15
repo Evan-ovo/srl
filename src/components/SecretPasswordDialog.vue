@@ -1,11 +1,28 @@
 <script setup lang="ts">
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import '../styles/ConfirmDialog.css'
 import {
   secretPasswordRequest,
   resolveSecretPassword,
 } from '../composables/UseSecretPasswordPrompt'
 const password = ref('')
 const error = ref('')
+const modal = ref<HTMLDialogElement>()
+onMounted(() => {
+  const element = modal.value
+  if (!element) return
+  try {
+    element.showModal()
+    if (element.open) return
+  } catch {
+    /* Use the existing confirmation fallback on older WebViews. */
+  }
+  element.classList.add(
+    'confirm-dialog__overlay--safety-layer',
+    'confirm-dialog__overlay--fallback',
+  )
+  element.setAttribute('open', '')
+})
 function submit() {
   if (password.value.length < 8) {
     error.value = '密码至少需要 8 个字符'
@@ -14,13 +31,19 @@ function submit() {
   resolveSecretPassword(password.value)
 }
 onBeforeUnmount(() => {
+  modal.value?.close?.()
   password.value = ''
   resolveSecretPassword()
 })
 </script>
 <template>
   <Teleport to="body"
-    ><div class="editor-overlay" @click.self="resolveSecretPassword()">
+    ><dialog
+      ref="modal"
+      class="editor-overlay confirm-dialog__overlay"
+      @cancel.prevent="resolveSecretPassword()"
+      @click.self="resolveSecretPassword()"
+    >
       <section class="editor-sheet" role="dialog" aria-modal="true" aria-label="密钥密码">
         <header class="editor-sheet__header">
           <h2>密钥密码</h2>
@@ -46,6 +69,6 @@ onBeforeUnmount(() => {
           </button>
         </form>
       </section>
-    </div></Teleport
+    </dialog></Teleport
   >
 </template>

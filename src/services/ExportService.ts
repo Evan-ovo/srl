@@ -301,6 +301,34 @@ export async function createResourceArchiveSource(
     selection ? { ids: [...selection] } : undefined,
   )
   if (selection?.size) {
+    // Preserve the eager export's chat dependencies and persona avatars using
+    // only their referenced IDs. Their gallery and history are then planned once.
+    const companionIds = new Set<string>()
+    for (const resource of resources) {
+      if (resource.type === RESOURCE_TYPE.CHAT) {
+        for (const id of getRelatedResourceIds(resource)) companionIds.add(id)
+        for (const key of ['chatDisplayRegexId', 'chatReadingScriptId']) {
+          const id = resource.metadata[key]
+          if (typeof id === 'string') companionIds.add(id)
+        }
+      } else if (resource.type === RESOURCE_TYPE.USER_PERSONA) {
+        for (const id of getRelatedResourceIds(resource)) companionIds.add(id)
+      }
+    }
+    const missing = [...companionIds].filter((id) => !selection.has(id))
+    const companions = missing.length
+      ? await service.listResourceListSummaries({ ids: missing })
+      : []
+    const candidates = [...resources, ...companions]
+    includeChatCompanionIds(candidates, selection)
+    for (const resource of resources) {
+      if (resource.type !== RESOURCE_TYPE.USER_PERSONA) continue
+      const related = new Set(getRelatedResourceIds(resource))
+      for (const companion of companions)
+        if (related.has(companion.id) && isUserPersonaAvatarAttachment(companion))
+          selection.add(companion.id)
+    }
+    resources = candidates.filter((resource) => selection.has(resource.id))
     // Gallery ownership lives in metadata, so only OTHER summaries need a scan.
     // Unselected character/chat bodies and metadata never enter a single-item archive plan.
     const owners = new Set(resources.filter((r) => !isResourceGalleryImage(r)).map((r) => r.id))

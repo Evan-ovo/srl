@@ -4,6 +4,32 @@ import { describe, expect, it } from 'vitest'
 import { useOverlayStack } from './UseOverlayStack'
 
 describe('useOverlayStack', () => {
+  it('invalidates a cached top when an older registration opens above a still-open sheet', async () => {
+    const child = ref(false)
+    const parent = ref(true)
+    const stack = useOverlayStack([
+      { id: 'child', isOpen: () => child.value, close: () => (child.value = false) },
+      { id: 'parent', isOpen: () => parent.value, close: () => (parent.value = false) },
+    ])
+    expect(stack.topId.value).toBe('parent')
+    child.value = true
+    await nextTick()
+    expect(stack.topId.value).toBe('child')
+    expect(stack.closeTop()).toBe('closed')
+    expect(parent.value).toBe(true)
+  })
+
+  it('preserves actual opening order within the same event turn', () => {
+    const first = ref(false)
+    const second = ref(false)
+    const stack = useOverlayStack([
+      { id: 'first', isOpen: () => first.value, close: () => (first.value = false) },
+      { id: 'second', isOpen: () => second.value, close: () => (second.value = false) },
+    ])
+    second.value = true
+    first.value = true
+    expect(stack.topId.value).toBe('first')
+  })
   it('closes only the most recently opened overlay', async () => {
     const first = ref(false)
     const second = ref(false)

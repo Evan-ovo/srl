@@ -42,13 +42,13 @@ public class NativeAssistantBrowserPlugin extends Plugin {
         });
     }
     private void handleWindowAction(JSObject event) {
-        if ("agent-pause".equals(event.optString("action")) || "return".equals(event.optString("action"))) stopFiles();
+        if ("agent-pause".equals(event.optString("action")) || "return".equals(event.optString("action")) || "browser-close".equals(event.optString("action"))) { stopFiles(); cancelDelay(); cancelStatus(); }
 
         if ("installation-ready".equals(event.optString("action"))) { installationReady(event.optString("marker")); return; }
         if ("page-ready".equals(event.optString("action"))) watchInstallation();
         if ("agent-pause".equals(event.optString("action")) && !browser.active()) cancelInstallationWatch();
         if ("status-ready".equals(event.optString("action"))) { statusReady(event.optString("marker")); return; }
-        if ("agent-pause".equals(event.optString("action")) && pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; cancelStatus(); waiting.resolve(metadata().put("paused", true)); }
+        if (("agent-pause".equals(event.optString("action")) || "return".equals(event.optString("action")) || "browser-close".equals(event.optString("action"))) && pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; waiting.resolve(metadata().put("paused", true)); }
         if ("page-ready".equals(event.optString("action")) && pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; cancelStatus(); waiting.resolve(metadata()); return; }
         notifyBrowser(event);
     }
@@ -129,7 +129,7 @@ public class NativeAssistantBrowserPlugin extends Plugin {
     @PluginMethod public void open(PluginCall call) {
         boolean general = "general".equals(call.getString("purpose", "discord-setup"));
         String url = call.getString("url");
-        if (url != null && !(general ? AssistantBrowserPolicy.browseAllowed(url) : AssistantBrowserPolicy.allowed(url))) { call.reject(general ? "只支持公开 HTTPS 网页，拒绝私网、本地地址和非标准端口" : "配置浏览器支持 GitHub、Cloudflare、Discord 和 workers.dev HTTPS 配置页面"); return; }
+        if (url != null && !AssistantBrowserPolicy.browseAllowed(url)) { call.reject("只支持公开 HTTPS 网页，拒绝私网、本地地址和非标准端口"); return; }
         if (general && url == null && browser == null) { call.reject("首次网页任务需要明确的 HTTPS 地址"); return; }
         String step = general ? "browser-general" : call.getString("step", "");
         JSArray steps = call.getArray("steps", new JSArray());
@@ -147,6 +147,8 @@ public class NativeAssistantBrowserPlugin extends Plugin {
             }
             browser.generalMode = general;
             browser.mode = call.getString("mode", "agent");
+            browser.githubApi = call.getBoolean("githubApi", false);
+            browser.githubRepository = call.getString("githubRepository", "");
             if (browser.conversation(call.getString("conversationId", ""))) cancelInstallationWatch();
             browser.installation(call.getString("expectedApplicationId", ""), step);
             String requestedRun = call.getString("agentRunId", "");
@@ -185,7 +187,7 @@ public class NativeAssistantBrowserPlugin extends Plugin {
             }
             String query = call.getString("query", "").trim();
             if (query.length() > 80 || !safe(query).equals(query) || query.matches("(?s).*[\\x00-\\x1f].*")) { call.reject("搜索只接受简短标签或标题，不接受配置值"); return; }
-            JSObject options = new JSObject().put("startSequence", controlSequence).put("query", query).put("step", browser.step).put("secretStage", browser.secretStage).put("general", browser.generalMode); controlSequence += 100;
+            JSObject options = new JSObject().put("startSequence", controlSequence).put("query", query).put("step", browser.step).put("secretStage", browser.secretStage).put("general", genericPage()); controlSequence += 100;
             evaluate(call, "inspect", options, value -> {
                 labels.clear(); referenceKinds.clear(); sensitiveTargets.clear(); JSONArray controls = value.optJSONArray("controls");
                 if (controls != null) for (int index = 0; index < controls.length(); index++) {
@@ -216,7 +218,7 @@ public class NativeAssistantBrowserPlugin extends Plugin {
     }
     @PluginMethod public void readPage(PluginCall call) {
         getActivity().runOnUiThread(() -> {
-            if (!ready(call) || !browser.generalMode) { call.reject("通用网页阅读仅适用于普通网页任务"); return; }
+            if (!ready(call)) return;
             Integer document = call.getInt("documentId"), tab = call.getInt("tabId");
             if (document == null || tab == null || document != browser.documentId || tab != browser.activeTabId() || browser.paused || browser.loading || pageUserOnly()) { call.reject("标签页或网页状态已变化，请先继续任务并重新观察"); return; }
             String query = call.getString("query", "").trim(), region = call.getString("region", "");
@@ -259,12 +261,12 @@ public class NativeAssistantBrowserPlugin extends Plugin {
             if (!target.isEmpty() && ("fill-endpoint".equals(operation) || "open-install".equals(operation) || "verify-step".equals(operation) || "collect-worker".equals(operation)) && (!labels.containsKey(target) || inspectedDocument != browser.documentId || !browser.web.getUrl().equals(inspectedUrl))) { call.reject("字段已变化，请重新查看实际输入位置"); return; }
             if (("click".equals(operation) || "upload".equals(operation) || "select".equals(operation) || "fill".equals(operation) || "focus".equals(operation) || "press".equals(operation) || "scroll".equals(operation) && !target.isEmpty()) && (!labels.containsKey(target) || inspectedDocument != browser.documentId || !browser.web.getUrl().equals(inspectedUrl))) { call.reject("控件或页面已变化，请重新读取当前控件"); return; }
             String key = call.getString("key", "");
-            if ("press".equals(operation) && (!browser.generalMode || !java.util.Arrays.asList("Tab", "Escape", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete").contains(key))) { call.reject("只支持通用网页任务中的常用按键"); return; }
+            if ("press".equals(operation) && !java.util.Arrays.asList("Tab", "Escape", "Enter", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete").contains(key)) { call.reject("只支持公开控件的常用按键"); return; }
             if ("upload".equals(operation) && !browser.generalMode) { call.reject("文件上传请使用通用网页任务"); return; }
-            if (browser.generalMode && "fill".equals(operation) && sensitiveTargets.contains(target)) { call.reject("登录凭据和秘密值只能由你自己填写"); return; }
+            if (genericPage() && "fill".equals(operation) && sensitiveTargets.contains(target)) { call.reject("登录凭据和秘密值只能由你自己填写"); return; }
             JSObject payload = new JSObject(); payload.put("target", target);
             payload.put("label", labels.getOrDefault(target, ""));
-            payload.put("value", call.getString("value", "")); payload.put("template", call.getString("template", "")); payload.put("key", key).put("general", browser.generalMode);
+            payload.put("value", call.getString("value", "")); payload.put("template", call.getString("template", "")); payload.put("key", key).put("general", genericPage());
             payload.put("direction", call.getString("direction", "down"));
             payload.put("expectedApplicationId", call.getString("expectedApplicationId", ""));
             payload.put("expectedPublicKey", call.getString("expectedPublicKey", ""));
@@ -298,7 +300,7 @@ public class NativeAssistantBrowserPlugin extends Plugin {
             payload.put("validateTemplate", call.getBoolean("validateTemplate", false));
             payload.put("autonomous", !browser.agentRunId.isEmpty());
             payload.put("nativeClick", !browser.agentRunId.isEmpty() && ("click".equals(operation) || "select".equals(operation)));
-            payload.put("nativeKey", browser.generalMode && "press".equals(operation));
+            payload.put("nativeKey", "press".equals(operation));
             String confirmedRun = browser.agentRunId;
             Runnable execute = () -> {
                 if (browser == null || !confirmedRun.equals(browser.agentRunId)) { call.reject("确认期间执行代次已变化，旧确认不操作网页"); return; }
@@ -306,7 +308,8 @@ public class NativeAssistantBrowserPlugin extends Plugin {
                 if (browser.paused && !secretInspection() || browser.documentId != documentId) { call.reject("页面或接手状态已变化，未执行"); return; }
                 evaluate(call, operation, payload, call::resolve);
             };
-            if (AssistantBrowserPolicy.requiresConfirmation(operation, labels.getOrDefault(target, "")) && (browser.generalMode || browser.agentRunId.isEmpty())) {
+            String confirmationOperation = "press".equals(operation) && "Enter".equals(key) ? "click" : operation;
+            if (AssistantBrowserPolicy.requiresConfirmation(confirmationOperation, labels.getOrDefault(target, "")) && (browser.generalMode || browser.agentRunId.isEmpty())) {
                 new AlertDialog.Builder(getActivity()).setTitle("确认网页修改")
                     .setMessage(AssistantBrowserPolicy.publicUrl(browser.web.getUrl()) + "\n" + ("template".equals(operation) ? "替换当前编辑内容为教程模板。未提交的编辑会被替换。" : "点击：" + labels.get(target) + "\n将修改当前账号的配置。"))
                     .setPositiveButton("执行这一步", (dialog, which) -> execute.run()).setNegativeButton("取消", (dialog, which) -> call.resolve(new JSObject().put("ok", false).put("cancelled", true))).setOnCancelListener(dialog -> call.resolve(new JSObject().put("ok", false).put("cancelled", true))).show();
@@ -377,9 +380,10 @@ public class NativeAssistantBrowserPlugin extends Plugin {
     private boolean ready(PluginCall call) {
         if (!ownsCall(call)) return false;
         if (browser == null || !browser.active() || browser.web.getUrl() == null) { call.reject("配置浏览器未打开，请先打开当前步骤"); return false; }
-        if (!(browser.generalMode ? AssistantBrowserPolicy.browseAllowed(browser.web.getUrl()) : AssistantBrowserPolicy.allowed(browser.web.getUrl()))) { call.reject("当前页面不是受支持的HTTPS网页"); return false; }
+        if (!AssistantBrowserPolicy.browseAllowed(browser.web.getUrl())) { call.reject("当前页面不是受支持的HTTPS网页"); return false; }
         return true;
     }
+    private boolean genericPage() { return browser != null && (browser.generalMode || !AssistantBrowserPolicy.deploymentPageAllowed(browser.web.getUrl())); }
     private boolean pageUserOnly() { return browser != null && (browser.generalMode ? AssistantBrowserPolicy.generalUserOnly(browser.web.getUrl()) : AssistantBrowserPolicy.userOnly(browser.step, browser.web.getUrl())); }
     private boolean regionMatches(String target, String kind) { return kind.equals(referenceKinds.get(target)); }
     private JSObject metadata() {
@@ -675,11 +679,16 @@ public class NativeAssistantBrowserPlugin extends Plugin {
         }
         return result;
     }
-    @PluginMethod public void close(PluginCall call) { getActivity().runOnUiThread(() -> { if (!ownsCall(call)) return; if (browser != null && call.getBoolean("keepRunning", false)) { browser.hideForChat(); call.resolve(); return; } stopFiles(); cancelStatus(); cancelInstallationWatch(); if (browser != null) browser.close(); if (pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; waiting.resolve(metadata().put("paused", true)); } call.resolve(); }); }
+    @PluginMethod public void close(PluginCall call) { getActivity().runOnUiThread(() -> { if (!ownsCall(call)) return; if (browser != null && call.getBoolean("keepRunning", false)) { browser.hideForChat(); call.resolve(); return; } stopFiles(); cancelDelay(); cancelStatus(); cancelInstallationWatch(); if (browser != null) browser.close(); if (pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; waiting.resolve(metadata().put("paused", true)); } call.resolve(); }); }
     @PluginMethod public void chatPresentation(PluginCall call) {
         getActivity().runOnUiThread(() -> {
-            if (browser == null || !browser.chatPresentation(call.getString("mode", ""), call.getString("conversationId", ""), call.getObject("bounds"))) { call.reject("当前网页任务不支持此显示方式"); return; }
-            call.resolve();
+            AssistantBrowserWindow target = browser;
+            if (target == null) { call.reject("当前网页任务不支持此显示方式"); return; }
+            String mode = call.getString("mode", "");
+            target.presentChat(mode, call.getString("conversationId", ""), call.getObject("bounds"), accepted -> {
+                if (!accepted) { call.reject("当前网页任务已关闭或显示请求已变化"); return; }
+                call.resolve();
+            });
         });
     }
     @PluginMethod public void back(PluginCall call) {
@@ -842,7 +851,7 @@ public class NativeAssistantBrowserPlugin extends Plugin {
     @PluginMethod public void pauseAgent(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             if (!ownsCall(call)) return;
-            stopFiles(); cancelStatus();
+            stopFiles(); cancelDelay(); cancelStatus();
             if (browser != null) { if (call.getBoolean("finished", false)) browser.taskFinished = true; browser.agentRun(""); browser.secretStage = ""; browser.secretScope = null; browser.setPaused(true); }
             if (pendingWait != null) { PluginCall waiting = pendingWait; pendingWait = null; waiting.resolve(metadata().put("paused", true)); }
             call.resolve();
@@ -858,5 +867,5 @@ public class NativeAssistantBrowserPlugin extends Plugin {
     @PluginMethod public void message(PluginCall call) { getActivity().runOnUiThread(() -> { if (browser != null) { String text = call.getString("text", ""); if (!text.isEmpty()) browser.message(safeReply(text)); String phase = call.getString("phase"); if (phase != null) browser.phase(safe(phase)); } call.resolve(); }); }
     @Override protected void handleOnPause() { if (browser != null) browser.background(); super.handleOnPause(); }
     @Override protected void handleOnResume() { super.handleOnResume(); if (browser != null) browser.foreground(); }
-    @Override protected void handleOnDestroy() { stopFiles(); if (filePicker != null) filePicker.unregister(); cancelStatus(); cancelInstallationWatch(); if (pendingWait != null) { pendingWait.reject("配置浏览器已关闭"); pendingWait = null; } if (browser != null) browser.destroy(); super.handleOnDestroy(); }
+    @Override protected void handleOnDestroy() { stopFiles(); cancelDelay(); if (filePicker != null) filePicker.unregister(); cancelStatus(); cancelInstallationWatch(); if (pendingWait != null) { pendingWait.reject("配置浏览器已关闭"); pendingWait = null; } if (browser != null) browser.destroy(); super.handleOnDestroy(); }
 }

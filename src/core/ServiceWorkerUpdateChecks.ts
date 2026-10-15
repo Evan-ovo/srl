@@ -10,8 +10,15 @@ export const SERVICE_WORKER_UPDATE_INTERVAL_MS = 10 * 60 * 1000
 export function startServiceWorkerUpdateChecks(
   registration: ServiceWorkerRegistration,
 ): () => void {
+  let pending: Promise<unknown> | undefined
   const checkForUpdate = (): void => {
-    void registration.update().catch(() => undefined)
+    if (pending) return
+    pending = registration
+      .update()
+      .catch(() => undefined)
+      .finally(() => {
+        pending = undefined
+      })
   }
   const checkWhenVisible = (): void => {
     if (document.visibilityState === 'visible') checkForUpdate()

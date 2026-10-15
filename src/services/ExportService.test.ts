@@ -1,15 +1,17 @@
 import { strFromU8, unzipSync } from 'fflate'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { ARCHIVE_FORMAT, ARCHIVE_VERSION, type ArchiveManifest } from '../types/Backup'
 import {
   normalizeResourceLinks,
   RESOURCE_LINK_TYPE,
   RESOURCE_TYPE,
+  toResourceListSummary,
   type Category,
   type Resource,
 } from '../types/Resource'
-import { ExportService } from './ExportService'
+import { ExportService, createResourceArchiveSource } from './ExportService'
+import type { ResourceService } from './ResourceService'
 
 function createResource(id: string, categoryId: string | null, content: string): Resource {
   const now = Date.now()
@@ -45,6 +47,60 @@ const categories: Category[] = [
 ]
 
 describe('ExportService', () => {
+  it('plans selected chat companions and persona avatars without a full catalogue or originals', async () => {
+    const chat = {
+      ...createResource('chat', null, 'chat'),
+      type: RESOURCE_TYPE.CHAT,
+      relatedResourceIds: ['card', 'unrelated'],
+      metadata: { chatDisplayRegexId: 'regex', chatReadingScriptId: 'script' },
+    }
+    const persona = {
+      ...createResource('persona', null, 'persona'),
+      type: RESOURCE_TYPE.USER_PERSONA,
+      relatedResourceIds: ['avatar', 'unrelated'],
+    }
+    const rows = [
+      chat,
+      persona,
+      { ...createResource('card', null, 'card'), type: RESOURCE_TYPE.CHARACTER_CARD },
+      { ...createResource('regex', null, 'regex'), type: RESOURCE_TYPE.REGEX },
+      { ...createResource('script', null, 'script'), type: RESOURCE_TYPE.SCRIPT },
+      {
+        ...createResource('avatar', null, 'avatar'),
+        type: RESOURCE_TYPE.OTHER,
+        metadata: { assetKind: 'userPersonaAvatar' },
+      },
+      {
+        ...createResource('gallery', null, 'gallery'),
+        type: RESOURCE_TYPE.OTHER,
+        metadata: { assetKind: 'resource-gallery-image', galleryOwnerId: 'card' },
+      },
+      createResource('unrelated', null, 'unrelated'),
+    ]
+    const summaries = rows.map(toResourceListSummary)
+    const list = vi.fn(async (filter) =>
+      summaries.filter((r) =>
+        filter.ids ? filter.ids.includes(r.id) : filter.types.includes(r.type),
+      ),
+    )
+    const history = vi.fn(async (_ids: string[]) => [])
+    const service = {
+      listResourceListSummaries: list,
+      listVersionSummariesForResources: history,
+    } as unknown as ResourceService
+    const plan = await createResourceArchiveSource(service, ['chat', 'persona'])
+    expect(plan.resources.map((r) => r.id).sort()).toEqual([
+      'avatar',
+      'card',
+      'chat',
+      'gallery',
+      'persona',
+      'regex',
+      'script',
+    ])
+    expect(list.mock.calls.every(([filter]) => filter.ids || filter.types)).toBe(true)
+    expect(history.mock.calls[0]?.[0].sort()).toEqual(plan.resources.map((r) => r.id).sort())
+  })
   it('exports a selected chat with its bound card and hidden display regex, excluding unrelated resources', async () => {
     const chat = {
       ...createResource('chat', null, '{"mes":"rain"}'),

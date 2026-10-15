@@ -11,6 +11,7 @@ import {
   getResourceCategoryIds,
   RESOURCE_TYPE,
   type Resource,
+  type ResourceSummary,
 } from '../types/Resource'
 
 import {
@@ -457,7 +458,9 @@ export async function importTransferredFiles(
     const results = await resourceService.importFiles(files, { detectVersions: false })
     const failed = results.filter((r) => r.status === 'failed')
     const bindingErrors: string[] = []
-    const summaries = await resourceService.listResourceListSummaries()
+    // Only hash-based persona bindings need a catalogue; share one read (including failure)
+    // within this transfer, so an unrelated file never scans the library.
+    let summaries: Promise<ResourceSummary[]> | undefined
     for (let index = 0; index < results.length; index += 1) {
       const result = results[index]
       const file = files[index]
@@ -472,7 +475,7 @@ export async function importTransferredFiles(
           ),
         )
         if (!hashes.size) continue
-        const matchedIds = summaries
+        const matchedIds = (await (summaries ??= resourceService.listResourceListSummaries()))
           .filter(
             (resource) =>
               resource.type === RESOURCE_TYPE.CHARACTER_CARD && hashes.has(resource.contentHash),

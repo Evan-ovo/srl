@@ -5,6 +5,7 @@ import {
   normalizeAssistantDirectoryQuery,
   readAssistantOffset,
   ASSISTANT_CAPABILITY_TOOLS,
+  assistantCapabilityAllowed,
   type AssistantCapability,
 } from './ProductAssistantTools'
 import { assistantDiscordGuidance } from './ProductAssistantDiscordGuidance'
@@ -297,10 +298,12 @@ export class ProductAssistantService {
     const githubReads = new Map<string, { callId: string; data: Record<string, unknown> }>()
     let finishRepeatedReads = false
     let failedGithubRead = false
+    let discordGuidance: { key: string; callId: string } | undefined
     let discordTask =
       request.mode !== 'appearance' && request.activeBrowserPurpose === 'discord-setup'
     const failedWrites = new Map<string, number>()
     let stopAfterRepeatedWriteFailure = false
+    let hostExecutionStarted: boolean
     let captured = 0
     let vueCancelled = false
     let allowedTools = getAssistantTurnTools(request)
@@ -349,8 +352,12 @@ export class ProductAssistantService {
     })
     const execute = async (command: AssistantReply) => {
       check()
-      if (request.toolCallingEnabled === false || host.getContext().toolCallingEnabled === false)
+      const current = host.getContext()
+      if (request.toolCallingEnabled === false || current.toolCallingEnabled === false)
         throw new Error('工具调用已关闭，未执行工具')
+      if (current.canCaptureUi === false)
+        expected = { ...expected, canCaptureUi: false, canCaptureCurrent: false }
+      hostExecutionStarted = true
       const value = await host.execute(command, expected, signal)
       if (
         !['inspect', 'presets', 'diagnose', 'pet-expression'].includes(command.action) &&
@@ -540,11 +547,24 @@ export class ProductAssistantService {
         discordTask = expected.activeBrowserPurpose === 'discord-setup'
         allowedTools = getAssistantTurnTools(expected)
         messages[0] = buildAssistantMessages(expected)[0]!
+        const guidanceKey = JSON.stringify([value.data?.task, value.data?.step, value.data?.mode])
+        const guidance =
+          discordGuidance?.key === guidanceKey
+            ? { guidanceFromToolCallId: discordGuidance.callId }
+            : {
+                guidance: assistantDiscordGuidance(
+                  value.data?.step,
+                  value.data?.task,
+                  value.data?.mode,
+                ),
+              }
+        if (discordGuidance?.key !== guidanceKey)
+          discordGuidance = { key: guidanceKey, callId: call.id }
         return {
           ok: value.ok !== false,
           text: value.text,
           ...value.data,
-          guidance: assistantDiscordGuidance(value.data?.step, value.data?.task),
+          ...guidance,
         }
       }
       if (call.name === 'browser') {
@@ -573,11 +593,11 @@ export class ProductAssistantService {
           throw new Error('未知任务能力，请使用select_mode列出的能力')
         if (
           args.capability &&
-          ((args.mode === 'appearance' && args.capability !== 'skills') ||
-            (['custom-tools', 'tool-authoring'].includes(args.capability) &&
-              args.mode !== 'creation'))
+          !assistantCapabilityAllowed(args.mode, args.capability as AssistantCapability)
         )
-          throw new Error('外观只加载美化工具；自定义工具制作须使用creation模式')
+          throw new Error(
+            '外观可按需加载历史、资料、公开参考或技能；业务操作请换模式，自定义工具须用creation模式',
+          )
         const capabilities = args.mode === expected.mode ? [...(expected.capabilities ?? [])] : []
         if (args.capability && !capabilities.includes(args.capability as AssistantCapability))
           capabilities.push(args.capability as AssistantCapability)
@@ -605,7 +625,19 @@ export class ProductAssistantService {
             ).includes(tool.name),
           )
         )
-          throw new Error('该能力未获设置授权或当前设备不支持；未加载工具')
+          throw new Error(
+            `该能力未获设置授权或当前设备不支持；未加载工具。${
+              (
+                {
+                  source: '请检查小助手联网开关；切模式不会开启联网。',
+                  browser: '当前宿主未提供通用浏览器接口。',
+                  discord: '当前宿主未提供Discord配置浏览器接口。',
+                  script: '请检查小助手页面脚本开关；切模式不会开启脚本。',
+                  pet: '请检查小助手桌宠表情控制开关。',
+                } as Record<string, string>
+              )[args.capability] ?? '请按当前任务检查对应设置或宿主接口。'
+            }`,
+          )
         expected = next
         allowedTools = nextTools
         messages[0] = buildAssistantMessages(expected)[0]!
@@ -942,7 +974,7 @@ export class ProductAssistantService {
         return {
           ok: true,
           css,
-          hint: '这是当前预设的全局 CSS，会影响所有页面；保留无关规则后再修改。',
+          hint: '这是当前预设的全局 CSS，会影响所有页面；保留无关规则。支持 @scope、根节点主题变量及登录表单外观，--boot-* / --recovery-* 可正常使用；不读取登录值，不直接修改恢复保护层。',
         }
       }
       if (call.name === 'run_page_script') {
@@ -1133,6 +1165,7 @@ export class ProductAssistantService {
           host.onPhase?.(`正在${activity.label}…`)
           host.onToolCall?.({ ...activity, state: 'running' })
           let value: Record<string, unknown>
+          hostExecutionStarted = false
           try {
             if (!requestTools.some((tool) => tool.name === call.name))
               throw new Error(
@@ -1149,17 +1182,27 @@ export class ProductAssistantService {
           } catch (error) {
             if (signal.aborted) host.onToolCall?.({ ...activity, state: 'cancelled' })
             check()
-            value = { ok: false, error: error instanceof Error ? error.message : '工具执行失败' }
+            value = {
+              ok: false,
+              error: error instanceof Error ? error.message : '工具执行失败',
+              ...(ASSISTANT_RETRYABLE_WRITES.has(call.name) && !hostExecutionStarted
+                ? { writeAttempted: false }
+                : {}),
+              ...(call.name === 'read_webpage' && !hostExecutionStarted
+                ? { requestAttempted: false }
+                : {}),
+            }
           }
           if (
             value.ok === false &&
             call.name === 'read_webpage' &&
+            hostExecutionStarted &&
             requestTools.some((tool) => tool.name === call.name)
           )
             failedGithubRead = true
           if (call.name === 'configure_discord_browser' && value.taskConversationRequired === true)
             taskConversationRequired = true
-          if (ASSISTANT_RETRYABLE_WRITES.has(call.name)) {
+          if (ASSISTANT_RETRYABLE_WRITES.has(call.name) && hostExecutionStarted) {
             if (value.ok === false) {
               const failures = (failedWrites.get(call.name) ?? 0) + 1
               failedWrites.set(call.name, failures)

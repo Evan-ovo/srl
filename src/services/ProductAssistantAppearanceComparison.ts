@@ -1,6 +1,5 @@
 import type { AppearanceScope } from '../core/AppearanceScopes'
 import type { AssistantImage } from './ProductAssistantService'
-import { captureAssistantPage } from './ProductAssistantScreenshot'
 export interface AssistantAppearanceComparison {
   id: string
   scope: string
@@ -10,8 +9,8 @@ export interface AssistantAppearanceComparison {
   captureError?: string
   state: 'applied' | 'kept' | 'undone'
 }
-/** Captures actual DOM around the existing CSS write; owns no CSS or undo stack. */
-export async function captureAssistantComparison(
+/** Records the existing write for keep/undo; screenshots are separate explicit tools. */
+export async function applyAssistantComparison(
   scope: AppearanceScope,
   signal: AbortSignal,
   apply: () => Promise<void>,
@@ -22,17 +21,7 @@ export async function captureAssistantComparison(
     title: scope.title,
     state: 'applied',
   }
-  const capture = async (side: 'before' | 'after') => {
-    try {
-      comparison[side] = await captureAssistantPage(scope, signal)
-    } catch (cause) {
-      if (signal.aborted && side === 'before') throw cause
-      comparison.captureError = `${side === 'before' ? '修改前' : '修改后'}截图未完成：${cause instanceof Error ? cause.message : '渲染失败'}`
-    }
-  }
-  await capture('before')
   if (signal.aborted) throw new DOMException('已停止', 'AbortError')
   await apply()
-  await capture('after')
   return comparison
 }

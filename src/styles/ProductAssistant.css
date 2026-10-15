@@ -1221,6 +1221,10 @@
   gap: 5px;
   min-height: 44px;
   padding: 0 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--button-color, var(--color-ink));
   font: inherit;
   font-size: 13px;
   cursor: pointer;
@@ -1230,13 +1234,20 @@
   position: absolute;
   z-index: -1;
   inset: 6px 0;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-surface);
+  border: 1px solid var(--button-border, var(--color-line));
+  border-radius: var(--button-radius, 8px);
+  background: var(--button-background, var(--color-surface));
+  box-shadow: var(--button-shadow, none);
+}
+.chat-memory-actions button[type='submit'] {
+  color: var(--button-primary-color, var(--color-ink));
 }
 .chat-memory-actions button[type='submit']::before {
-  border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-line));
-  background: var(--color-accent-soft);
+  border-color: var(
+    --button-primary-border,
+    color-mix(in srgb, var(--color-accent) 35%, var(--color-line))
+  );
+  background: var(--button-primary-background, var(--color-accent-soft));
 }
 .chat-memory-actions svg {
   width: 15px;
@@ -1574,11 +1585,29 @@
 
 .assistant-browser-task-preview {
   width: 180px;
-  height: 130px;
+  height: 150px;
   flex: 0 0 auto;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-card);
   background: var(--color-surface-raised);
   color: var(--color-ink-soft);
-  cursor: pointer;
+  cursor: grab;
+}
+.assistant-browser-preview-row {
+  position: fixed;
+  top: calc(var(--safe-top, 0px) + var(--visual-viewport-offset-top, 0px) + 72px);
+  right: max(12px, var(--safe-right, 0px));
+  z-index: 2;
+  margin: 0;
+}
+.assistant-browser-preview-row:empty {
+  display: none;
+}
+.assistant-browser-preview-row > button {
+  min-height: 0;
+  max-height: 150px;
+  max-width: calc(100vw - 24px);
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
 }

@@ -8,7 +8,7 @@
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) max(1rem, var(--safe-bottom))
     max(1rem, var(--safe-left));
   overflow: auto;
-  background: rgba(17, 36, 35, 0.82);
+  background: var(--overlay-background);
 }
 
 .project-notice {
@@ -17,13 +17,7 @@
   width: min(42rem, 100%);
   max-height: min(48rem, calc(var(--app-viewport-height) - 2rem));
   overflow: hidden;
-  border: 1px solid var(--glass-border, rgba(31, 91, 73, 0.26));
-  border-radius: clamp(1rem, 4vw, 1.5rem);
   color: var(--color-ink);
-  /* SRL-PUBLIC-SYNC: PUBLIC-ONLY id=project-notice-backdrop-copy */
-  /* 首次阅读时，正文不能被资源列表透出干扰。 */
-  background: var(--color-surface-raised, #fffdf7);
-  box-shadow: 0 1.25rem 4rem rgba(3, 23, 22, 0.36);
   outline: 0;
 }
 
@@ -146,7 +140,7 @@
   gap: 0.75rem;
   padding: 1rem clamp(1.25rem, 4vw, 2rem) calc(1rem + var(--safe-bottom));
   border-top: 1px solid var(--color-line);
-  background: var(--color-surface-raised);
+  background: inherit;
 }
 
 .project-notice__footer p {
@@ -157,10 +151,6 @@
 
 .project-notice__footer button {
   min-height: var(--size-touch);
-  border: 1px solid var(--color-accent);
-  border-radius: 0.75rem;
-  color: #fff;
-  background: var(--color-accent);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
@@ -176,10 +166,6 @@
 .project-notice__footer button:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;
-}
-
-:root[data-theme='dark'] .project-notice__footer {
-  background: var(--color-surface-raised);
 }
 
 @media (max-width: 480px) {

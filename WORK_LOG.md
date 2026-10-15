@@ -35,6 +35,38 @@
 - 公开增量隐私审计：基线 `1239846fce2f1a50df1b701ca98f1afab86ab5b0`；本次差异未发现个人邮箱、私人域名/服务地址或新增二进制。主库模板中的自有图床地址未复制，Public 示例仍是占位符。
 - 未决：提交前仍需复核本次 author/committer 邮箱及远端推送；当前 Main 工作树中与本次无关的未提交改动保持未触碰。
 
+
+## 2026-10-07 空目录清理审核与执行拒绝
+
+- 授权/范围：用户要求把空目录也清掉。只读盘点官版主目录/main/Public的artifacts与.codex-tmp，仅目录元数据及子项名称，不读取资源内容；依赖/Git、链接与保护属性、浏览器profile、模拟器、Wrangler状态、配了么及当日活动任务、已有拒绝目标均排除。516个初步空目录/全空目录树候选进一步排除持久状态与依赖后，确定143目录（官版主目录121，Public22，main0），没有文件进入删除范围。旧65项构建清理暂停仍有效。
+- 核验：规范化绝对路径在目标根内、祖先无reparse、普通目录属性16、修改时间和子项集合逐项一致；空目录树按子目录先于父目录的明确顺序。候选树内不存在文件或未选入的子项，无更深层AGENTS/CLAUDE规则，未发现进程命令行引用这143路径；不把该检查冒充已检查所有进程工作目录/文件句柄。审核元数据指纹ecf7f159a8a4893c9e952a6cbf201b2106f8d42e56fda199e5a4af420cab575b。
+- 实际拒绝：exec_command计划执行PowerShell，确切路径列表逐项Get-Item核对属性、Get-ChildItem -Force只读查空、Remove-Item -LiteralPath删除空目录；删除不使用Force/Recurse/通配目标，不修改权限。CreateProcess阶段原始返回Rejected，末尾“rejected: blocked by policy”，无更具体理由，脚本未启动。本轮实际删除0，143目录全部仍在且属性/修改时间/子项集合未变；没有重试、改工具/API、拆分命令或修改安全配置。上一轮30APK与两个空目录已删除的结果不变，不把文件删除成功泛化为本次目录动作必能放行。
+- 保留/下一步：143项核清空目录成为本次确切拒绝目标，继续保留；后续需本机清理或针对执行工具拒绝处理，用户授权已具备，不重复要求同一批准。既有源码/版本、安装包、用户数据、凭据、其它聊天的发布/施工及受限工作树均未删除/接管，没有新脚本、清单或过程报告。仅追加既有日志、更新当前清理限制；未暂存/提交/推送/发布/部署/构建。
+
+本Public项目的22个确切路径：
+- `.codex-tmp/deploy-check-main-worker/v3/cache`
+- `.codex-tmp/deploy-check-main-worker/v3/do`
+- `.codex-tmp/deploy-check-main-worker/v3/workflows`
+- `.codex-tmp/deploy-check-main-worker/v3`
+- `.codex-tmp/deploy-check-main-worker`
+- `.codex-tmp/deploy-check-main-worker-latest/v3/cache`
+- `.codex-tmp/deploy-check-main-worker-latest/v3/d1`
+- `.codex-tmp/deploy-check-main-worker-latest/v3/do`
+- `.codex-tmp/deploy-check-main-worker-latest/v3/kv`
+- `.codex-tmp/deploy-check-main-worker-latest/v3/observability`
+- `.codex-tmp/deploy-check-main-worker-latest/v3/r2`
+- `.codex-tmp/deploy-check-main-worker-latest/v3`
+- `.codex-tmp/deploy-check-main-worker-latest`
+- `.codex-tmp/deploy-check-main-worker-live/v3/cache`
+- `.codex-tmp/deploy-check-main-worker-live/v3/d1`
+- `.codex-tmp/deploy-check-main-worker-live/v3/do`
+- `.codex-tmp/deploy-check-main-worker-live/v3/kv`
+- `.codex-tmp/deploy-check-main-worker-live/v3/observability`
+- `.codex-tmp/deploy-check-main-worker-live/v3/r2`
+- `.codex-tmp/deploy-check-main-worker-live/v3`
+- `.codex-tmp/deploy-check-main-worker-live`
+- `.codex-tmp/parity`
+
 ## 2026-10-08：同步本地 main 已提交内容并复核 Public UI
 
 - 目标/边界：按用户要求只取主库本地 main 的已提交快照，Public 从 0.0.156 同步至 0.0.183（srl-public-0.0.183-v9）。施工期间其他聊天合入主线的已提交互传优化一并纳入；本轮没有合并开发分支，没有复制主库未提交文件。精确私有源 SHA 仅记入主库既有 WORK_LOG，不写入 Public。
@@ -52,6 +84,21 @@
 - 准备/验证：fetch 回读 Public origin/main 与本机 HEAD 同为 f216caef1769e82fc1e7fa0a97fd5996826768e9，暂存区原为空。业务源码未作后续修改，复用上轮全量 4,326 项通过、相关收尾 102 项回归、类型/生产构建/包校验、Android 编译/单测及隔离 Chromium 证据；本轮只再核验 Git、记录、增量隐私和实际提交邮箱。
 - 公开门禁：增量基线 c7899463c7441bbde294401266aeede059413893；核查其后文档提交及本次准备公开的改动、新文件完整内容。上轮地址人工核验与三模板占位符修复保留，本轮对实际新提交再次复扫并核对 author/committer 均为该账号 GitHub noreply 后才普通快进推送；具体新 SHA 和远端回读结果在完成后追加。
 - 边界：保留 Public 自部署服务/身份及既有用户修改，未更改仓库可见性、fork、签名/部署配置，未构建/安装 APK 或执行 CF/VPS 部署；提交到 GitHub 不等于已完成线上或真机验收。
+- 提交/门禁实际结果：创建同步提交 bc33153b5da6f7c6f8ab3466792aee1e007c176f，342 文件；隐私基线 c7899463c7441bbde294401266aeede059413893，发布前远端 f216caef1769e82fc1e7fa0a97fd5996826768e9。候选增量扫描 342 路径 findings/binaryReview 均 0，地址人工复核为第三方官方/示例/回环、源码成员/Java 包名和该账号 GitHub noreply；实际提交树 ff5c782191d0193fa478865997a19f8f92693d31 与已审计暂存树完全相同，父提交正确，故复用内容核验、不重复扫描既有已审计历史。实际基线后两提交的 author/committer 均为 285288120+jixiangruyi117@users.noreply.github.com，GitHub API 账户 ID 与用户名核对一致；167 个助手知识 Owner 的指纹与暂存 Git 原件一致。原有两份清理记录哈希未变、未入提交，源码无未提交改动；推送结果待回读后追加。
+- 推送/回读实际结果：普通 git push origin HEAD:main 成功，f216caef1769e82fc1e7fa0a97fd5996826768e9 → bc33153b5da6f7c6f8ab3466792aee1e007c176f。本机 HEAD/origin/main、git ls-remote 与 GitHub API 的 main 回读均为 bc33153b5da6f7c6f8ab3466792aee1e007c176f，该 SHA 成为新的已审计基线；无强制推送、历史改写或可见性变更。GitHub check run 37783784740 当前 in_progress，尚无 CI 完成结论；此记录不把本机既有测试或成功推送说成线上部署/真机通过。暂存区已空，源码无剩余未提交/未跟踪文件；仅两份工作记录保留原清理内容与本轮发布回执，原清理段落/行的 SHA256 不变、未公开。任务专用临时工具清理结果随后追加，未触碰其它临时目录或仓库。
+- 工具收尾：只读确认本轮 .codex-tmp/20261008-public-publish-b73 位于目标根内、根与子项无 reparse 且仅含自建 Publish.mjs，逐项 LiteralPath 删除该文件及空目录，残留 0；不处理共享临时区或旧拒绝目标。Git 格式核验通过，HEAD/origin/main 保持发布 SHA，最终仅原两份工作记录及发布回执为未提交修改，业务源码无遗漏。
+
+## 2026-10-08：再次同步本地 main 已提交增量至 0.0.184
+
+- 目标/基线：承接上次已发布 Public bc33153b5da6f7c6f8ab3466792aee1e007c176f，按用户再次同步要求读取官版本地 main 已提交内容；施工期间新增的已提交 Android 修复也纳入，源 SHA 只记官版既有 WORK_LOG，不复制未提交开发内容、不合并开发分支。
+- 改动：同步云备份恢复资源/附加数据选择、Koofr 有效备份与损坏项区分、维护批次和事务修复；统一内置 APP 256 条目（含 manifest），第三方 128 保持。追加收件精确过期回执封口、原生字段投影与 64 项摘要批处理、快扫/完整检查、接收暂存逐项列表/清理保护、APP 检查收进问号弹窗。70 个共享源码/原生/打包/验收文件的最终投影差异 0、基线不明差异 0、解析错误 0；共享功能合同的 folders/inbox 项沿现有 Owner 更新，保留其他 Public 合同边界。Public build 为 srl-public-0.0.184-v10，助手知识 176 Owner 更新通过。
+- CI 修正：只读回查上一发布 run 37783784740，Android job success，check failure 的具体原因是 README 表格格式；仅格式化这张表，不改部署语义。上游改为 const 后移除 Public 测试中已失效的 prefer-const 禁用注释。
+- 验证：云备份/APP/事务 15 文件271项、追加存储/收件 9文件136项通过；最终全量 503 文件/4387项通过，各2跳过。格式、lint0错误3既有警告、vue-tsc/生产构建、知识及包校验（10当前+51保留，26可选）通过。Android Java/JVM编译和22套141项单测通过，含原生字段投影、精确回执、暂存保护及1k/5k/10k合成目录；不是手机速度或操作验收。首次定向命令误匹配旧临时测试副本，退出1；随后用正式 pnpm test 的临时目录排除规则重跑，上述正式计数不包含旧副本。追加提交后重新做全量验证，首次0.0.183中间版4368项结果不冒充最终版本。
+- 浏览器：本任务隔离 Chromium run public-resync-20261008-c42-apps 通过10 APP安装/旧包修复与原数据保留/触控批量更新/首次离线/卸载重装/明确清数据及四宽度浅深色；原生暂存 run public-resync-20261008-c42-intake 通过8组触控夹具，保护正在传输/导入/恢复源，不操作真实手机文件。HTTP核验build184-v10、hostAPI2、10包和228壳资产。桌面fixture不称为真机/真实云端成功。
+- 隐私/邮箱：只审计已审计基线 bc33153b5da6f7c6f8ab3466792aee1e007c176f 后0新提交和本轮77个变动路径，新增8个文本文件完整扫描；findings0、binaryReview0。增量地址人工核验仅 Koofr 官方服务、example.invalid/example.com、公开项目Java命名空间和该账号GitHub noreply，未发现私人邮箱/服务地址。仓库级邮箱仍为285288120+jixiangruyi117@users.noreply.github.com；没有新提交，已审计SHA不推进到未提交内容。
+- 边界/未决：保留免维护者登录、账号广场/反馈/官方共享托管/APK更新排除及自填API/云盘/Worker/Discord；品牌、图标、应用ID、签名与部署配置未改。原有两份记录及官版全部未提交施工内容保留，仅在现有记录追加本轮结论。未暂存/提交/推送/远端改写/部署/构建或安装APK；真实服务、真机及旧长任务暂停接入仍待独立验收。常规dist与Android编译/单测可再生结果保留，不触及用户资源。
+- 收尾计划：隔离脚本已退出并关闭本任务浏览器/服务，5196/5197无监听；核清本轮具名 .codex-tmp/20261008-main-resync-c42、public-resync-20261008-c42-apps、public-resync-20261008-c42-intake 的36普通文件/1,444,075 bytes，无链接或受保护属性，结论已记录，拟按LiteralPath逐项删除文件及空目录。旧拒绝目标与共享临时区不动，实际结果随后追加。
+- 收尾实际结果：exec_command 的 PowerShell Remove-Item -LiteralPath 普通文件逐项删除及空目录删除，在 CreateProcess 前被自动审批拒绝；原始理由只有 rejected: blocked by policy，无具体风险理由。明确范围为 D:\cunchu\SillyTavernResourceLibrary-Public\.codex-tmp\20261008-main-resync-c42、D:\cunchu\SillyTavernResourceLibrary-Public\.codex-tmp\public-resync-20261008-c42-apps、D:\cunchu\SillyTavernResourceLibrary-Public\.codex-tmp\public-resync-20261008-c42-intake 内本轮36普通文件/1,444,075 bytes和5目录；实际删除0，未换工具/API或重试。两次隔离审计passed结果与32张成功截图、同步工具保留；验证已完成、进程已退出，后续仅按这些确切范围重新获允许的方式退役，不动其它临时内容或此前拒绝目标。CURRENT_PROGRESS已更新该限制。公开前基线仍bc33153，最终增量77路径 findings/binaryReview均0，地址类别保持第三方官方/示例/公开身份及noreply；Git差异格式与空暂存区核验通过，无新提交或发布。
 
 ## 2026-10-09：继续同步本地 main 已提交增量至 0.0.190
 
@@ -62,7 +109,140 @@
 - 浏览器：隔离Chromium的本轮apps/intake/preview/reader/inbox五套审计均通过：10APP安装、旧包修复/原数据保留、批量更新、首次离线、卸载重装/明确清数据，320/375/390/430浅深色；暂存8组触控及130回执分批暂停继续保护活动源；开场/美化8组尺寸主题及加速确认取消刷新关闭；读了么纸色/夜间重入、首屏最终主题字体与楼层恢复；收件箱8场景。HTTP实际产物190-v11、hostAPI2、10包与229壳资产通过，人工查看窄屏前端与暂存截图无布局溢出。均为桌面合成夹具，不称真实云端/手机成功。
 - 增量隐私：基线bc33153b5da6f7c6f8ab3466792aee1e007c176f之后0新提交及149变动路径，18新增文本完整扫描，findings0、binaryReview0。地址人工复核仅Discord/Koofr/Catbox/W3C公开服务、example示例、Java/属性成员误匹配及账号noreply；未发现私人邮箱/基础设施。仓库级邮箱285288120+jixiangruyi117@users.noreply.github.com，0新提交无需重复已审计历史邮箱。已审计SHA不推进到未提交内容。
 - 保留/未决：上轮同步与两份既有用户工作记录保持，官版其他未提交内容保持；未暂存、提交、推送、远端写入、部署、构建/安装APK或访问实体手机。真实自部署服务、厂商后台/重启与旧长任务暂停缺口仍待对应Owner验收。常规dist及Android可再生编译结果保留；只退役本任务独立临时目录，旧拒绝清理范围不重试，实际清理结果随后追加。
+- 本轮收尾核清：六个唯一具名临时目录 .codex-tmp/20261009-main-sync-e72 与 .codex-tmp/20261009-public-e72-{apps,intake,preview,reader,inbox}，共136普通文件、17目录、22,226,854 bytes；规范化路径均在Public临时根内，祖先/子项无reparse与只读/隐藏/系统属性。五套审计已正常结束，5196～5200无监听，成功证据已汇入上述结论；拟逐文件LiteralPath删除及查空后逐目录删除，不使用Force/Recursive，不处理任何旧拒绝目标。
+- 收尾实际结果：exec_command的PowerShell逐文件Remove-Item -LiteralPath及查空后逐目录删除，在CreateProcess前被自动审批拒绝，原始理由为rejected: blocked by policy，无具体原因。六个确切目标为D:/cunchu/SillyTavernResourceLibrary-Public/.codex-tmp/20261009-main-sync-e72、20261009-public-e72-apps、20261009-public-e72-intake、20261009-public-e72-preview、20261009-public-e72-reader、20261009-public-e72-inbox；136文件/17目录/22,226,854 bytes，实际删除0。工具未启动，未换工具/API/拆命令或重试；同步工具及五套成功截图/夹具保留，正式验证已完成、服务已退出。旧拒绝目标不动；后续须针对本机工具拒绝处理，不再要求同一用户授权。
 
-## 2026-10-09：公开同步提交验收
+## 2026-10-09：提交并推送Public 0.0.190同步
 
-- 0.0.184至0.0.190的共享增量已同步并通过前端4451项、Android JVM156项和五套隔离浏览器验收，格式/类型/构建/包校验通过。仅本地main已提交上游内容，Public身份与账号/官方服务排除保持。公开前增量隐私基线bc33153b5da6f7c6f8ab3466792aee1e007c176f，149变动路径/18新增文本完整检查；凭据/私人邮箱/域名地址及新增二进制复核通过，提交身份使用账号对应GitHub noreply。实际推送与CI状态另行记录，未部署或操作实体手机。
+- 目标：按用户明确推送授权，将上轮未提交184同步及本轮190共享更新一并提交；仅Public当前main，远端main与已审计基线bc33153b5da6f7c6f8ab3466792aee1e007c176f一致。公开仓库可见性和GitHub账号ID已回读，仓库级noreply在创建提交前重新设置。
+- 范围/保护：147个代码/测试/README/版本路径按确切清单暂存，两份既有记录仅把公共同步摘要写入index；本机清理、工具拒绝、历史推送回执和全部工作文件原文保留，绝不暂存本地绝对路径或私有源SHA。增量149路径审计和实际提交邮箱、树指纹检查通过后普通快进推送。
+- 验证/未决：复用该未变源码已完成4451前端/156JVM与五套隔离浏览器、格式/lint/类型/构建验收；再次核对共享投影及182知识Owner。GitHub CI待实际新提交触发后回读，不把推送称部署或真机通过。本轮不处理任何旧拒清目标、不访问实体手机、不构建APK或部署。实际新SHA和远端回读在完成后追加。
+- 提交/公开门禁实际结果：创建a7cf409d27b5468d93c969540d9433f400bdc1a7，149路径；已审计基线bc33153b5da6f7c6f8ab3466792aee1e007c176f，本次1新提交。149路径候选含18新增文本，findings0、binaryReview0，地址人工核验为第三方官方/示例、Java及属性成员误匹配和账号noreply，私人源SHA/本地路径新增匹配0；实际提交树7c3adac40381f6ac20abb6d28507b3ab3cb741fe等于已审计暂存树，父SHA正确，内容未变故复用增量审计、不扫描旧历史。新提交author/committer均为285288120+jixiangruyi117@users.noreply.github.com，账号ID回读一致。原有WORK_LOG全文前缀与CURRENT_PROGRESS原字节哈希保持，所有本机记录未入提交；仅公共摘要写入提交树。推送与远端回读结果随后追加。
+- 推送/回读实际结果：普通git push origin HEAD:main成功，bc33153b5da6f7c6f8ab3466792aee1e007c176f → a7cf409d27b5468d93c969540d9433f400bdc1a7。本机HEAD/origin/main、ls-remote与GitHub API回读均一致，新SHA成为已审计基线；无force、历史重写或可见性变更。GitHub check run37837616243已触发、当前in_progress，未声称CI/真机/线上验收完成。源码全部提交，最终仅两份既有本机工作记录及本次发布回执未提交，暂存为空；原日志全文前缀与进度正文哈希均已核验保持，未发布本机清理记录。没有新临时文件，未触碰或重试任何旧清理目录、未部署/构建APK/操作手机。
+
+## 2026-10-12 同步官版本地 main 已提交内容至 Public 0.0.216（未提交）
+
+- 基线与来源：Public 原已审计基线 a7cf409d27b5468d93c969540d9433f400bdc1a7；仅采用官版本地 main 干净、已提交的 0.0.216 快照，不包含未提交文件或开发分支。官版 GitHub ls-remote 返回 Repository not found，未据此声称远端同步。官版提交 SHA 仅留官版既有记录。
+- 改动：同步共享界面、内置 APP、资源/备份、Discord、互传及相关验收更新，保留 Public 免维护者登录及账号/广场/反馈/官版托管/APK更新边界；版本身份保持 Public 0.0.216/v12。Public 不提供官版公共中继或默认端点，现有自部署 Worker 设置仍供用户配置自己的 Worker；留空时相关中转不可用，不回退其他中继。
+- 兼容检查：补齐被同步检查命令引用的 SourceStructure checker/测试；为与官版相同、已有 2897 行的 DiscordSetupService 记录等长结构预算，禁止继续增长。助手外观/APP知识复核并刷新对应Owner指纹，BuildInfo校验保留Public版本格式。
+- 验证：相关Vitest 11文件170项通过；结构检查916源码通过、助手知识216 Owner通过、BuildInfo通过；正式前端/PWA构建通过，9当前+51保留APP包、24可选资产完整性通过。保留构建器已有的大块chunk提示。未构建APK、未安装或操作实体手机。
+- 交付状态：所有更改仅在Public本机未提交工作树，未暂存、提交、推送、部署；原有用户工作记录及其它工作树内容保留。
+- 收尾清理：删除本轮独有的 .codex-tmp/public-sync-20261012-plan、public-sync-20261012-plan-v2、public-sync-20261012-review 三个已核对目录；解析路径均在 Public 临时根内且无 reparse point，删除后确认三者均不存在。其它临时目录未动。
+
+## 2026-10-13：同步提交 Public 并加入二改数据保护协议
+
+- 目标/改动：将“二次修改与衍生版本的数据保护要求”加入 Public README，突出本地优先、用户自行控制云端、禁止共用私有数据后端、禁止收集利用用户资源及云端主动选择，并明确静态分发与共用基础设施的适用边界。
+- 同步范围：Public 从已审计基线 `a7cf409d27b5468d93c969540d9433f400bdc1a7` 接收官版本地 `main` 已提交的 0.0.216 内容，不含官版未提交修改或开发分支；与协议一并提交为 `095f1399904bc12285826dfc0bb90f630f2c124b`，普通快进推送至 `origin/main`。远端 ls-remote、GitHub API 与本机 HEAD 一致。
+- 隐私/身份：增量审计从上述基线检查提交前 352 个变动路径，新增文本全量扫描；findings 0、binaryReview 0。地址复核仅公开服务、测试占位和公开项目身份；未发现私人邮箱/自有基础设施地址。author/committer 均为 `285288120+jixiangruyi117@users.noreply.github.com`。GitHub CLI 当前账号为 `jixiangruyi117`。
+- 验证：提交前 `git diff --cached --check` 通过；复用本轮同步已完成的 170 项相关测试、916 源码结构检查、216 知识 Owner、BuildInfo、生产 PWA 构建与 APP 包校验结果。未打 APK、未使用实体手机。GitHub CI 状态未在本记录中验证。
+- 保留：`WORK_LOG.md`、`CURRENT_PROGRESS.md` 与既有未跟踪 `android/app/src/main/assets/` 均未加入提交；工作记录仅在本机更新。Public 服务边界及现有本地资源保持。
+
+## 2026-10-13：继续同步官版已提交的启动与外观更新
+
+- 来源/范围：Public 上次同步基线为官版 `b83998459437a0a3190c7343d68f20d1cea7144d`；官版当前本地 `main` 为 `15fa9754162561190f4f6a2c2f6a9d75a9db484f`。本轮仅同步共享启动/恢复和外观参考的已提交改动（`ee18e35b`，已由 `bab56c3a` 合入官版 main）；不纳入账号/GitHub OAuth授权功能及官版 0.0.217/APK版本号。保留 Public 免维护者登录、服务边界与自有版本。
+- 改动：公共启动 CSS 提前加载；启动前沿用已保存外观并处理安全/恢复状态；恢复提示 CSS 提取为共享样式；本机数据库准备与迁移提示改用公共样式；外观预览/变量说明同步。Public `index.html` 保留自己的标题、图标及品牌；知识说明和 12 个受影响 Owner 指纹按实际源码更新。
+- 验证：相关8个测试文件83项通过；vue-tsc、222个助手知识Owner、BuildInfo `srl-public-0.0.216-v12`、919源码结构、9当前+51保留APP及24可选资产、Prettier、定向ESLint、生产Vite/PWA构建通过。首次直接Vitest命令误扫旧 `.codex-tmp` 副本并失败；按既有排除规则重跑后通过，未改动该目录。未打APK或使用手机。
+- 交付/保留：改动留在 Public 工作树，未暂存、提交、推送或部署。上轮本机 WORK_LOG/CURRENT_PROGRESS 与既有未跟踪 `android/app/src/main/assets/` 保持；本轮只追加现有工作记录。
+
+## 2026-10-13：继续同步官版主题与个人资源弹层修复
+
+- 来源/范围：仅取官版已提交的 `15fa9754162561190f4f6a2c2f6a9d75a9db484f` 之后两项提交：`53e344680d770113b64aa98e487d1035026b8d79`（全局主题/助手开关）和 `4508173785635689424b769b8f12cbad3bfd0094`（个人资源编辑弹层层级）。官版工作树另有未提交的 APP/读了么/助手更改，本轮未读取投影或复制。
+- 改动：自定义全局 CSS 在应用样式加载后移动到 head 末尾，使主题变量可覆盖默认主题；个人资源编辑器在资源详情中打开时使用高层 overlay，并补相应组件回归。加入官版移动弹层审计脚本，但按 Public 服务边界移除不存在的 FeedbackCenter 用例。更新 appearance 与 personal-resources 助手说明及对应 Owner 指纹。Public 自身版本、未登录边界、账号/中继/服务配置保持。
+- 验证：相关4个测试文件41项通过；MobileDialogLayerAudit 在320/375/390/430/1280宽度及浅深色下17个弹层通过，个人资源编辑器叠层通过。vue-tsc、222知识Owner、BuildInfo `srl-public-0.0.216-v12`、920源码结构、9当前+51保留APP与24可选资产、定向ESLint/Prettier、生产Vite/PWA构建通过。首次并行包检查读到构建中的dist，构建后重跑通过；新增脚本的首次lint发现浏览器全局未声明，补全声明后通过。
+- 交付/保留：仍为 Public 本机未提交状态；未暂存、提交、推送、部署、打APK或操作手机。上一轮工作树修改、两份本机记录及既有未跟踪 Android assets 均保留；官版未提交内容未纳入。
+
+
+## 2026-10-13：继续同步官版已提交内容至 Public（本机未提交）
+
+- 来源/范围：依据官版本地 `main` 相对上次同步增加的10个已提交提交；官版当前工作树未提交内容未纳入。仅同步共享读了么、资源/人设存储性能、助手通用网页浏览和相关外观/交互修复；不带入官版APK版本元数据、GitHub维护者登录/API授权功能及官版专属服务。保留Public 0.0.216/v12身份和原服务边界：Public不提供官版中继，Worker由用户自行配置。
+- 改动：更新读了么与助手APP内容修订号；将Discord专用网页容器并入通用助手浏览器运行时，接入通用网页工具及对应原生窗口，保留Public用户自行登录/输入秘密值规则；更新读了么扩展、存储/人设和助手相关共享代码、测试及知识Owner指纹。移除旧浏览器类与旧引用。
+- 验证：知识Owner 222项、功能合同、vue-tsc、8个相关测试文件614项、生产PWA构建、Prettier、`git diff --check`通过；构建校验9个当前+51个保留APP包及24个可选资源完整。Android JVM测试未运行：当前环境缺少Java/JAVA_HOME。
+- 交付/保留：仅Public本机工作树修改，未暂存、提交、推送、打APK、部署或操作实体手机；已有未提交工作与未跟踪Android assets保留。
+
+
+## 2026-10-13：Public 同步更新提交并推送
+
+- 发布：提交 `3de67ce59e9129e5c63c4fbef2e07ac261733096`（同步官版已提交共享更新至 Public）已普通快进推送至 `origin/main`。推送前远端仍为基线 `095f1399904bc12285826dfc0bb90f630f2c124b`；推送后本机 `HEAD`、`origin/main` 与 `ls-remote` 均为新提交。只推送 `main`。
+- 隐私/身份：增量审计范围为基线 `095f1399904bc12285826dfc0bb90f630f2c124b` 至新提交 `3de67ce59e9129e5c63c4fbef2e07ac261733096`，覆盖92个变动路径；findings 0、binaryReview 0。addressReview均复核为公开服务地址、测试占位或公开的 `jixiangruyi117/SRL-Discord-Bridge` 项目身份；WORK_LOG未发布。author/committer均为 `285288120+jixiangruyi117@users.noreply.github.com`。
+- 验证：知识Owner、功能合同、vue-tsc、614项定向测试、Prettier、PWA生产构建和APP包完整性检查通过；Android JVM未运行（环境缺少Java）。未打APK、部署或操作实体手机；CI未核验。
+- 保留：`WORK_LOG.md` 与 `CURRENT_PROGRESS.md` 为本机记录，未推送；仅这两份文件留有未提交更改，源码工作树与 `origin/main` 同步。
+
+## 2026-10-14：同步官版 main 已提交内容至 Public（仅本地）
+
+- 目标/边界：同步官版 main 在上次同步点之后的已提交共享实现；保留 Public 无维护者登录、资源广场、反馈共用后端、官版默认中继和官版 APK 更新通道的差异。Public 版本及 BuildInfo 仍为 `0.0.216` / `srl-public-0.0.216-v12`。
+- 改动：同步共享 UI、阅读器、产品助手任务与引用、Discord 展示/设置、原生浏览器与文件流等实现及对应测试/审计；未同步官版专属账号、广场、反馈与默认中继实现。`WORK_LOG.md`、`CURRENT_PROGRESS.md` 保持本机记录。
+- 验证：功能合同 14 APP/29 备份范围、知识源 237 Owner、build-info、vue-tsc、6 个定向测试文件 247 项、生产 PWA 构建及包完整性检查通过；`git diff --check` 通过。Android JVM 测试未运行（没有可用 JDK/JAVA_HOME），未使用实体手机。
+- 未决：reader-native 隔离审计停在 `ChatTransferAudit.mjs` 对官版 `cloudflare/BridgeParcels.js` 的导入；该中继后端属于 Public 明确保留的服务边界，未为通过审计而引入。官版同步脚本自身 `--audit` 因嵌套 MAIN-ONLY 标记未能使用，改由 Public 契约、边界扫描与构建验证。此次没有提交或推送。两次失败审计产生的 `.codex-tmp` 输出因运行环境阻止删除命令而暂时保留。
+
+## 2026-10-14：推送已完成的 Public 同步并发布官版 main
+
+- Public：基于本机已验证的共享同步工作树创建提交 `bcaab2784de73cf043354f7cb938a11a609238ad`，由基线 `3de67ce59e9129e5c63c4fbef2e07ac261733096` 普通快进推送至 Public `origin/main`，远端回读与本机 HEAD 一致。提交包含162个变动路径；本机 WORK_LOG/CURRENT_PROGRESS 未发布。
+- 增量隐私/身份：只审查 `3de67ce59e9129e5c63c4fbef2e07ac261733096..bcaab2784de73cf043354f7cb938a11a609238ad`；新增邮箱和敏感私人地址匹配0，新增二进制0。唯一 URL 主机均为 Cloudflare/GitHub 官方服务或 `.invalid`、`.example`、本地回环及测试 Worker 占位符。author/committer 均为 `285288120+jixiangruyi117@users.noreply.github.com`。
+- 验证：知识源237 Owner、功能合同14 APP/29备份范围、BuildInfo、vue-tsc、247项定向Vitest、reader-native隔离Chromium审计、生产PWA与APP包完整性及暂存/提交差异检查通过。Android JVM未运行（环境无JDK）；未使用实体手机。
+- 后续边界：官版 `main` 已从原远端 `4508173785635689424b769b8f12cbad3bfd0094` 快进至 `bd7f3da1bd77fd3fff0d18f7e30d9b2c930115c9` 并经 GitHub API 回读；43个提交邮箱均符合账号 noreply，官版未提交改动仍留本机。Public 新一轮 `7fe68cf` 之后投影预演有9个跨版本重叠文件，尚未合并；因此本次 Public 推送只包含此前已经验证的同步批次，没有把这9个未审查冲突或官版 GitHub API/作者账号相关实现带入 Public。此差异作为后续待办保留。
+
+
+## 2026-10-14：同步官版最新通用优化至 Public（待发布）
+
+- 来源/范围：仅基于官版已提交快照 `bd7f3da1bd77fd3fff0d18f7e30d9b2c930115c9` 至 `f90a2bfbdf6f0aee7627f69a3f3de7476ec1c749` 的已提交内容；官版未提交文件未纳入。官版资源广场、账号托管及由广场替代的组件远程分享改造按 Public 合同排除。
+- 改动：同步读了么工作区主题变量、外观预设试用回退、文件夹指示色、第三方 APP 宿主启动条和 API 控件阴影；更新 Discord Worker 无新提交时的部署核验指引。保留 Public 的 `npm run deploy`、品牌和 `0.0.216/v12` 版本身份。读了么外层保留 `--reader-paper` 兼容变量但不覆盖宿主 `--color-*`；补对应助手知识说明与源指纹。
+- 验证：7个定向 Vitest 文件439项、vue-tsc、知识Owner 237项、外观参考12项、功能合同14 APP/29备份范围、BuildInfo、生产PWA构建与9当前+51保留APP包检查通过；读了么隔离 Chromium 审计通过。
+- 交付/保留：Public源码仍待提交发布；本机工作记录沿用既有文件。无APK版本升级、无部署、未操作实体手机。
+
+- 发布/隐私：Public提交 `67c85d3c20778692ed416a0146b7d33bd5ec8877` 已推送至 `origin/main`；推送前远端为 `bcaab2784de73cf043354f7cb938a11a609238ad`，推送后本机HEAD与远端main一致。增量审计基线 bcaab2784de73cf043354f7cb938a11a609238ad → 67c85d3c20778692ed416a0146b7d33bd5ec8877，24个变动路径，findings 0、binaryReview 0；新增URL复核为官方Cloudflare/GitHub测试页，未发现私人邮箱、域名或服务地址。author/committer 均为 `285288120+jixiangruyi117@users.noreply.github.com`。
+
+## 2026-10-15：同步官版 main 已提交共享内容（仅本地）
+
+- 来源/范围：从上次基线 `f90a2bfbdf6f0aee7627f69a3f3de7476ec1c749` 同步到官版本机已提交 `main` `2ec8db08827514cdba0f9232a517445f08da7974`，覆盖11个官版提交；官版工作树9个未提交文件未纳入。官版 GitHub 分支 API 仍返回404，故本轮以本机 main 提交快照为源，未声称远端已核对。
+- 改动：同步28个共享文件，包含资源批量元数据操作/关联导出优化、刷新与导出弹窗修复、预设顺序解析及Web/原生缝合落点修复和对应测试。未同步官版广场/发布版本等内容；Public 登录、服务边界、版本号保持不变。
+- 验证：定向Vitest 19个文件、207项通过；`vue-tsc --noEmit` 与 `git diff --check` 通过。Android NativePresetOrder JVM测试未运行（当前未发现可用Java运行时）。
+- 审计/交付：同步脚本 dry-run/apply 正常；全量 `--audit` 仍显示88个跨版本/服务边界差异，并因官版 `NativeSecurityPlugin.java`、`RootApp.vue` 的嵌套 MAIN-ONLY 标记无法完成这两处归一化，故不将其报告为全量等价通过。仅本机未提交，未推送、未构建APK/部署、未操作实体手机；此前本地 WORK_LOG/CURRENT_PROGRESS 改动均保留。
+
+## 2026-10-15：同步官版 main 新提交至 Public（仅本地）
+
+- 来源/边界：从上次 Public 同步快照 `2ec8db08827514cdba0f9232a517445f08da7974` 对照官版本地已提交 `main` `6fd1bab0f0e46c0c81f52469ecaa263353faf5da`，同步其间10个已提交提交；官版未提交的 `WORK_LOG.md`、`CURRENT_PROGRESS.md` 未纳入。官版 `origin` 本轮 `git ls-remote` 返回 Repository not found，因此来源只核验到本地已提交 main，未能确认其与 GitHub 远端一致。
+- 改动：同步共享资源读取/存储/批处理性能、搜索与详情、通用助手网页续接/取消/按键、外观助手截图授权规则、Discord 配置浏览器协助及原生相关实现和测试；按 Public 既有服务边界保留，无维护者登录、资源广场、反馈共用后端、官版默认中继及官版 APK 更新通道。本次没有改变 Public APP/版本号。复核并补充 Discord 配置助手的网页操作授权及取消说明，刷新对应知识 Owner 指纹。
+- 验证：43个受影响 Vitest 文件1123项通过；复验相关5个文件290项通过；`vue-tsc --noEmit`、知识源238 Owner、功能合同14 APP/29备份范围、Prettier、`git diff --check`通过。Android JVM/实体手机测试、APK及生产构建未执行。
+- 交付/未决：Public `HEAD` 仍为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，本次同步改动仍在本机未提交工作树，未推送；原有未提交和未跟踪文件均保留。本轮临时源工作树已清理。
+
+## 2026-10-15：同步触觉反馈并核查 Public 主库等价性
+
+- 同步：依据上次同步点 `6fd1bab0f0e46c0c81f52469ecaa263353faf5da`，从官版本地已提交 `main` `cc2af662afe4f73345df7834e6035cc96d060f2d` 同步4个共享文件（原生系统触觉接口、实现与测试）。官版日志文件未纳入；Public原有本机修改保留。官版本地 main 比 origin/main `bd7f3da1bd77fd3fff0d18f7e30d9b2c930115c9` 超前28个提交，本次按用户此前指定的本地 main 同步。
+- 等价性审计：`SyncPublic.mjs --audit` 检查1574个受跟踪/未跟踪源码路径，1488个一致、86个差异；官版 `RootApp.vue` 与 `NativeSecurityPlugin.java` 的重复/嵌套 MAIN-ONLY 标记无法归一化。差异包含 AppearanceStudio、ChatReader、功能入口、外观/助手/Discord 配置、扩展 APP、若干样式及 Worker 设置/部署指引，不能断言除登录/广场/Worker 外完全一致。已确认 AppearanceStudio 的预设作用域恢复和重开时刷新行为与官版不同。其余差异尚未全部逐项定性；审计计数不能直接等同缺陷数。
+- 验证：新同步的触觉与 APP 加载/注册测试4文件20项通过；`vue-tsc`、功能合同14 APP/29备份范围、知识源238 Owner及`git diff --check`通过。未做APK、生产构建、Android JVM或实体手机测试。
+- 交付：Public HEAD 仍为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，同步改动留在本机未提交工作树，没有推送。下一步若要确认“其余全部一致”，需先逐项分类86个差异并修复所有非边界差异。
+
+## 2026-10-15：Public 全量同步差异复核与共享 UI 对齐
+
+- 同步与修复：以官版本地已提交 `main` `cc2af662afe4f73345df7834e6035cc96d060f2d` 为准；保留官版工作树未提交的版本文件。已同步本轮触觉反馈4文件，并修复外观预设选中局部 CSS 作用域/重开刷新与保留草稿行为、助手当前网页预览交互的共享差异；同步更新外观/助手功能说明与 Owner 指纹。Public 登录、广场与自部署服务边界未改变。
+- 全量核查：原同步投影检查范围1574路径，发现共享代码仍有多处差异。为让审计跨过官版重复/嵌套 MAIN-ONLY 标记，临时审计脚本仅在本轮临时 worktree 中排除 `RootApp.vue`、`NativeSecurity.ts`、`NativeSecurityPlugin.java` 三个无法归一化的文件；其余1571路径结果为1489一致、82差异。差异集中在 Public 登录/广场、用户自部署 Worker/Discord/云端服务适配、账号托管图床/组件分享，以及若干助手/扩展/样式与测试。APP入口逐项核对：绘图、缝了么、前端了么、酒馆互传与官版组件相同；资源广场按边界移除；生图/相册只保留自建图床；人设移除广场来源；读了么保留 Public 纸色适配。不是所有其余差异都能仅凭文件名确定为边界，也不能据此报告全功能完全等同。
+- 验证：外观/助手/触觉/APP加载回归5文件182项通过；`vue-tsc`、知识源238 Owner、功能合同14 APP/29备份范围、Prettier与`git diff --check`通过。未跑全量测试、生产构建、Android JVM、APK或真机。
+- 交付/限制：Public `HEAD`/`origin/main`仍为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，改动包含此前同步工作及本轮修复，均仍本机未提交、未推送；官版 `main` 比 `origin/main` 超前28提交，按用户此前指定本地主线；临时审计 worktree 已移除。剩余82个可比较路径差异和3个未能自动审计路径需继续逐项人工核对后，才能确认剩余功能/UI一致。
+
+## 2026-10-15：复核最新官版已提交 main 与全量测试
+
+- 来源核对：官版本地 main 当前为 `621a55683b22fa2f6c0e7848c8c273d123097e61`，`origin/main` 为 `bd7f3da1bd77fd3fff0d18f7e30d9b2c930115c9`，本地领先29个提交。用干净临时 worktree 对比上次基线 `6fd1bab0f0e46c0c81f52469ecaa263353faf5da` 运行同步器 dry-run，结果0个可同步文件；本批已提交共享实现均已在 Public 当前工作树，未应用官版未提交的外观编辑器/CSS改动。临时 worktree 已清理。
+- 验证：6个先前全量测试失败文件在单 worker 下复跑，79/80通过；唯一失败为 Windows 路径分隔符导致阅读器 CSS 未从样式契约测试过滤。修正测试路径筛选后，该文件10/10通过。全量并发测试曾报9项失败（其中含超时、过期断言/夹具）；全量套件尚未在这些修正后重跑，因此不报告全量通过。
+- 等价性：先前投影审计在跳过3个官版嵌套 MAIN-ONLY 标记文件后，1571条路径中1489一致、82有差异。已修复/对齐外观预设作用域和助手网页预览交互，但82项未逐一分类，仍不能确认除登录、广场、Worker部署边界外完全一致。
+- 交付：Public HEAD/origin/main 仍为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，工作树含此前同步与本地未提交修改，均保留；本轮未提交、未推送、未构建 APK、未操作实体手机。
+- 后续补充：尝试 `vitest run --maxWorkers=1` 全量重跑，超过3分钟仍无测试汇总输出，已中断；全量套件最终状态仍未知，不能算通过。`git diff --check` 通过。Public HEAD 与 origin/main 均仍为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`；既有未提交/未跟踪工作全部保留。
+
+## 2026-10-15 Public 共享功能与 UI 对齐复核
+
+- 来源：官版本地已提交 `main` 快照 `1561cba3bf7dd9241ca1d277af1bc216c1918c97`；Public 基线/HEAD 仍为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`。同步对齐了外观编辑器试用/恢复、共享助手浏览器与 Discord GitHub Worker 配置、扩展 APP 管理及共享样式；补齐 Android 原生 GitHub 助手授权插件注册，并移除复制知识文档中残留的广场描述。保留 Public 资源广场/登录排除、自部署 Worker 与更新通道差异、Public 版本身份及原有本机改动。
+- 审计：最新源码投影 1545 个文件一致、31 个路径仍有差异；主要为账号/登录、资源广场、公共中继/托管服务与 APK 更新排除、自部署 Worker 配置、读了么纸色、Discord 上游仓库安全边界和测试，以及 Public 文件导出缓存实现差异。官版 `RootApp.vue`、`NativeSecurity.ts`、`NativeSecurityPlugin.java` 的嵌套 MAIN-ONLY 标记使自动归一化失败，不能据此声称文件逐字相同。
+- 验证：共享回归17文件482项通过；知识源238 Owner及生产 Web 构建/APP 包完整性通过，`git diff --check`通过。源码结构检查仍报告 ChatReaderView.js 与 DiscordSetupService.ts 超过既有行数阈值；Android JVM 测试因无 JAVA_HOME/JDK 未运行。未打 APK、未测试实体手机、未提交或推送。
+- 状态：保留 Public 工作树现有未提交修改。临时 parity worktree 已解除登记；其忽略的 `node_modules/better-sqlite3` 在 Windows 清理时返回 Access denied，残留在 `.codex-tmp/public-parity-20261015-1561`，未改动其他临时目录。
+
+## 2026-10-15：细查剩余同步差异与 MAIN-ONLY 标记
+
+- 范围：官版本地已提交 `main` `bcb193ea4b7ef8326517b963d1ff3fd39ba06435` 对照 Public `67c85d3c20778692ed416a0146b7d33bd5ec8877`，基线为上轮官版 `1561cba3bf7dd9241ca1d277af1bc216c1918c97`。标准投影审计报告1546路径一致、30项差异；3个标记文件均为重复使用 MAIN-ONLY ID，标记区块逐对闭合，并非区间相互嵌套。允许 ID 重复后 RootApp.vue 和 NativeSecurity.ts 归一化一致；NativeSecurityPlugin.java 手动剥离区块后的共享代码也一致。剩余差异主要是 Public 账号/广场/云服务和更新通道、用户自部署 Worker、读了么纸色、本机导出实现，以及专属测试/说明，不等于共享功能缺失。
+- 修正：同步结论还暴露审计范围漏掉 `OfficialAppContentRevision.ts`；官版 assistant=42、Public=33，Public 助手知识已有本轮用户可见更新，因此 Public 修订号递增至34。删除前端组件库已无模板引用的84行广场分享样式，并恢复不显示分享入口的测试断言。
+- 验证：组件库定向测试19/19、助手知识源238 Owner、APP包校验9个当前+51个保留通过；标准审计更新为1546一致/30差异，`git diff --check`通过。全量测试、Android JVM/APK/真机未执行；未提交或推送，其他既有工作树修改保留。
+
+## 2026-10-15：提交并推送 Public 同步与 UI 对齐
+
+- 目标/改动：提交本轮及此前保留在 Public 工作树中的官版共享功能同步、UI 对齐、测试和工作记录；保留 Public 登录/资源广场/服务边界、Public 版本身份及所有用户已有工作。仅提交 Git 跟踪和非忽略的工作树内容，不纳入 `.codex-tmp`。
+- 验证：定向组件测试19/19、助手知识源238 Owner、9个当前+51个保留 APP 包校验和 `git diff --check`通过；全量测试与 Android JVM/APK/真机未执行。提交前增量隐私扫描基线为 `67c85d3c20778692ed416a0146b7d33bd5ec8877`，finding 0、binaryReview 0；逐项复核地址命中为 GitHub noreply 邮箱、官方服务域名及 example/test 主机，没有作者私人邮箱、私人域名或私人基础设施地址。
+- 发布：仓库级 Git 邮箱为该 GitHub 账号 noreply，推送前确认活动账号为 `jixiangruyi117`、远端为 Public `origin/main`。本地提交和远端回读结果记录在本节后续核验中。
+- 未决：全量等价性审计仍有已分类的 Public 边界差异；不声称 APK、Android JVM或真机验收通过。未修改官版远端或操作实体手机。

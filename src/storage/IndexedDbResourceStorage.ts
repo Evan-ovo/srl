@@ -36,6 +36,7 @@ import {
 
 import type {
   ResourceListSummaryFilter,
+  ChatReadPositionCache,
   ResourceStorageAdapter,
   ResourceMetadataPatch,
   ResourceVersionMatchFingerprintCache,
@@ -65,6 +66,9 @@ const SUMMARY_READ_BATCH_SIZE = 250
 
 const LIST_SUMMARY_INDEX_SETTING_ID = 'index.resourceListSummaries.v20'
 const VERSION_MATCH_FINGERPRINT_CACHE_SETTING_ID = 'cache.resourceVersionMatchFingerprints.v1'
+
+const CHAT_READ_POSITION_CACHE_PREFIX = 'cache.chatReadPosition.v1:'
+const CHAT_READ_POSITION_CACHE_COUNT = 4
 
 export class IndexedDbResourceStorage implements ResourceStorageAdapter {
   private readonly database: AppDatabase
@@ -110,6 +114,46 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     if (summary?.thumbnailAssetId) return this.assets.getBlob(summary.thumbnailAssetId)
     // Legacy embedded/encrypted records retain their established hydration route.
     return (await this.get(id))?.thumbnailBlob
+  }
+
+  async getChatReadPositionCache(id: string): Promise<ChatReadPositionCache | undefined> {
+    const settings = this.database.settings
+    const settingId = `${CHAT_READ_POSITION_CACHE_PREFIX}${encodeURIComponent(id)}`
+    return this.database.transaction('rw', settings, async () => {
+      const setting = await settings.get(settingId)
+      if (!setting) return undefined
+      await settings.update(settingId, { updatedAt: Date.now() })
+      return setting.value as ChatReadPositionCache
+    })
+  }
+
+  async setChatReadPositionCache(id: string, cache: ChatReadPositionCache): Promise<void> {
+    const settings = this.database.settings
+    await this.database.transaction('rw', settings, async () => {
+      await settings.put({
+        id: `${CHAT_READ_POSITION_CACHE_PREFIX}${encodeURIComponent(id)}`,
+        value: cache,
+        updatedAt: Date.now(),
+      })
+      const entries = await settings
+        .where('id')
+        .startsWith(CHAT_READ_POSITION_CACHE_PREFIX)
+        .toArray()
+      if (entries.length > CHAT_READ_POSITION_CACHE_COUNT) {
+        entries.sort((a, b) => a.updatedAt - b.updatedAt)
+        await settings.bulkDelete(
+          entries
+            .slice(0, entries.length - CHAT_READ_POSITION_CACHE_COUNT)
+            .map((entry) => entry.id),
+        )
+      }
+    })
+  }
+
+  async deleteChatReadPositionCache(id: string): Promise<void> {
+    await this.database.settings.delete(
+      `${CHAT_READ_POSITION_CACHE_PREFIX}${encodeURIComponent(id)}`,
+    )
   }
 
   repairThumbnailAssets(): Promise<number> {
@@ -194,7 +238,8 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
   async listResourceListSummaries(
     filter?: ResourceListSummaryFilter,
   ): Promise<ResourceListSummary[]> {
-    await this.repairResourceListSummaryIndex()
+    if (filter?.ids?.length === 0) return []
+    await this.repairResourceListSummaryIndex(false, filter?.ids)
     const table = this.database.resourceListSummaries
     const ids = filter?.ids
       ? Array.from(new Set(filter.ids)).sort()
@@ -243,6 +288,41 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     const requested = Math.min(200, Math.max(1, Math.round(limit)))
     const table = this.database.resourceListSummaries
     if (!this.vault?.isEnabled()) {
+      // A write transaction can have uncommitted Dexie changes; its existing cursor
+      // merges those changes, while a direct SQLite read cannot see them yet.
+      if (
+        isAndroidNativeAppDatabaseActive() &&
+        Number.isFinite(requested) &&
+        Dexie.currentTransaction?.mode !== 'readwrite'
+      ) {
+        try {
+          return await this.database.transaction('r', table, (transaction) =>
+            runAndroidNativeRead(transaction.idbtrans, async () => {
+              const rows = await nativeAppDatabase.getRecentRecordsByIndex(
+                'resourceListSummaries',
+                'updatedAt',
+                requested,
+                'type',
+                encodeAppDatabaseKey(RESOURCE_TYPE.CHARACTER_CARD),
+              )
+              return Promise.all(
+                rows.map(async ({ key, value }) =>
+                  toResourceListSummary(
+                    (await decodeAppDatabaseValue(
+                      value,
+                      'resourceListSummaries',
+                      key,
+                      nativeAppDatabase,
+                    )) as ResourceSummary,
+                  ),
+                ),
+              )
+            }),
+          )
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'UNIMPLEMENTED') throw error
+        }
+      }
       const stored = await table
         .orderBy('updatedAt')
         .reverse()
@@ -323,7 +403,10 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     })
   }
 
-  private async repairResourceListSummaryIndex(force = false): Promise<void> {
+  private async repairResourceListSummaryIndex(
+    force = false,
+    selectedIds?: readonly string[],
+  ): Promise<void> {
     await this.database.transaction(
       'rw',
       [
@@ -335,6 +418,7 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
       async () => {
         if (
           !force &&
+          !selectedIds &&
           isAndroidNativeAppDatabaseActive() &&
           (await this.database.settings.get(LIST_SUMMARY_INDEX_SETTING_ID))?.value === true
         ) {
@@ -349,8 +433,15 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
           }
           if (equal === true) return
         }
-        const ids = await this.database.resources.toCollection().primaryKeys()
-        const listed = await this.database.resourceListSummaries.toCollection().primaryKeys()
+        // A scoped query still repairs missing/orphaned selected rows atomically, but never
+        // enumerates unrelated keys or certifies the rest of the library as repaired.
+        const scope = selectedIds ? Array.from(new Set(selectedIds)) : undefined
+        const ids = await (scope
+          ? this.database.resources.where(':id').anyOf(scope).primaryKeys()
+          : this.database.resources.toCollection().primaryKeys())
+        const listed = await (scope
+          ? this.database.resourceListSummaries.where(':id').anyOf(scope).primaryKeys()
+          : this.database.resourceListSummaries.toCollection().primaryKeys())
         const indexed = new Set(listed)
         if (
           !force &&
@@ -371,11 +462,13 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
         const validIds = new Set(ids)
         const staleIds = listed.filter((id) => !validIds.has(id))
         if (staleIds.length) await this.database.resourceListSummaries.bulkDelete(staleIds)
-        await this.database.settings.put({
-          id: LIST_SUMMARY_INDEX_SETTING_ID,
-          value: true,
-          updatedAt: Date.now(),
-        })
+        if (!scope) {
+          await this.database.settings.put({
+            id: LIST_SUMMARY_INDEX_SETTING_ID,
+            value: true,
+            updatedAt: Date.now(),
+          })
+        }
       },
     )
   }
@@ -492,15 +585,28 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
 
   async listVersionListSummaries(): Promise<ResourceListSummary[]> {
     const summaries: ResourceListSummary[] = []
-    // Read authoritative versions one at a time; no full metadata/body array or repair scan.
-    for (const id of await this.database.resourceVersions.toCollection().primaryKeys()) {
-      const record = await this.database.resourceVersions.get(id)
-      if (!record) continue
-      const stored = this.toStoredSummary(record)
-      const summary = this.vault
-        ? await this.vault.decodeResourceSummary(stored)
-        : (stored as ResourceSummary)
-      summaries.push(toResourceListSummary(summary))
+    const ids = await this.database.resourceVersions.toCollection().primaryKeys()
+    for (let start = 0; start < ids.length; start += SUMMARY_READ_BATCH_SIZE) {
+      const records = await readResourceMetadataBatch(
+        this.database,
+        ids.slice(start, start + SUMMARY_READ_BATCH_SIZE),
+        'resourceVersions',
+      )
+      for (const record of records) {
+        if (!record) continue
+        // Encrypted metadata still needs its existing payload-only decoder; never hydrate originals.
+        if (isEncryptedResource(record)) {
+          const summary = await this.getSummary(record.id, true)
+          if (summary) summaries.push(toResourceListSummary(summary))
+          continue
+        }
+        const stored = this.toStoredSummary(record)
+        const summary = this.vault
+          ? await this.vault.decodeResourceSummary(stored)
+          : (stored as ResourceSummary)
+        summaries.push(toResourceListSummary(summary))
+      }
+      if (start + SUMMARY_READ_BATCH_SIZE < ids.length) await yieldMainThread()
     }
     return summaries.sort((a, b) => b.updatedAt - a.updatedAt)
   }

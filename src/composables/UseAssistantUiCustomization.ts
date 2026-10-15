@@ -4,6 +4,7 @@ import { createEditableUiView } from '../core/UiViewStarter'
 import { readUiViewPreview, updateUiViewPreview } from '../core/UiViewPreview'
 import { compileCustomUiView, customUiSourceKey } from '../services/UiCustomizationService'
 import { confirmAction } from './UseConfirmDialog'
+import { withAbort } from '../utils/Abortable'
 import type { CustomCssPreset, CustomCssScope } from '../types/BrowserPreferences'
 import type { CustomUiView, UiViewSnapshot, UiViewAction } from '../types/UiCustomization'
 import type { AppearanceScope } from '../core/AppearanceScopes'
@@ -177,7 +178,7 @@ export function useAssistantUiCustomization(host: Bindings) {
       candidate.views![scope.value] = nextView
       candidate.views = normalizeUiViews(candidate.views)
       const validated = candidate.views[scope.value]!
-      const source = await compileCustomUiView(validated)
+      const source = await withAbort(compileCustomUiView(validated), signal)
       check(signal, version)
       if ((await revision(scope.value)) !== key)
         throw new Error('编译期间Vue已变化，未覆盖手动修改')
@@ -248,7 +249,7 @@ export function useAssistantUiCustomization(host: Bindings) {
     const source =
       prepared?.scope === scope.value && prepared.revision === key
         ? prepared.source
-        : await compileCustomUiView(view)
+        : await withAbort(compileCustomUiView(view), signal)
     check(signal, version)
     if (
       host.remote() &&

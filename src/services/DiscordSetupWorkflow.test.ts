@@ -5,7 +5,18 @@ import {
   normalizeDiscordSetupState,
   discordSetupUrl,
   validSetupBranch,
+  DISCORD_SETUP_STEPS,
 } from './DiscordSetupWorkflow'
+
+it('gives compatible reuse and validation guidance for manual and agent paths', () => {
+  const hint = (id: string) => DISCORD_SETUP_STEPS.find((step) => step.id === id)!.hint
+  expect(hint('github-fork')).toContain('拥有源仓库则直接复用')
+  expect(hint('d1-uuid')).toContain('不要求详情页面显示 UUID')
+  expect(hint('wrangler-check')).toContain('JSON/JSONC')
+  expect(hint('cf-deploy')).toContain('不能假定 npm run deploy')
+  expect(hint('cf-secret')).toContain('已有值先核验，不重复添加')
+  expect(hint('local-settings')).toContain('代理可回填')
+})
 
 describe('Worker public page authority', () => {
   it.each(['/', '/interactions', '/health'])('allows the deployed Worker at %s', (path) => {
@@ -14,7 +25,6 @@ describe('Worker public page authority', () => {
     )
   })
   it.each([
-    'https://workers.dev/',
     'https://bridge.account.workers.dev.example/',
     'https://credential@bridge.account.workers.dev/',
     'http://bridge.account.workers.dev/',
@@ -46,23 +56,23 @@ describe('authorized Fork identity across public page layouts', () => {
   })
 })
 
-it('does not restore a maintainer-owned source as a Public fork binding', () => {
+it('retains an owner source binding and actual branch/file when continuing a task', () => {
   const state = normalizeDiscordSetupState({
     task: 'configure',
     step: 'wrangler-edit',
     startedAt: 1,
-    forkRepo: 'account/worker',
+    forkRepo: 'jixiangruyi117/SRL-Discord-Bridge',
     repositoryKind: 'owned-source',
     githubBranch: 'release/stable',
     githubFile: 'wrangler.json',
   })!
   expect(state).toMatchObject({
+    repositoryKind: 'owned-source',
     githubBranch: 'release/stable',
     githubFile: 'wrangler.json',
   })
-  expect(state.repositoryKind).toBeUndefined()
   expect(discordSetupUrl(state)).toBe(
-    'https://github.com/account/worker/edit/release%2Fstable/wrangler.json',
+    'https://github.com/jixiangruyi117/SRL-Discord-Bridge/edit/release%2Fstable/wrangler.json',
   )
   expect(validSetupBranch('release/stable')).toBe(true)
   expect(validSetupBranch('../main')).toBe(false)

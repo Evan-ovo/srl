@@ -13,9 +13,10 @@ const emit = defineEmits<{
 }>()
 const side = ref<'before' | 'after'>('after')
 const image = computed(() => props.comparison[side.value])
+const hasImages = computed(() => Boolean(props.comparison.before || props.comparison.after))
 </script>
 <template>
-  <section class="chat-comparison" :aria-label="`${comparison.title}美化对比`">
+  <section class="chat-comparison" :aria-label="`${comparison.title}美化记录`">
     <header>
       <strong>{{ comparison.title }}</strong
       ><span>{{
@@ -23,10 +24,12 @@ const image = computed(() => props.comparison[side.value])
           ? '已撤销'
           : comparison.state === 'kept'
             ? '已保留'
-            : '美化对比'
+            : hasImages
+              ? '美化对比'
+              : '已应用'
       }}</span>
     </header>
-    <div class="chat-comparison-switch" role="group" aria-label="切换对比截图">
+    <div v-if="hasImages" class="chat-comparison-switch" role="group" aria-label="切换对比截图">
       <button type="button" :aria-pressed="side === 'before'" @click="side = 'before'">
         修改前
       </button>
@@ -41,7 +44,9 @@ const image = computed(() => props.comparison[side.value])
     >
       <img :src="image.dataUrl" :alt="side === 'before' ? '修改前实际界面' : '修改后实际界面'" />
     </button>
-    <p v-else class="chat-empty">{{ comparison.captureError || '较早对比图已释放' }}</p>
+    <p v-else-if="hasImages || comparison.captureError" class="chat-empty">
+      {{ comparison.captureError || '这张对比图未保留' }}
+    </p>
     <footer v-if="comparison.state !== 'undone'">
       <button
         type="button"

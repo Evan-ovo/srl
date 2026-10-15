@@ -77,3 +77,33 @@ it('无观察器时正常加载；缺失封面不抛未处理异常', async () =
   expect(wrapper.text()).toBe('false')
   wrapper.unmount()
 })
+
+it('retains the loaded image for metadata-only replacement and reloads a changed image identity', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  getBlob.mockResolvedValue(new Blob(['thumbnail']))
+  const source = ref({
+    id: 'card',
+    name: 'before',
+    contentHash: 'hash',
+    thumbnailAssetId: 'image',
+  } as ResourceReference)
+  const wrapper = mount(
+    defineComponent({
+      setup() {
+        const image = useResourceThumbnail(() => source.value)
+        return () => h('div', String(Boolean(image.value)))
+      },
+    }),
+  )
+  await flushPromises()
+  expect(getBlob).toHaveBeenCalledTimes(1)
+  source.value = { ...source.value, name: 'renamed', tags: ['new'], updatedAt: 20 }
+  await flushPromises()
+  expect(wrapper.text()).toBe('true')
+  expect(getBlob).toHaveBeenCalledTimes(1)
+  source.value = { ...source.value, thumbnailAssetId: 'replacement', contentHash: 'changed' }
+  await flushPromises()
+  expect(getBlob).toHaveBeenCalledTimes(2)
+  expect(getBlob).toHaveBeenLastCalledWith('replacement')
+  wrapper.unmount()
+})

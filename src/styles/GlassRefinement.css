@@ -217,8 +217,27 @@ summary:focus-visible {
 .import-button:not(:disabled):hover,
 .feature-app:hover,
 .resource-card:hover {
-  border-color: color-mix(in srgb, var(--color-accent) 48%, var(--glass-border));
   box-shadow: var(--button-hover-shadow, var(--button-shadow, var(--glass-shadow)));
+}
+
+.button:not(:disabled):hover {
+  border-color: var(
+    --button-border,
+    color-mix(in srgb, var(--color-accent) 48%, var(--glass-border))
+  );
+}
+
+.button--primary:not(:disabled):hover,
+.import-button:not(:disabled):hover {
+  border-color: var(
+    --button-primary-border,
+    color-mix(in srgb, var(--color-accent) 48%, var(--glass-border))
+  );
+}
+
+.feature-app:hover,
+.resource-card:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 48%, var(--glass-border));
 }
 
 .button.button--danger {

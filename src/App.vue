@@ -227,6 +227,7 @@ const {
   visibleLibraryResources,
   organizingVersions,
   organizingInitialTab,
+  prepareResourceDetail,
   categories,
   uiFontScale,
   customUiCss,
@@ -1376,6 +1377,7 @@ const isBatchBarVisible = computed(
       ref="personalOrganizer"
       :resource="organizingResource"
       :initial-tab="organizingInitialTab"
+      :prepare-tab="prepareResourceDetail"
       :settings-open="isSettingsOpen"
       :resources="managedResources"
       :bound-resources="organizingBoundResources"

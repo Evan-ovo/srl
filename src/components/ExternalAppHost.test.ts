@@ -12,6 +12,7 @@ const {
   hasPermission,
   hasPersistentPermission,
   readChat,
+  previewAllowed,
 } = vi.hoisted(() => ({
   getExternalApp: vi.fn(),
   getExternalAppSummary: vi.fn(async () => getExternalApp.mock.results.at(-1)?.value),
@@ -20,7 +21,13 @@ const {
   hasPermission: vi.fn(),
   hasPersistentPermission: vi.fn(),
   readChat: vi.fn(),
+  previewAllowed: { value: true },
 }))
+
+vi.mock('../composables/UsePreviewBudget', async () => {
+  const { ref } = await import('vue')
+  return { usePreviewBudget: () => ({ previewEnabled: ref(previewAllowed.value) }) }
+})
 
 vi.mock('../core/AppContainer', () => ({
   externalAppService: {
@@ -45,6 +52,67 @@ import ExternalAppHost from './ExternalAppHost.vue'
 import { readChatReaderColors, rememberChatReaderColors } from '../utils/ChatReaderAppearance'
 
 describe('ExternalAppHost', () => {
+  it('does not restore fullscreen when a pending load returns after closing', async () => {
+    let resolve!: (app: unknown) => void
+    getExternalApp.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        }),
+    )
+    const wrapper = mount(ExternalAppHost, { props: { appId: 'com.example.late' } })
+    await wrapper.get('[aria-label="返回扩展管理"]').trigger('click')
+    expect(wrapper.emitted('back')).toHaveLength(1)
+    wrapper.unmount()
+    resolve({
+      id: 'com.example.late',
+      enabled: true,
+      runtimeHtml: '',
+      manifest: { name: 'late', immersive: true },
+    })
+    await flushPromises()
+    expect(document.body.classList.contains('external-app-fullscreen')).toBe(false)
+    expect(document.body.querySelector('.external-app-host__workspace')).toBeNull()
+  })
+
+  it.each([false, true])(
+    'keeps a direct exit before iframe connection and after startup failure: %s',
+    async (failed) => {
+      previewAllowed.value = false
+      if (failed) vi.useFakeTimers()
+      getExternalApp.mockResolvedValueOnce({
+        id: 'com.example.starting',
+        enabled: true,
+        runtimeHtml: '<p>starting</p>',
+        manifest: {
+          id: 'com.example.starting',
+          name: 'starting',
+          version: '1.0.0',
+          immersive: true,
+        },
+      })
+      const wrapper = mount(ExternalAppHost, { props: { appId: 'com.example.starting' } })
+      try {
+        await flushPromises()
+        if (failed) {
+          await vi.advanceTimersByTimeAsync(12_000)
+          expect(document.body.textContent).toContain('第三方 APP 启动超时')
+        }
+        const exit = document.body.querySelector(
+          '[aria-label="退出第三方 APP"]',
+        ) as HTMLButtonElement
+        expect(exit).not.toBeNull()
+        exit.click()
+        await nextTick()
+        expect(wrapper.emitted('back')).toHaveLength(1)
+        expect(document.body.classList.contains('external-app-fullscreen')).toBe(false)
+      } finally {
+        wrapper.unmount()
+        previewAllowed.value = true
+        vi.useRealTimers()
+      }
+    },
+  )
   beforeEach(() =>
     rememberChatReaderColors({
       paper: '#f6f3ec',
@@ -426,16 +494,17 @@ describe('ExternalAppHost', () => {
       await vi.advanceTimersByTimeAsync(1000)
       signal('srl:host-hold-end')
       await vi.advanceTimersByTimeAsync(1500)
-      expect(wrapper.find('.external-app-host__exit-handle').exists()).toBe(false)
+      expect(document.body.querySelector('.external-app-host__exit-handle')).toBeNull()
       signal('srl:host-hold-start')
       await vi.advanceTimersByTimeAsync(1499)
-      expect(wrapper.find('.external-app-host__exit-handle').exists()).toBe(false)
+      expect(document.body.querySelector('.external-app-host__exit-handle')).toBeNull()
       await vi.advanceTimersByTimeAsync(1)
-      expect(wrapper.find('.external-app-host__exit-handle').exists()).toBe(true)
+      expect(document.body.querySelector('.external-app-host__exit-handle')).not.toBeNull()
       signal('srl:host-hold-end')
       await vi.advanceTimersByTimeAsync(2999)
-      expect(wrapper.find('.external-app-host__exit-handle').exists()).toBe(true)
-      await wrapper.get('.external-app-host__exit-handle').trigger('click')
+      expect(document.body.querySelector('.external-app-host__exit-handle')).not.toBeNull()
+      ;(document.body.querySelector('.external-app-host__exit-handle') as HTMLButtonElement).click()
+      await nextTick()
       expect(wrapper.emitted('back')).toHaveLength(1)
     } finally {
       wrapper.unmount()

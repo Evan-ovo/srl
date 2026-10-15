@@ -32,9 +32,8 @@ export class CategoryService {
 
   async create(name: string, color: string): Promise<void> {
     const normalizedName = normalizeName(name)
-    await this.ensureUniqueName(normalizedName)
+    const categories = await this.ensureUniqueName(normalizedName)
     const now = Date.now()
-    const categories = await this.storage.list()
     await Promise.all(
       categories.flatMap((category, index) =>
         Number.isFinite(category.sortOrder)
@@ -122,12 +121,14 @@ export class CategoryService {
     )
   }
 
-  private async ensureUniqueName(name: string, excludedId?: string): Promise<void> {
+  private async ensureUniqueName(name: string, excludedId?: string): Promise<Category[]> {
     const normalizedName = name.toLocaleLowerCase()
-    const duplicate = (await this.storage.list()).some(
+    const categories = await this.storage.list()
+    const duplicate = categories.some(
       (category) =>
         category.id !== excludedId && category.name.toLocaleLowerCase() === normalizedName,
     )
     if (duplicate) throw new Error('已存在同名文件夹')
+    return categories
   }
 }

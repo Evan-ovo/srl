@@ -1,4 +1,4 @@
-import { computed, watch, type ComputedRef } from 'vue'
+import { computed, reactive, watch, type ComputedRef } from 'vue'
 
 export interface OverlayRegistration {
   id: string
@@ -14,7 +14,7 @@ export interface OverlayStack {
 }
 
 export function useOverlayStack(registrations: OverlayRegistration[]): OverlayStack {
-  const order: string[] = []
+  const order = reactive<string[]>([])
   const byId = new Map(registrations.map((registration) => [registration.id, registration]))
 
   for (const registration of registrations) {
@@ -25,7 +25,7 @@ export function useOverlayStack(registrations: OverlayRegistration[]): OverlaySt
         if (index >= 0) order.splice(index, 1)
         if (open) order.push(registration.id)
       },
-      { immediate: true },
+      { immediate: true, flush: 'sync' },
     )
   }
 

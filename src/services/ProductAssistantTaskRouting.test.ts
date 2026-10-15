@@ -423,6 +423,91 @@ describe('assistant task capability routing', () => {
 })
 
 describe('Discord instructions follow actual owner phase', () => {
+  it('keeps economy guidance separate from autonomous browser operations', () => {
+    const guidance = assistantDiscordGuidance('cf-secret', 'configure', 'economy')
+    expect(guidance).toContain('网页由用户操作')
+    expect(guidance).not.toMatch(/transfer-secret|prepare-secret|github-connect/)
+  })
+  it('does not inject first-time setup actions into an update or diagnosis milestone', () => {
+    for (const task of ['update-worker', 'update-commands', 'update-commands-only', 'diagnose']) {
+      const guidance = assistantDiscordGuidance('verify', task)
+      expect(guidance).toContain('verify-local')
+      expect(guidance).not.toMatch(
+        /collect-config新建|当前目标：同一App的Bot Token|advance-step到discord-token/,
+      )
+    }
+    expect(assistantDiscordGuidance('d1-uuid', 'configure')).toContain('不强求Settings有UUID')
+    expect(assistantDiscordGuidance('local-settings', 'configure')).not.toContain(
+      'open-install打开',
+    )
+  })
+  it('reuses phase instructions within a turn but sends fresh guidance on transitions and new turns', async () => {
+    const current = {
+      ...context(),
+      mode: 'features' as const,
+      activeBrowserPurpose: 'discord-setup' as const,
+    }
+    const completeWithUsage = vi
+      .fn()
+      .mockResolvedValueOnce(
+        reply([call('first', 'configure_discord_browser', { operation: 'inspect' })]),
+      )
+      .mockResolvedValueOnce(
+        reply([call('same-phase', 'configure_discord_browser', { operation: 'inspect' })]),
+      )
+      .mockResolvedValueOnce(
+        reply([
+          call('transition', 'configure_discord_browser', {
+            operation: 'advance-step',
+            from: 'd1-uuid',
+            document_id: '2',
+          }),
+        ]),
+      )
+      .mockResolvedValueOnce(reply())
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        data: { task: 'configure', step: 'd1-uuid', hint: '请重新观察当前页' },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        data: { task: 'configure', step: 'd1-uuid', documentId: 2 },
+      })
+      .mockResolvedValueOnce({ ok: true, data: { task: 'configure', step: 'github-fork' } })
+    const service = new ProductAssistantService({ completeWithUsage })
+    await service.reply(current, DEFAULT_MAIN_API_CONFIG, signal(), {
+      getContext: () => current,
+      execute,
+    })
+    const messages = completeWithUsage.mock.lastCall![0]
+    const value = (id: string) =>
+      JSON.parse(
+        messages.find((message: { toolCallId?: string }) => message.toolCallId === id).content,
+      )
+    expect(value('first').guidance).toContain('database_id_target')
+    expect(value('same-phase')).toMatchObject({ documentId: 2, guidanceFromToolCallId: 'first' })
+    expect(value('same-phase').guidance).toBeUndefined()
+    expect(value('transition').guidance).toContain('owned-source')
+    completeWithUsage
+      .mockResolvedValueOnce(
+        reply([call('new-turn', 'configure_discord_browser', { operation: 'status' })]),
+      )
+      .mockResolvedValueOnce(reply())
+    execute.mockResolvedValueOnce({ ok: true, data: { task: 'configure', step: 'github-fork' } })
+    await service.reply(current, DEFAULT_MAIN_API_CONFIG, signal(), {
+      getContext: () => current,
+      execute,
+    })
+    const newMessages = completeWithUsage.mock.lastCall![0]
+    expect(
+      JSON.parse(
+        newMessages.find((message: { toolCallId?: string }) => message.toolCallId === 'new-turn')
+          .content,
+      ).guidance,
+    ).toContain('owned-source')
+  })
   it('keeps unrelated deployment/Secret workflows out of current observation and completion', () => {
     expect(assistantDiscordGuidance('cf-secret', 'configure')).toContain('transfer-secret')
     expect(assistantDiscordGuidance('cf-secret', 'configure')).not.toContain(

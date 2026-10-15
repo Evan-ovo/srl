@@ -8,6 +8,98 @@ import './StructuredResourceDetails.vue'
 import './CharacterCardDetails.vue'
 import ResourceOrganizer from './ResourceOrganizer.vue'
 
+it('prepares a tab before mounting its editor, preserves the draft, and offers explicit retry', async () => {
+  const resource = {
+    id: 'prepared',
+    name: '角色',
+    type: RESOURCE_TYPE.CHARACTER_CARD,
+    description: '',
+    fileName: 'card.json',
+    mimeType: 'application/json',
+    fileSize: 2,
+    contentHash: 'hash',
+    favorite: false,
+    categoryId: null,
+    tags: [],
+    metadata: { card: { data: { name: '角色' } } },
+    originalBlob: new Blob(['{}']),
+    createdAt: 1,
+    updatedAt: 1,
+  } as Resource
+  let ready!: () => void
+  const prepareTab = vi.fn(async (tab: string) => {
+    if (tab === 'content')
+      await new Promise<void>((resolve) => {
+        ready = resolve
+      })
+  })
+  const mounted = vi.fn()
+  const editor = defineComponent({
+    setup() {
+      mounted()
+      const value = ref('')
+      return () =>
+        h('input', {
+          value: value.value,
+          'aria-label': 'prepared draft',
+          onInput: (e: Event) => {
+            value.value = (e.target as HTMLInputElement).value
+          },
+        })
+    },
+  })
+  const wrapper = mount(ResourceOrganizer, {
+    props: {
+      resource,
+      resources: [resource],
+      boundResources: [],
+      versions: [],
+      categories: [],
+      busy: false,
+      prepareTab,
+    },
+    global: {
+      stubs: {
+        CharacterCardDetails: editor,
+        ResourceCoverEditor: true,
+        ResourceSourceLinks: true,
+        ResourcePicker: true,
+        ResourceVersionCarriers: true,
+      },
+    },
+  })
+  const dom = new DOMWrapper(document.body)
+  try {
+    await flushPromises()
+    ;(dom.get('.resource-detail__layout').element as HTMLElement).scrollTo = vi.fn()
+    await dom.get('#resource-tab-content').trigger('click')
+    expect(mounted).not.toHaveBeenCalled()
+    ready()
+    await flushPromises()
+    await dom.get('[aria-label="prepared draft"]').setValue('keep draft')
+    await dom.get('#resource-tab-overview').trigger('click')
+    await dom.get('#resource-tab-content').trigger('click')
+    await flushPromises()
+    expect(mounted).toHaveBeenCalledOnce()
+    expect((dom.get('[aria-label="prepared draft"]').element as HTMLInputElement).value).toBe(
+      'keep draft',
+    )
+    prepareTab.mockRejectedValueOnce(new Error('history fixture failure'))
+    await dom.get('#resource-tab-versions').trigger('click')
+    await flushPromises()
+    expect(dom.get('[role="alert"]').text()).toContain('history fixture failure')
+    expect(dom.find('#resource-panel-versions').exists()).toBe(false)
+    await dom
+      .findAll('button')
+      .find((button) => button.text() === '重试读取')!
+      .trigger('click')
+    await flushPromises()
+    expect(dom.find('#resource-panel-versions').exists()).toBe(true)
+  } finally {
+    wrapper.unmount()
+  }
+})
+
 it.each([undefined, 'content'] as const)(
   'defers hidden metadata and preserves a visited content draft (initial tab: %s)',
   async (initialTab) => {

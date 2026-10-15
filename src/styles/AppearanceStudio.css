@@ -177,8 +177,7 @@
   font-size: 0.68rem;
 }
 
-.appearance-panel--code,
-.appearance-panel--preview {
+.appearance-panel--code {
   grid-column: 1 / -1;
 }
 
@@ -473,13 +472,6 @@
   font-size: 0.68rem;
 }
 
-.appearance-panel--preview iframe {
-  width: 100%;
-  height: min(62dvh, 36rem);
-  border: 1px solid var(--color-line-strong);
-  background: white;
-}
-
 @media (max-width: 48rem) {
   .appearance-panel {
     padding: 0.5rem;
@@ -585,8 +577,7 @@
     font-size: var(--text-caption);
   }
 
-  .appearance-panel--code,
-  .appearance-panel--preview {
+  .appearance-panel--code {
     grid-column: auto;
   }
 

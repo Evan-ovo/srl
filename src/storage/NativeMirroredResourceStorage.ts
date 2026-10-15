@@ -29,6 +29,9 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
   private readonly vault: VaultService
   private mutationQueue: Promise<void> = Promise.resolve()
   readonly listGalleryListSummaries?: ResourceStorageAdapter['listGalleryListSummaries']
+  readonly getChatReadPositionCache?: ResourceStorageAdapter['getChatReadPositionCache']
+  readonly setChatReadPositionCache?: ResourceStorageAdapter['setChatReadPositionCache']
+  readonly deleteChatReadPositionCache?: ResourceStorageAdapter['deleteChatReadPositionCache']
   readonly getReadSource?: ResourceStorageAdapter['getReadSource']
   readonly updateMetadataMany?: ResourceStorageAdapter['updateMetadataMany']
 
@@ -37,6 +40,9 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     this.vault = vault
     // Keep this optional so older delegates retain the service's summary fallback.
     this.listGalleryListSummaries = delegate.listGalleryListSummaries?.bind(delegate)
+    this.getChatReadPositionCache = delegate.getChatReadPositionCache?.bind(delegate)
+    this.setChatReadPositionCache = delegate.setChatReadPositionCache?.bind(delegate)
+    this.deleteChatReadPositionCache = delegate.deleteChatReadPositionCache?.bind(delegate)
     this.getReadSource = delegate.getReadSource?.bind(delegate)
     if (delegate.updateMetadataMany)
       this.updateMetadataMany = (patches) =>

@@ -408,8 +408,11 @@ class NativeTransactionFacade implements NativeTransaction {
     const values: unknown[] = []
     // Decode and release each batch before reading the next. The result array is requested by
     // the caller, but the transaction must not keep a second copy of the whole scanned table.
-    for (let offset = 0; offset < keys.length; offset += 100) {
-      const batch = keys.slice(offset, offset + 100)
+    // The list index contains compact metadata only; match its caller's 250-row
+    // batch instead of splitting every page into three bridge round trips.
+    const batchSize = store === 'resourceListSummaries' ? 250 : 100
+    for (let offset = 0; offset < keys.length; offset += batchSize) {
+      const batch = keys.slice(offset, offset + batchSize)
       const missing = [...new Set(batch.map(encodeAppDatabaseKey))].filter(
         (token) => !changes.has(token) && !cache.has(token),
       )

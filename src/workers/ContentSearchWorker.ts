@@ -16,18 +16,23 @@ interface ResetRequest {
 }
 
 const contentByHash = new Map<string, string>()
+let cachedBytes = 0
 let generation = 0
 
 self.onmessage = async (event: MessageEvent<SearchRequest | ResetRequest>) => {
   const request = event.data
   const current = ++generation
   if (request.type !== 'search') {
-    if (request.type === 'reset') contentByHash.clear()
+    if (request.type === 'reset') {
+      contentByHash.clear()
+      cachedBytes = 0
+    }
     return
   }
 
   const matchedIds: string[] = []
   const indexedHashes: string[] = []
+  const evictedHashes: string[] = []
   let batchSize = 0
   for (const item of request.items) {
     // Cached matches also need to yield, otherwise a new query cannot cancel a large scan.
@@ -37,9 +42,19 @@ self.onmessage = async (event: MessageEvent<SearchRequest | ResetRequest>) => {
     if (content === undefined && item.blob) {
       content = (await item.blob.text()).toLocaleLowerCase()
       if (current !== generation) return
-      contentByHash.set(item.contentHash, content)
+      const bytes = content.length * 2
+      if (bytes <= 8 * 1024 * 1024) {
+        contentByHash.set(item.contentHash, content)
+        cachedBytes += bytes
+        while (contentByHash.size > 2048 || cachedBytes > 8 * 1024 * 1024) {
+          const hash = contentByHash.keys().next().value!
+          cachedBytes -= contentByHash.get(hash)!.length * 2
+          contentByHash.delete(hash)
+          evictedHashes.push(hash)
+        }
+      }
     }
-    if (content !== undefined) indexedHashes.push(item.contentHash)
+    if (contentByHash.has(item.contentHash)) indexedHashes.push(item.contentHash)
     if (content?.includes(request.query)) matchedIds.push(item.id)
   }
 
@@ -48,6 +63,7 @@ self.onmessage = async (event: MessageEvent<SearchRequest | ResetRequest>) => {
     requestId: request.requestId,
     matchedIds,
     indexedHashes,
+    ...(evictedHashes.length ? { evictedHashes } : {}),
   })
 }
 

@@ -2,7 +2,6 @@ package buzz.jixiangruyi1207.srl;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.Dialog;
 import android.graphics.Color;
 import android.os.Message;
 import android.view.ViewGroup;
@@ -27,7 +26,7 @@ import com.getcapacitor.JSObject;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Dedicated browser dialog: external pages never receive a JavascriptInterface or SRL assets. */
+/** Retained native browser surface: external pages never receive a JavascriptInterface or SRL assets. */
 final class AssistantBrowserWindow {
     interface Actions { void emit(JSObject event); }
     String taskRunId = "";
@@ -39,12 +38,19 @@ final class AssistantBrowserWindow {
     private final Actions actions;
     private final WebView appWeb;
     private FrameLayout surface;
-    private FrameLayout chatLayer;
     private android.view.View preview;
+    private BrowserPreviewBounds.Frame previewFrame;
+    private boolean previewMoved;
     private String chatMode = "";
+    private int chatPresentationRevision;
+    private java.util.function.Consumer<Boolean> pendingPresentation;
+    private android.view.ViewTreeObserver.OnDrawListener browserDraw;
+    private android.view.ViewTreeObserver browserDrawObserver;
     private android.graphics.drawable.Drawable appBackground;
     private boolean drawingPreview;
-    private Dialog dialog;
+    private boolean suspendedChat;
+    private ViewGroup host;
+    private androidx.activity.OnBackPressedCallback systemBack;
     WebView web;
     private final java.util.Map<WebView, WebView> parentWindows = new java.util.IdentityHashMap<>();
     private final java.util.Map<Integer, WebView> tabs = new java.util.LinkedHashMap<>();
@@ -56,7 +62,10 @@ final class AssistantBrowserWindow {
     private TextView address;
     private TextView heading, status, failureText, failureTitle;
     private Button previousPage, loginMethod;
-    private android.window.OnBackInvokedCallback systemBack;
+    boolean githubApi;
+    private LinearLayout githubPanel;
+    private TextView githubText;
+    String githubRepository = "";
     private final java.util.Set<Button> quietButtons = new java.util.HashSet<>();
     private LinearLayout failure;
     private ProgressBar progress;
@@ -93,9 +102,11 @@ final class AssistantBrowserWindow {
         if (!next.equals(agentRunId)) { agentRunId = next; readyKey = ""; }
         if (status != null) updateStatus();
     }
-    private void pageReady() {
-        if (loading || suspended || closed || dialog == null || web.getUrl() == null) return;
-        if (!agentRunId.isEmpty() && !failed && !userOnly(web.getUrl())) setPaused(!generalMode && "cf-secret".equals(step) && secretStage.matches("input|submit|saved|submitted") && !AssistantBrowserPolicy.secretPublicControlsAllowed(mode, agentRunId, step, web.getUrl(), secretScope, secretStage));
+    private void pageReady() { pageReady(true); }
+    private void pageReady(boolean resumeAgent) {
+        if (githubApi) return;
+        if (loading || suspended || closed || surface == null || web.getUrl() == null) return;
+        if (resumeAgent && !agentRunId.isEmpty() && !failed && !userOnly(web.getUrl())) setPaused(!generalMode && "cf-secret".equals(step) && secretStage.matches("input|submit|saved|submitted") && !AssistantBrowserPolicy.secretPublicControlsAllowed(mode, agentRunId, step, web.getUrl(), secretScope, secretStage));
         String key = agentRunId + ":" + documentId + ":" + step + ":" + web.getUrl() + ":" + failed;
         if (key.equals(readyKey)) return;
         readyKey = key;
@@ -111,18 +122,19 @@ final class AssistantBrowserWindow {
         open(url, newStep, title, hint, newSteps, newTemplate, choose, dark, general, false);
     }
     void open(String url, String newStep, String title, String hint, JSONArray newSteps, String newTemplate, boolean choose, boolean dark, boolean general, boolean foreground) {
-        if (foreground) { clearChatPresentation(); suspended = false; }
+        if (foreground) { cancelPresentation(); ++chatPresentationRevision; clearChatPresentation(); suspended = false; }
         darkTheme = dark;
         generalMode = general;
-        if (dialog == null) create();
+        if (surface == null) create();
         int ink = Color.parseColor(dark ? "#eef8f8" : "#183842");
         int muted = Color.parseColor(dark ? "#b5c8cc" : "#59727c");
         int canvas = Color.parseColor(dark ? "#1f323a" : "#f2f9fa");
-        root.setBackgroundColor(canvas); ((android.view.View) root.getParent()).setBackgroundColor(canvas);
+        root.setBackgroundColor(canvas); surface.setBackgroundColor(canvas);
         android.graphics.drawable.GradientDrawable webShape = new android.graphics.drawable.GradientDrawable();
         webShape.setColor(Color.parseColor(dark ? "#293f48" : "#fbfefe")); webShape.setCornerRadius(dp(12));
         web.setBackground(webShape); web.setClipToOutline(true);
         heading.setTextColor(ink); instruction.setTextColor(ink); failureText.setTextColor(muted); failureTitle.setTextColor(ink);
+        githubText.setTextColor(ink);
         address.setTextColor(muted); status.setTextColor(muted);
         for (Button button : buttons) {
             boolean primary = false;
@@ -145,23 +157,25 @@ final class AssistantBrowserWindow {
         setPaused(true);
         closed = false;
         if (chatMode.isEmpty()) {
-            dialog.show();
+            showBrowser();
             actions.emit(new JSObject().put("action", "visibility").put("visible", true));
         }
-        Window window = dialog.getWindow();
+        Window window = activity.getWindow();
         if (window != null) {
-            window.setLayout(-1, -1); window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
             androidx.core.view.WindowInsetsControllerCompat controller = new androidx.core.view.WindowInsetsControllerCompat(window, window.getDecorView());
             controller.setAppearanceLightStatusBars(!dark); controller.setAppearanceLightNavigationBars(!dark);
         }
-        web.setVisibility(android.view.View.VISIBLE);
-        if (!choose && url != null && !url.equals(web.getUrl())) navigate(url);
+        githubPanel.setVisibility(githubApi ? android.view.View.VISIBLE : android.view.View.GONE);
+        web.setVisibility(githubApi ? android.view.View.GONE : android.view.View.VISIBLE);
+        if (githubApi) { web.stopLoading(); loading = false; failed = false; failure.setVisibility(android.view.View.GONE); address.setText("api.github.com · GitHub 授权连接"); githubText.setText(title + "\n\n" + hint); setPaused(agentRunId.isEmpty()); }
+        else if (!choose && url != null && !url.equals(web.getUrl())) navigate(url);
         if (choose) chooseStep();
         else pageReady();
     }
     private void create() {
-        dialog = new Dialog(activity, darkTheme ? android.R.style.Theme_DeviceDefault_NoActionBar : android.R.style.Theme_DeviceDefault_Light_NoActionBar);
-        root = new LinearLayout(dialog.getContext()); root.setOrientation(LinearLayout.VERTICAL);
+        host = appWeb != null && appWeb.getParent() instanceof ViewGroup ? (ViewGroup) appWeb.getParent() : activity.findViewById(android.R.id.content);
+        root = new LinearLayout(themedContext()); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(12), 0, dp(12), dp(8));
         LinearLayout header = new LinearLayout(activity); header.setGravity(android.view.Gravity.CENTER_VERTICAL);
         Button back = button(header, "‹", this::back);
@@ -173,7 +187,7 @@ final class AssistantBrowserWindow {
         heading.setGravity(android.view.Gravity.CENTER_VERTICAL);
         previousPage = button(header, "上一页", this::goBack);
         previousPage.setContentDescription("返回上一网页"); quietButtons.add(previousPage);
-        loginMethod = button(header, "系统浏览器", this::chooseLoginMethod);
+        loginMethod = button(header, "登录卡住？备用登录", this::chooseLoginMethod);
         loginMethod.setVisibility(android.view.View.GONE); quietButtons.add(loginMethod);
         root.addView(header);
         address = new TextView(activity); address.setTextSize(12); address.setSingleLine(true); address.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE); root.addView(address);
@@ -193,32 +207,56 @@ final class AssistantBrowserWindow {
         button(recovery, "重试", () -> { if (failedUrl != null) navigate(failedUrl); });
         button(recovery, "系统浏览器", () -> {
             String url = AssistantBrowserPolicy.publicUrl(failedUrl);
-            if (!AssistantBrowserPolicy.allowed(url)) return;
+            if (!AssistantBrowserPolicy.deploymentPageAllowed(url)) return;
             try { activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))); }
             catch (android.content.ActivityNotFoundException error) { message("没有可用的系统浏览器，请先检查网络后重试。"); }
         });
         failure.addView(recovery); failure.setVisibility(android.view.View.GONE); root.addView(failure, new LinearLayout.LayoutParams(-1, 0, 1));
+        githubPanel = new LinearLayout(activity); githubPanel.setOrientation(LinearLayout.VERTICAL); githubPanel.setPadding(dp(16), dp(16), dp(16), dp(16));
+        githubText = new TextView(activity); githubText.setTextSize(15);
+        ScrollView githubScroll = new ScrollView(activity); githubScroll.addView(githubText); githubPanel.addView(githubScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        button(githubPanel, "在系统浏览器查看仓库", () -> {
+            if (!githubRepository.matches("[A-Za-z0-9-]+/[A-Za-z0-9_.-]+")) return;
+            try { activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/" + githubRepository))); }
+            catch (android.content.ActivityNotFoundException error) { message("没有可用的系统浏览器。"); }
+        });
+        githubPanel.setVisibility(android.view.View.GONE); root.addView(githubPanel, new LinearLayout.LayoutParams(-1, 0, 1));
         root.addView(status);
-        surface = new FrameLayout(dialog.getContext());
+        surface = new FrameLayout(themedContext());
         surface.addView(root, new FrameLayout.LayoutParams(-1, -1));
         ViewCompat.setOnApplyWindowInsetsListener(surface, (view, insets) -> {
             if (!chatMode.isEmpty()) return insets;
             androidx.core.graphics.Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout() | WindowInsetsCompat.Type.ime());
-            view.setPadding(safe.left, safe.top, safe.right, safe.bottom); return insets;
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+            if (pet != null) pet.constrain();
+            return insets;
         });
         ViewCompat.setOnApplyWindowInsetsListener(root, null);
         pet = new DiscordSetupPetOverlay(surface, this::talk);
-        dialog.setContentView(surface);
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            systemBack = this::back;
-            dialog.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, systemBack);
+        surface.setVisibility(android.view.View.INVISIBLE);
+        host.addView(surface, new ViewGroup.LayoutParams(-1, -1));
+        if (activity instanceof androidx.activity.ComponentActivity) {
+            systemBack = new androidx.activity.OnBackPressedCallback(false) {
+                @Override public void handleOnBackPressed() { back(); }
+            };
+            ((androidx.activity.ComponentActivity) activity).getOnBackPressedDispatcher().addCallback(systemBack);
         }
-        dialog.setOnKeyListener((ignored, key, event) -> {
-            if (key != android.view.KeyEvent.KEYCODE_BACK) return false;
-            if (event.getAction() == android.view.KeyEvent.ACTION_UP) back();
-            return true;
-        });
-        dialog.setOnCancelListener(ignored -> { closed = true; setPaused(true); agentRun(""); actions.emit(new JSObject().put("action", "agent-pause")); actions.emit(new JSObject().put("action", "visibility").put("visible", false)); });
+    }
+    boolean browserShowing() { return active() && !suspended && chatMode.isEmpty() && surface.getVisibility() == android.view.View.VISIBLE; }
+    private void showBrowser() {
+        surface.setVisibility(android.view.View.VISIBLE); surface.bringToFront();
+        if (systemBack != null) systemBack.setEnabled(true);
+        ViewCompat.requestApplyInsets(surface);
+    }
+    private void hideBrowser() {
+        if (surface != null) surface.setVisibility(android.view.View.INVISIBLE);
+        if (systemBack != null) systemBack.setEnabled(false);
+        if (surface != null) NativeSystemUiPlugin.applyPersistedSystemBars(activity);
+    }
+    private void sizeSurface(int width, int height) {
+        // Capacitor's parent is a CoordinatorLayout, not necessarily a FrameLayout.
+        ViewGroup.LayoutParams layout = surface.getLayoutParams();
+        layout.width = width; layout.height = height; surface.setLayoutParams(layout);
     }
     private WebView createWebView() {
         WebView created = new WebView(activity) {
@@ -230,20 +268,23 @@ final class AssistantBrowserWindow {
         int newTabId = nextTabId++; tabs.put(newTabId, created); tabIds.put(created, newTabId);
         created.setOnTouchListener((view, event) -> !dispatchingAgentTouch && blocksUserInput(web.getUrl()));
         created.getSettings().setJavaScriptEnabled(true); created.getSettings().setDomStorageEnabled(true);
+        // Cloudflare's cross-origin verification frame needs cookie continuity.
+        // This applies to this external WebView only; never read or export cookies.
+        android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(created, true);
         created.getSettings().setAllowFileAccess(false); created.getSettings().setAllowContentAccess(false);
         created.getSettings().setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         created.getSettings().setSupportMultipleWindows(true); created.getSettings().setJavaScriptCanOpenWindowsAutomatically(false);
         created.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!request.isForMainFrame()) return false;
-                if ((generalMode ? AssistantBrowserPolicy.browseAllowed(request.getUrl().toString()) : AssistantBrowserPolicy.allowed(request.getUrl().toString()))) {
+                if (AssistantBrowserPolicy.browserNavigationAllowed(request.getUrl().toString())) {
                     return false;
                 }
                 message("本次跳转未打开，当前网页仍可使用。"); return true;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 loadingWindows.add(view);
-                if (view != web) return;
+                if (view != web || githubApi) return;
                 // Main-frame HTTP errors can arrive before onPageStarted (including cached responses).
                 // Keep that document's failure until an explicit retry or a different navigation.
                 boolean sameFailure = failed && url.equals(failedUrl);
@@ -253,20 +294,20 @@ final class AssistantBrowserWindow {
                 updateStatus();
                 if (!AssistantBrowserPolicy.retainSecretStageOnNavigation(secretScope, url, secretStage)) { secretStage = ""; secretScope = null; }
                 address.setText(android.net.Uri.parse(url).getHost());
-                if (!(generalMode ? AssistantBrowserPolicy.browseAllowed(url) : AssistantBrowserPolicy.allowed(url))) { view.stopLoading(); message("已停止不支持的网页地址。"); }
+                if (!AssistantBrowserPolicy.browserNavigationAllowed(url)) { view.stopLoading(); message("已停止不支持的网页地址。"); }
             }
             @Override public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
-                if (view != web) return;
+                if (view != web || githubApi) return;
                 // Discord and Cloudflare can change routes without replacing the document.
                 if (userOnly(url)) setPaused(true);
                 pageReady();
             }
-            @Override public void onPageFinished(WebView view, String url) { loadingWindows.remove(view); if (view != web) return; loading = false; address.setText(android.net.Uri.parse(url).getHost()); updateStatus(); pageReady(); }
+            @Override public void onPageFinished(WebView view, String url) { loadingWindows.remove(view); if (view != web || githubApi) return; loading = false; address.setText(android.net.Uri.parse(url).getHost()); updateStatus(); pageReady(); }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (view == web && request.isForMainFrame()) loadFailed(request.getUrl().toString(), error.getErrorCode() == ERROR_TIMEOUT ? "连接超时" : error.getErrorCode() == ERROR_HOST_LOOKUP ? "无法解析网站地址" : "连接失败");
+                if (view == web && !githubApi && request.isForMainFrame()) loadFailed(request.getUrl().toString(), error.getErrorCode() == ERROR_TIMEOUT ? "连接超时" : error.getErrorCode() == ERROR_HOST_LOOKUP ? "无法解析网站地址" : "连接失败");
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-                if (view == web && request.isForMainFrame()) loadFailed(request.getUrl().toString(), "网站返回 HTTP " + response.getStatusCode());
+                if (view == web && !githubApi && request.isForMainFrame()) loadFailed(request.getUrl().toString(), "网站返回 HTTP " + response.getStatusCode());
             }
         });
         created.setDownloadListener((url, agent, disposition, mime, bytes) -> { if (created == web && active() && download != null) download.request(url, agent, disposition, mime); });
@@ -351,7 +392,8 @@ final class AssistantBrowserWindow {
         agentRun(""); close(); actions.emit(new JSObject().put("action", "return"));
     }
     boolean pressPublicKey(String key, int document, String run) {
-        if (!generalMode || !active() || paused || loading || failed || document != documentId || !run.equals(agentRunId)) return false;
+        if (!active() || paused || loading || failed || document != documentId || !run.equals(agentRunId)) return false;
+        if (generalMode ? AssistantBrowserPolicy.generalUserOnly(web.getUrl()) : AssistantBrowserPolicy.userOnly(step, web.getUrl())) return false;
         java.util.Map<String, Integer> keys = java.util.Map.ofEntries(
             java.util.Map.entry("Tab", android.view.KeyEvent.KEYCODE_TAB), java.util.Map.entry("Escape", android.view.KeyEvent.KEYCODE_ESCAPE),
             java.util.Map.entry("Enter", android.view.KeyEvent.KEYCODE_ENTER), java.util.Map.entry("ArrowUp", android.view.KeyEvent.KEYCODE_DPAD_UP),
@@ -395,17 +437,17 @@ final class AssistantBrowserWindow {
         address.setText(android.net.Uri.parse(web.getUrl() == null ? "" : web.getUrl()).getHost()); setPaused(true); pageReady(); return true;
     }
     private boolean userOnly(String url) { return generalMode ? AssistantBrowserPolicy.generalUserOnly(url) : AssistantBrowserPolicy.userOnly(step, url); }
-    private boolean blocksUserInput(String url) { return generalMode ? "agent".equals(mode) && !agentRunId.isEmpty() && !failed && !userOnly(url) && (loading || !paused) : AssistantBrowserPolicy.blocksUserInput(mode, agentRunId, paused, loading, failed, step, url); }
+    private boolean blocksUserInput(String url) { return generalMode ? "agent".equals(mode) && !agentRunId.isEmpty() && !failed && !loading && !userOnly(url) && !paused : AssistantBrowserPolicy.blocksUserInput(mode, agentRunId, paused, loading, failed, step, url); }
     void background() {
         verificationUrl = null;
-        if (!active() || suspended || !dialog.isShowing() || failed || loading
-            || !(generalMode ? AssistantBrowserPolicy.browseAllowed(web.getUrl()) : AssistantBrowserPolicy.allowed(web.getUrl()))
+        if (!active() || suspended || !browserShowing() || failed || loading
+            || !AssistantBrowserPolicy.browseAllowed(web.getUrl())
             || !(AssistantBrowserPolicy.authentication(web.getUrl()) || externalVerificationDestination != null)) return;
         verificationUrl = web.getUrl(); verificationDocument = documentId;
         verificationStep = step; verificationRun = agentRunId;
     }
     private boolean sameVerification(String url, int document, String expectedStep, String run) {
-        return active() && !suspended && dialog.isShowing() && !failed && !loading
+        return active() && !suspended && browserShowing() && !failed && !loading
             && document == documentId && url.equals(web.getUrl()) && expectedStep.equals(step) && run.equals(agentRunId);
     }
     void foreground() {
@@ -424,7 +466,7 @@ final class AssistantBrowserWindow {
             }).setNegativeButton("尚未完成", null).show();
     }
     private Button button(LinearLayout row, String title, Runnable action) {
-        Button button = new Button(dialog.getContext()); button.setText(title); button.setTextSize(14); button.setAllCaps(false);
+        Button button = new Button(themedContext()); button.setText(title); button.setTextSize(14); button.setAllCaps(false);
         button.setStateListAnimator(null); button.setElevation(0);
         button.setMinHeight(dp(44)); button.setMinimumHeight(dp(44)); button.setMinWidth(dp(44)); button.setMinimumWidth(dp(44)); button.setPadding(dp(8), 0, dp(8), 0);
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-2, dp(44)); layout.setMargins(dp(2), dp(2), dp(2), dp(2));
@@ -436,14 +478,14 @@ final class AssistantBrowserWindow {
     }
     private void updateStatus() {
         if (status == null) return;
-        boolean hasPreviousPage = web.canGoBack() || parentWindows.containsKey(web);
+        boolean hasPreviousPage = !githubApi && (web.canGoBack() || parentWindows.containsKey(web));
         previousPage.setEnabled(hasPreviousPage); previousPage.setAlpha(hasPreviousPage ? 1f : .4f);
-        loginMethod.setVisibility(AssistantBrowserPolicy.authentication(web.getUrl()) ? android.view.View.VISIBLE : android.view.View.GONE);
+        loginMethod.setVisibility(githubApi || AssistantBrowserPolicy.githubLogin(web.getUrl()) || AssistantBrowserPolicy.connectionConsent(web.getUrl()) || AssistantBrowserPolicy.repositoryAuthorization(web.getUrl()) || step.startsWith("github-") || step.startsWith("wrangler-") ? android.view.View.VISIBLE : android.view.View.GONE);
         loginMethod.setEnabled(!loading && !failed);
-        boolean working = !failed && !loading && !paused && !agentRunId.isEmpty() && !userOnly(web.getUrl());
+        boolean working = !failed && !loading && !paused && !agentRunId.isEmpty() && (githubApi || !userOnly(web.getUrl()));
         status.setTypeface(null, working ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
         status.setTextColor(Color.parseColor(working ? darkTheme ? "#92d7d3" : "#1d707b" : darkTheme ? "#b5c8cc" : "#59727c"));
-        status.setText(taskFinished ? "本次网页任务已完成 · 可查看网页和对话" : failed ? "网页加载失败 · " + (!agentRunId.isEmpty() && !userOnly(web.getUrl()) ? "助手可继续" : "可重试或返回") : loading ? "正在加载网页…" : userOnly(web.getUrl()) ? (generalMode ? "请你完成登录或私密步骤，再点我继续" : AssistantBrowserPolicy.handoffReason(step, web.getUrl()) + " · 点桌宠查看") : paused || agentRunId.isEmpty() && "agent".equals(mode) ? "已暂停 · 点桌宠查看或继续\n" + agentPhase : !agentRunId.isEmpty() ? "小助手操作中 · 点桌宠查看或暂停\n" + agentPhase : "点桌宠继续当前步骤");
+        status.setText(taskFinished ? "本次网页任务已完成 · 可查看网页和对话" : failed ? "网页加载失败 · " + (!agentRunId.isEmpty() && !userOnly(web.getUrl()) ? "助手可继续" : "可重试或返回") : loading ? "正在加载网页…" : !githubApi && userOnly(web.getUrl()) ? (generalMode ? "请你完成登录或私密步骤，再点我继续" : AssistantBrowserPolicy.handoffReason(step, web.getUrl()) + " · 点桌宠查看") : paused || agentRunId.isEmpty() && "agent".equals(mode) ? "已暂停 · 点桌宠查看或继续\n" + agentPhase : !agentRunId.isEmpty() ? "小助手操作中 · 点桌宠查看或暂停\n" + agentPhase : "点桌宠继续当前步骤");
         progress.setVisibility((loading || !agentRunId.isEmpty() && !paused) && !failed ? android.view.View.VISIBLE : android.view.View.INVISIBLE);
         if (preview != null) preview.invalidate();
     }
@@ -466,17 +508,21 @@ final class AssistantBrowserWindow {
     }
     private void chooseLoginMethod() {
         String current = web.getUrl();
-        if (!AssistantBrowserPolicy.browseAllowed(current)) return;
-        new AlertDialog.Builder(themedContext(), dialogTheme()).setTitle("在系统浏览器继续")
-            .setMessage("登录、验证码或授权可在系统浏览器完成；返回后按当前网页核验。网页登录状态不会转交助手。")
-            .setNegativeButton("取消", null)
-            .setPositiveButton("打开系统浏览器", (ignored, which) -> {
+        boolean taskGitHub = step.startsWith("github-") || step.startsWith("wrangler-");
+        AlertDialog.Builder prompt = new AlertDialog.Builder(themedContext(), dialogTheme()).setTitle(taskGitHub ? "GitHub 登录备用方式" : "GitHub 登录与授权")
+            .setMessage(taskGitHub ? "先在当前网页直接登录；可以账号密码登录的用户继续留在这里即可。只有网页登录卡住、需要 Google/Apple 登录或希望使用本机 GitHub API 自动处理仓库时，再打开系统浏览器授权。API 授权与网页登录是独立会话，不共享 Cookie。" : "在系统浏览器完成当前 GitHub 登录和 Cloudflare 关联授权；若浏览器提示 Cloudflare 登录，请使用本次相同账号。返回后会重新检查 Cloudflare 的实际关联结果，不复制 Cookie，也不把打开网址当成功。")
+            .setNegativeButton("取消", null);
+        if (taskGitHub && "agent".equals(mode)) prompt.setPositiveButton("打开备用 API 授权", (ignored, which) -> actions.emit(new JSObject().put("action", "github-connect")));
+        if (AssistantBrowserPolicy.githubLogin(current) || AssistantBrowserPolicy.connectionConsent(current) || AssistantBrowserPolicy.repositoryAuthorization(current))
+            prompt.setNeutralButton("系统浏览器继续当前授权", (ignored, which) -> {
                 if (!current.equals(web.getUrl()) || loading || failed) return;
                 externalVerificationDestination = step.startsWith("cf-") ? "https://dash.cloudflare.com/" : null;
                 try { activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(current))); }
                 catch (android.content.ActivityNotFoundException error) { externalVerificationDestination = null; message("没有可用的系统浏览器。"); }
-            }).show();
+            });
+        prompt.show();
     }
+    void githubProgress(String text, String repository) { if (githubText != null) githubText.setText(text); githubRepository = repository == null ? "" : repository; if (preview != null) preview.invalidate(); }
     private int dialogTheme() { return darkTheme ? R.style.DiscordSetupDialogDark : R.style.DiscordSetupDialogLight; }
     private android.content.Context themedContext() { return new android.view.ContextThemeWrapper(activity, dialogTheme()); }
     void setPaused(boolean value) {
@@ -489,8 +535,8 @@ final class AssistantBrowserWindow {
         updateStatus();
     }
     void message(String text) { if (text.equals(replyText)) return; replyText = text; if (pet != null && (paused || agentRunId.isEmpty())) pet.say(text.length() > 100 ? text.substring(0, 100) + "…点我看完整回复" : text); updateTranscript(); }
-    void phase(String text) { agentPhase = text; if (pet != null && !paused && !agentRunId.isEmpty()) pet.say(""); updateStatus(); updateTranscript(); }
-    boolean conversation(String id) { if (conversationId.equals(id)) return false; clearChatPresentation(); conversationId = id; replyText = ""; installationCompleted = false; installationStartedApp = ""; updateTranscript(); return true; }
+    void phase(String text) { agentPhase = text; if (githubApi && githubText != null) githubText.setText(stepTitle + "\n\n" + text); if (pet != null && !paused && !agentRunId.isEmpty()) pet.say(""); updateStatus(); updateTranscript(); }
+    boolean conversation(String id) { if (conversationId.equals(id)) return false; clearChatPresentation(); previewFrame = null; previewMoved = false; conversationId = id; replyText = ""; installationCompleted = false; installationStartedApp = ""; updateTranscript(); return true; }
     void installation(String app, String nextStep) { if (!"discord-install".equals(nextStep) || !app.equals(installationApplicationId)) { installationCompleted = false; installationStartedApp = ""; } installationApplicationId = "discord-install".equals(nextStep) ? app : ""; }
     private void updateTranscript() { if (chatTranscript != null) chatTranscript.setText(stepTitle + "\n" + agentPhase + "\n\n" + (replyText.isEmpty() ? details : replyText)); }
     void petFrame(String data) { if (pet != null) pet.frame(data); }
@@ -506,7 +552,7 @@ final class AssistantBrowserWindow {
         setPaused(false); actions.emit(new JSObject().put("action", "secret-prepare"));
     }
     private void talk() {
-        if ("agent".equals(mode)) { actions.emit(new JSObject().put("action", "quick-chat")); return; }
+        if ("agent".equals(mode)) { actions.emit(new JSObject().put("action", "quick-chat").put("petBounds", appWeb == null ? null : pet.bounds(appWeb))); return; }
         manualTalk();
     }
     void controls() {
@@ -649,34 +695,74 @@ final class AssistantBrowserWindow {
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         new AlertDialog.Builder(themedContext(), dialogTheme()).setTitle("部署成功的 Worker 根链接").setView(input).setPositiveButton("回填资源库", (dialog, which) -> actions.emit(new JSObject().put("action", "worker-url").put("workerUrl", input.getText().toString()))).setNegativeButton("取消", null).show();
     }
-    boolean active() { return !closed && dialog != null && web != null; }
-    /** Reparent the existing page, never reopen it or pause the agent for chat. */
+    boolean active() { return !closed && surface != null && web != null; }
+    void presentChat(String presentation, String id, JSONObject bounds, java.util.function.Consumer<Boolean> done) {
+        cancelPresentation();
+        int revision = ++chatPresentationRevision;
+        if (!active() || suspended || !conversationId.equals(id) || id.isEmpty()) { done.accept(false); return; }
+        pendingPresentation = done;
+        if ("browser".equals(presentation)) {
+            if (!chatPresentation(presentation, id, bounds)) { finishPresentation(revision, false); return; }
+            browserDraw = new android.view.ViewTreeObserver.OnDrawListener() {
+                private boolean posted;
+                @Override public void onDraw() {
+                    if (posted) return;
+                    posted = true;
+                    surface.post(() -> {
+                        if (revision != chatPresentationRevision) return;
+                        boolean valid = browserShowing();
+                        if (valid) actions.emit(new JSObject().put("action", "visibility").put("visible", true));
+                        finishPresentation(revision, valid);
+                    });
+                }
+            };
+            browserDrawObserver = surface.getViewTreeObserver();
+            browserDrawObserver.addOnDrawListener(browserDraw);
+            surface.invalidate();
+            return;
+        }
+        if (appWeb == null) { finishPresentation(revision, false); return; }
+        // Wait for prepared chat/transparency before changing stacking, not a timer.
+        appWeb.postVisualStateCallback(revision, new WebView.VisualStateCallback() {
+            @Override public void onComplete(long requestId) {
+                if (revision != chatPresentationRevision) return;
+                finishPresentation(revision, active() && !suspended && conversationId.equals(id)
+                    && chatPresentation(presentation, id, bounds));
+            }
+        });
+    }
+    private void finishPresentation(int revision, boolean accepted) {
+        if (revision != chatPresentationRevision) return;
+        java.util.function.Consumer<Boolean> completed = pendingPresentation;
+        pendingPresentation = null;
+        if (browserDraw != null && browserDrawObserver != null && browserDrawObserver.isAlive()) browserDrawObserver.removeOnDrawListener(browserDraw);
+        browserDraw = null;
+        browserDrawObserver = null;
+        if (completed != null) completed.accept(accepted);
+    }
+    private void cancelPresentation() { finishPresentation(chatPresentationRevision, false); }
+    /** Change stacking only: neither WebView is detached during a chat transition. */
     boolean chatPresentation(String presentation, String id, JSONObject bounds) {
         if (!active() || suspended || !conversationId.equals(id) || id.isEmpty() || appWeb == null
             || !(appWeb.getParent() instanceof ViewGroup)) return false;
         if ("browser".equals(presentation)) {
-            clearChatPresentation(); dialog.show();
-            actions.emit(new JSObject().put("action", "visibility").put("visible", true));
+            clearChatPresentation(); showBrowser();
             return true;
         }
         if (!"compact".equals(presentation) && !"fullscreen".equals(presentation)) return false;
-        ViewGroup host = (ViewGroup) appWeb.getParent();
-        chatMode = presentation;
-        if (chatLayer == null) {
+        if (chatMode.isEmpty()) {
             appBackground = appWeb.getBackground();
-            chatLayer = new FrameLayout(activity);
-            host.addView(chatLayer, host.indexOfChild(appWeb), new ViewGroup.LayoutParams(-1, -1));
-            dialog.hide();
             int sourceWidth = surface.getWidth(), sourceHeight = surface.getHeight();
-            ((ViewGroup) surface.getParent()).removeView(surface);
-            chatLayer.addView(surface, new FrameLayout.LayoutParams(sourceWidth, sourceHeight));
-            ViewCompat.requestApplyInsets(surface);
-            pet.visible(false);
+            sizeSurface(sourceWidth, sourceHeight);
         }
         chatMode = presentation;
+        if (systemBack != null) systemBack.setEnabled(false);
+        pet.visible(false);
         appWeb.setBackgroundColor("compact".equals(presentation) ? Color.TRANSPARENT : Color.parseColor(darkTheme ? "#1f323a" : "#f2f9fa"));
-        if (preview != null) { host.removeView(preview); preview = null; }
+        appWeb.bringToFront();
+        if (!"fullscreen".equals(presentation) && preview != null) { host.removeView(preview); preview = null; }
         if ("fullscreen".equals(presentation) && bounds != null && bounds.optDouble("width") > 0 && bounds.optDouble("height") > 0) {
+          if (preview == null) {
             // A local rendering of the target WebView. No bitmap, model request or SRL-page capture.
             preview = new android.view.View(activity) {
                 private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
@@ -687,60 +773,135 @@ final class AssistantBrowserWindow {
                     canvas.save(); canvas.clipPath(clip);
                     canvas.drawColor(Color.parseColor(darkTheme ? "#293f48" : "#fbfefe"));
                     canvas.save(); canvas.clipRect(0, 0, getWidth(), getHeight() - dp(34));
-                    android.view.View page = failed ? failure : web;
+                    android.view.View page = githubApi ? githubPanel : failed ? failure : web;
                     float scale = (float) getWidth() / Math.max(1, page.getWidth()); canvas.scale(scale, scale);
                     drawingPreview = true;
                     try { page.draw(canvas); } finally { drawingPreview = false; }
                     canvas.restore();
-                    paint.setColor(Color.parseColor(darkTheme ? "#eef8f8" : "#183842")); paint.setTextSize(dp(11));
-                    canvas.drawText(paused ? "已暂停 · 点此返回网页" : "助手操作中 · 点此返回网页", dp(8), getHeight() - dp(18), paint);
-                    paint.setTextSize(dp(10));
+                    paint.setColor(Color.parseColor(darkTheme ? "#eef8f8" : "#183842")); paint.setTextSize(dp(12));
+                    canvas.drawText(paused ? "已暂停 · 双击返回" : "操作中 · 双击返回", dp(8), getHeight() - dp(20), paint);
+                    paint.setTextSize(dp(12));
                     String phase = agentPhase.isEmpty() ? stepTitle : agentPhase;
                     canvas.drawText(phase, dp(8), getHeight() - dp(5), paint);
+                    paint.setStrokeWidth(dp(2));
+                    canvas.drawLine(getWidth() - dp(18), getHeight() - dp(7), getWidth() - dp(7), getHeight() - dp(18), paint);
+                    canvas.drawLine(getWidth() - dp(12), getHeight() - dp(6), getWidth() - dp(6), getHeight() - dp(12), paint);
                     canvas.restore();
                 }
             };
-            preview.setContentDescription("当前网页和助手进度，点击返回网页协助");
-            preview.setOnClickListener(view -> chatPresentation("browser", conversationId, null));
+            preview.setContentDescription("当前网页和助手进度，可拖动和缩放，双击返回网页协助");
+            preview.setFocusable(true);
+            preview.setOnClickListener(view -> presentChat("browser", conversationId, null, accepted -> {}));
+            installPreviewGestures(host);
+            host.addView(preview, new ViewGroup.LayoutParams(dp(180), dp(150)));
+          }
             float scale = appWeb.getWidth() / (float) Math.max(1, bounds.optDouble("viewportWidth", appWeb.getWidth() / activity.getResources().getDisplayMetrics().density));
             int[] appPosition = new int[2], hostPosition = new int[2]; appWeb.getLocationInWindow(appPosition); host.getLocationInWindow(hostPosition);
-            ViewGroup.LayoutParams layout = new ViewGroup.LayoutParams(Math.max(1, Math.round((float) bounds.optDouble("width") * scale)), Math.max(1, Math.round((float) bounds.optDouble("height") * scale)));
-            host.addView(preview, layout);
-            preview.setX(appPosition[0] - hostPosition[0] + Math.round((float) bounds.optDouble("left") * scale));
-            preview.setY(appPosition[1] - hostPosition[1] + Math.round((float) bounds.optDouble("top") * scale));
+            BrowserPreviewBounds.Frame initial = new BrowserPreviewBounds.Frame(
+                appPosition[0] - hostPosition[0] + (float) bounds.optDouble("left") * scale,
+                appPosition[1] - hostPosition[1] + (float) bounds.optDouble("top") * scale,
+                (float) bounds.optDouble("width") * scale, (float) bounds.optDouble("height") * scale);
+            applyPreviewFrame(host, previewMoved && previewFrame != null ? previewFrame : initial);
         }
         actions.emit(new JSObject().put("action", "visibility").put("visible", false));
         return true;
     }
+    private void applyPreviewFrame(ViewGroup host, BrowserPreviewBounds.Frame frame) {
+        android.graphics.Rect visible = new android.graphics.Rect(); host.getWindowVisibleDisplayFrame(visible);
+        int[] position = new int[2]; host.getLocationOnScreen(position);
+        float left = Math.max(dp(12), visible.left - position[0] + dp(12));
+        float top = Math.max(dp(12), visible.top - position[1] + dp(12));
+        float right = Math.min(host.getWidth() - dp(12), visible.right - position[0] - dp(12));
+        float bottom = Math.min(host.getHeight() - dp(12), visible.bottom - position[1] - dp(12));
+        previewFrame = BrowserPreviewBounds.fit(frame.left(), frame.top(), frame.width(), frame.height(), left, top, right, bottom, dp(160), dp(110));
+        ViewGroup.LayoutParams layout = preview.getLayoutParams();
+        layout.width = Math.round(previewFrame.width()); layout.height = Math.round(previewFrame.height());
+        preview.setLayoutParams(layout); preview.setX(previewFrame.left()); preview.setY(previewFrame.top());
+        preview.invalidate();
+    }
+    private void installPreviewGestures(ViewGroup host) {
+        float[] down = new float[2]; BrowserPreviewBounds.Frame[] origin = new BrowserPreviewBounds.Frame[1];
+        boolean[] moved = {false}, resizing = {false}; long[] lastTap = {0}; float[] lastPoint = new float[2];
+        int slop = android.view.ViewConfiguration.get(activity).getScaledTouchSlop();
+        int doubleTapSlop = android.view.ViewConfiguration.get(activity).getScaledDoubleTapSlop();
+        android.view.ScaleGestureDetector pinch = new android.view.ScaleGestureDetector(activity,
+            new android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                @Override public boolean onScaleBegin(android.view.ScaleGestureDetector detector) { moved[0] = true; lastTap[0] = 0; return true; }
+                @Override public boolean onScale(android.view.ScaleGestureDetector detector) {
+                    float scale = detector.getScaleFactor(); BrowserPreviewBounds.Frame f = previewFrame;
+                    if (f != null) { previewMoved = true; applyPreviewFrame(host, new BrowserPreviewBounds.Frame(
+                        f.left() - detector.getFocusX() * (scale - 1), f.top() - detector.getFocusY() * (scale - 1), f.width() * scale, f.height() * scale)); }
+                    return true;
+                }
+            });
+        preview.setOnTouchListener((view, event) -> {
+            pinch.onTouchEvent(event);
+            switch (event.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    down[0] = event.getRawX(); down[1] = event.getRawY(); origin[0] = previewFrame; moved[0] = false;
+                    resizing[0] = event.getX() >= view.getWidth() - dp(44) && event.getY() >= view.getHeight() - dp(44);
+                    return true;
+                case android.view.MotionEvent.ACTION_MOVE:
+                    if (pinch.isInProgress() || event.getPointerCount() != 1 || origin[0] == null) return true;
+                    float dx = event.getRawX() - down[0], dy = event.getRawY() - down[1];
+                    if (!moved[0] && Math.hypot(dx, dy) <= slop) return true;
+                    moved[0] = true; previewMoved = true; lastTap[0] = 0;
+                    BrowserPreviewBounds.Frame f = origin[0];
+                    applyPreviewFrame(host, resizing[0] ? new BrowserPreviewBounds.Frame(f.left(), f.top(), f.width() + dx, f.height() + dy)
+                        : new BrowserPreviewBounds.Frame(f.left() + dx, f.top() + dy, f.width(), f.height()));
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                    if (!moved[0] && !resizing[0]) {
+                        boolean twice = lastTap[0] != 0 && event.getEventTime() - lastTap[0] <= android.view.ViewConfiguration.getDoubleTapTimeout()
+                            && Math.hypot(event.getRawX() - lastPoint[0], event.getRawY() - lastPoint[1]) <= doubleTapSlop;
+                        if (twice) { lastTap[0] = 0; view.performClick(); }
+                        else { lastTap[0] = event.getEventTime(); lastPoint[0] = event.getRawX(); lastPoint[1] = event.getRawY(); }
+                    } else lastTap[0] = 0;
+                    origin[0] = null; return true;
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    origin[0] = null; lastTap[0] = 0; return true;
+                case android.view.MotionEvent.ACTION_POINTER_DOWN:
+                    origin[0] = null; moved[0] = true; lastTap[0] = 0; return true;
+                default: return true;
+            }
+        });
+    }
     private void clearChatPresentation() {
         if (preview != null) { ((ViewGroup) preview.getParent()).removeView(preview); preview = null; }
-        if (chatLayer != null) {
-            chatLayer.removeView(surface);
-            ((ViewGroup) chatLayer.getParent()).removeView(chatLayer); chatLayer = null;
-            dialog.setContentView(surface); pet.visible(true);
+        if (!chatMode.isEmpty()) {
+            sizeSurface(-1, -1); pet.visible(true);
             appWeb.setBackground(appBackground);
         }
         chatMode = "";
     }
-    void hideForChat() { if (dialog != null) dialog.hide(); actions.emit(new JSObject().put("action", "visibility").put("visible", false)); }
+    void hideForChat() { hideBrowser(); actions.emit(new JSObject().put("action", "visibility").put("visible", false)); }
     void revealForAction(String operation) {
-        if (!active() || suspended || !chatMode.isEmpty() || agentRunId.isEmpty() || dialog.isShowing()
+        if (!active() || suspended || !chatMode.isEmpty() || agentRunId.isEmpty() || browserShowing()
             || !java.util.Arrays.asList("click", "select", "fill", "focus", "scroll", "navigate", "template", "fill-config", "fill-endpoint", "open-install", "prepare-secret", "submit-secret").contains(operation)) return;
         boolean publicSecret = AssistantBrowserPolicy.secretPublicControlsAllowed(mode, agentRunId, step, web.getUrl(), secretScope, secretStage);
         if (paused && !publicSecret || loading || failed) return;
-        dialog.show(); actions.emit(new JSObject().put("action", "visibility").put("visible", true));
+        showBrowser(); actions.emit(new JSObject().put("action", "visibility").put("visible", true));
     }
     boolean suspend() {
-        if (!active() || !dialog.isShowing()) return false;
-        suspended = true; resumeAllowed = !paused; suspendedDocument = documentId; suspendedUrl = web.getUrl(); setPaused(true); dialog.hide(); return true;
+        if (!active() || suspended || (!browserShowing() && chatMode.isEmpty())) return false;
+        suspendedChat = !chatMode.isEmpty();
+        suspended = true; resumeAllowed = !paused; suspendedDocument = documentId; suspendedUrl = web.getUrl(); setPaused(true);
+        if (preview != null) preview.setVisibility(android.view.View.GONE);
+        hideBrowser(); return true;
     }
     void restore(boolean resume) {
-        if (!suspended || dialog == null || web == null) return;
-        suspended = false; dialog.show();
-        setPaused(!(resume && resumeAllowed && !loading && suspendedDocument == documentId && suspendedUrl != null && suspendedUrl.equals(web.getUrl()) && !userOnly(web.getUrl())));
-        actions.emit(new JSObject().put("action", "visibility").put("visible", true));
-        pageReady();
+        if (!suspended || surface == null || web == null) return;
+        suspended = false;
+        if (closed || taskFinished) return;
+        boolean inChat = suspendedChat && !chatMode.isEmpty();
+        if (!inChat) showBrowser();
+        else { surface.setVisibility(android.view.View.VISIBLE); appWeb.bringToFront(); }
+        if (preview != null) { preview.setVisibility(android.view.View.VISIBLE); preview.bringToFront(); }
+        boolean resumeAgent = resume && resumeAllowed && !loading && suspendedDocument == documentId && suspendedUrl != null && suspendedUrl.equals(web.getUrl()) && !userOnly(web.getUrl());
+        setPaused(!resumeAgent);
+        actions.emit(new JSObject().put("action", "visibility").put("visible", !inChat));
+        pageReady(resumeAgent);
     }
-    void close() { agentRun(""); closed = true; setPaused(true); clearChatPresentation(); if (dialog != null) dialog.hide(); actions.emit(new JSObject().put("action", "visibility").put("visible", false)); }
-    void destroy() { clearChatPresentation(); if (pet != null) pet.destroy(); if (dialog != null) { if (android.os.Build.VERSION.SDK_INT >= 33 && systemBack != null) dialog.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(systemBack); dialog.dismiss(); } for (WebView tab : tabs.values()) { tab.stopLoading(); tab.destroy(); } tabs.clear(); tabIds.clear(); parentWindows.clear(); loadingWindows.clear(); web = null; }
+    void close() { agentRun(""); closed = true; setPaused(true); clearChatPresentation(); hideBrowser(); cancelPresentation(); ++chatPresentationRevision; actions.emit(new JSObject().put("action", "visibility").put("visible", false)); }
+    void destroy() { close(); if (systemBack != null) systemBack.remove(); if (pet != null) pet.destroy(); if (surface != null) { host.removeView(surface); surface = null; } for (WebView tab : tabs.values()) { tab.stopLoading(); tab.destroy(); } tabs.clear(); tabIds.clear(); parentWindows.clear(); loadingWindows.clear(); web = null; }
 }

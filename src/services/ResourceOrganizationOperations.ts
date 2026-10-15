@@ -247,22 +247,41 @@ export async function moveManyToCategory(
   categoryId: string | null,
 ): Promise<void> {
   if (!ids.length) return
-  const selectedIds = new Set(ids)
   const now = Date.now()
-  const resources = (await storage.list())
-    .filter((resource) => selectedIds.has(resource.id))
-    .map((resource) => {
-      const categoryIds = categoryId
-        ? Array.from(new Set([...getResourceCategoryIds(resource), categoryId]))
-        : []
-      return normalizeResource({
-        ...resource,
-        categoryId: categoryIds[0] ?? null,
-        categoryIds,
-        updatedAt: now,
-      })
-    })
-  await storage.saveMany(resources)
+  const patches = (await readSelectedSummaries(storage, ids)).map((resource) => {
+    const categoryIds = categoryId
+      ? Array.from(new Set([...getResourceCategoryIds(resource), categoryId]))
+      : []
+    return {
+      id: resource.id,
+      changes: { categoryId: categoryIds[0] ?? null, categoryIds, updatedAt: now },
+    }
+  })
+  await writeMetadataPatches(storage, patches)
+}
+
+async function readSelectedSummaries(storage: ResourceStorageAdapter, ids: string[]) {
+  const loaded = []
+  const uniqueIds = Array.from(new Set(ids))
+  for (let start = 0; start < uniqueIds.length; start += 250) {
+    loaded.push(
+      ...(await Promise.all(
+        uniqueIds
+          .slice(start, start + 250)
+          .map((id) => (storage.getSummary ? storage.getSummary(id) : storage.get(id))),
+      )),
+    )
+  }
+  return loaded.flatMap((resource) => (resource ? [resource] : []))
+}
+
+async function writeMetadataPatches(
+  storage: ResourceStorageAdapter,
+  patches: Array<{ id: string; changes: ResourceMetadataPatch }>,
+): Promise<void> {
+  if (!patches.length) return
+  if (storage.updateMetadataMany) await storage.updateMetadataMany(patches)
+  else for (const { id, changes } of patches) await storage.update(id, changes)
 }
 
 export async function updateTagsMany(
@@ -273,12 +292,10 @@ export async function updateTagsMany(
 ): Promise<void> {
   const normalizedTag = tag.trim()
   if (!ids.length || !normalizedTag) throw new Error('请输入标签名称')
-  const selectedIds = new Set(ids)
   const now = Date.now()
-  const resources = (await storage.list())
-    .filter((resource) => selectedIds.has(resource.id))
-    .map((resource) => ({
-      ...resource,
+  const patches = (await readSelectedSummaries(storage, ids)).map((resource) => ({
+    id: resource.id,
+    changes: {
       tags:
         action === 'add'
           ? normalizeTags([...resource.tags, normalizedTag])
@@ -286,8 +303,9 @@ export async function updateTagsMany(
               (item) => item.toLocaleLowerCase() !== normalizedTag.toLocaleLowerCase(),
             ),
       updatedAt: now,
-    }))
-  await storage.saveMany(resources)
+    },
+  }))
+  await writeMetadataPatches(storage, patches)
 }
 
 export async function addTagsPerResource(
@@ -305,9 +323,7 @@ export async function addTagsPerResource(
     }),
   )
   if (!tagsById.size) return { resourceCount: 0, tagCount: 0, entries: [] }
-  const loaded = storage.listResourceListSummaries
-    ? await storage.listResourceListSummaries()
-    : await storage.listSummaries()
+  const loaded = await readSelectedSummaries(storage, Array.from(tagsById.keys()))
   const now = Date.now()
   const mutations = loaded.flatMap((resource) => {
     if (!tagsById.has(resource.id)) return []
@@ -334,8 +350,13 @@ export async function addTagsPerResource(
           },
         ]
   })
-  for (const { resource } of mutations)
-    await storage.update(resource.id, { tags: resource.tags, updatedAt: now })
+  await writeMetadataPatches(
+    storage,
+    mutations.map(({ resource }) => ({
+      id: resource.id,
+      changes: { tags: resource.tags, updatedAt: now },
+    })),
+  )
   const entries = mutations.map((mutation) => mutation.entry)
   return {
     resourceCount: entries.length,
@@ -356,7 +377,7 @@ export async function undoAddedTags(
     }),
   )
   if (!byId.size) return { resourceCount: 0, tagCount: 0, entries: [] }
-  const loaded = await Promise.all(Array.from(byId.keys(), (id) => storage.get(id)))
+  const loaded = await readSelectedSummaries(storage, Array.from(byId.keys()))
   const now = Date.now()
   const mutations = loaded.flatMap((resource) => {
     if (!resource) return []
@@ -378,7 +399,13 @@ export async function undoAddedTags(
       },
     ]
   })
-  if (mutations.length) await storage.saveMany(mutations.map((mutation) => mutation.resource))
+  await writeMetadataPatches(
+    storage,
+    mutations.map(({ resource }) => ({
+      id: resource.id,
+      changes: { tags: resource.tags, updatedAt: now },
+    })),
+  )
   const removedEntries = mutations.map((mutation) => mutation.entry)
   return {
     resourceCount: removedEntries.length,
@@ -431,7 +458,7 @@ export async function deleteMany(
 /** 同内容副本的组织信息归并；成功写入保留项后沿用 Service 删除入口清理反向关联。 */
 export async function mergeDuplicates(
   storage: ResourceStorageAdapter,
-  deleteResource: (id: string) => Promise<void>,
+  deleteResources: (ids: string[]) => Promise<unknown>,
   keepId: string,
   removeIds: string[],
 ): Promise<number> {
@@ -476,7 +503,16 @@ export async function mergeDuplicates(
     updatedAt: Date.now(),
   })
   // Move incoming references before deleting copies; deleting alone would detach their owners.
-  for (const target of targets) await moveResourceGallery(storage, target.id, keeper.id)
+  const galleryByOwner = new Map<string, ResourceListSummary[]>()
+  for (const summary of summaries) {
+    if (!isResourceGalleryImage(summary)) continue
+    const owner = galleryOwnerId(summary)
+    const images = galleryByOwner.get(owner) ?? []
+    images.push(summary)
+    galleryByOwner.set(owner, images)
+  }
+  for (const target of targets)
+    await moveResourceGallery(storage, target.id, keeper.id, galleryByOwner.get(target.id) ?? [])
   const removedIds = new Set(targets.map((target) => target.id))
   for (const summary of summaries) {
     if (summary.id === keeper.id || removedIds.has(summary.id)) continue
@@ -503,9 +539,7 @@ export async function mergeDuplicates(
       updatedAt: Date.now(),
     })
   }
-  for (const target of targets) {
-    await deleteResource(target.id)
-  }
+  await deleteResources(targets.map((target) => target.id))
   return targets.length
 }
 

@@ -53,4 +53,25 @@ describe('assistant skills', () => {
     expect(tools.map((item) => item.name)).not.toContain('read_webpage')
     expect(tools.map((item) => item.name)).not.toContain('run_page_script')
   })
+  it('allows appearance skills to recall the current chat and selected or public references', () => {
+    const appearance = {
+      ...skill,
+      mode: 'appearance' as const,
+      capabilities: ['history', 'references', 'source'] as const,
+    }
+    expect(
+      normalizeAssistantTaskTemplate({ ...appearance, capabilities: [...appearance.capabilities] }),
+    ).toMatchObject(appearance)
+    const names = getAssistantRequestTools({
+      ...request,
+      mode: 'appearance',
+      taskSkill: { ...appearance, capabilities: [...appearance.capabilities] },
+      canUseNetwork: true,
+      canSearchWeb: true,
+    }).map(({ name }) => name)
+    expect(names).toEqual(
+      expect.arrayContaining(['read_conversation', 'read_webpage', 'update_css']),
+    )
+    expect(names).not.toContain('browser')
+  })
 })

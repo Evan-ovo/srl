@@ -280,22 +280,10 @@ export function quickManifest(
     version: '0.0.0-local',
     entry,
     description: '由本机 HTML 或静态网页快速导入。',
-    splashColor: '#237f87',
     orientation: 'auto',
     immersive: false,
     permissions: [],
   }
-}
-
-export function addGeneratedIcon(
-  files: Record<string, Uint8Array>,
-  manifest: ExternalAppManifest,
-): void {
-  if (manifest.icon && files[manifest.icon]) return
-  files['srl-app-icon.svg'] = TEXT_ENCODER.encode(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="24" fill="#237f87"/><path fill="#fff" d="M25 28h46v40H25z" opacity=".92"/><path fill="#237f87" d="M34 38h28v5H34zm0 11h20v5H34z"/></svg>',
-  )
-  manifest.icon = manifest.icon && files[manifest.icon] ? manifest.icon : 'srl-app-icon.svg'
 }
 
 export function validateFileMap(files: Record<string, Uint8Array>): void {
@@ -333,7 +321,6 @@ export async function filesFromInput(input: File | readonly File[]): Promise<Pac
         ? normalizeManifest(JSON.parse(readText(files['manifest.json'], 'manifest.json')))
         : quickManifest(files, file.name, fingerprint)
       requireDeclaredFiles(files, manifest)
-      if (!files['manifest.json']) addGeneratedIcon(files, manifest)
       return { files, manifest, fingerprint, sourceKind: 'zip' }
     }
   }
@@ -369,7 +356,6 @@ export async function filesFromInput(input: File | readonly File[]): Promise<Pac
           : (selected.find((file) => /\.html?$/i.test(file.name))?.name ?? selected[0].name),
         fingerprint,
       )
-  if (!files['manifest.json']) addGeneratedIcon(files, manifest)
   requireDeclaredFiles(files, manifest)
   return {
     files,

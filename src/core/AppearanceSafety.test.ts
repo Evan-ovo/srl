@@ -1,7 +1,11 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { appearanceTransaction, recoverInterruptedAppearance } from './AppearanceSafety'
+import {
+  appearanceTransaction,
+  createProtectedHost,
+  recoverInterruptedAppearance,
+} from './AppearanceSafety'
 import {
   beginStartupAttempt,
   installSafeModeBanner,
@@ -11,6 +15,19 @@ import {
 } from './SafeStartup'
 
 describe('AppearanceSafety', () => {
+  it('后创建的Vue恢复按钮不遮挡试用确认和立即恢复', () => {
+    appearanceTransaction.begin({
+      previousCss: '',
+      nextCss: '.trial{}',
+      apply: vi.fn(),
+      persist: vi.fn(),
+    })
+    const { host } = createProtectedHost('srl-custom-ui-rescue')
+    const guard = document.getElementById('srl-appearance-safe-layer')!
+    expect(host.compareDocumentPosition(guard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    appearanceTransaction.keep()
+    expect(host.isConnected).toBe(true)
+  })
   afterEach(() => {
     appearanceTransaction.rollback()
     vi.useRealTimers()

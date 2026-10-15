@@ -22,10 +22,13 @@ export async function moveResourceGallery(
   storage: ResourceStorageAdapter,
   from: string,
   to: string,
+  snapshot?: ResourceSummary[],
 ): Promise<void> {
-  const summaries = await (storage.listGalleryListSummaries?.(from) ??
-    storage.listResourceListSummaries?.() ??
-    storage.listSummaries())
+  const summaries =
+    snapshot ??
+    (await (storage.listGalleryListSummaries?.(from) ??
+      storage.listResourceListSummaries?.() ??
+      storage.listSummaries()))
   for (const summary of summaries) {
     if (galleryOwnerId(summary) !== from) continue
     const image = await storage.get(summary.id)

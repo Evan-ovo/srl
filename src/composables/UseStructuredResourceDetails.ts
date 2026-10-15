@@ -2,6 +2,7 @@ import { computed, nextTick, ref, shallowRef, useTemplateRef, watch } from 'vue'
 import { usePreviewPolicy } from '../composables/UsePreviewPolicy'
 import { RESOURCE_TYPE, type Resource, type ResourceSummary } from '../types/Resource'
 import { parseGreetingMetadata } from '../utils/GreetingMetadata'
+import { listPresetPromptEntries } from '../utils/PresetStitcher'
 import { summarizeRegexEffect, type RegexEffectSummary } from '../utils/RegexEffectPreview'
 import {
   buildRegexPreviewDocument,
@@ -351,14 +352,14 @@ export function useStructuredResourceDetails(props: Readonly<StructuredResourceD
   })
 
   const presetPrompts = computed(() => {
-    const prompts = rootRecord.value?.prompts
-    if (!Array.isArray(prompts)) return []
-    return prompts.filter(isRecord).map((prompt, index) => ({
+    const preset = rootRecord.value
+    if (!preset) return []
+    return listPresetPromptEntries(preset).map(({ prompt, enabled }, index) => ({
       id: readString(prompt.identifier ?? prompt.id) || String(index),
       name: readString(prompt.name) || `提示词 ${index + 1}`,
       role: readString(prompt.role) || '未指定角色',
       content: readString(prompt.content ?? prompt.prompt),
-      enabled: prompt.enabled !== false,
+      enabled,
     }))
   })
 

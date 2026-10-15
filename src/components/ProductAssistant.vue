@@ -1493,12 +1493,12 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         <button
           v-if="!settingsOpen"
           type="button"
-          class="feature-header-action"
+          class="feature-header-action feature-header-action--icon"
           aria-label="聊天设置"
           :disabled="busy || initializing"
           @click="settingsOpen = true"
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <circle cx="5" cy="12" r="1.5" />
             <circle cx="12" cy="12" r="1.5" />
             <circle cx="19" cy="12" r="1.5" />
@@ -1520,10 +1520,12 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
           ref="generalBrowserPreview"
           type="button"
           class="assistant-browser-task-preview"
-          aria-label="当前网页和操作进度，点此返回网页"
-          @click="assistantBrowserTaskService.returnToBrowser()"
+          aria-label="当前网页，可拖动缩放，双击返回网页协助"
+          @dblclick="assistantBrowserTaskService.returnToBrowser()"
+          @keydown.enter.prevent="assistantBrowserTaskService.returnToBrowser()"
+          @keydown.space.prevent="assistantBrowserTaskService.returnToBrowser()"
         >
-          当前网页 · 点此返回
+          当前网页 · 双击返回
         </button>
       </slot>
     </div>

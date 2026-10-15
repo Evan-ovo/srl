@@ -1,4 +1,5 @@
 import type { DiscordSetupStorage } from '../storage/IndexedDbDiscordSetupStorage'
+import { withAbort } from '../utils/Abortable'
 import { chooseAction, confirmAction } from '../composables/UseConfirmDialog'
 import {
   discordSetupParameterResources,
@@ -11,7 +12,17 @@ import {
 } from './DiscordSetupParameters'
 import { startAssistantGuidance } from '../core/ProductAssistantGuidance'
 import { taskCenter } from '../core/TaskCenter'
-import { DISCORD_BRIDGE_WRANGLER_TEMPLATE } from './DiscordBridgeDeployService'
+import { assistantBrowserTaskService } from './AssistantBrowserTaskService'
+import {
+  DISCORD_BRIDGE_WRANGLER_TEMPLATE,
+  DISCORD_BRIDGE_AGENT_DEPLOY_COMMAND,
+} from './DiscordBridgeDeployService'
+import { gitHubAssistantConnection, type GitHubAssistantPort } from './GitHubAssistantConnection'
+import {
+  gitHubWranglerSource,
+  githubConfigurationConflict,
+  githubWranglerMatches,
+} from './DiscordSetupGitHub'
 import { checkDiscordWorker, diagnoseDiscordConfiguration } from './DiscordSourceConnectionService'
 import {
   nativeDiscordSetupBrowser,
@@ -35,6 +46,8 @@ import {
   setupStep,
   isSetupAgentUrl,
   isSetupForkPage,
+  setupWranglerPage,
+  validSetupBranch,
   setupParameterStep,
   type DiscordSetupState,
   type DiscordSetupStep,
@@ -45,6 +58,17 @@ export class DiscordSetupService {
   private readonly storage: DiscordSetupStorage
   private readonly browser: DiscordSetupBrowser
   private readonly parameters: DiscordSetupParameterResources
+  private readonly github: GitHubAssistantPort
+  private githubApi = false
+  private githubFallbackRequested = false
+  private githubDraft?: {
+    startedAt: number
+    repository: string
+    branch: string
+    file: string
+    source: string
+    sha: string
+  }
   private state?: DiscordSetupState
   private initialized?: Promise<void>
   private pending: Promise<unknown> = Promise.resolve()
@@ -338,7 +362,7 @@ export class DiscordSetupService {
           confirmLabel: '确认权限并开启',
           cancelLabel: '暂不开启',
           message:
-            '本次 Discord Bridge 配置或更新由助手操作 Discord、GitHub、Cloudflare 和 workers.dev 公开站点；登录跳转可打开其他公开 HTTPS 网站，由你完成。\n\n会修改当前账号配置，并调用你选择的 AI 服务、消耗 Token；你可随时在桌宠或任务中心暂停。\n\n登录、密码、验证码及网站显示/重置密钥由你操作；助手可核对并完成 Cloudflare GitHub App 的仓库选择与安装授权，已有连接可复用。模型不读取或接收秘密值；Bot Token 可单独确认本机加密保存，再由软件盲转填到本次 Worker 和资源库设置。\n\n向下滑动查看完整权限：\n• 查看公开页面说明、表格、文本和控件；搜索、跳转、点击、选择、滚动，并按实际结果语义判断生产部署。\n• 自主填写普通非秘密表单；使用本机保存的 App ID、公钥、D1 UUID、Worker 网址回填字段。\n• 创建 App、D1、Worker；Fork 仓库、编辑自己的 Wrangler、提交、同步分支、保存、部署；回填交互地址、打开安装链接、注册命令并核验。\n\n公开文字与控件标签会发给所选 AI；部署参数由本机采集保存回填；普通网页名称、地址和公开标识可交模型定位，秘密值不发模型。已加密保存的 Bot Token 可本机转填；手填时等你明确继续后保存部署。网页操作中暂时锁定触摸，点桌宠查看详情不会打断，点暂停后可接手。删除不自动执行；配置冲突须居中确认，先保存并读回核对旧连接，再允许本次切换；拒绝即停止。\n\n授权仅用于本次任务及当前会话。',
+            '本次 Discord Bridge 配置或更新由助手按你的目标操作公开 HTTPS 网页，不限于 Discord、GitHub、Cloudflare 和 workers.dev；可自主查看、导航、点击和填写普通表单。登录与秘密值由你操作。\n\n会修改当前账号配置，并调用你选择的 AI 服务、消耗 Token；你可随时在桌宠或任务中心暂停。\n\n登录、密码、验证码及网站显示/重置密钥由你操作；助手可核对并完成 Cloudflare GitHub App 的仓库选择与安装授权，已有连接可复用。模型不读取或接收秘密值；Bot Token 可单独确认本机加密保存，再由软件盲转填到本次 Worker 和资源库设置。\n\n向下滑动查看完整权限：\n• 查看公开页面说明、表格、文本和控件；搜索、跳转、点击、选择、滚动，并按实际结果语义判断生产部署。\n• 自主填写普通非秘密表单；使用本机保存的 App ID、公钥、D1 UUID、Worker 网址回填字段。\n• 创建 App、D1、Worker；复用自己的 Fork 或确认拥有的源仓库，必要时 Fork，编辑本次目标的 Wrangler、提交、同步分支、保存、部署；回填交互地址、打开安装链接、注册命令并核验。\n\n公开文字与控件标签会发给所选 AI；部署参数由本机采集保存回填；普通网页名称、地址和公开标识可交模型定位，秘密值不发模型。已加密保存的 Bot Token 可本机转填；手填时等你明确继续后保存部署。网页操作中暂时锁定触摸，点桌宠查看详情不会打断，点暂停后可接手。删除不自动执行；配置冲突须居中确认，先保存并读回核对旧连接，再允许本次切换；拒绝即停止。\n\n授权仅用于本次任务及当前会话。',
         },
         controller.signal,
       )
@@ -361,7 +385,10 @@ export class DiscordSetupService {
       this.state.step === 'done'
     )
       return
-    if (setupStep(this.state.step).site !== 'local') {
+    if (
+      setupStep(this.state.step).site !== 'local' &&
+      !(this.githubApi && setupStep(this.state.step).site === 'github')
+    ) {
       const hadActivity = this.agentActions.size > 0
       const page = await this.browser.inspect({ metadataOnly: this.state.step === 'cf-secret' })
       if (
@@ -400,7 +427,11 @@ export class DiscordSetupService {
       !this.state
     )
       return
-    if (!failed && setupStep(this.state.step).site !== 'local') {
+    if (
+      !failed &&
+      setupStep(this.state.step).site !== 'local' &&
+      !(this.githubApi && setupStep(this.state.step).site === 'github')
+    ) {
       const page = await this.browser.inspect({ metadataOnly: true })
       if (
         runId !== this.agentOperationId ||
@@ -549,17 +580,21 @@ export class DiscordSetupService {
       if (this.saveLocalForm === save) this.saveLocalForm = undefined
     }
   }
-  private async stopAgent() {
+  private async stopAgent(cancelReply = true) {
     this.consentController?.abort()
     this.preparationController?.abort()
     this.transferController?.abort()
     const operationId = this.agentOperationId
     this.agentController?.abort()
     this.assistantRequested = undefined
+    this.githubFallbackRequested = false
     discordSetupSession.agentRunning = false
-    window.dispatchEvent(new Event('srl:discord-setup-stop'))
-    await this.browser.pauseAgent()
-    if (operationId) taskCenter.cancelled(operationId)
+    if (cancelReply) window.dispatchEvent(new Event('srl:discord-setup-stop'))
+    try {
+      await this.browser.pauseAgent()
+    } finally {
+      if (operationId) taskCenter.cancelled(operationId)
+    }
   }
   agentRunId() {
     return this.agentOperationId
@@ -622,7 +657,7 @@ export class DiscordSetupService {
     return prompt
   }
   async suspendForModelConsent() {
-    if (!discordSetupSession.browserVisible) return false
+    if (!discordSetupSession.browserVisible && !discordSetupSession.chatPresentation) return false
     return (await this.browser.suspend()).suspended
   }
   async restoreAfterModelConsent(resume: boolean) {
@@ -645,21 +680,45 @@ export class DiscordSetupService {
     await this.initialize()
     if (!this.state || this.state.step === 'done' || setupStep(this.state.step).site === 'local')
       throw new Error('当前步骤在资源库内处理，没有待返回的配置网页')
+    if (!showControls && this.browser.chatPresentation && this.state.assistantConversationId) {
+      try {
+        await this.browser.chatPresentation({
+          mode: 'browser',
+          conversationId: this.state.assistantConversationId,
+        })
+        return
+      } catch {
+        // A previous APK can still restore its retained WebView through open().
+      }
+    }
     return this.open(false, true, showControls)
   }
   constructor(
     storage: DiscordSetupStorage,
     browser: DiscordSetupBrowser = nativeDiscordSetupBrowser,
     parameters: DiscordSetupParameterResources = discordSetupParameterResources,
+    github: GitHubAssistantPort = gitHubAssistantConnection,
   ) {
     this.storage = storage
     this.browser = browser
     this.parameters = parameters
+    this.github = github
   }
   private initialize() {
     this.initialized ??= (async () => {
       this.state = await this.storage.read()
       await this.browser.addListener('setupAction', (event) => {
+        if (
+          discordSetupSession.purpose === 'general' ||
+          (event.conversationId !== undefined &&
+            event.conversationId !== (this.state?.assistantConversationId ?? ''))
+        )
+          return
+        // Presentation follows the native window immediately, even while a web operation waits.
+        if (event.action === 'visibility') {
+          discordSetupSession.browserVisible = event.visible === true
+          return
+        }
         if (event.action === 'quick-chat') {
           void this.userAction(event).catch(() => {})
           return
@@ -673,8 +732,11 @@ export class DiscordSetupService {
           )
           return
         }
-        if (event.action === 'return' && discordSetupSession.agentRunning)
-          void this.stopAgent().catch(() => {})
+        if (event.action === 'return') {
+          // Exit, like pause, must not wait behind its own pending confirmation.
+          void this.userAction(event).catch(() => {})
+          return
+        }
         let interrupted: Promise<void> | undefined
         if (event.action === 'assist' && discordSetupSession.agentRunning) {
           try {
@@ -709,6 +771,9 @@ export class DiscordSetupService {
     await this.storage.save(state)
     this.state = state
     if (changedStep) this.markAction(`step:${state.step}`)
+    if (discordSetupSession.purpose === 'general' && discordSetupSession.active) return
+    discordSetupSession.purpose = 'discord-setup'
+    discordSetupSession.completed = state.step === 'done'
     discordSetupSession.active = state.step !== 'done'
     discordSetupSession.assistantConversationId =
       state.mode === 'agent' ? (state.assistantConversationId ?? '') : ''
@@ -779,16 +844,21 @@ export class DiscordSetupService {
             : 'create-on-collection',
           botSecretSaved: this.state.botTokenReady === 'encrypted',
           step: this.state.step,
+          workSurface: setupStep(this.state.step).site === 'local' ? 'local' : 'browser',
+          browserRequired: setupStep(this.state.step).site !== 'local',
           title: setupStep(this.state.step).title,
           hint: this.stepHint(),
           forkKnown: Boolean(this.state.forkRepo),
           forkRepo: this.state.forkRepo,
+          repositoryKind: this.state.forkRepo ? (this.state.repositoryKind ?? 'fork') : 'unknown',
+          githubBranch: this.state.githubBranch,
+          githubFile: this.state.githubFile,
           workerKnown: Boolean(this.state.workerUrl),
           ...(this.state.step === 'cf-deploy'
             ? {
                 deploymentGoal: {
                   repository: this.state.forkRepo,
-                  branch: 'main',
+                  branch: this.state.githubBranch ?? 'main',
                   revision: this.state.githubRevision,
                   workerName: this.state.task.startsWith('update-')
                     ? this.state.workerUrl &&
@@ -800,7 +870,7 @@ export class DiscordSetupService {
                   automaticBuildTrigger: 'new-branch-commit',
                   requireNewDeploymentRecord: false,
                   completionEvidence: 'current-worker-production-success',
-                  deployCommand: 'npm run deploy',
+                  deployCommand: DISCORD_BRIDGE_AGENT_DEPLOY_COMMAND,
                 },
               }
             : {}),
@@ -808,6 +878,13 @@ export class DiscordSetupService {
       : { hint: '尚未开始；更新前先问用户卡在哪一步。' }
   }
   private stepHint() {
+    if (
+      this.state?.repositoryKind === 'owned-source' &&
+      setupStep(this.state.step).site === 'github'
+    )
+      return '已确认当前账号拥有本次源仓库，无需也不能 Fork 自己或 merge-upstream。更新只核验实际部署分支与当前提交，再检查原 Worker；首次配置仍核验/准备本次 Wrangler 再部署。已有正确配置直接复用，不为过教程制造修改。'
+    if (this.githubApi && this.state && setupStep(this.state.step).site === 'github')
+      return `GitHub已授权API连接，不再要求协助网页登录或查找按钮。仅按当前步骤操作本次仓库，已有正确结果复用，advance-step核验后继续。当前目标：${setupStep(this.state.step).hint}`
     if (this.state?.mode === 'agent') {
       if (this.state.step === 'worker-url')
         return '助手在本次 Worker 详情定位 HTTPS 根网址，保存到本次任务和部署密钥卡，再继续填写 Discord 交互地址。不带 /interactions，不猜网址；本机连接设置留到 local-settings 一并回填，不提前替换旧配对目标。'
@@ -815,10 +892,8 @@ export class DiscordSetupService {
         return '助手在同一个 App 定位交互地址，填写已保存的 Worker 根网址 + /interactions，保存并核验结果，再自动继续；资源库保留根网址。'
       if (this.state.step === 'discord-install')
         return '助手打开同一个 App 的安装链接；你选择安装目标并授权。完成后在桌宠对话小窗点网页配置操作，再选择填好了，继续。'
-      if (this.state.step === 'cf-secret')
-        return '助手打开本次 Worker 的 Settings，添加 DISCORD_BOT_TOKEN 并选 Secret。已加密保存的 Token 由本机转填；否则停下来等你填值。保存部署后核验真实生产结果，模型不会收到密钥。'
-      if (this.state.step === 'wrangler-edit')
-        return '助手在自己的 Fork 打开完整 Wrangler 编辑器，使用本机保存的 App/Public Key/D1 参数填写整份模板，校验后提交；Bot Token 不写仓库。'
+      if (this.state.step === 'wrangler-edit' || this.state.step === 'wrangler-check')
+        return '先核验目标仓库/部署分支已保存的完整 JSON/JSONC。三个参数正确且配置有效就复用，不必进入编辑器或制造提交；不正确才沿本机参数更新并校验，保留合法自定义配置，有冲突先确认。Bot Token 不写仓库。'
       if (this.state.step === 'discord-app')
         return '助手先看实际应用列表，有目标 App 就复用；尚未创建时自己找到入口、自选合法名称并创建（例如 SRL Bridge；名称不含 discord），按网站实际校验错误调整，再进入 General Information。本机读取并校验 Application ID 与 Public Key，存入部署密钥卡后自动继续。有多个无法确定的 App 时问你选择；下一步会打开 Bot 页面让你显示并加密保存 Token，或确认自行保存。'
       if (this.state.step === 'discord-token')
@@ -828,15 +903,22 @@ export class DiscordSetupService {
       if (this.state.step === 'local-settings')
         return 'App、公钥、Worker 和已加密保存的 Token 在本机回填到原连接设置；未保存 Token 时等你手填。助手沿原设置保存、注册并核验，模型不读取凭据。'
       if (this.state.step === 'd1-create')
-        return '助手定位 D1 入口，使用或创建 srl-discord-source-handoff，按库名从列表或详情地址采集 UUID 后继续，无需切换助手模式；账号登录由你完成。'
+        return '助手定位 D1 入口并核对本次库，已有匹配库复用，没有才创建，保留合法自定义名称；按库名从列表或详情地址采集 UUID 后继续，无需切换助手模式；账号登录由你完成。'
       if (this.state.step === 'github-fork')
-        return '助手 Fork 指定上游仓库，确认自己账号下的 Fork 来源后继续；登录授权由你完成。'
+        return '确认实际部署仓库。已有 Fork 就复用；当前登录者拥有源仓库则直接使用源仓库，不找或新建自己的 Fork。多候选先问目标，登录授权由你完成。'
       if (this.state.step === 'cf-deploy' && this.state.task.startsWith('update-'))
         return '更新已配置的同一个 Worker。GitHub 分支没有新提交时不会触发自动构建，已最新或复用仓库不意味着会出现新部署记录。先 inspect 原 Worker 的当前生产部署；已有成功/生效结果即可 advance-step，再做本次连接与命令检查，不等待新记录、反复 Sync 或制造空提交。有新提交则查看实际构建/部署状态；明确在构建或排队才 wait-status，未触发或失败时检查原 Worker 的构建设置、分支和错误，按实际入口手动构建/重试，不能等待一个尚未启动的任务。没有成功生产部署不能跳过，不能新建或部署示例。保留已有 Secret、D1 和交互地址；只有更换 Worker 时先确认备份，再走完整的 Secret、端点与连接切换路线。'
       if (this.state.step === 'cf-deploy')
-        return '目标是部署本次 Bridge Worker。先观察当前页和已有填写，按实际控件选择自己的 Git 仓库；构建命令与部署命令是不同字段，npm run deploy 填部署命令。已部署成功就按本次路线继续，首次配置下一步是 Secret；不要求仓库名称、分支和提交号在页面上一一匹配，不为凑证据反复打开 Settings、重新关联或重新构建。只有构建成功、网址变化或进入预览页不算生产部署成功；不要误部署 Hello World 示例。生产参数、D1 和连接健康留到后续核验，首次配置先保存部署 Secret。账号登录与网站验证由你完成；Cloudflare GitHub App 的仓库选择与安装授权由助手处理。'
+        return '目标是部署本次 Bridge Worker。先观察当前页和已有填写，按实际控件选择自己的 Git 仓库；构建命令与部署命令分开，按实际项目脚本处理；迁移可用 npx wrangler d1 migrations apply DB --remote && npx wrangler deploy，按 DB 绑定而非教程库名。已部署成功就按本次路线继续，首次配置下一步是 Secret；不要求仓库名称、分支和提交号在页面上一一匹配，不为凑证据反复打开 Settings、重新关联或重新构建。只有构建成功、网址变化或进入预览页不算生产部署成功；不要误部署 Hello World 示例。生产参数、D1 和连接健康留到后续核验，首次配置先保存部署 Secret。账号登录与网站验证由你完成；Cloudflare GitHub App 的仓库选择与安装授权由助手处理。'
     }
     return this.state ? setupStep(this.state.step).hint : ''
+  }
+  private githubWebFirstGuidance() {
+    return this.state?.mode === 'agent' &&
+      setupStep(this.state.step).site === 'github' &&
+      !this.githubApi
+      ? ' GitHub 当前优先使用这个代理网页：先观察实际页面，让用户可在这里直接登录并继续；不要自动调用 github-connect 或跳系统浏览器。只有用户明确说网页登录卡住，或主动点“GitHub连接”，才使用独立的系统浏览器 API 授权。'
+      : ''
   }
   start(task: DiscordSetupTask, from?: DiscordSetupStep, mode: 'economy' | 'agent' = 'economy') {
     return this.serial(() => this.startTask(task, from, false, mode))
@@ -845,7 +927,7 @@ export class DiscordSetupService {
     return this.serial(async () => {
       await this.initialize()
       if (!(await this.startAgent())) return { ...this.summary(), cancelled: true }
-      return this.open()
+      return this.open(false, true, false, true)
     })
   }
   restart(task: DiscordSetupTask, mode: 'economy' | 'agent' = 'economy') {
@@ -859,6 +941,7 @@ export class DiscordSetupService {
     signal?: AbortSignal,
   ) {
     await this.initialize()
+    this.githubFallbackRequested = false
     if (this.state && this.state.step !== 'done' && !restart)
       throw new Error('已有未完成任务，请在居中弹窗选择继续上次配置或重新开始')
     if (
@@ -923,8 +1006,13 @@ export class DiscordSetupService {
       }
     }
     signal?.throwIfAborted()
+    if (discordSetupSession.purpose === 'general' && discordSetupSession.active)
+      await assistantBrowserTaskService.close(true, false)
+    discordSetupSession.purpose = 'discord-setup'
     this.collectionReceipt = undefined
     this.diagnosisReceipt = undefined
+    this.githubApi = false
+    this.githubDraft = undefined
     await this.save({
       task,
       mode,
@@ -945,7 +1033,14 @@ export class DiscordSetupService {
       ...((task === 'configure' && this.state?.task === 'configure') ||
       (task !== 'configure' && this.state?.applicationId === saved.applicationId)
         ? {
-            ...(task !== 'configure' ? { forkRepo: this.state.forkRepo } : {}),
+            ...(task !== 'configure' && this.state.workerUrl === saved.workerBaseUrl
+              ? {
+                  forkRepo: this.state.forkRepo,
+                  repositoryKind: this.state.repositoryKind,
+                  githubBranch: this.state.githubBranch,
+                  githubFile: this.state.githubFile,
+                }
+              : {}),
           }
         : {}),
     })
@@ -954,9 +1049,12 @@ export class DiscordSetupService {
     await this.open(!['configure', 'diagnose'].includes(task) && !from, false)
     return { ...this.summary(), needsUserStep: !['configure', 'diagnose'].includes(task) && !from }
   }
-  async open(chooseStep = false, resumeCurrent = true, showControls = false) {
+  async open(chooseStep = false, resumeCurrent = true, showControls = false, foreground = false) {
     await this.initialize()
     if (!this.state) throw new Error('请先开始配置或更新任务')
+    if (discordSetupSession.purpose === 'general' && discordSetupSession.active)
+      await assistantBrowserTaskService.close(true, false)
+    discordSetupSession.purpose = 'discord-setup'
     const step = setupStep(this.state.step)
     discordSetupSession.active = this.state.step !== 'done'
     discordSetupSession.assistantConversationId =
@@ -964,6 +1062,8 @@ export class DiscordSetupService {
     discordSetupSession.webStepActive = step.site !== 'local'
     if (step.site === 'local') {
       await this.browser.close()
+      discordSetupSession.browserVisible = false
+      discordSetupSession.chatPresentation = ''
       let nextSettings: ReturnType<typeof loadDiscordSourceConnectionSettings> | undefined
       let previousDatabaseId: string | undefined
       let databaseChanged = false
@@ -1045,18 +1145,26 @@ export class DiscordSetupService {
         this.state.appliedDatabaseId = databaseIdToApply
         await this.save(this.state)
       }
-      startAssistantGuidance('inbox-connection', 'inbox')
+      const diagnosisChat =
+        foreground &&
+        this.state.step === 'diagnose' &&
+        this.state.mode === 'agent' &&
+        Boolean(this.state.assistantConversationId)
+      if (!diagnosisChat) startAssistantGuidance('inbox-connection', 'inbox')
       if (this.state.step === 'local-settings' && this.state.workerUrl)
         window.dispatchEvent(
           new CustomEvent('srl:discord-setup-worker', {
             detail: { workerUrl: this.state.workerUrl },
           }),
         )
-      window.dispatchEvent(new CustomEvent('srl:native-deep-link', { detail: { kind: 'inbox' } }))
-      window.dispatchEvent(new Event('srl:discord-setup-settings'))
+      if (diagnosisChat) window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+      else {
+        window.dispatchEvent(new CustomEvent('srl:native-deep-link', { detail: { kind: 'inbox' } }))
+        window.dispatchEvent(new Event('srl:discord-setup-settings'))
+      }
       if (this.state.step === 'diagnose' && discordSetupSession.agentRunning)
         this.requestAssistant(
-          '先 status 核对本次独立排查任务，然后调用 diagnose（from=diagnose）。只报告工具的真实检查结果；按问题调用 repair 选择配置/更新路线及修复起点，保持本次对话，秘密、登录验证和 Discord 安装授权交用户；Cloudflare GitHub App 的仓库安装授权由代理核对并完成。',
+          '当前是本机排查，尚不需要协助网页；先 status 核对当前连接，再调用 diagnose（from=diagnose）。不要把本机步骤说成协助网页打不开，也不沿历史继续旧部署。只报告工具真实结果；确需网页修复时调用 repair 选择实际路线和起点，软件会打开对应网页，保持本次对话。秘密、登录验证和 Discord 安装授权交用户；Cloudflare GitHub App 的仓库安装授权由代理核对并完成。',
         )
       if (
         this.state.step === 'local-settings' &&
@@ -1073,6 +1181,11 @@ export class DiscordSetupService {
         )
       return this.summary()
     }
+    // Keep the in-WebView route as the default even when this account already
+    // has a GitHub API credential. API mode is selected only by an explicit
+    // fallback action. Its task-scoped access remains available for later repairs;
+    // only the GitHub phase shows the API panel instead of a webpage.
+    if (this.state.mode !== 'agent') this.githubApi = false
     await this.browser.open({
       url: discordSetupUrl(this.state),
       site: step.site,
@@ -1087,6 +1200,8 @@ export class DiscordSetupService {
       mode: this.state.mode ?? 'agent',
       conversationId: this.state.mode === 'agent' ? this.state.assistantConversationId : undefined,
       expectedApplicationId: this.state.applicationId,
+      githubApi: this.githubApi && step.site === 'github',
+      githubRepository: this.state.forkRepo,
       agentRunId:
         this.agentController && !this.agentController.signal.aborted
           ? this.agentOperationId
@@ -1094,6 +1209,7 @@ export class DiscordSetupService {
       ...(chooseStep ? { chooseStep: true } : {}),
       ...(showControls ? { showControls: true } : {}),
       ...(resumeCurrent ? { resumeCurrent: true } : {}),
+      ...(foreground ? { foreground: true } : {}),
     })
     return this.summary()
   }
@@ -1123,7 +1239,7 @@ export class DiscordSetupService {
       !isSetupAgentUrl(url) ||
       (this.state.mode !== 'agent' && (site === 'local' || url.hostname !== expectedHost))
     )
-      throw new Error('当前网页不属于已授权的 Discord、GitHub、Cloudflare 或 workers.dev 配置页面')
+      throw new Error('当前网页不是可操作的公开 HTTPS 页面；手动步骤请返回对应配置站点')
     const next = { ...this.state }
     const app =
       url.hostname === 'discord.com' &&
@@ -1138,22 +1254,431 @@ export class DiscordSetupService {
       url.pathname.match(/^\/([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)(?:\/|$)/u)
     if (
       fork &&
-      page.forkOfTarget === true &&
-      fork[1] !== 'jixiangruyi117/SRL-Discord-Bridge' &&
+      (page.forkOfTarget === true ||
+        (page.repository?.kind === 'owned-source' && page.repository.name === fork[1])) &&
       (!next.forkRepo || next.forkRepo === fork[1])
-    )
+    ) {
       next.forkRepo = fork[1]
+      next.repositoryKind = page.repository?.kind ?? 'fork'
+      if (page.repository?.branch && validSetupBranch(page.repository.branch))
+        next.githubBranch = page.repository.branch
+      if (page.repository?.file) next.githubFile = page.repository.file
+    }
     if (JSON.stringify(next) !== JSON.stringify(this.state)) await this.save(next)
   }
   private requireFork(page: DiscordBrowserSnapshot) {
-    const url = new URL(page.url)
     if (
-      !this.state?.forkRepo ||
-      url.hostname !== 'github.com' ||
-      !url.pathname.startsWith(`/${this.state.forkRepo}/`) ||
-      !/\/(?:edit|blob)\/main\/wrangler\.jsonc$/u.test(url.pathname)
+      !this.state ||
+      !setupWranglerPage(new URL(page.url), this.state) ||
+      ((this.state.repositoryKind === 'owned-source' ||
+        this.state.forkRepo === 'jixiangruyi117/SRL-Discord-Bridge') &&
+        !this.repositoryPage(page))
     )
-      throw new Error('请先进入自己 Fork 的 main/wrangler.jsonc 编辑页面；不能修改上游仓库')
+      throw new Error('请进入已确认目标仓库/分支的 Wrangler 文件；未确认所有权时不能修改上游仓库')
+  }
+  private repositoryPage(page: DiscordBrowserSnapshot) {
+    if (this.state?.forkRepo === 'jixiangruyi117/SRL-Discord-Bridge')
+      return (
+        isSetupForkPage(new URL(page.url), this.state.forkRepo) &&
+        page.repository?.kind === 'owned-source' &&
+        page.repository.name === this.state.forkRepo
+      )
+    return (
+      isSetupForkPage(new URL(page.url), this.state?.forkRepo) &&
+      (page.forkOfTarget === true ||
+        (this.state?.repositoryKind === 'owned-source' &&
+          page.repository?.kind === 'owned-source' &&
+          page.repository.name === this.state.forkRepo))
+    )
+  }
+  private async githubTemplate(signal: AbortSignal, existing?: string) {
+    const state = this.state!
+    if (!state.parameterResourceId) throw new Error('请先保存本次 App、公钥与 D1 参数')
+    await this.prepareParameters(signal)
+    const values = await this.parameters.read(state.parameterResourceId)
+    signal.throwIfAborted()
+    return gitHubWranglerSource(values, state.applicationId, existing)
+  }
+  private async executeGitHub(
+    operation: string,
+    modelSignal: AbortSignal,
+    args: Record<string, string> = {},
+  ) {
+    const state = this.state!
+    if (
+      state.mode !== 'agent' ||
+      state.step === 'done' ||
+      !discordSetupSession.agentRunning ||
+      !this.agentController ||
+      this.agentController.signal.aborted
+    )
+      throw new Error('请在本次活动 GitHub 配置步骤连接或操作；已暂停任务不自动恢复')
+    const signal = AbortSignal.any([modelSignal, this.agentController.signal])
+    if (operation === 'github-connect') {
+      if (!this.githubFallbackRequested)
+        throw new Error(
+          'GitHub 外部授权是备用入口；请先在当前网页尝试登录，卡住时由用户点击“GitHub连接”后再打开。',
+        )
+      const suspended = await this.suspendForModelConsent()
+      let result: { connected: boolean; login: string }
+      try {
+        await this.showAssistantProgress('等待你在系统浏览器登录并授权 GitHub')
+        result = await this.github.authorize(signal)
+        signal.throwIfAborted()
+        if (this.state?.startedAt !== state.startedAt) throw new Error('任务已变化，未继续原任务')
+        if (!result.connected) throw new Error('GitHub 尚未完成授权')
+        this.githubDraft = undefined
+      } finally {
+        this.githubFallbackRequested = false
+        if (suspended) await this.browser.restore({ resume: false })
+      }
+      signal.throwIfAborted()
+      // The user explicitly chose the API fallback, so continue in its panel.
+      this.githubApi = true
+      await this.open(false, true)
+      this.markAction(`github-connected:${result.login}`)
+      return {
+        ok: true,
+        ...this.summary(),
+        githubConnected: true,
+        login: result.login,
+        hint: 'GitHub 授权已确认。用 github-inspect 查找本次 Fork，再执行实际工作；不再要求 WebView 登录。',
+      }
+    }
+    if (!this.githubApi)
+      return {
+        ok: false,
+        githubConnected: false,
+        fallbackAvailable: true,
+        waitingForUser: false,
+        hint: '当前仍在 GitHub 网页协助。API 路线尚未由用户选择，请继续读取和操作当前网页；用户点“GitHub连接”后再使用 GitHub API。',
+      }
+    if (!(await this.github.status()).connected)
+      return {
+        ok: false,
+        githubConnected: false,
+        fallbackAvailable: true,
+        waitingForUser: false,
+        hint: 'GitHub API 尚未连接；当前网页登录路线仍可继续，请先根据当前网页观察和操作。不要自动启动 github-connect。只有用户明确表示网页登录卡住，或主动点击“GitHub连接”，才使用系统浏览器授权 API。',
+      }
+    this.githubApi = true
+    const allowed: Record<string, string[]> = {
+      'github-inspect': [
+        'github-fork',
+        'github-sync',
+        'wrangler-edit',
+        'wrangler-check',
+        'github-save',
+      ],
+      'github-fork': ['github-fork'],
+      'github-sync': ['github-sync'],
+      'github-fill': ['wrangler-edit', 'wrangler-check', 'github-save'],
+      'github-save': ['github-save'],
+    }
+    const boundRepair =
+      state.task !== 'diagnose' &&
+      setupStep(state.step).site !== 'local' &&
+      !!state.forkRepo &&
+      ['github-fill', 'github-save', 'github-sync'].includes(operation)
+    if (operation !== 'github-inspect' && !allowed[operation]?.includes(state.step) && !boundRepair)
+      throw new Error('当前 GitHub 步骤不执行该写操作，请核对 status 和实际目标')
+    if (
+      operation !== 'github-inspect' &&
+      ((args.repository && args.repository !== state.forkRepo) ||
+        (args.branch && args.branch !== state.githubBranch) ||
+        (args.file && args.file !== state.githubFile))
+    )
+      throw new Error(
+        '目标已变化，请先 github-inspect 确认仓库、分支和配置文件；不把旧草稿提交到新目标',
+      )
+    await this.showAssistantProgress(
+      operation === 'github-inspect'
+        ? '正在核对实际 GitHub 仓库、分支和配置'
+        : '正在通过原 GitHub 连接处理本次目标仓库',
+    )
+    let content: string | undefined, sha: string | undefined
+    if (operation === 'github-save') {
+      content = await this.githubTemplate(signal, this.githubDraft?.source)
+      const draft = this.githubDraft
+      if (
+        !draft ||
+        draft.startedAt !== state.startedAt ||
+        draft.repository !== state.forkRepo ||
+        draft.branch !== (state.githubBranch ?? 'main') ||
+        draft.file !== (state.githubFile ?? 'wrangler.jsonc') ||
+        draft.source !== content
+      )
+        throw new Error('请先 github-fill 检查当前文件并准备本次配置，再提交；不会用旧草稿覆盖')
+      sha = draft.sha
+    }
+    const result = await this.github.execute(
+      operation === 'github-fork'
+        ? 'fork'
+        : operation === 'github-sync'
+          ? 'sync'
+          : operation === 'github-save'
+            ? 'save'
+            : 'inspect',
+      {
+        repository: args.repository || state.forkRepo,
+        branch: args.branch || state.githubBranch,
+        file: args.file || state.githubFile,
+        content,
+        sha,
+      },
+      signal,
+    )
+    signal.throwIfAborted()
+    if (this.state?.startedAt !== state.startedAt || this.state.step !== state.step)
+      throw new Error('任务已变化，未应用旧 GitHub 回执')
+    if (!result.repository)
+      return {
+        ok: true,
+        ...this.summary(),
+        githubConnected: true,
+        forkFound: false,
+        hint: '已确认当前账号没有目标仓库；先核对实际 Worker 来源，不反复搜索。仅首次配置确需新仓库时创建 Fork。',
+      }
+    if (
+      !result.revision ||
+      ((operation === 'github-fill' ||
+        operation === 'github-save' ||
+        state.step.startsWith('wrangler-') ||
+        state.step === 'github-save') &&
+        (!result.sha || !result.source))
+    )
+      throw new Error(
+        '目标分支未提供完整 JSON/JSONC 配置，未填写或提交；核对实际文件格式，不重复 Fork',
+      )
+    await this.save({
+      ...this.state,
+      forkRepo: result.repository,
+      repositoryKind: result.repositoryKind ?? 'fork',
+      ...(result.branch ? { githubBranch: result.branch } : {}),
+      ...(result.file ? { githubFile: result.file } : {}),
+      ...(operation === 'github-save' || operation === 'github-sync'
+        ? { githubRevision: result.revision }
+        : {}),
+    })
+    if (operation === 'github-fill') {
+      let source: string
+      let replaceConfiguration = false
+      try {
+        source = await this.githubTemplate(signal, result.source)
+      } catch {
+        // A damaged old file is not a reason to create another repository. Replacement still needs consent.
+        source = await this.githubTemplate(signal)
+        replaceConfiguration = true
+      }
+      this.githubDraft = undefined
+      let conflict = true
+      try {
+        conflict = replaceConfiguration || githubConfigurationConflict(result.source!, source)
+      } catch {
+        /* An unreadable old file requires the same explicit replacement decision. */
+      }
+      if (conflict) {
+        const suspended = await this.suspendForModelConsent()
+        try {
+          if (
+            !(await confirmAction(
+              {
+                title: '发现已有 Wrangler 配置',
+                centered: true,
+                message:
+                  '自己的 Fork 已有不同 App、公钥或 D1 配置，或旧文件无法解析。是否将此文件替换成本次教程模板？旧文件保留在 GitHub 提交历史，可随时查看和恢复；本机连接仍走原冲突备份流程。取消不会提交或推进步骤。',
+                confirmLabel: '准备本次配置',
+                cancelLabel: '保留原文件',
+              },
+              signal,
+            ))
+          ) {
+            await this.stopAgent()
+            return { ok: false, cancelled: true, ...this.summary() }
+          }
+        } finally {
+          if (suspended) await this.browser.restore({ resume: false })
+        }
+      }
+      signal.throwIfAborted()
+      this.githubDraft = {
+        startedAt: state.startedAt,
+        repository: result.repository,
+        branch: result.branch ?? this.state?.githubBranch ?? 'main',
+        file: result.file ?? this.state?.githubFile ?? 'wrangler.jsonc',
+        source,
+        sha: result.sha!,
+      }
+    }
+    this.markAction(`github:${operation}:${result.repository}:${result.sha}`)
+    return {
+      ok: true,
+      ...this.summary(),
+      githubConnected: true,
+      forkFound: true,
+      repository: result.repository,
+      repositoryKind: result.repositoryKind ?? 'fork',
+      branch: result.branch ?? this.state?.githubBranch ?? 'main',
+      file: result.file ?? this.state?.githubFile ?? 'wrangler.jsonc',
+      sha: result.sha,
+      revision: result.revision,
+      behindBy: result.behindBy,
+      configurationAvailable: Boolean(result.sha && result.source),
+      prepared: operation === 'github-fill',
+      saved: result.saved === true,
+      hint: '这是实际 GitHub 回执。owned-source 是当前账号的源仓库，不能也无需 Fork/merge-upstream；直接核验当前分支后检查实际 Worker。fork 才需要同步。已有正确配置复用，无差异不制造提交；from 仍绑定当前步骤。',
+    }
+  }
+  private async verifyGitHubStep(signal: AbortSignal) {
+    const state = this.state!
+    const result = await this.github.execute(
+      'read',
+      {
+        repository: state.forkRepo,
+        branch: state.githubBranch,
+        file: state.githubFile,
+      },
+      signal,
+    )
+    signal.throwIfAborted()
+    if (
+      !result.repository ||
+      result.repository !== state.forkRepo ||
+      !result.revision ||
+      ((state.step.startsWith('wrangler-') || state.step === 'github-save') &&
+        (!result.sha || !result.source))
+    )
+      throw new Error('本次仓库、分支与文件尚未确认，未推进')
+    if (state.step === 'github-sync' && result.behindBy !== 0)
+      throw new Error('Fork 尚落后于上游，请同步实际分支；冲突不强制覆盖')
+    if (state.step.startsWith('wrangler-')) {
+      const source = await this.githubTemplate(signal, result.source)
+      const draft = this.githubDraft
+      if (
+        !(
+          draft?.startedAt === state.startedAt &&
+          draft.repository === result.repository &&
+          draft.branch === (state.githubBranch ?? 'main') &&
+          draft.file === (state.githubFile ?? 'wrangler.jsonc') &&
+          draft.sha === result.sha &&
+          draft.source === source
+        ) &&
+        !githubWranglerMatches(result.source!, source)
+      )
+        throw new Error('当前文件或草稿尚未包含本次参数，请 github-fill 重新准备，不宣称已写入远端')
+    }
+    if (
+      state.step === 'github-save' &&
+      !githubWranglerMatches(result.source!, await this.githubTemplate(signal, result.source))
+    )
+      throw new Error('远端 Wrangler 与本次配置不一致，请先核对并提交')
+    signal.throwIfAborted()
+    await this.save({ ...this.state!, githubRevision: result.revision })
+  }
+  private async restoreSavedConnection(resourceId: string | undefined, signal: AbortSignal) {
+    if (!this.parameters.readSavedConnection || !this.parameters.backupConnection)
+      throw new Error('当前版本不支持恢复旧连接')
+    if (!resourceId) throw new Error('请先列出密钥卡并确认用户指定的 resource_id')
+    const controller = new AbortController()
+    const cancel = () => controller.abort()
+    this.consentController = controller
+    signal.addEventListener('abort', cancel, { once: true })
+    if (signal.aborted) controller.abort()
+    const previousRun = this.agentController
+    const startedAt = this.state?.startedAt
+    let suspended = false
+    let restored = false
+    try {
+      const cardName = (await this.parameters.savedConnectionName?.(resourceId)) ?? resourceId
+      controller.signal.throwIfAborted()
+      suspended = await this.suspendForModelConsent()
+      if (
+        !(await confirmAction(
+          {
+            title: '恢复选中的收件箱配置',
+            centered: true,
+            message: `所选密钥卡：${cardName}\n在本机读取并恢复连接资料。切换前加密备份当前连接；本机没有保存的旧密钥无法从网站取回。`,
+            confirmLabel: '恢复这份配置',
+          },
+          controller.signal,
+        ))
+      )
+        return { ok: false, cancelled: true }
+      controller.signal.throwIfAborted()
+      const value = await this.parameters.readSavedConnection(resourceId, controller.signal)
+      controller.signal.throwIfAborted()
+      if (this.state?.startedAt !== startedAt) throw new Error('任务已变化，未恢复旧请求的配置')
+      let backupResourceId: string | undefined
+      const result = await replaceDiscordSourceConnectionSettings(
+        value,
+        async (previous) => {
+          backupResourceId = await this.parameters.backupConnection!(
+            previous,
+            undefined,
+            controller.signal,
+          )
+          return true
+        },
+        controller.signal,
+        undefined,
+        false,
+        true,
+      )
+      controller.signal.throwIfAborted()
+      if (!result) return { ok: false, cancelled: true }
+      this.githubApi = false
+      this.githubDraft = undefined
+      if (this.state) {
+        await this.save({
+          ...this.state,
+          startedAt: Date.now(),
+          task: 'diagnose',
+          step: 'diagnose',
+          applicationId: result.applicationId,
+          workerUrl: result.workerBaseUrl,
+          parameterResourceId: resourceId,
+          botTokenReady: 'encrypted',
+          appliedDatabaseId: undefined,
+          forkRepo: undefined,
+          repositoryKind: undefined,
+          githubBranch: undefined,
+          githubFile: undefined,
+          githubRevision: undefined,
+        })
+        this.diagnosisReceipt = undefined
+      }
+      restored = true
+      // End the old deployment run, while allowing this completed tool receipt and reply to arrive.
+      if (this.consentController === controller) this.consentController = undefined
+      if (discordSetupSession.purpose !== 'general') {
+        await this.stopAgent(false)
+        await this.browser.close()
+        discordSetupSession.chatPresentation = ''
+      }
+      window.dispatchEvent(new Event('srl:discord-setup-credentials'))
+      return {
+        ok: true,
+        restored: true,
+        workSurface: 'local',
+        browserRequired: false,
+        nextAction: 'diagnose',
+        resourceId,
+        backupResourceId,
+        pairingRestored: Boolean(result.inboxLibraryId),
+        setupTaskStopped: true,
+        hint: '已备份原连接并回填所选配置，旧网页部署任务已结束。恢复不等于已核验在线；后续应核验当前收件连接，不重复恢复或继续旧仓库部署。',
+      }
+    } finally {
+      signal.removeEventListener('abort', cancel)
+      if (this.consentController === controller) this.consentController = undefined
+      if (suspended && !restored)
+        await this.browser.restore({
+          resume:
+            !controller.signal.aborted &&
+            discordSetupSession.agentRunning &&
+            previousRun === this.agentController,
+        })
+    }
   }
   async execute(
     args: Record<string, string>,
@@ -1162,6 +1687,16 @@ export class DiscordSetupService {
     return this.serial(async () => {
       await this.initialize()
       signal.throwIfAborted()
+      if (args.operation === 'list-saved-config') {
+        if (!this.parameters.listSavedConnections) throw new Error('当前版本没有密钥卡查找入口')
+        return {
+          ok: true,
+          ...(await this.parameters.listSavedConnections(args.query, Number(args.offset ?? 0))),
+          hint: '只返回卡片名称及ID，没有密钥内容。按用户指定的名称/时间选择；多份有歧义就请用户选，不自动猜。',
+        }
+      }
+      if (args.operation === 'restore-saved-config')
+        return this.restoreSavedConnection(args.resource_id, signal)
       if (args.operation === 'start') {
         const result = await this.startTask(
           args.task as DiscordSetupTask,
@@ -1196,7 +1731,19 @@ export class DiscordSetupService {
             }
           }
         }
-        return { ok: true, ...this.summary(), ...(await this.parameterStatus()), ...installation }
+        const githubConnected = this.github.available() && (await this.github.status()).connected
+        return {
+          ok: true,
+          ...this.summary(),
+          ...(await this.parameterStatus()),
+          ...installation,
+          githubConnected,
+          ...(githubConnected && this.state && setupStep(this.state.step).site === 'github'
+            ? {
+                hint: 'GitHub 已通过系统浏览器授权连接。使用 github-inspect/fork/sync/fill/save 操作本次 Fork，不再要求 WebView 登录或查找网页按钮。',
+              }
+            : {}),
+        }
       }
       if (args.operation === 'open') return { ok: true, ...(await this.open(false, true)) }
       if (args.operation === 'return') {
@@ -1215,6 +1762,20 @@ export class DiscordSetupService {
         signal.throwIfAborted()
         this.consentStartedAt = this.state.startedAt
       }
+      if (args.operation.startsWith('github-'))
+        return this.executeGitHub(args.operation, signal, args)
+      if (
+        this.githubApi &&
+        setupStep(this.state.step).site === 'github' &&
+        args.operation === 'inspect'
+      )
+        return this.executeGitHub('github-inspect', signal, args)
+      if (
+        this.githubApi &&
+        setupStep(this.state.step).site === 'github' &&
+        ['fill-config', 'template', 'validate'].includes(args.operation)
+      )
+        return this.executeGitHub('github-fill', signal, args)
       if (args.operation === 'repair') {
         if (
           this.state.step !== 'diagnose' ||
@@ -1306,19 +1867,29 @@ export class DiscordSetupService {
           (!/^\d{1,10}$/u.test(args.target || '') || !/^\d+$/u.test(args.document_id || ''))
         )
           throw new Error('请先观察当前部署/同步页的实际状态，再等待其变化')
+        const waiting = new AbortController()
+        const waitingRunId = this.agentOperationId
         const cancel = () => {
-          void this.browser.cancelWait()
+          waiting.abort(new DOMException('网页等待已取消', 'AbortError'))
+          // A rejected obsolete native cancellation must not hold the serial queue or become unhandled.
+          void this.browser
+            .cancelWait(waitingRunId ? { ownerAgentRunId: waitingRunId } : undefined)
+            .catch(() => undefined)
         }
         signal.addEventListener('abort', cancel, { once: true })
         agentSignal?.addEventListener('abort', cancel, { once: true })
         try {
-          const ready =
+          signal.throwIfAborted()
+          agentSignal?.throwIfAborted()
+          const ready = await withAbort(
             args.operation === 'wait-status'
-              ? await this.browser.waitStatus({
+              ? this.browser.waitStatus({
                   documentId: Number(args.document_id),
                   target: args.target!,
                 })
-              : await this.browser.waitReady()
+              : this.browser.waitReady(),
+            waiting.signal,
+          )
           signal.throwIfAborted()
           agentSignal?.throwIfAborted()
           const recoveryNavigation = this.canRecoverPage(ready)
@@ -1487,6 +2058,10 @@ export class DiscordSetupService {
             ? { secretSavedOnPage: page.secretSavedOnPage }
             : {}),
           controls: page.controls ?? [],
+          ...(page.text !== undefined ? { text: page.text } : {}),
+          ...(page.links ? { links: page.links } : {}),
+          ...(page.forms ? { forms: page.forms } : {}),
+          ...(page.regions ? { regions: page.regions } : {}),
           pageKind: page.pageKind,
           headings: page.headings ?? [],
           ...(page.searchMatched !== undefined
@@ -1508,7 +2083,12 @@ export class DiscordSetupService {
           ok: false,
           ...this.summary(),
           waitingForUser: true,
-          hint: '请用户完成登录或填写，再点击浏览器的“允许协助”；不采集登录页或秘密。',
+          hint:
+            page.pageAccess === 'authentication'
+              ? '当前是登录或网站验证页，请用户完成后继续；不读取登录秘密。'
+              : page.pageAccess === 'protected'
+                ? '当前是受保护输入页面，请用户完成必要填写后继续；不读取秘密值。'
+                : '网页已暂停或由用户接手，需在桌宠中明确继续后重新观察；暂停不代表需要重新登录。',
         }
       if (args.operation !== 'navigate' && String(page.documentId) !== args.document_id)
         throw new Error('网页已变化，请重新 inspect，不执行旧页面操作')
@@ -1536,19 +2116,39 @@ export class DiscordSetupService {
       }
       const control = page.controls?.find((item) => item.target === args.target)
       if (
+        args.operation === 'press' &&
+        ![
+          'Tab',
+          'Escape',
+          'Enter',
+          'ArrowUp',
+          'ArrowDown',
+          'ArrowLeft',
+          'ArrowRight',
+          'Home',
+          'End',
+          'Backspace',
+          'Delete',
+        ].includes(args.key ?? '')
+      )
+        throw new Error('按键只支持公开控件的常用键，需携带当前 target')
+      const activating =
+        args.operation === 'click' || (args.operation === 'press' && args.key === 'Enter')
+      const submitting = args.operation === 'press' && args.key === 'Enter'
+      if (
         new URL(page.url).hostname === 'github.com' &&
-        args.operation === 'click' &&
+        activating &&
         /sync fork|update branch|同步|更新分支/iu.test(control?.label ?? '')
       ) {
-        if (!page.forkOfTarget || !isSetupForkPage(new URL(page.url), this.state.forkRepo))
+        if (!this.repositoryPage(page) || this.state.repositoryKind === 'owned-source')
           throw new Error('请先打开指定仓库在自己账号下的 Fork，不同步上游或其它仓库')
       }
       if (
         ['template', 'validate'].includes(args.operation!) ||
-        (args.operation === 'click' &&
+        (activating &&
           new URL(page.url).hostname === 'github.com' &&
           /\/edit\//u.test(new URL(page.url).pathname) &&
-          /commit|save|提交|保存/iu.test(control?.label ?? ''))
+          (submitting || /commit|save|提交|保存/iu.test(control?.label ?? '')))
       )
         this.requireFork(page)
       if (args.operation === 'template' && this.state.mode === 'agent') {
@@ -1564,7 +2164,7 @@ export class DiscordSetupService {
         'app-name': 'SRL Bridge',
         'database-name': 'srl-discord-source-handoff',
         'worker-name': 'srl-discord-source-bridge',
-        'deploy-command': 'npm run deploy',
+        'deploy-command': DISCORD_BRIDGE_AGENT_DEPLOY_COMMAND,
         'repository-search': 'SRL-Discord-Bridge',
         'commit-message': 'Configure Discord Bridge',
       }
@@ -1634,9 +2234,7 @@ export class DiscordSetupService {
         if (recoveryNavigation && destination.href === new URL(page.url).href)
           throw new Error('失败网页不自动重试；请返回其他已授权配置页')
         if (!args.url || args.url.length > 2000 || !isSetupAgentUrl(destination))
-          throw new Error(
-            '本次代理导航支持已授权的 Discord、GitHub、Cloudflare 和 workers.dev HTTPS 页面',
-          )
+          throw new Error('本次代理可导航公开 HTTPS 网页；不打开私网、本地地址或带账号密码的网址')
         const receipt = await this.browser.act({
           documentId: page.documentId,
           operation: 'navigate',
@@ -1657,12 +2255,11 @@ export class DiscordSetupService {
       }
       if (
         this.state.step === 'github-save' &&
-        args.operation === 'click' &&
-        /commit|提交|保存/iu.test(control?.label ?? '')
+        activating &&
+        (submitting || /commit|提交|保存/iu.test(control?.label ?? ''))
       ) {
         // The modal may hide the editor; validate when opening Commit, not the subsequent modal receipt.
-        if (/\/edit\/main\/wrangler\.jsonc$/u.test(new URL(page.url).pathname))
-          await this.validate(page)
+        if (setupWranglerPage(new URL(page.url), this.state, 'edit')) await this.validate(page)
       }
       const result =
         args.operation === 'validate'
@@ -1674,6 +2271,7 @@ export class DiscordSetupService {
               target: args.target,
               expectedFork: this.state.forkRepo,
               value: args.operation === 'fill' ? fillValue : undefined,
+              ...(args.operation === 'press' ? { key: args.key } : {}),
               ...(args.operation === 'scroll'
                 ? { direction: (args.direction || 'down') as 'up' | 'down' }
                 : {}),
@@ -1696,6 +2294,7 @@ export class DiscordSetupService {
             args.source || '',
             args.operation === 'fill' && args.value !== undefined ? args.value : '',
             args.operation === 'scroll' ? args.direction || 'down' : '',
+            args.operation === 'press' ? args.key : '',
             control?.kind || '',
             control?.label || '',
             page.pageKind || '',
@@ -1711,6 +2310,9 @@ export class DiscordSetupService {
       documentId: page.documentId,
       operation: 'validate',
       expectedApplicationId: this.state?.applicationId,
+      expectedFork: this.state?.forkRepo,
+      expectedBranch: this.state?.githubBranch ?? 'main',
+      expectedFile: this.state?.githubFile ?? 'wrangler.jsonc',
     })
     if (result.ok !== true)
       throw new Error(
@@ -1725,6 +2327,10 @@ export class DiscordSetupService {
     if (this.state.step === 'diagnose')
       throw new Error('排查结果不等于配置完成；请先检查并选择实际修复路径')
     const step = this.state.step
+    if (this.githubApi && setupStep(step).site === 'github') {
+      await this.verifyGitHubStep(signal)
+      return
+    }
     if (['cf-deploy', 'cf-secret'].includes(step) && !this.state.applicationId)
       throw new Error('请先确认本次 Discord App，不能核验未知 App 的部署')
     if (setupStep(step).site === 'local') {
@@ -1809,8 +2415,7 @@ export class DiscordSetupService {
       return
     }
     if (step === 'github-fork') {
-      if (!page.forkOfTarget || !isSetupForkPage(new URL(page.url), this.state.forkRepo))
-        throw new Error('尚未确认指定上游仓库在自己账号下的 Fork')
+      if (!this.repositoryPage(page)) throw new Error('尚未确认指定上游仓库在自己账号下的 Fork')
       return
     }
     if (['wrangler-edit', 'wrangler-check'].includes(step)) {
@@ -1826,16 +2431,10 @@ export class DiscordSetupService {
     if (!['github-sync', 'github-save', 'cf-deploy', 'discord-endpoint'].includes(step))
       throw new Error('该步骤尚无自动核验条件')
     const url = new URL(page.url)
-    if (
-      step === 'github-sync' &&
-      (!page.forkOfTarget || !isSetupForkPage(url, this.state.forkRepo))
-    )
-      throw new Error('请在本次 Fork 核对 main 分支同步结果')
-    if (
-      step === 'github-save' &&
-      (!this.state.forkRepo || url.pathname !== `/${this.state.forkRepo}/blob/main/wrangler.jsonc`)
-    )
-      throw new Error('请提交到自己 Fork 的 main；当前仍未保存完成')
+    if (step === 'github-sync' && !this.repositoryPage(page))
+      throw new Error('请核对本次实际仓库和部署分支；源仓库所有者不需要同步 Fork')
+    if (step === 'github-save' && !setupWranglerPage(url, this.state, 'blob'))
+      throw new Error('请核验目标分支已保存的 Wrangler 文件；编辑草稿不是提交证据')
     if (
       step === 'cf-deploy' &&
       (url.hostname !== 'dash.cloudflare.com' ||
@@ -1859,6 +2458,11 @@ export class DiscordSetupService {
       expectedDatabaseId: values.databaseId,
       expectedRevision: this.state.githubRevision,
       expectedFork: this.state.forkRepo,
+      expectedBranch: this.state.githubBranch ?? 'main',
+      expectedFile: this.state.githubFile ?? 'wrangler.jsonc',
+      repositoryKind: this.state.repositoryKind,
+      synchronizationAssessment:
+        args.synchronization_assessment === 'current' ? 'current' : undefined,
       value: step === 'discord-endpoint' ? `${this.state.workerUrl}/interactions` : undefined,
     })
     signal.throwIfAborted()
@@ -1866,7 +2470,7 @@ export class DiscordSetupService {
       throw new Error('当前页面未提供本步成功证据，请继续定位实际结果；不会把点击当成成功')
     if (['github-save', 'github-sync'].includes(step)) {
       if (typeof result.revision !== 'string' || !/^[a-f0-9]{40}$/iu.test(result.revision))
-        throw new Error('当前 GitHub 页面没有唯一的 main 提交身份')
+        throw new Error('当前 GitHub 页面没有唯一的目标分支提交身份')
       await this.save({ ...this.state, githubRevision: result.revision.toLowerCase() })
     }
     if (step === 'cf-deploy') {
@@ -1892,7 +2496,15 @@ export class DiscordSetupService {
     )
   }
   next() {
-    return this.serial(() => this.advanceStep())
+    return this.serial(async () => {
+      if (this.githubApi && this.state && setupStep(this.state.step).site === 'github') {
+        if (!this.agentController || this.agentController.signal.aborted)
+          throw new Error('请先明确继续已暂停的 GitHub 任务')
+        await this.verifyGitHubStep(this.agentController.signal)
+        return this.advanceStep(true)
+      }
+      return this.advanceStep()
+    })
   }
   private async advanceStep(verifiedAgent = false) {
     await this.initialize()
@@ -1901,7 +2513,10 @@ export class DiscordSetupService {
       throw new Error('排查结果不等于配置完成；请先检查并选择实际修复路径')
     if (this.state.step === 'discord-token' && !this.state.botTokenReady)
       throw new Error('请先加密保存 Bot Token，或由用户明确确认已自行保存；不会跳过密钥步骤')
-    if (setupStep(this.state.step).site !== 'local') {
+    if (
+      setupStep(this.state.step).site !== 'local' &&
+      !(this.githubApi && setupStep(this.state.step).site === 'github' && verifiedAgent)
+    ) {
       const page = await this.browser.inspect()
       await this.rememberPage(page)
       if (
@@ -1913,16 +2528,12 @@ export class DiscordSetupService {
         await this.collectParameters(page)
       if (['github-fork', 'github-sync'].includes(this.state.step) && !this.state.forkRepo)
         throw new Error('请先打开指定仓库的自己 Fork 首页并允许协助，不能用其它仓库继续')
-      if (
-        this.state.step === 'github-sync' &&
-        (!page.forkOfTarget || !isSetupForkPage(new URL(page.url), this.state.forkRepo))
-      )
-        throw new Error('请在自己 Fork 核对 main 分支同步结果')
+      if (this.state.step === 'github-sync' && !this.repositoryPage(page))
+        throw new Error('请核对本次实际仓库/部署分支的更新结果；源仓库无需 Fork 同步')
       if (['wrangler-edit', 'wrangler-check'].includes(this.state.step)) await this.validate(page)
       if (
         this.state.step === 'github-save' &&
-        (!this.state.forkRepo ||
-          new URL(page.url).pathname !== `/${this.state.forkRepo}/blob/main/wrangler.jsonc`)
+        !setupWranglerPage(new URL(page.url), this.state, 'blob')
       )
         throw new Error(
           '请先提交到自己 Fork 的 main，并确认已返回 wrangler.jsonc 文件页；仍在编辑页不算保存成功',
@@ -2045,6 +2656,7 @@ export class DiscordSetupService {
         return
       }
       if (event.action === 'page-ready') {
+        if (this.githubApi && this.state && setupStep(this.state.step).site === 'github') return
         if (
           !this.state ||
           !discordSetupSession.agentRunning ||
@@ -2085,16 +2697,14 @@ export class DiscordSetupService {
           return
         }
         this.requestAssistant(
-          '当前配置网页已加载。请 inspect 观察实际页面种类、标题和控件，自己定位并继续配置；不要照教程猜位置。登录/密码/验证码/秘密及 Discord 安装授权交给用户；Cloudflare GitHub App 的仓库选择与安装授权也由你核对并完成。',
+          `当前配置网页已加载。请 inspect 观察实际页面种类、标题和控件，自己定位并继续配置；不要照教程猜位置。登录/密码/验证码/秘密及 Discord 安装授权交给用户；Cloudflare GitHub App 的仓库选择与安装授权也由你核对并完成。${this.githubWebFirstGuidance()}`,
         )
         return
       }
-      if (event.action === 'visibility') {
-        discordSetupSession.browserVisible = event.visible === true
-        return
-      }
       if (event.action === 'return') {
-        if (discordSetupSession.agentRunning) await this.stopAgent()
+        discordSetupSession.active = false
+        discordSetupSession.chatPresentation = ''
+        await this.stopAgent()
         await this.browser.close()
         return
       }
@@ -2103,13 +2713,19 @@ export class DiscordSetupService {
         if (draft.length > 200 || maskDiscordSetupSecrets(draft) !== draft)
           throw new Error('配置值请填在网页里，不转入聊天草稿')
         this.assistantDraft = draft || undefined
-        await this.browser.close({ keepRunning: true })
+        // The shared chat prepares its UI before chatPresentation reparents the page.
+        if (!this.browser.chatPresentation) await this.browser.close({ keepRunning: true })
         if (event.action === 'fullscreen') {
           window.dispatchEvent(
             new CustomEvent('srl:native-deep-link', { detail: { kind: 'assistant' } }),
           )
           window.dispatchEvent(new Event('srl:discord-setup-fullscreen'))
-        } else window.dispatchEvent(new Event('srl:discord-setup-quick-chat'))
+        } else
+          window.dispatchEvent(
+            new CustomEvent('srl:discord-setup-quick-chat', {
+              detail: { petBounds: event.petBounds },
+            }),
+          )
         return
       }
       if (event.action === 'secret-prepare' || event.action === 'secret-submit') {
@@ -2155,6 +2771,16 @@ export class DiscordSetupService {
         return
       }
       if (event.action === 'resume') {
+        if (this.githubApi && this.state && setupStep(this.state.step).site === 'github') {
+          if (!(await this.startAgent())) return
+          await this.open(false, true)
+          await this.verifyGitHubStep(this.agentController!.signal)
+          await this.advanceStep(true)
+          this.requestAssistant(
+            '本次 GitHub 步骤已按 API 实际结果核验。先 status 核对新步骤再继续，不重复登录或提交。',
+          )
+          return
+        }
         if (this.state?.step === 'discord-token') {
           const page = await this.browser.inspect({ metadataOnly: true })
           if (
@@ -2196,9 +2822,25 @@ export class DiscordSetupService {
               ? '本次连接与命令检查通过。请在 Discord 实际使用一次命令，确认菜单与收件正常。'
               : '本步核验通过，已进入下一步。需要手填时我会停下。',
         })
+      } else if (event.action === 'github-connect') {
+        if (!this.state || setupStep(this.state.step).site !== 'github')
+          throw new Error('请在本次 GitHub 配置步骤连接')
+        if (!(await this.startAgent())) return
+        this.githubFallbackRequested = true
+        await this.executeGitHub('github-connect', this.agentController!.signal)
+        this.requestAssistant(
+          '用户已在系统浏览器完成 GitHub 授权。用 status/github-inspect 核对本次 Fork，通过 github-fork/sync/fill/save 完成当前目标，advance-step 核验推进；不要在 WebView 再要求登录或寻找按钮。',
+        )
       } else if (event.action === 'assist') {
         const message = this.assistantQuestion(event.text)
         if (discordSetupSession.agentRunning && message) await this.stopAgent()
+        this.githubFallbackRequested = Boolean(
+          message &&
+          this.state &&
+          this.state.mode === 'agent' &&
+          setupStep(this.state.step).site === 'github' &&
+          this.explicitlyRequestsGitHubLoginFallback(message),
+        )
         if (this.state?.mode === 'agent' && !discordSetupSession.agentRunning) {
           if (!(await this.startAgent())) return
           await this.open(false, true)
@@ -2215,11 +2857,18 @@ export class DiscordSetupService {
           await this.browser.message({ text: setupStep(this.state.step).hint })
           return
         }
+        if (this.githubApi && this.state && setupStep(this.state.step).site === 'github') {
+          this.requestAssistant(
+            `${message || '请继续本次 GitHub 配置任务。'}\n先处理用户当前问题；用 status/github-inspect 查实际 API 回执，再选择 github-fork/sync/fill/save，按结果 advance-step，不操作 WebView 登录页。`,
+            Boolean(message),
+          )
+          return
+        }
         const page = await this.browser.inspect({ metadataOnly: true })
         if (page.paused && !message) throw new Error('请先允许本页协助；登录、授权和密钥由你操作')
         if (!message) await this.rememberPage(page)
         this.requestAssistant(
-          `${message || '请继续协助当前 Discord Bridge 网页配置任务。'}\n先处理用户当前问题和更改，再决定如何继续。先 status 核对任务，公开页面 inspect 找实际原因与控件，按反馈调整并核验；教程仅作目标和完成依据，不强行推进原步骤。登录、密码、验证码、密钥及 Discord 安装授权交用户；Cloudflare GitHub App 仓库选择与安装授权由代理完成。网页等待接手时可以回答问题，不读取私密页面。公开参数沿本机保存与回填，不发到聊天。`,
+          `${message || '请继续协助当前 Discord Bridge 网页配置任务。'}\n先处理用户当前问题和更改，再决定如何继续。先 status 核对任务，公开页面 inspect 找实际原因与控件，按反馈调整并核验；教程仅作目标和完成依据，不强行推进原步骤。登录、密码、验证码、密钥及 Discord 安装授权交用户；Cloudflare GitHub App 仓库选择与安装授权由代理完成。网页等待接手时可以回答问题，不读取私密页面。公开参数沿本机保存与回填，不发到聊天。${this.githubFallbackRequested ? '用户明确反馈 GitHub 网页登录遇到问题，可调用一次 github-connect 提供备用 API 授权；不要反复启动。' : this.githubWebFirstGuidance()}`,
           Boolean(message),
         )
         await this.browser.message({
@@ -2238,8 +2887,15 @@ export class DiscordSetupService {
               ? '本页部署参数已存入资源库密钥卡，Bot Token 留空，由你手填。'
               : '三个部署参数已填入教程模板，Bot Token 没有写入；请检查后提交。',
         })
-      } else if (event.action === 'next') await this.advanceStep()
-      else if (event.action === 'select-step') await this.selectStep(event.step as DiscordSetupStep)
+      } else if (event.action === 'next') {
+        if (this.githubApi && this.state && setupStep(this.state.step).site === 'github') {
+          if (!this.agentController || this.agentController.signal.aborted)
+            throw new Error('请先明确继续已暂停的任务')
+          await this.verifyGitHubStep(this.agentController.signal)
+          await this.advanceStep(true)
+        } else await this.advanceStep()
+      } else if (event.action === 'select-step')
+        await this.selectStep(event.step as DiscordSetupStep)
       else if (event.action === 'worker-url') {
         if (!this.state || this.state.step !== 'worker-url')
           throw new Error('请在 Worker 链接步骤填写')
@@ -2294,10 +2950,14 @@ export class DiscordSetupService {
       throw new Error('配置值请留在网页表单填写；这里只说明遇到的问题')
     return message
   }
+  private explicitlyRequestsGitHubLoginFallback(message: string) {
+    return /(?:登录|登陆).{0,12}(?:卡住|卡了|失败|不行|不了|不能|不支持|报错|没有)|(?:google|谷歌|系统浏览器).{0,12}(?:登录|登陆|授权)|(?:google|谷歌).{0,16}(?:按钮|选项).{0,8}(?:没有|不显示|找不到)|(?:备用登录)/iu.test(
+      message,
+    )
+  }
   private requestAssistant(prompt: string, userInitiated = false) {
     if (this.assistantRequested?.userInitiated && !userInitiated) return
     this.assistantRequested = { text: prompt, userInitiated }
-    window.dispatchEvent(new CustomEvent('srl:native-deep-link', { detail: { kind: 'assistant' } }))
     window.dispatchEvent(new Event('srl:discord-setup-assist'))
   }
   private async captureBotSecret() {
@@ -2869,16 +3529,62 @@ export class DiscordSetupService {
     template.d1_databases[0].database_id = values.databaseId
     template.vars.DISCORD_APPLICATION_ID = values.applicationId
     template.vars.DISCORD_PUBLIC_KEY = values.publicKey
-    const result = await this.browser.act({
+    const options = {
       documentId: page.documentId,
       operation: 'template',
       template: JSON.stringify(template, null, 2),
       validateTemplate: true,
       expectedApplicationId: this.state.applicationId,
-    })
+      preserveConfiguration: true,
+    }
+    let result = await this.browser.act(options)
+    if (result.configurationConflict === true) {
+      const startedAt = this.state.startedAt,
+        signal = this.agentController?.signal
+      const suspended = await this.suspendForModelConsent()
+      try {
+        if (
+          !(await confirmAction(
+            {
+              title: '切换已有 Wrangler 配置？',
+              centered: true,
+              message:
+                result.replacementRequired === true
+                  ? '已有文件格式或结构无法保留。是否用完整 Bridge 模板替换当前文件？旧提交仍在 GitHub 历史，未提交草稿会被替换；取消不写入。'
+                  : '当前文件已有不同 App、公钥或 D1。只替换本次三个公开参数，保留 Worker 名称和其它合法配置；已提交旧文件仍在 GitHub 历史。取消不会填写或提交。',
+              confirmLabel: '切换这三个参数',
+              cancelLabel: '保留原配置',
+            },
+            signal,
+          ))
+        ) {
+          await this.stopAgent()
+          throw new Error('用户保留原 Wrangler，未修改或继续提交')
+        }
+      } finally {
+        if (suspended) await this.browser.restore({ resume: false })
+      }
+      signal?.throwIfAborted()
+      const fresh = await this.browser.inspect()
+      if (
+        this.state.startedAt !== startedAt ||
+        fresh.documentId !== page.documentId ||
+        fresh.url !== page.url
+      )
+        throw new Error('确认期间任务或文件页面已变化，未覆盖；请重新观察')
+      result = await this.browser.act({
+        ...options,
+        configurationConfirmation:
+          typeof result.configurationConfirmation === 'string'
+            ? result.configurationConfirmation
+            : undefined,
+      })
+    }
     if (result.ok !== true)
       throw new Error(
-        '未找到可读取完整文档的编辑器，未填写；请 inspect 核对编辑状态，定位自己的 Fork/main/wrangler.jsonc 编辑入口后再填写，不让用户代找或粘贴',
+        Array.isArray(result.errors)
+          ? result.errors.join('；')
+          : '未读到完整配置，未填写；请 inspect 核对目标文件和实际编辑器，不让用户代找或粘贴',
       )
     this.markAction(`${this.state.step}:${page.url}:template`)
   }

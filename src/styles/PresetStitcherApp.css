@@ -1117,7 +1117,8 @@ span.stitch-entry__copy {
 
 .stitch-insertion {
   position: relative;
-  height: 24px;
+  /* 点击区域必须与公共按钮同高，否则按钮会越过落点行遮住下一条。 */
+  height: var(--size-touch, 44px);
   list-style: none;
 }
 
@@ -1135,11 +1136,16 @@ span.stitch-entry__copy {
   z-index: 1;
   display: block;
   width: 100%;
-  height: 24px;
+  height: 100%;
+  min-height: var(--size-touch, 44px);
+  padding: 0 0.5rem;
   border: 0;
-  background: var(--button-background, transparent);
-  color: var(--button-color, transparent);
-  font-size: 0.68rem;
+  /* 行间落点用线和文字反馈，普通按钮的背景/阴影会把它画成覆盖内容的卡片。 */
+  background: transparent;
+  box-shadow: none;
+  color: var(--stitch-muted);
+  font-size: var(--text-caption);
+  line-height: 1.4;
 }
 
 .stitch-insertion:hover::before,
@@ -2147,18 +2153,6 @@ span.stitch-entry__copy {
   .stitch.is-reading .stitch-pagination span {
     min-width: 2.65rem;
     font-size: var(--text-caption);
-  }
-
-  .stitch.is-reading .stitch-insertion.is-active {
-    height: 30px;
-  }
-
-  .stitch.is-reading .stitch-insertion.is-active button {
-    transform: translateY(-3px);
-  }
-
-  .stitch.is-reading .stitch-workbench.is-dragging .stitch-insertion button {
-    transform: translateY(-8px);
   }
 
   .stitch.is-workbench:not(.is-reading) {

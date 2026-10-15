@@ -339,10 +339,62 @@ describe('ExternalAppService', () => {
     const template = service.createTemplatePackage()
     const preview = await service.inspect(template)
 
-    expect(preview.manifest.icon).toBe('icon.svg')
-    expect(preview.manifest.splashColor).toBe('#237f87')
+    expect(preview.manifest.icon).toBeUndefined()
+    expect(preview.iconDataUrl).toBeUndefined()
+    expect(preview.manifest.splashColor).toBeUndefined()
     expect(preview.manifest.orientation).toBe('auto')
     expect(preview.packageFiles['app.js']).toBeDefined()
+  })
+
+  it('uses themed default covers for quick imports without adding images to the package', async () => {
+    const service = createService(`external-themed-${crypto.randomUUID()}`)
+    const preview = await service.inspect(new File(['<p>local</p>'], 'local.html'))
+    expect(preview.manifest.icon).toBeUndefined()
+    expect(preview.manifest.splashColor).toBeUndefined()
+    expect(preview.iconDataUrl).toBeUndefined()
+    expect(Object.keys(preview.packageFiles)).toEqual(['local.html'])
+    const installed = await service.install(preview)
+    expect(
+      (await service.list()).find((app) => app.id === installed.id)?.iconDataUrl,
+    ).toBeUndefined()
+    const restored = await service.inspect(await service.exportPackage(installed.id))
+    expect(restored.manifest.icon).toBeUndefined()
+    expect(restored.iconDataUrl).toBeUndefined()
+  })
+
+  it('renders existing generated covers through the theme while preserving custom images and stored bytes', async () => {
+    const service = createService(`external-legacy-cover-${crypto.randomUUID()}`)
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="24" fill="#237f87"/><path fill="#fff" d="M25 28h46v40H25z" opacity=".92"/><path fill="#237f87" d="M34 38h28v5H34zm0 11h20v5H34z"/></svg>'
+    const app = await service.install(
+      createPackage(
+        { ...manifest, icon: 'srl-app-icon.svg' },
+        { 'srl-app-icon.svg': strToU8(svg) },
+      ),
+    )
+    const original = `data:image/svg+xml;base64,${btoa(svg)}`
+    await service.updatePresentation(app.id, manifest.name, original)
+    expect((await service.list())[0]?.iconDataUrl).toBeUndefined()
+    expect((await service.get(app.id))?.iconDataUrl).toBe(original)
+    expect((await service.get(app.id))?.packageFiles?.['srl-app-icon.svg']).toEqual(strToU8(svg))
+    const custom = `data:image/svg+xml;base64,${btoa(svg.replace('#237f87', '#ff8800'))}`
+    await service.updatePresentation(app.id, manifest.name, custom)
+    expect((await service.list())[0]?.iconDataUrl).toBe(custom)
+  })
+  it('uses the theme for previously generated AI APP covers without changing stored presentation or package bytes', async () => {
+    const service = createService(`external-legacy-ai-cover-${crypto.randomUUID()}`)
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="18" fill="#5b7d71"/><path d="M19 21h26M19 32h19M19 43h13" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>'
+    const app = await service.install(
+      createPackage({ ...manifest, icon: 'icon.svg' }, { 'icon.svg': strToU8(svg) }),
+    )
+    const original = `data:image/svg+xml;base64,${btoa(svg)}`
+    await service.updatePresentation(app.id, manifest.name, original)
+    expect((await service.list())[0]?.iconDataUrl).toBeUndefined()
+    expect((await service.get(app.id))?.iconDataUrl).toBe(original)
+    const exported = await service.inspect(await service.exportPackage(app.id))
+    expect(exported.iconDataUrl).toBeUndefined()
+    expect(Array.from(exported.packageFiles['icon.svg']!)).toEqual(Array.from(strToU8(svg)))
   })
 
   it('records and revokes a persistent runtime permission without granting undeclared access', async () => {

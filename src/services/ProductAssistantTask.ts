@@ -1,6 +1,10 @@
 import type { AssistantTurn, AssistantToolCall } from './ProductAssistantService'
 import type { AssistantMode } from '../core/ProductAssistantKnowledge'
-import { ASSISTANT_CAPABILITY_TOOLS, type AssistantCapability } from './ProductAssistantTools'
+import {
+  ASSISTANT_CAPABILITY_TOOLS,
+  assistantCapabilityAllowed,
+  type AssistantCapability,
+} from './ProductAssistantTools'
 import type { AssistantTaskTemplate } from './ProductAssistantWorkspaceService'
 
 export const ASSISTANT_TASK_CAPABILITY_LABELS: Record<AssistantCapability, string> = {
@@ -46,8 +50,11 @@ export function normalizeAssistantTaskTemplate(
     const capabilities = [...new Set(value.capabilities ?? [])]
     if (capabilities.some((capability) => !Object.hasOwn(ASSISTANT_CAPABILITY_TOOLS, capability)))
       throw new Error('技能包含未知能力')
-    if (value.mode === 'appearance' && capabilities.some((c) => c !== 'skills'))
-      throw new Error('美化技能只可附加技能查询，其他工作请使用功能或制作模式')
+    if (
+      value.mode === 'appearance' &&
+      capabilities.some((c) => !assistantCapabilityAllowed(value.mode, c))
+    )
+      throw new Error('美化技能可附加历史、选定资料、公开参考和技能查询；其他工作请切换模式')
     if (
       value.mode !== 'creation' &&
       capabilities.some((c) => ['custom-tools', 'tool-authoring'].includes(c))

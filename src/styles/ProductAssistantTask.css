@@ -44,10 +44,11 @@
 .assistant-task-text-button {
   min-height: 44px;
   padding: 4px 10px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  color: var(--color-ink);
-  background: var(--color-surface-raised);
+  border: 1px solid var(--button-border, var(--color-line));
+  border-radius: var(--button-radius, 8px);
+  color: var(--button-color, var(--color-ink));
+  background: var(--button-background, var(--color-surface-raised));
+  box-shadow: var(--button-shadow, none);
   font: inherit;
   cursor: pointer;
 }
@@ -66,13 +67,14 @@
   box-sizing: border-box;
   overflow: auto;
   padding: 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 14px;
-  background: var(--color-surface-raised);
+  border: 1px solid var(--dialog-border, var(--color-line));
+  border-radius: var(--dialog-radius, 14px);
+  background: var(--dialog-background, var(--color-surface-raised));
+  box-shadow: var(--dialog-shadow, none);
   color: var(--color-ink);
 }
 .assistant-reference-dialog::backdrop {
-  background: rgb(0 0 0 / 0.4);
+  background: var(--overlay-background);
 }
 .assistant-reference-dialog header {
   display: flex;

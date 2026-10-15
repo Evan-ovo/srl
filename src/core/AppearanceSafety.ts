@@ -37,7 +37,9 @@ export function createProtectedHost(id: string): { host: HTMLDivElement; root: S
   for (const [property, value] of Object.entries(importantStyles)) {
     host.style.setProperty(property, value, 'important')
   }
-  document.body.append(host)
+  // Both protected hosts use the top layer index; trial confirmation must stay
+  // above the per-view recovery button even when that button mounts later.
+  document.body.insertBefore(host, document.getElementById(GUARD_HOST_ID))
   return { host, root: host.attachShadow({ mode: 'open' }) }
 }
 

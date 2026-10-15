@@ -17,7 +17,7 @@ interface BatchOperationsContext {
   activeCategoryLabel: ComputedRef<string>
   matchesCategory: (resource: ResourceSummary, categoryId: string | null | undefined) => boolean
   showNotice: (message: string) => void
-  loadResources: () => Promise<void>
+  loadResources: (ids?: string[]) => Promise<void>
   moveToRecycleBin: (ids: string[]) => Promise<void>
 }
 
@@ -109,7 +109,7 @@ export function useBatchOperations(context: BatchOperationsContext) {
     isBatchBusy.value = true
     try {
       await resourceService.updateTagsMany(ids, details.tag, details.action)
-      await context.loadResources()
+      await context.loadResources(ids)
       finishBatch(
         details.action === 'add'
           ? `已为 ${ids.length} 项资源添加标签“${details.tag.trim()}”`
@@ -147,7 +147,7 @@ export function useBatchOperations(context: BatchOperationsContext) {
     isBatchBusy.value = true
     try {
       await resourceService.moveManyToCategory(ids, categoryId)
-      await context.loadResources()
+      await context.loadResources(ids)
       finishBatch(
         categoryId
           ? `已将 ${ids.length} 项资源加入文件夹`

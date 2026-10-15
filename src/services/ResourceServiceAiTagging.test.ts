@@ -34,6 +34,13 @@ describe('ResourceService.addTagsPerResource', () => {
     const update = vi.fn(async () => undefined)
     const storage = {
       get: vi.fn(async (id: string) => (id === 'r1' ? first : id === 'r2' ? second : undefined)),
+      getSummary: vi.fn(async (id: string) =>
+        id === 'r1'
+          ? toResourceSummary(first)
+          : id === 'r2'
+            ? toResourceSummary(second)
+            : undefined,
+      ),
       listSummaries: vi.fn(async () => [first, second].map(toResourceSummary)),
       update,
       saveMany,
@@ -76,8 +83,17 @@ describe('ResourceService.addTagsPerResource', () => {
     const first = resource('r1', ['原标签', '甜宠', 'AI后手动新增'])
     const second = resource('r2', ['古风改名'])
     const saveMany = vi.fn(async (_resources: Resource[]) => undefined)
+    const updateMetadataMany = vi.fn(async () => undefined)
     const storage = {
       get: vi.fn(async (id: string) => (id === 'r1' ? first : id === 'r2' ? second : undefined)),
+      getSummary: vi.fn(async (id: string) =>
+        id === 'r1'
+          ? toResourceSummary(first)
+          : id === 'r2'
+            ? toResourceSummary(second)
+            : undefined,
+      ),
+      updateMetadataMany,
       saveMany,
     } as unknown as ResourceStorageAdapter
     const service = new ResourceService(storage, new ResourceParserRegistry([]))
@@ -92,8 +108,10 @@ describe('ResourceService.addTagsPerResource', () => {
       tagCount: 1,
       entries: [{ resourceId: 'r1', resourceName: 'r1', tags: ['甜宠'] }],
     })
-    expect(saveMany.mock.calls[0]?.[0]).toEqual([
-      expect.objectContaining({ id: 'r1', tags: ['原标签', 'AI后手动新增'] }),
+    expect(storage.get).not.toHaveBeenCalled()
+    expect(saveMany).not.toHaveBeenCalled()
+    expect(updateMetadataMany).toHaveBeenCalledWith([
+      { id: 'r1', changes: expect.objectContaining({ tags: ['原标签', 'AI后手动新增'] }) },
     ])
   })
 })

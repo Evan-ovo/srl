@@ -147,6 +147,8 @@ defineExpose({ invokeTool })
 let sessionNonce = ''
 let lastRequestSequence = 0
 let startupTimer: number | undefined
+let loadVersion = 0
+let hostClosed = false
 let holdTimer: number | undefined
 let exitHandleTimer: number | undefined
 let pendingFilePick:
@@ -180,10 +182,12 @@ const filteredPickableResources = computed(() => {
 })
 
 async function load(): Promise<void> {
+  const version = ++loadVersion
   readerReady.value = false
   errorMessage.value = ''
   notice.value = ''
   const next = await externalAppService.get(props.appId)
+  if (hostClosed || version !== loadVersion) return
   if (props.assistantTool && next?.packageFingerprint !== props.assistantTool.fingerprint) {
     toolSession.close()
     errorMessage.value = 'APP 安装版本已变化，请返回聊天重新查询工具。'
@@ -800,6 +804,7 @@ function exitFromHandle(): void {
 }
 
 function connect(): void {
+  if (hostClosed) return
   if (
     app.value?.runtimeMode === 'trustedCompatible' &&
     frame.value &&
@@ -956,6 +961,10 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  hostClosed = true
+  loadVersion++
+  clearHoldGesture()
+  hideExitHandle()
   externalAppSdkService.releaseListSession(sessionNonce)
   toolSession.close()
   window.removeEventListener(APPLIED_CSS_CHANGED_EVENT, syncReaderUiCss)
@@ -1105,6 +1114,27 @@ onBeforeUnmount(() => {
           <span class="external-app-host__touch-exit">长按 1.5 秒显示返回</span>
         </p>
       </section>
+      <button
+        v-if="
+          isFullscreen && (exitHandleVisible || loadingLabel || errorMessage) && !isBuiltinReader
+        "
+        class="external-app-host__exit-handle"
+        type="button"
+        aria-label="退出第三方 APP"
+        @click="exitFromHandle"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+      </button>
+      <p
+        v-if="isFullscreen && errorMessage"
+        class="external-app-host__fullscreen-error"
+        role="alert"
+      >
+        {{ errorMessage }}
+        <button v-if="isBuiltinReader" type="button" class="button" @click="emit('back')">
+          返回功能桌面
+        </button>
+      </p>
     </Teleport>
     <input
       ref="fileInput"
@@ -1112,21 +1142,6 @@ onBeforeUnmount(() => {
       type="file"
       @change="completeFilePick"
     />
-    <button
-      v-if="isFullscreen && exitHandleVisible && !isBuiltinReader"
-      class="external-app-host__exit-handle"
-      type="button"
-      aria-label="退出第三方 APP"
-      @click="exitFromHandle"
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
-    </button>
-    <p v-if="isFullscreen && errorMessage" class="external-app-host__fullscreen-error" role="alert">
-      {{ errorMessage }}
-      <button v-if="isBuiltinReader" type="button" class="button" @click="emit('back')">
-        返回功能桌面
-      </button>
-    </p>
     <Teleport to="body">
       <section
         v-if="resourcePicker"

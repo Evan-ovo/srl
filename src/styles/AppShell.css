@@ -369,9 +369,9 @@
 }
 
 .export-button:hover {
-  border-color: var(--color-line-strong);
-  background: var(--color-surface-raised);
-  box-shadow: 0 8px 24px var(--color-shadow);
+  border-color: var(--button-border, var(--color-line-strong));
+  background: var(--button-background, var(--color-surface-raised));
+  box-shadow: var(--button-hover-shadow, var(--button-shadow, 0 8px 24px var(--color-shadow)));
 }
 
 .export-button:disabled {
@@ -414,7 +414,7 @@
   min-height: var(--size-touch);
   gap: clamp(0.4375rem, 0.8vw, 0.5625rem);
   padding: 0 clamp(0.875rem, 1.6vw, 1.125rem);
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--button-primary-border, var(--color-accent));
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1486,7 +1486,10 @@
 }
 
 .pagination button {
+  border-color: var(--button-border, var(--color-line));
+  background: var(--button-background, var(--color-surface));
   color: var(--button-color, var(--color-ink));
+  box-shadow: var(--button-shadow, none);
   cursor: pointer;
 }
 

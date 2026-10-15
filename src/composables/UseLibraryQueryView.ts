@@ -186,23 +186,45 @@ export function useLibraryQueryView(context: LibraryQueryViewContext) {
     })
   })
 
+  let ordered:
+    | {
+        items: ResourceSummary[]
+        sort: SortValue
+        collator: Intl.Collator
+        result: ComputedRef<ResourceSummary[]>
+      }
+    | undefined
+  function queryPage(offset = 0, limit?: number) {
+    const items = matchingResources.value,
+      sort = context.sortValue.value,
+      collator = context.resourceNameCollator
+    if (
+      ordered &&
+      (ordered.items !== items || ordered.sort !== sort || ordered.collator !== collator)
+    )
+      ordered = undefined
+    offset = Math.max(0, Math.round(offset))
+    if (limit !== undefined) limit = Math.max(0, Math.round(limit))
+    if (!Number.isFinite(offset) || (limit !== undefined && !Number.isFinite(limit)))
+      return resourceQueryEngine.page(items, { sort, nameCollator: collator, offset, limit }).items
+    if (ordered)
+      return ordered.result.value.slice(offset, limit === undefined ? undefined : offset + limit)
+    if (limit === undefined || (offset + limit) * 2 >= items.length) {
+      const result = computed(
+        () => resourceQueryEngine.page(items, { sort, nameCollator: collator }).items,
+      )
+      ordered = { items, sort, collator, result }
+      return result.value.slice(offset, limit === undefined ? undefined : offset + limit)
+    }
+    return resourceQueryEngine.page(items, { sort, nameCollator: collator, offset, limit }).items
+  }
+
   const filteredResourceCount = computed(() => matchingResources.value.length)
-  const filteredResources = computed(
-    () =>
-      resourceQueryEngine.page(matchingResources.value, {
-        sort: context.sortValue.value,
-        nameCollator: context.resourceNameCollator,
-      }).items,
-  )
+  const filteredResources = computed(() => queryPage())
 
   const paginatedResources = computed(() => {
     const start = (context.currentPage.value - 1) * context.pageSize.value
-    return resourceQueryEngine.page(matchingResources.value, {
-      sort: context.sortValue.value,
-      nameCollator: context.resourceNameCollator,
-      offset: start,
-      limit: context.pageSize.value,
-    }).items
+    return queryPage(start, context.pageSize.value)
   })
 
   const totalPages = computed(() =>

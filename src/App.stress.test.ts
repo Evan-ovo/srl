@@ -26,6 +26,7 @@ afterAll(() => {
 
 const stressApi = vi.hoisted(() => ({
   summaries: [] as ResourceSummary[],
+  listSummaries: vi.fn(async () => stressApi.summaries),
   listResourceListSummaries: vi.fn(async () => stressApi.summaries),
   repairThumbnailAssets: vi.fn(async () => 0),
   upgradeLegacyJsonResources: vi
@@ -50,6 +51,7 @@ vi.mock('./core/AppContainer', async (importOriginal) => {
   return {
     ...actual,
     resourceService: {
+      listSummaries: stressApi.listSummaries,
       listResourceListSummaries: stressApi.listResourceListSummaries,
       repairThumbnailAssets: stressApi.repairThumbnailAssets,
       upgradeLegacyJsonResources: stressApi.upgradeLegacyJsonResources,
@@ -78,6 +80,7 @@ vi.mock('./core/LibraryContainer', async (importOriginal) => {
   return {
     ...actual,
     resourceService: {
+      listSummaries: stressApi.listSummaries,
       listResourceListSummaries: stressApi.listResourceListSummaries,
       repairThumbnailAssets: stressApi.repairThumbnailAssets,
       upgradeLegacyJsonResources: stressApi.upgradeLegacyJsonResources,
@@ -172,6 +175,7 @@ describe('App 资源量压力回归', () => {
     await wrapper.get('.mobile-bottom-nav > button:first-child').trigger('click')
     await vi.waitFor(() => expect(stressApi.backfillCardFingerprints).toHaveBeenCalledTimes(1))
     expect(stressApi.upgradeLegacyJsonResources).toHaveBeenCalledTimes(2)
+    expect(stressApi.listSummaries).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
   it('存储统计未返回时资源列表已就绪', async () => {

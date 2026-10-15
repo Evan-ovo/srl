@@ -1,9 +1,12 @@
 import type { Ref } from 'vue'
+import { RESOURCE_TYPE } from '../types/Resource'
+import type { DetailTab } from './UseResourceOrganizer'
 import { confirmAction } from '../composables/UseConfirmDialog'
 import { exportService, resourceService } from '../core/LibraryContainer'
 import { createNativeResourceDeepLink } from '../core/NativeRuntime'
 import { referenceIndex } from '../core/ReferenceIndex'
 import type { ResourceVersionView } from '../services/ResourceService'
+import { createResourceArchiveSource } from '../services/ExportService'
 import type { CharacterCardContentEdit } from '../types/CharacterCardContentEdit'
 import {
   getRelatedResourceIds,
@@ -31,12 +34,14 @@ interface LibraryResourceActionsContext {
   resources: Ref<ResourceSummary[]>
   moveResourcesToRecycleBin: (ids: string[]) => Promise<void>
   isOrganizing: Ref<boolean, boolean>
-  loadResources: () => Promise<void>
+  loadResources: (ids?: string[]) => Promise<void>
   categories: Ref<Category[]>
 }
 
 export function useLibraryResourceActions(getContext: () => LibraryResourceActionsContext) {
   let isFavoriteBusy = false
+  let detailGeneration = 0
+  const detailReads = new Map<string, Promise<void>>()
 
   async function openResourceDetail(
     resource: ResourceReference,
@@ -44,20 +49,65 @@ export function useLibraryResourceActions(getContext: () => LibraryResourceActio
   ): Promise<void> {
     const context = getContext()
 
+    const generation = ++detailGeneration
     const fullResource =
       'originalBlob' in resource ? resource : await resourceService.get(resource.id)
+    if (generation !== detailGeneration) return
     if (!fullResource) {
       context.showNotice('资源文件不存在或已被删除')
       return
     }
     context.organizingInitialTab.value = initialTab
     context.organizingResource.value = fullResource
-    context.organizingBoundResources.value = (
-      await Promise.all(
-        getRelatedResourceIds(fullResource).map((resourceId) => resourceService.get(resourceId)),
-      )
-    ).flatMap((item) => (item && !isUserPersonaAvatarAttachment(item) ? [item] : []))
-    context.organizingVersions.value = await resourceService.listVersions(fullResource.id)
+    context.organizingBoundResources.value = []
+    context.organizingVersions.value = []
+  }
+
+  async function prepareResourceDetail(tab: DetailTab): Promise<void> {
+    const context = getContext(),
+      resource = context.organizingResource.value
+    if (!resource) return
+    const versions = tab === 'versions'
+    const related =
+      tab === 'content' || (tab === 'overview' && resource.type === RESOURCE_TYPE.USER_PERSONA)
+    if (!versions && !related) return
+    const generation = detailGeneration
+    const key = JSON.stringify([
+      generation,
+      resource.id,
+      resource.contentHash,
+      resource.updatedAt,
+      versions,
+    ])
+    const existing = detailReads.get(key)
+    if (existing) return existing
+    const pending = (async () => {
+      const valid = () =>
+        generation === detailGeneration && context.organizingResource.value === resource
+      if (versions) {
+        const result = await resourceService.listVersions(resource.id)
+        if (valid()) context.organizingVersions.value = result
+      } else {
+        const result: Resource[] = [],
+          ids = getRelatedResourceIds(resource)
+        for (let start = 0; start < ids.length; start += 4) {
+          if (!valid()) return
+          const batch = await Promise.all(
+            ids.slice(start, start + 4).map((id) => resourceService.get(id)),
+          )
+          result.push(
+            ...batch.flatMap((item) =>
+              item && !isUserPersonaAvatarAttachment(item) ? [item] : [],
+            ),
+          )
+        }
+        if (valid()) context.organizingBoundResources.value = result
+      }
+    })().finally(() => {
+      if (detailReads.get(key) === pending) detailReads.delete(key)
+    })
+    detailReads.set(key, pending)
+    return pending
   }
 
   async function copyResourceDeepLink(resource: ResourceSummary): Promise<void> {
@@ -79,8 +129,10 @@ export function useLibraryResourceActions(getContext: () => LibraryResourceActio
   function closeResourceDetail(): void {
     const context = getContext()
 
+    detailGeneration++
     context.organizingResource.value = undefined
     context.organizingBoundResources.value = []
+    context.organizingVersions.value = []
   }
 
   function openResourceFromLayout(resource: ResourceSummary): void {
@@ -173,9 +225,15 @@ export function useLibraryResourceActions(getContext: () => LibraryResourceActio
     context.isOrganizing.value = true
     try {
       await resourceService.updateDetails(resource, details)
-      await context.loadResources()
-      context.organizingResource.value = undefined
-      context.organizingBoundResources.value = []
+      await context.loadResources([
+        ...new Set([
+          resource.id,
+          ...getRelatedResourceIds(resource),
+          ...details.relatedResourceIds,
+        ]),
+      ])
+      if (context.organizingResource.value !== resource) return
+      closeResourceDetail()
       context.showNotice('资源详情已保存')
     } catch (error) {
       context.showNotice(error instanceof Error ? error.message : '资源详情保存失败')
@@ -191,16 +249,17 @@ export function useLibraryResourceActions(getContext: () => LibraryResourceActio
     if (!source || !resourceIds.length) return
     context.isOrganizing.value = true
     try {
-      const archive = await exportService.createArchive(
-        await resourceService.list(),
+      const archiveSource = await createResourceArchiveSource(resourceService, resourceIds)
+      const [archive] = await exportService.createArchivesFromSource(
+        archiveSource,
         context.categories.value,
         {
           mode: 'partial',
           resourceIds,
           includeAllCategories: false,
         },
-        await resourceService.listAllVersions(),
       )
+      if (!archive) throw new Error('所选关联文件已不存在')
       const safeName = source.name.replace(/[<>:"/\\|?*]/g, '_').trim() || '资源'
       downloadBlob(archive.blob, `${safeName}-配套文件.zip`)
       context.showNotice(`已打包下载 ${resourceIds.length} 个关联文件`)
@@ -212,6 +271,7 @@ export function useLibraryResourceActions(getContext: () => LibraryResourceActio
   }
   return {
     openResourceDetail,
+    prepareResourceDetail,
     copyResourceDeepLink,
     closeResourceDetail,
     openResourceFromLayout,

@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto'
+import console from 'node:console'
 
 import { IndexedDbArchiveStorage } from './IndexedDbArchiveStorage'
 import { IndexedDbCategoryStorage } from './IndexedDbCategoryStorage'
@@ -32,7 +33,12 @@ import { IndexedDbProductAssistantStorage } from './IndexedDbProductAssistantSto
 import { newAssistantConversation } from '../services/ProductAssistantWorkspaceService'
 import { IndexedDbAssetStore } from './IndexedDbAssetStore'
 import { RecycleBinService } from '../services/RecycleBinService'
-import { RESOURCE_TYPE, type Resource, type ResourceSummary } from '../types/Resource'
+import {
+  RESOURCE_TYPE,
+  toResourceListSummary,
+  type Resource,
+  type ResourceSummary,
+} from '../types/Resource'
 import {
   AndroidAppDatabaseMigrator,
   encodeAppDatabaseKey,
@@ -43,7 +49,13 @@ import {
 import { hashBlob } from '../services/HashService'
 import { ChatReaderService } from '../services/ChatReaderService'
 import { ResourceService } from '../services/ResourceService'
-import { updateDetails } from '../services/ResourceOrganizationOperations'
+import {
+  updateDetails,
+  moveManyToCategory,
+  updateTagsMany,
+  addTagsPerResource,
+  undoAddedTags,
+} from '../services/ResourceOrganizationOperations'
 import {
   getRetainedIndexedDbCopy,
   clearRetainedIndexedDbCopy,
@@ -302,6 +314,52 @@ function createNativeStore(keyPages = false, bridgeDelay = 0) {
   }
 }
 
+it.each([1000, 5000, 10000])(
+  'measures bounded summary bridge reads for %i native rows',
+  async (size) => {
+    const database = new AppDatabase(`native-summary-perf-${crypto.randomUUID()}`)
+    const { native, stores } = createNativeStore(true, 2)
+    const ids = Array.from({ length: size }, (_, i) => `r-${i}`)
+    for (const id of ids)
+      stores.get('resourceListSummaries')!.set(JSON.stringify(id), { id, name: id, tags: ['keep'] })
+    database.use(createAndroidNativeDexieCore({ enabled: () => true, native }))
+    const batches = vi.spyOn(native, 'getRecordsByKeys')
+    const originals = vi.spyOn(native, 'readBlob')
+    try {
+      const started = performance.now()
+      const rows = await database.resourceListSummaries.bulkGet(ids)
+      console.info(
+        `NATIVE summaries ${size}: ${Math.round(performance.now() - started)}ms; bridge batches=${batches.mock.calls.length}; max rows=${Math.max(...batches.mock.calls.map(([, keys]) => keys.length))}`,
+      )
+      expect(rows.map((r) => r?.id)).toEqual(ids)
+      expect(batches).toHaveBeenCalledTimes(Math.ceil(size / 250))
+      expect(batches.mock.calls.every(([, keys]) => keys.length <= 250)).toBe(true)
+      expect(originals).not.toHaveBeenCalled()
+      expect(await database.resourceListSummaries.bulkGet(['r-0', 'missing', 'r-0'])).toEqual([
+        rows[0],
+        undefined,
+        rows[0],
+      ])
+      batches.mockClear()
+      const smaller = []
+      const lowStarted = performance.now()
+      for (let start = 0; start < ids.length; start += 100)
+        smaller.push(
+          ...(await database.resourceListSummaries.bulkGet(ids.slice(start, start + 100))),
+        )
+      console.info(
+        `NATIVE caller batches 100 ${size}: ${Math.round(performance.now() - lowStarted)}ms; bridge batches=${batches.mock.calls.length}`,
+      )
+      expect(smaller).toEqual(rows)
+      expect(batches).toHaveBeenCalledTimes(Math.ceil(size / 100))
+      expect(batches.mock.calls.every(([, keys]) => keys.length <= 100)).toBe(true)
+    } finally {
+      database.close()
+      await database.delete()
+    }
+  },
+)
+
 async function delayedDatabase() {
   const name = `native-core-routes-${crypto.randomUUID()}`
   const seed = new AppDatabase(name)
@@ -319,6 +377,47 @@ async function delayedDatabase() {
     },
   }
 }
+
+it('persists selected metadata edits in the native adapter without reading or replacing originals', async () => {
+  const fixture = await delayedDatabase()
+  const { database, native, stores } = fixture
+  const storage = new IndexedDbResourceStorage(database)
+  activateAndroidNativeAppDatabase()
+  try {
+    const selected = await routeResource('selected-organization')
+    await storage.save(selected)
+    for (let i = 0; i < 10000; i++) {
+      const row = { ...toResourceListSummary(selected), id: `unrelated-${i}` }
+      stores.get('resources')!.set(JSON.stringify(row.id), {
+        ...row,
+        originalBlob: { __srlAppDatabaseValueV1: 'blob', size: 1024 ** 3 },
+      })
+      stores.get('resourceSummaries')!.set(JSON.stringify(row.id), row)
+      stores.get('resourceListSummaries')!.set(JSON.stringify(row.id), row)
+    }
+    const originals = vi.spyOn(native, 'readBlob')
+    const full = vi.spyOn(storage, 'list')
+    const rewrites = vi.spyOn(storage, 'saveMany')
+    await moveManyToCategory(storage, [selected.id, selected.id, 'missing'], 'folder')
+    await updateTagsMany(storage, [selected.id], 'new', 'add')
+    const added = await addTagsPerResource(storage, [{ resourceId: selected.id, tags: ['AI'] }])
+    await undoAddedTags(storage, added.entries)
+    expect(originals).not.toHaveBeenCalled()
+    expect(full).not.toHaveBeenCalled()
+    expect(rewrites).not.toHaveBeenCalled()
+    database.close()
+    await database.open()
+    const loaded = (await storage.get(selected.id))!
+    expect(loaded.tags).toEqual(['retain', 'new'])
+    expect(loaded.categoryIds).toEqual(['folder'])
+    expect(loaded.metadata).toEqual(selected.metadata)
+    expect(await loaded.originalBlob.text()).toBe(await selected.originalBlob.text())
+    expect((await storage.getSummary('unrelated-0'))!.tags).toEqual(['retain'])
+  } finally {
+    deactivateAndroidNativeAppDatabase()
+    await fixture.close()
+  }
+})
 
 async function routeResource(id: string): Promise<Resource> {
   const originalBlob = new Blob([JSON.stringify({ id, original: `preserve-${id}` })], {
@@ -1760,7 +1859,7 @@ describe('AndroidNativeDexieCore', () => {
     expect(keys).toHaveLength(3000)
     expect(await database.resources.count()).toBe(3000)
     expect(await database.resourceListSummaries.bulkGet(keys.slice(0, 250))).toHaveLength(250)
-    expect(batches).toHaveBeenCalledTimes(3)
+    expect(batches).toHaveBeenCalledTimes(1)
     expect(eager).not.toHaveBeenCalled()
     expect(single).not.toHaveBeenCalled()
     expect(blobs).not.toHaveBeenCalled()
@@ -2683,6 +2782,277 @@ describe('AndroidNativeDexieCore', () => {
       read.mockRestore()
       database.close()
       await database.delete()
+    }
+  })
+})
+
+describe('recent card native read', () => {
+  it('keeps encrypted history metadata on the payload-only vault decoder', async () => {
+    const fixture = await delayedDatabase()
+    const vault = new VaultService(fixture.database)
+    const blobRead = vi
+      .spyOn(nativeAppDatabase, 'readBlob')
+      .mockImplementation(fixture.native.readBlob.bind(fixture.native))
+    try {
+      await vault.initialize()
+      await vault.enable('synthetic-test-password')
+      const storage = new IndexedDbResourceStorage(fixture.database, vault)
+      const sample = await routeResource('encrypted-history')
+      await storage.saveVersion({
+        ...sample,
+        versionGroupId: 'owner',
+        metadata: { creator: 'private author' },
+      })
+      const read = vi.spyOn(fixture.native, 'readBlob')
+      activateAndroidNativeAppDatabase()
+      const rows = await storage.listVersionListSummaries()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.metadata.creator).toBe('private author')
+      expect(rows[0]).not.toHaveProperty('originalBlob')
+      expect(read.mock.calls.every((call) => !call[2].includes('originalBlob'))).toBe(true)
+      expect(blobRead.mock.calls.every((call) => !call[2].includes('originalBlob'))).toBe(true)
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      blobRead.mockRestore()
+      await fixture.close()
+    }
+  })
+
+  it('batches historical catalogue metadata without loading any original or thumbnail', async () => {
+    const fixture = await delayedDatabase()
+    const storage = new IndexedDbResourceStorage(fixture.database)
+    const sample = await routeResource('version')
+    for (let i = 0; i < 1001; i++)
+      fixture.stores.get('resourceVersions')!.set(JSON.stringify(`v-${i}`), {
+        ...sample,
+        id: `v-${i}`,
+        versionGroupId: 'owner',
+        updatedAt: i,
+        originalBlob: {
+          __srlAppDatabaseValueV1: 'blob',
+          fieldPath: '$/originalBlob',
+          size: 1024 ** 3,
+          sha256: 'a'.repeat(64),
+          mimeType: 'application/json',
+        },
+        thumbnailBlob: {
+          __srlAppDatabaseValueV1: 'blob',
+          fieldPath: '$/thumbnailBlob',
+          size: 100,
+          sha256: 'b'.repeat(64),
+          mimeType: 'image/png',
+        },
+      })
+    const originals = vi.spyOn(fixture.native, 'readBlob')
+    const batches = vi.spyOn(fixture.native, 'getRecordsByKeys')
+    activateAndroidNativeAppDatabase()
+    try {
+      const rows = await storage.listVersionListSummaries()
+      expect(rows).toHaveLength(1001)
+      expect(rows[0]!.id).toBe('v-1000')
+      expect(rows.at(-1)!.id).toBe('v-0')
+      expect(rows.every((row) => !('originalBlob' in row) && !('thumbnailBlob' in row))).toBe(true)
+      expect(originals).not.toHaveBeenCalled()
+      expect(batches).toHaveBeenCalledTimes(13)
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      await fixture.close()
+    }
+  })
+
+  it('reopens sparse chat positions through ResourceService, mirror and the native settings adapter', async () => {
+    const fixture = await delayedDatabase()
+    const vault = new VaultService(fixture.database)
+    const storage = new NativeMirroredResourceStorage(
+      new IndexedDbResourceStorage(fixture.database),
+      vault,
+    )
+    const sample = await routeResource('chat')
+    const rows = Array.from({ length: 700 }, (_, floor) => ({
+      name: '角色',
+      mes: `第${floor}楼` + '中🌧'.repeat(80),
+      is_user: floor % 3 === 1,
+    }))
+    const originalBlob = new File([rows.map((row) => JSON.stringify(row)).join('\n')], 'chat.jsonl')
+    await storage.save({
+      ...sample,
+      type: RESOURCE_TYPE.CHAT,
+      originalBlob,
+      fileSize: originalBlob.size,
+      metadata: { format: 'jsonl', messageCount: rows.length, visibleMessageCount: rows.length },
+    })
+    const range = vi
+      .spyOn(nativeAppDatabase, 'readBlobRange')
+      .mockImplementation(async (store, key, path, offset, length) =>
+        fixture.blobs
+          .get(fixture.blobKey(store, key, path))!
+          .slice(offset, offset + length)
+          .arrayBuffer(),
+      )
+    const full = vi.spyOn(fixture.native, 'readBlob')
+    const reader = () =>
+      new ChatReaderService(new ResourceService(storage, new ResourceParserRegistry([])))
+    activateAndroidNativeAppDatabase()
+    try {
+      const cold = await reader().read('chat', 600, 20)
+      expect(await storage.getChatReadPositionCache?.('chat')).toMatchObject({
+        checkpoints: expect.arrayContaining([expect.objectContaining({ floor: 512 })]),
+      })
+      fixture.database.close()
+      await fixture.database.open()
+      range.mockClear()
+      const reopened = reader()
+      expect(await reopened.read('chat', 600, 20)).toEqual(cold)
+      expect(range.mock.calls[0]!.slice(3, 5)).toEqual([0, 1])
+      expect(range.mock.calls[1]![3]).toBeGreaterThan(0)
+      expect(range.mock.calls.reduce((sum, call) => sum + call[4], 0)).toBeLessThan(
+        originalBlob.size / 2,
+      )
+      range.mockClear()
+      expect(await reopened.read('chat', 600, 20)).toEqual(cold)
+      expect(range.mock.calls.map((call) => call.slice(3, 5))).toEqual([[0, 1]])
+      expect(full).not.toHaveBeenCalled()
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      range.mockRestore()
+      await fixture.close()
+    }
+  })
+
+  it('reads only five recent cards through the indexed bridge and waits for an in-flight writer', async () => {
+    const fixture = await delayedDatabase()
+    const storage = new IndexedDbResourceStorage(fixture.database)
+    const sample = await routeResource('sample')
+    for (let i = 0; i < 1000; i++) {
+      const id = `other-${i}`
+      fixture.stores.get('resourceListSummaries')!.set(JSON.stringify(id), {
+        ...sample,
+        id,
+        updatedAt: 100 + i,
+      })
+    }
+    for (const id of ['a', 'b', 'c', 'd', 'e', 'f']) {
+      await storage.save({
+        ...sample,
+        id,
+        type: RESOURCE_TYPE.CHARACTER_CARD,
+        thumbnailBlob: new Blob([id], { type: 'image/png' }),
+        updatedAt: 1,
+      })
+    }
+    const recent = vi
+      .spyOn(nativeAppDatabase, 'getRecentRecordsByIndex')
+      .mockImplementation(async (store, index, limit, filterIndex, filterKey) => {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        expect(index).toBe('updatedAt')
+        expect(filterIndex).toBe('type')
+        expect(filterKey).toBe(encodeAppDatabaseKey(RESOURCE_TYPE.CHARACTER_CARD))
+        return [...fixture.stores.get(store)!]
+          .filter(([, row]) => row.type === JSON.parse(filterKey!))
+          .sort(
+            ([a, left], [b, right]) =>
+              Number(right.updatedAt) - Number(left.updatedAt) || (a < b ? 1 : a > b ? -1 : 0),
+          )
+          .slice(0, limit)
+          .map(([key, value]) => ({ key, value }))
+      })
+    const blobRead = vi
+      .spyOn(nativeAppDatabase, 'readBlob')
+      .mockImplementation(fixture.native.readBlob.bind(fixture.native))
+    const payloadReads = vi.spyOn(fixture.native, 'getRecordsByKeys')
+    const indexReads = vi.spyOn(fixture.native, 'getIndexEntries')
+    activateAndroidNativeAppDatabase()
+    try {
+      const result = await storage.listRecentCharacterCardSummaries(5)
+      expect(result.map((row) => row.id)).toEqual(['f', 'e', 'd', 'c', 'b'])
+      expect(result[0]!.thumbnailAssetId).toEqual(expect.any(String))
+      expect(result[0]).not.toHaveProperty('thumbnailBlob')
+      expect(payloadReads).not.toHaveBeenCalled()
+      expect(indexReads).not.toHaveBeenCalled()
+      expect(blobRead).not.toHaveBeenCalled()
+
+      let release!: () => void, entered!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const ready = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const writer = fixture.database.transaction(
+        'rw',
+        fixture.database.resourceListSummaries,
+        async () => {
+          await fixture.database.resourceListSummaries.get('a')
+          entered()
+          await Dexie.waitFor(blocked)
+          await fixture.database.resourceListSummaries.update('a', { updatedAt: 5000 })
+        },
+      )
+      await ready
+      const reading = Dexie.ignoreTransaction(() => storage.listRecentCharacterCardSummaries(1))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(recent).toHaveBeenCalledOnce()
+      release()
+      await writer
+      expect((await reading).map((row) => row.id)).toEqual(['a'])
+
+      // Keep old-interface parity independent of the intentionally slow 1 ms/record fixture.
+      for (let i = 0; i < 1000; i++)
+        fixture.stores.get('resourceListSummaries')!.delete(JSON.stringify(`other-${i}`))
+      recent.mockRejectedValueOnce({ code: 'UNIMPLEMENTED' })
+      const old = await storage.listRecentCharacterCardSummaries(5)
+      expect(old.map((row) => row.id)).toEqual(['a', 'f', 'e', 'd', 'c'])
+      expect(indexReads).toHaveBeenCalled()
+      const recentCalls = recent.mock.calls.length
+      await fixture.database.transaction('rw', fixture.database.resourceListSummaries, async () => {
+        await fixture.database.resourceListSummaries.update('b', { updatedAt: 9000 })
+        expect((await storage.listRecentCharacterCardSummaries(1)).map((row) => row.id)).toEqual([
+          'b',
+        ])
+      })
+      expect(recent).toHaveBeenCalledTimes(recentCalls)
+      payloadReads.mockClear()
+      recent.mockRejectedValueOnce(new Error('SQLite read failed'))
+      await expect(storage.listRecentCharacterCardSummaries(5)).rejects.toThrow(
+        'SQLite read failed',
+      )
+      expect(payloadReads).not.toHaveBeenCalled()
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      recent.mockRestore()
+      blobRead.mockRestore()
+      await fixture.close()
+    }
+  })
+
+  it('keeps private recent-card selection on the decoded vault route', async () => {
+    const fixture = await delayedDatabase()
+    const vault = new VaultService(fixture.database)
+    const recent = vi
+      .spyOn(nativeAppDatabase, 'getRecentRecordsByIndex')
+      .mockRejectedValue(new Error('private type must not be queried'))
+    try {
+      await vault.initialize()
+      await vault.enable('synthetic-test-password')
+      const storage = new IndexedDbResourceStorage(fixture.database, vault)
+      const sample = await routeResource('sample')
+      await storage.saveMany([
+        { ...sample, id: 'card-a', type: RESOURCE_TYPE.CHARACTER_CARD },
+        { ...sample, id: 'card-b', type: RESOURCE_TYPE.CHARACTER_CARD },
+        { ...sample, id: 'newer-other', updatedAt: 5000 },
+      ])
+      activateAndroidNativeAppDatabase()
+      expect((await storage.listRecentCharacterCardSummaries(1)).map((row) => row.id)).toEqual([
+        'card-b',
+      ])
+      expect(recent).not.toHaveBeenCalled()
+      expect(fixture.stores.get('resourceListSummaries')!.get('"card-b"')).not.toHaveProperty(
+        'type',
+      )
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      recent.mockRestore()
+      await fixture.close()
     }
   })
 })

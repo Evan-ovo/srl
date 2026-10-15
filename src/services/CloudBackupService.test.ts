@@ -585,7 +585,7 @@ describe('CloudBackupService V3', () => {
     expect(service.getSnapshot().credentials.webdav).toBe('valid')
     await expect(service.testConnection(webDavConfig)).rejects.toThrow(
       // SRL-PUBLIC-SYNC: BEGIN REPLACE id=koofr-worker-error-assertion
-      /SRL Worker 没有返回 Koofr 中转响应/,
+      /自建中继未完成 Koofr 请求/,
       // SRL-PUBLIC-SYNC: END REPLACE id=koofr-worker-error-assertion
     )
     expect(service.getSnapshot().credentials.webdav).toBe('valid')

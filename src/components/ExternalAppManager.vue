@@ -36,6 +36,7 @@ const emit = defineEmits<{
 
 const props = defineProps<{
   sharedFiles?: File[]
+  embedded?: boolean
 }>()
 const { activeDialog: confirmation, respond: respondToConfirmation } = useConfirmDialogState()
 
@@ -441,7 +442,7 @@ watch(
   () => props.sharedFiles,
   (files) => {
     if (!files?.length) return
-    void inspectFiles([...files]).then((valid) => {
+    void inspectFiles(files).then((valid) => {
       if (valid) emit('shared-files-consumed')
     })
   },
@@ -803,7 +804,7 @@ async function clearAppData(app: InstalledExternalApp): Promise<void> {
     @drop="handleDrop"
     @paste="handlePaste"
   >
-    <FeatureAppHeader title="扩展" back-label="返回功能桌面" @back="emit('back')">
+    <FeatureAppHeader v-if="!embedded" title="扩展" back-label="返回功能桌面" @back="emit('back')">
       <template #actions>
         <button
           class="feature-header-action external-app-manager__add"
@@ -926,7 +927,7 @@ async function clearAppData(app: InstalledExternalApp): Promise<void> {
         </div>
       </article>
     </details>
-    <Teleport to="body">
+    <Teleport to="body" :disabled="embedded">
       <div v-if="preview" class="external-app-manager__overlay" @click.self="closeOverlay">
         <section
           ref="overlayPanel"

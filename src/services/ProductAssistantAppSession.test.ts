@@ -189,8 +189,21 @@ describe('assistant APP drafts using the real package/storage owner', () => {
     await run('export')
     const exported = await service.inspect(host.exportFile.mock.calls[0]![0])
     expect(exported.manifest.id).toBe(receipt.app!.id)
+    expect(exported.manifest.icon).toBeUndefined()
+    expect(exported.iconDataUrl).toBeUndefined()
+    expect(exported.packageFiles['icon.svg']).toBeUndefined()
     expect(new TextDecoder().decode(exported.packageFiles['app.css'])).toBe('button { color: red }')
     expect(await service.list()).toEqual([])
+  })
+  it('keeps an explicitly authored APP icon instead of replacing it with the host default', async () => {
+    const { service, host, run, create, source } = setup()
+    const icon = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4" fill="#ff8800"/></svg>'
+    await create({ ...source, 'icon.svg': icon })
+    await run('export')
+    const exported = await service.inspect(host.exportFile.mock.calls[0]![0])
+    expect(exported.manifest.icon).toBe('icon.svg')
+    expect(new TextDecoder().decode(exported.packageFiles['icon.svg'])).toBe(icon)
+    expect(exported.iconDataUrl).toBe(`data:image/svg+xml;base64,${btoa(icon)}`)
   })
   it('requires reading the current version before replacement, preserves siblings, and rejects stale writes', async () => {
     const { session, run, create } = setup()

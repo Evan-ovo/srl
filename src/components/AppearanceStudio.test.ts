@@ -9,7 +9,7 @@ vi.mock('../core/OfficialAppRuntime', () => ({
   officialAppService: { list: async () => [{ id: 'imageAlbum' }, { id: 'assistant' }] },
   loadOfficialApp: async (id: string) => {
     if (id === 'assistant') return (await import('./ProductAssistant.vue')).default
-    throw new Error(`Unexpected test APP: ${id}`)
+    throw new Error('Unexpected test APP: ' + id)
   },
 }))
 // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=appearance-official-runtime-test-mock
@@ -22,12 +22,16 @@ vi.mock('./ProductAssistant.vue', () => ({
 }))
 // SRL-PUBLIC-SYNC: END REPLACE id=appearance-assistant-component-test-mock
 
-import { BrowserStorageService } from '../services/BrowserStorageService'
+import { BrowserStorageService, type CustomCssScope } from '../services/BrowserStorageService'
 import AppearanceOriginalCssActions from './AppearanceOriginalCssActions.vue'
 import AppearanceStudio from './AppearanceStudio.vue'
 import ProductAssistant from './ProductAssistant.vue'
+import ProductAssistantComparison from './ProductAssistantComparison.vue'
 import type { AssistantRequest, AssistantReply } from '../services/ProductAssistantService'
 import { appearanceTransaction } from '../core/AppearanceSafety'
+import { createUiView, normalizeUiViews } from '../core/UiCustomization'
+import { confirmAction } from '../composables/UseConfirmDialog'
+vi.mock('../composables/UseConfirmDialog', () => ({ confirmAction: vi.fn(async () => true) }))
 vi.mock('../services/ProductAssistantScreenshot', () => ({
   captureAssistantPage: vi.fn(async () => ({
     id: 'shot',
@@ -39,6 +43,239 @@ vi.mock('../services/ProductAssistantScreenshot', () => ({
 
 describe('AppearanceStudio cabinet layout', () => {
   beforeEach(() => localStorage.clear())
+
+  it('allows an unchanged saved Vue preset to be reapplied after restoring the original UI', async () => {
+    const storage = new BrowserStorageService()
+    const view = { ...createUiView(), enabled: true }
+    const preset = {
+      id: 'vue-preset',
+      name: 'Vue主题',
+      globalCss: '',
+      scopedCss: {},
+      views: normalizeUiViews({ library: view }),
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.setCustomUiPresets([preset])
+    storage.setActiveCustomUiPresetId(preset.id)
+    storage.setCustomUiViews(preset.views)
+    const wrapper = mount(AppearanceStudio, {
+      props: { theme: 'light', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
+    })
+    try {
+      const save = wrapper.get<HTMLButtonElement>('[data-assistant-focus="appearance-save"]')
+      expect(save.element.disabled).toBe(true)
+      // Same persistent change as UiCustomizationHost's protected recovery button.
+      storage.setCustomUiViews({ library: { ...view, enabled: false } })
+      await flushPromises()
+      expect(save.element.disabled).toBe(false)
+      expect(save.text()).toBe('重新应用')
+      expect(wrapper.text()).toContain('已保存 · 未应用')
+      await save.trigger('click')
+      await flushPromises()
+      expect(wrapper.emitted('save-css')?.at(-1)).toEqual(['', { views: preset.views }])
+      storage.setCustomUiViews(preset.views)
+      await flushPromises()
+      expect(save.element.disabled).toBe(true)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('previews the complete CSS and Vue draft through the real trial without saving it', async () => {
+    const storage = new BrowserStorageService()
+    const preset = {
+      id: 'trial',
+      name: '待预览',
+      globalCss: 'body { color: pink; }',
+      scopedCss: {},
+      views: normalizeUiViews({ library: { ...createUiView(), enabled: true } }),
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.setCustomUiPresets([preset])
+    storage.setActiveCustomUiPresetId(preset.id)
+    const wrapper = mount(AppearanceStudio, {
+      props: { theme: 'dark', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
+    })
+    try {
+      await wrapper.get('textarea').setValue('body { color: orange; }')
+      const preview = wrapper.findAll('button').find((button) => button.text() === '预览并试用')!
+      await preview.trigger('click')
+      await flushPromises()
+      expect(wrapper.emitted('save-css')?.at(-1)).toEqual([
+        'body { color: orange; }',
+        { views: preset.views },
+      ])
+      expect(storage.getCustomUiPresets()).toEqual([preset])
+      expect(wrapper.find('iframe[title="自定义 CSS 隔离预览"]').exists()).toBe(false)
+      vi.mocked(confirmAction).mockResolvedValueOnce(false)
+      await preview.trigger('click')
+      await flushPromises()
+      expect(wrapper.emitted('save-css')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('refreshes a retained editor on return without losing its unsaved CSS draft', async () => {
+    const storage = new BrowserStorageService()
+    const original = {
+      id: 'original',
+      name: '原预设',
+      globalCss: ':root { --x: pink; }',
+      scopedCss: {},
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.setCustomUiPresets([original])
+    storage.setActiveCustomUiPresetId(original.id)
+    const wrapper = mount(AppearanceStudio, {
+      props: {
+        active: true,
+        theme: 'light',
+        layoutMode: 'grid',
+        uiFontScale: 'standard',
+        customCss: original.globalCss,
+      },
+    })
+    try {
+      await wrapper.get('textarea').setValue('/*未保存草稿*/ body { color: pink; }')
+      await wrapper.setProps({ active: false })
+      storage.setCustomUiPresets([
+        original,
+        { ...original, id: 'plaza', name: '新下载皮肤', globalCss: 'body {color: red;}' },
+      ])
+      storage.setActiveCustomUiPresetId('plaza')
+      await wrapper.setProps({ active: true })
+      expect(wrapper.get('.appearance-preset-fields select').text()).toContain('新下载皮肤')
+      expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toContain('未保存草稿')
+      expect(wrapper.emitted('save-css')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('selects the applied saved preset when returning with a clean editor', async () => {
+    const storage = new BrowserStorageService()
+    const original = {
+      id: 'original',
+      name: '原预设',
+      globalCss: 'body{}',
+      scopedCss: {},
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.setCustomUiPresets([original])
+    const wrapper = mount(AppearanceStudio, {
+      props: {
+        active: true,
+        theme: 'light',
+        layoutMode: 'grid',
+        uiFontScale: 'standard',
+        customCss: '',
+      },
+    })
+    try {
+      await wrapper.setProps({ active: false })
+      const added = {
+        ...original,
+        id: 'plaza',
+        name: '新皮肤',
+        globalCss: '',
+        scopedCss: { shell: '/*原文*/.button{}' },
+      }
+      storage.setCustomUiPresets([original, added])
+      storage.setActiveCustomUiPresetId(added.id)
+      await wrapper.setProps({ active: true })
+      expect(wrapper.get<HTMLSelectElement>('.appearance-preset-fields select').element.value).toBe(
+        added.id,
+      )
+      expect(wrapper.findAll<HTMLTextAreaElement>('textarea')[1]!.element.value).toBe(
+        added.scopedCss.shell,
+      )
+      expect(wrapper.get<HTMLDetailsElement>('.appearance-advanced').element.open).toBe(true)
+      expect(wrapper.emitted('save-css')).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it.each(['shell', 'library', 'app:imageGeneration', 'future:screen'])(
+    'shows existing CSS immediately when opening a %s-only preset',
+    async (scope) => {
+      const storage = new BrowserStorageService()
+      const css = '/*完整原文*/\n:scope { color: pink; }'
+      storage.setCustomUiPresets([
+        {
+          id: 'scoped',
+          name: '局部样式',
+          globalCss: '',
+          scopedCss: { [scope]: css },
+          createdAt: '',
+          updatedAt: '',
+        },
+      ])
+      const wrapper = mount(AppearanceStudio, {
+        props: { theme: 'light', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
+      })
+      try {
+        await flushPromises()
+        expect(wrapper.get<HTMLDetailsElement>('.appearance-advanced').element.open).toBe(true)
+        expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('●')
+        expect(wrapper.findAll<HTMLTextAreaElement>('textarea')[1]!.element.value).toBe(css)
+        if (scope.startsWith('app:') || scope.startsWith('future:'))
+          expect(wrapper.get<HTMLDetailsElement>('.appearance-inactive-scopes').element.open).toBe(
+            true,
+          )
+        expect(storage.getCustomUiPresets()[0]!.scopedCss[scope as CustomCssScope]).toBe(css)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  it('selects a populated scope on preset changes and keeps global-only presets compact', async () => {
+    const storage = new BrowserStorageService()
+    const presets = [
+      {
+        id: 'global',
+        name: '全局',
+        globalCss: ':root { --x: pink; }',
+        scopedCss: {},
+        createdAt: '',
+        updatedAt: '',
+      },
+      {
+        id: 'shell',
+        name: '整套旧预设',
+        globalCss: ':root { --mixed: pink; }',
+        scopedCss: { library: ' ', shell: '.button { color: pink; }' },
+        createdAt: '',
+        updatedAt: '',
+      },
+    ]
+    storage.setCustomUiPresets(presets)
+    storage.setActiveCustomUiPresetId('global')
+    const wrapper = mount(AppearanceStudio, {
+      props: { theme: 'light', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
+    })
+    try {
+      await wrapper.get('.appearance-preset-fields select').setValue('shell')
+      await flushPromises()
+      expect(wrapper.get('[role="tab"][aria-selected="true"]').text()).toContain('整个应用界面')
+      expect(wrapper.get<HTMLDetailsElement>('.appearance-advanced').element.open).toBe(true)
+      expect(wrapper.findAll<HTMLTextAreaElement>('textarea')[1]!.element.value).toBe(
+        presets[1]!.scopedCss.shell,
+      )
+      await wrapper.get('.appearance-preset-fields select').setValue('global')
+      await flushPromises()
+      expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe(presets[0]!.globalCss)
+      expect(wrapper.get<HTMLDetailsElement>('.appearance-advanced').element.open).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
 
   it('offers two, three and four columns and persists the selected density', async () => {
     const wrapper = mount(AppearanceStudio, {
@@ -318,12 +555,15 @@ describe('AppearanceStudio AI CSS owner', () => {
     const proposal: AssistantReply = {
       action: 'global-style',
       answer: '全局换成蓝白色',
-      css: '.toolbar { color:red } :root { --brand: #387da5 }',
+      css: '.toolbar { color:red } :root { --brand: #387da5; --boot-background: #FFF8F3; --recovery-background: #FFFCFE } @scope (.reader-host) { :scope .toolbar { color: purple } } .auth-form input { border-radius: 12px }',
     }
     const value = await child.props('execute')(proposal, currentRequest, signal)
     expect(value.status).toBe('已应用到全局样式')
     const applied = wrapper.emitted('save-assistant-css')![0]![0] as string
     expect(applied).toContain('--brand: #387da5')
+    expect(applied).toContain('@scope (.reader-host)')
+    expect(applied).toContain('.auth-form input')
+    expect(applied).toContain(preset.scopedCss.details)
     expect(applied).toContain(preset.scopedCss.library)
     expect(child.props('getContext')().globalCss).toContain('--brand: #387da5')
     await child.props('execute')(
@@ -423,6 +663,45 @@ describe('AppearanceStudio AI CSS owner', () => {
     expect(child.props('getContext')().css.library).toContain('color:red')
     wrapper.unmount()
   })
+  it.each([
+    ['local', true],
+    ['local', false],
+    ['global', true],
+    ['global', false],
+  ] as const)(
+    'applies and undoes %s CSS without automatic screenshots (permission=%s)',
+    async (kind, canCaptureUi) => {
+      const { wrapper, child, proposal, storage, request, signal } = await setup()
+      const { captureAssistantPage } = await import('../services/ProductAssistantScreenshot')
+      vi.mocked(captureAssistantPage).mockClear()
+      const action: AssistantReply =
+        kind === 'local'
+          ? proposal
+          : {
+              action: 'global-style',
+              answer: '更改主题',
+              css: '.toolbar{background:purple}',
+            }
+      const result = await child.props('execute')(
+        action,
+        { ...request, currentScope: kind === 'global' ? '' : request.currentScope, canCaptureUi },
+        signal,
+      )
+      expect(result.data!.comparison).toMatchObject({
+        beforeCaptured: false,
+        afterCaptured: false,
+      })
+      expect(storage.getCustomUiCss()).toContain('background:purple')
+      await child.props('execute')(
+        { action: 'undo', answer: '撤销' },
+        { ...child.props('getContext')(), history: request.history },
+        signal,
+      )
+      expect(storage.getCustomUiCss()).toBe(request.appliedCss)
+      expect(captureAssistantPage).not.toHaveBeenCalled()
+      wrapper.unmount()
+    },
+  )
   it('does not show or mount the assistant chat inside the regular appearance page', async () => {
     const wrapper = mount(AppearanceStudio, {
       props: {
@@ -517,6 +796,26 @@ describe('AppearanceStudio AI CSS owner', () => {
     expect(value.ok).toBe(false)
     expect(value.image).toBeUndefined()
     expect(value.text).toContain('未挂载')
+    wrapper.unmount()
+  })
+  it('shows keep/undo without empty image controls while retaining old real comparisons', async () => {
+    const comparison = { id: 'edit', scope: 'library', title: '资源库', state: 'applied' as const }
+    const wrapper = mount(ProductAssistantComparison, {
+      props: { comparison, currentId: 'edit', busy: false },
+    })
+    expect(wrapper.text()).toContain('已应用')
+    expect(wrapper.find('.chat-comparison-switch').exists()).toBe(false)
+    expect(wrapper.find('.chat-empty').exists()).toBe(false)
+    await wrapper.find('footer button').trigger('click')
+    expect(wrapper.emitted('action')).toEqual([['undo-comparison', 'edit']])
+    await wrapper.setProps({
+      comparison: {
+        ...comparison,
+        after: { id: 'shot', name: '实际截图', dataUrl: 'data:image/jpeg;base64,AA' },
+      },
+    })
+    expect(wrapper.find('.chat-comparison-switch').exists()).toBe(true)
+    expect(wrapper.find('img').exists()).toBe(true)
     wrapper.unmount()
   })
   it('imports CSS above 200000 characters with the final rule intact in storage and application', async () => {

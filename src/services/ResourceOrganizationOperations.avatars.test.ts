@@ -4,7 +4,7 @@ import { AppDatabase } from '../database/AppDatabase'
 import { IndexedDbResourceStorage } from '../storage/IndexedDbResourceStorage'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import { findDuplicateGroups } from '../utils/DuplicateGroups'
-import { deleteResource, mergeDuplicates } from './ResourceOrganizationOperations'
+import { deleteMany, mergeDuplicates } from './ResourceOrganizationOperations'
 
 function resource(id: string, overrides: Partial<Resource> = {}): Resource {
   return {
@@ -57,7 +57,7 @@ describe('cleanup restored avatar copies', () => {
     const storage = new IndexedDbResourceStorage(db)
     try {
       await storage.saveMany(fixture())
-      const remove = (id: string) => deleteResource(storage, id)
+      const remove = (ids: string[]) => deleteMany(storage, ids)
       expect(await mergeDuplicates(storage, remove, 'keep', ['copy'])).toBe(1)
       const persona = await storage.get('persona')
       expect(persona?.relatedResourceIds).toEqual(['keep'])
@@ -90,7 +90,7 @@ describe('cleanup restored avatar copies', () => {
           resource('different-owner', { relatedResourceIds: ['other-persona'] }),
         ])
         await expect(
-          mergeDuplicates(storage, (id) => deleteResource(storage, id), 'keep', [target]),
+          mergeDuplicates(storage, (ids) => deleteMany(storage, ids), 'keep', [target]),
         ).rejects.toThrow('头像身份')
         expect(await storage.get(target)).toBeDefined()
         expect((await storage.get('persona'))?.relatedResourceIds).toEqual(['copy'])

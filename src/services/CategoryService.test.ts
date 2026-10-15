@@ -28,6 +28,38 @@ class MemoryCategoryStorage implements CategoryStorageAdapter {
 }
 
 describe('CategoryService', () => {
+  it('uses one category snapshot for uniqueness and legacy ordering when creating a folder', async () => {
+    const storage = new MemoryCategoryStorage()
+    await storage.save({
+      id: 'old',
+      name: '旧文件夹',
+      color: '#486b5d',
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await storage.save({
+      id: 'ordered',
+      name: '已有排序',
+      color: '#486b5d',
+      sortOrder: 7,
+      createdAt: 2,
+      updatedAt: 2,
+    })
+    const list = vi.spyOn(storage, 'list')
+    const service = new CategoryService(storage)
+
+    await service.create(' 新文件夹 ', '#486b5d')
+
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(storage.categories.get('old')?.sortOrder).toBe(0)
+    expect(storage.categories.get('ordered')?.sortOrder).toBe(7)
+    expect(
+      [...storage.categories.values()].find((item) => item.name === '新文件夹')?.sortOrder,
+    ).toBe(2)
+    await expect(service.create('新文件夹', '#486b5d')).rejects.toThrow('已存在同名文件夹')
+    expect(storage.categories.size).toBe(3)
+  })
+
   it('creates a trimmed category with normalized color', async () => {
     const storage = new MemoryCategoryStorage()
     const service = new CategoryService(storage)
@@ -47,6 +79,17 @@ describe('CategoryService', () => {
     await service.create('Lore', '#486b5d')
 
     await expect(service.create('lore', '#8a6a47')).rejects.toThrow('已存在同名文件夹')
+  })
+
+  it('does not persist a category when the shared validation snapshot cannot be read', async () => {
+    const storage = new MemoryCategoryStorage()
+    vi.spyOn(storage, 'list').mockRejectedValueOnce(new Error('read failed'))
+    const save = vi.spyOn(storage, 'save')
+    await expect(new CategoryService(storage).create('新文件夹', '#486b5d')).rejects.toThrow(
+      'read failed',
+    )
+    expect(save).not.toHaveBeenCalled()
+    expect(storage.categories.size).toBe(0)
   })
 
   it('updates and deletes an existing category', async () => {
