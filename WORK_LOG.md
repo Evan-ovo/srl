@@ -251,4 +251,4 @@
 
 - 对照官版本地已提交 `main` `ae352cee656b3012381fa03b8299aee8de7a669c`，移除 Public 读了么外壳多余的 `--reader-paper` 覆盖，并同步测试预期；正文阅读主题/纸色设置保留。
 - 复核 `NativeExportDialog.vue`、`ExportService.ts`、`ChatReaderAppearance.ts` 与通用 Android 本机保存代码均和官版 main 一致。仅官版新增的63行资源广场导入/下载接口由 MAIN-ONLY 标记包围，Public无广场后端，按合同排除。之前把整类称作“本机导出差异”不准确。
-- 验证：`ChatReaderApp.test.ts` 5/5，`git diff --check`通过；未构建 APK或操作手机。提交/推送结果随后续状态更新为准。
+- 验证/发布：`ChatReaderApp.test.ts` 5/5，`git diff --check`通过；增量隐私审计基线 `a089277d9b71bade7a91b7f433193ea1b17dc0f9` → `5b25357c20512f87e1852b9eeb204fef77259f3d`，1提交、4路径，findings 0、binaryReview 0、addressReview 0；author/committer为GitHub noreply。提交 `5b25357c20512f87e1852b9eeb204fef77259f3d` 已推送至Public `origin/main`，远端回读与本机一致。未构建 APK或操作手机。
