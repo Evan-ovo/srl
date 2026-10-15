@@ -286,3 +286,8 @@
 - 验证：13个定向测试文件216项通过；`vue-tsc --noEmit`、助手知识243 Owner、功能合同14个APP/29个备份范围、Prettier、`git diff --check`及Public网页生产构建通过；构建核验9个当前/51个保留APP包。Android JVM测试因没有可用JDK未能启动；无Android设备/实体手机测试。
 - 审计：增量隐私基线为Public `016a64243a87a392e0e85f4945ff01d1ce1e78f3`，覆盖51个路径，findings 0。两张教程截图的应用ID/Token已人工查看确认遮挡；两个新增PNG列入binaryReview并已人工复核。四条addressReview均为测试占位、localhost、Discord官方地址或公开包名。没有发现私人邮箱、域名或基础设施地址。提交邮箱设置为GitHub noreply，提交后仍需复核author/committer并扫描最终提交。
 - 未决：同步器对助手知识文件中的Public替换区仍报告三方合并冲突；该文件已人工三方合并并通过243 Owner检查。Android JVM/仪器测试未运行。当前同步改动待提交和推送。
+
+## 2026-10-16：Public 官版共享更新推送回执
+
+- 同步提交 `013d52feed8f01c0604063802076c5df07d3dc5e` 已推送至 `origin/main`，`git ls-remote` 回读一致；推送后主工作树干净。提交 author/committer 均为 `285288120+jixiangruyi117@users.noreply.github.com`。
+- 增量隐私审计基线 `016a64243a87a392e0e85f4945ff01d1ce1e78f3` 至该提交覆盖1提交/51路径；findings 0、两张已脱敏教程图已人工复核、地址命中均为测试占位/localhost/Discord官方/公开依赖。没有构建APK或操作设备；Android JVM测试受缺少JDK限制未执行。
