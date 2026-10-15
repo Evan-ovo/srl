@@ -60,7 +60,7 @@ describe('downloadBlob Android native export', () => {
     expect(nativeMocks.writeFile).toHaveBeenCalledTimes(1)
     expect(nativeMocks.appendFile).toHaveBeenCalledTimes(1)
     const writePath = nativeMocks.writeFile.mock.calls[0]![0].path as string
-    expect(writePath).toMatch(/^exports\/2000000000-[0-9a-f-]{36}-备份\.zip$/)
+    expect(writePath).toMatch(/^exports\/2000000000-[0-9a-f-]{36}\/备份\.zip$/)
     expect(nativeMocks.appendFile).toHaveBeenCalledWith(
       expect.objectContaining({ path: writePath }),
     )

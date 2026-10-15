@@ -4,6 +4,7 @@ import { beforeEach, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   chunks: [] as string[],
+  paths: [] as string[],
   deleted: [] as string[],
   shared: [] as string[],
   onWrite: async (): Promise<void> => undefined,
@@ -15,7 +16,8 @@ vi.mock('@capacitor/filesystem', () => ({
   Directory: { Cache: 'CACHE' },
   Filesystem: {
     readdir: async () => ({ files: [] }),
-    writeFile: async ({ data }: { data: string }) => {
+    writeFile: async ({ data, path }: { data: string; path: string }) => {
+      state.paths.push(path)
       state.chunks.push(data)
       await state.onWrite()
     },
@@ -24,6 +26,9 @@ vi.mock('@capacitor/filesystem', () => ({
       await state.onWrite()
     },
     deleteFile: async ({ path }: { path: string }) => {
+      state.deleted.push(path)
+    },
+    rmdir: async ({ path }: { path: string }) => {
       state.deleted.push(path)
     },
     getUri: async ({ path }: { path: string }) => ({ uri: `content://${path}` }),
@@ -44,6 +49,7 @@ import { taskCenter } from '../core/TaskCenter'
 
 beforeEach(() => {
   state.chunks = []
+  state.paths = []
   state.deleted = []
   state.shared = []
   state.onWrite = async () => undefined
@@ -70,7 +76,7 @@ it('shares an exact file through the common bounded writer with truthful phases'
   assert.equal(taskCenter.list()[0]?.status, 'completed')
 })
 
-it('does not open a browser download or system share after cancellation and clears only its partial file', async () => {
+it('does not open a browser download or system share after cancellation and clears only its export directory', async () => {
   state.onWrite = async () => {
     const task = taskCenter.active()[0]!
     taskCenter.cancel(task.operationId)
@@ -82,7 +88,8 @@ it('does not open a browser download or system share after cancellation and clea
   assert.equal(state.chunks.length, 1)
   assert.equal(state.shared.length, 0)
   assert.equal(state.deleted.length, 1)
-  assert.match(state.deleted[0]!, /^exports\/.*-test\.bin$/)
+  assert.match(state.paths[0]!, /^exports\/\d+-[0-9a-f-]{36}\/test\.bin$/)
+  assert.equal(state.deleted[0], state.paths[0]!.slice(0, state.paths[0]!.lastIndexOf('/')))
   assert.equal(taskCenter.list()[0]?.status, 'cancelled')
 })
 
@@ -92,6 +99,7 @@ it('surfaces write failures and cleans the current partial cache file', async ()
   }
   await assert.rejects(downloadBlob(new Blob(['abc']), 'test.txt'), /disk full/)
   assert.equal(state.deleted.length, 1)
+  assert.equal(state.deleted[0], state.paths[0]!.slice(0, state.paths[0]!.lastIndexOf('/')))
   assert.equal(state.shared.length, 0)
   assert.equal(taskCenter.list()[0]?.status, 'failed')
 })

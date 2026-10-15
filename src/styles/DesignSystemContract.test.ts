@@ -179,10 +179,9 @@ describe('mobile design system contract', () => {
     expect(stylesEntry).not.toContain('FrontendWorkshopLegacyUiMigration.css')
   })
 
-  it('keeps direct iOS top inset reads in shared, reader, and pre-Main startup owners', () => {
+  it('keeps direct iOS top inset reads in the host, startup and isolated reader token owners', () => {
     const sourceRoot = fileURLToPath(new URL('../', import.meta.url))
     const directTopInset = ['env(', 'safe-area-inset-top'].join('')
-    const readerCssPath = `${sourceRoot.replace(/\\/gu, '/')}/reader/ChatReader.css`
     const consumers = sourceFiles(sourceRoot)
       .filter((path) => !path.endsWith('/styles/Foundation.css'))
       .filter((path) => !path.endsWith('/styles/Startup.css'))
@@ -192,10 +191,12 @@ describe('mobile design system contract', () => {
     expect(consumers).toEqual([])
     // Startup runs before Foundation can load, so its safe inset has to be self-contained.
     const startup = readFileSync(new URL('./Startup.css', import.meta.url), 'utf8')
-    const reader = readFileSync(readerCssPath, 'utf8')
     expect(startup).toContain(directTopInset)
     expect(startup).toContain('#srl-boot,')
     expect(startup).toContain('#srl-native-preparation')
-    expect(reader).toContain('--reader-safe-top: env(safe-area-inset-top, 0px);')
+    // The reader runs in its own Shadow DOM and owns its safe-area tokens.
+    const reader = readFileSync(new URL('../reader/ChatReader.css', import.meta.url), 'utf8')
+    expect(reader).toMatch(/^:host\s*\{\s*--reader-safe-top: env\(safe-area-inset-top, 0px\);/)
+    expect(reader.split(directTopInset)).toHaveLength(2)
   })
 })

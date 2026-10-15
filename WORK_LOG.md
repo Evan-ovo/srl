@@ -252,3 +252,9 @@
 - 对照官版本地已提交 `main` `ae352cee656b3012381fa03b8299aee8de7a669c`，移除 Public 读了么外壳多余的 `--reader-paper` 覆盖，并同步测试预期；正文阅读主题/纸色设置保留。
 - 复核 `NativeExportDialog.vue`、`ExportService.ts`、`ChatReaderAppearance.ts` 与通用 Android 本机保存代码均和官版 main 一致。仅官版新增的63行资源广场导入/下载接口由 MAIN-ONLY 标记包围，Public无广场后端，按合同排除。之前把整类称作“本机导出差异”不准确。
 - 验证/发布：`ChatReaderApp.test.ts` 5/5，`git diff --check`通过；增量隐私审计基线 `a089277d9b71bade7a91b7f433193ea1b17dc0f9` → `5b25357c20512f87e1852b9eeb204fef77259f3d`，1提交、4路径，findings 0、binaryReview 0、addressReview 0；author/committer为GitHub noreply。提交 `5b25357c20512f87e1852b9eeb204fef77259f3d` 已推送至Public `origin/main`，远端回读与本机一致。未构建 APK或操作手机。
+
+## 2026-10-15：补齐共享本机导出实现并完成全量差异复核
+
+- 对照官版本地已提交 main `ae352cee656b3012381fa03b8299aee8de7a669c`，确认之前 Public 的 `LibraryFormatting` 本机导出路径仍落后；同步实现及三组相关测试，并同步设计系统契约测试。导出使用唯一目录避免同名冲突，并只清理过期且可识别的生成目录。
+- 干净官版快照全量审计：1551 个文件一致、25 个文件有路径级差异。25 项逐项归类为登录/账号/反馈/托管服务与资源广场、Public 自部署 Worker/无默认中继及 APK 更新边界、对应文案/知识/测试、两份仅测试用的脱敏夹具和一份 Public 专用浏览器策略测试。3 个 MAIN-ONLY 重复 ID 文件由标准解析器拒绝；逐区块核对后确认共享实现一致。另有测试健壮性差异，不涉及产品行为。未发现这些范围以外的未同步功能或 UI 差异。
+- 验证：`LibraryFormatting` 三组测试及 `DesignSystemContract.test.ts` 共33项通过；`git diff --check`通过。当前改动待提交；未运行全量测试、Android JVM/APK 或实体手机测试。

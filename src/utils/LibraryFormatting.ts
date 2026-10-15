@@ -65,11 +65,19 @@ async function cleanStaleNativeExports(): Promise<void> {
   await Promise.all(
     listing.files.map(async (file) => {
       const modifiedAt = file.mtime ?? file.ctime ?? Date.now()
-      if (file.type !== 'file' || modifiedAt >= cutoff) return
-      await Filesystem.deleteFile({
-        path: `exports/${file.name}`,
-        directory: Directory.Cache,
-      }).catch(() => undefined)
+      if (modifiedAt >= cutoff) return
+      if (file.type === 'file') {
+        await Filesystem.deleteFile({
+          path: `exports/${file.name}`,
+          directory: Directory.Cache,
+        }).catch(() => undefined)
+      } else if (file.type === 'directory' && /^\d{13}-[0-9a-f-]{36}$/u.test(file.name)) {
+        await Filesystem.rmdir({
+          path: `exports/${file.name}`,
+          directory: Directory.Cache,
+          recursive: true,
+        }).catch(() => undefined)
+      }
     }),
   )
 }
@@ -82,8 +90,10 @@ async function shareNativeBlob(blob: Blob, fileName: string): Promise<void> {
     cancelable: true,
     cancel: () => controller.abort(new DOMException('导出已取消', 'AbortError')),
   })
-  const safeName = fileName.replace(/[\\/:*?"<>|]/g, '_')
-  const path = `exports/${Date.now()}-${crypto.randomUUID()}-${safeName}`
+  const sanitizedName = fileName.replace(/[\\/:*?"<>|]/g, '_')
+  const safeName = !sanitizedName || /^\.+$/u.test(sanitizedName) ? 'srl-export' : sanitizedName
+  const exportDirectory = `exports/${Date.now()}-${crypto.randomUUID()}`
+  const path = `${exportDirectory}/${safeName}`
   let written = false
   let handedOff = false
   const throwIfAborted = (): void => {
@@ -122,7 +132,11 @@ async function shareNativeBlob(blob: Blob, fileName: string): Promise<void> {
   } catch (error) {
     // 系统已接收 URI 后可能继续读取文件，不删除这份有效交付副本。
     if (written && !handedOff) {
-      await Filesystem.deleteFile({ path, directory: Directory.Cache }).catch(() => undefined)
+      await Filesystem.rmdir({
+        path: exportDirectory,
+        directory: Directory.Cache,
+        recursive: true,
+      }).catch(() => undefined)
     }
     if (controller.signal.aborted) taskCenter.cancelled(operationId)
     else taskCenter.fail(operationId, error)
