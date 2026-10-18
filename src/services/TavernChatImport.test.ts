@@ -108,6 +108,9 @@ describe('chat transfer to the canonical resource library', () => {
     const { resources, database } = setup()
     await resources.importFiles([png('filler')])
     const template = (await resources.list())[0]!
+    // Initialize the real index before seeding an already-indexed catalogue;
+    // this regression checks batch reads, not a first-use index migration.
+    await resources.listResourceListSummaries()
     const storedFixture = await database.resources.get(template.id)
     if (!storedFixture) throw new Error('stored fixture missing')
     const fillers = Array.from({ length: 1000 }, (_, index) => ({
@@ -129,6 +132,8 @@ describe('chat transfer to the canonical resource library', () => {
         await database.resourceListSummaries.bulkPut(summariesFixture)
       },
     )
+    expect(await database.resources.count()).toBe(1001)
+    expect(await database.resourceSummaries.count()).toBe(1001)
     expect(await database.resourceListSummaries.count()).toBe(1001)
     const summaries = vi.spyOn(resources, 'listResourceListSummaries')
     const thumbnail = vi.spyOn(thumbnails, 'createImageThumbnail')
