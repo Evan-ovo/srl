@@ -386,3 +386,10 @@
 - 首次代码提交50b8b716f884c40edc41362ddeb2f59a1a5ac9fc已推送，原37路径增量与author/committer noreply核验通过；新发现发行工作流job级env不接受runner.temp，GitHub拒绝解析，未执行发行。改为首个配置步骤使用RUNNER_TEMP并写GITHUB_ENV，清理独立计算同一固定文件路径。
 - 旧check工作流运行停在Public不存在的BumpDeployVersion.mjs（MODULE_NOT_FOUND），精准复用现有PublicRelease prepare替代；不复制官版发布脚本/私有服务或另建版本Owner。云端结果继续回读，不把本地YAML解析或默认关闭的job当成签名发行成功。
 - 此补充仅工作流与记录，做YAML/内嵌PowerShell解析、引用检查及自上一已审计提交50b8b71之后的增量隐私/邮箱复核；原代码与本地测试证据不变。未设置签名Secrets/Variables，未部署CF或使用手机。
+
+## 2026-10-18：云端回执与部署关系确认
+
+- a4a0ab13507ea456a5624787b3682b4d52383212已正常推送并回读一致，工作区干净；基线50b8b71之后1提交3路径增量findings/binaryReview/addressReview均0，author/committer为对应账号noreply。发行工作流39134976135已被GitHub接受，因未启用正常skipped，没有签名发布。
+- check工作流39134976124的隐私、候选准备和15项外观手册测试通过，随后结构门禁失败：ProductAssistant.vue2002>2000、ChatReaderView.js3135>2000、DiscordSetupService.ts3606>2897。逐文件与此前审计基线3660221比较，内容完全未变，属既有欠项；本轮不放宽门禁或扩大为无关重构，不能声称所有云端检查通过。
+- 用户已确认现有CF所连接的Fork，GitHub核实为本仓库的正常下游，当前仅落后上游，可通过Sync fork更新。当前维护账号对下游只有pull、没有push权限，没有代为写入该账号仓库；下游同步及CF构建命令由部署账号完成，配置步骤见README。私人登录邮箱、账号参数与站点URL不进入公开记录。
+- 本次仅补充现有进度和日志，源代码与已验证产物保持；以a4a0ab1为已审计基线做2文档增量核对后提交，不重复扫描旧内容。本条所属提交为下一内容基线，完整SHA/回读记于维护者既有日志。
