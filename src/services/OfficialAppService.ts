@@ -321,56 +321,64 @@ export class OfficialAppService {
     return catalog
   }
 
-  async availableUpdates(): Promise<Partial<Record<OfficialAppId, OfficialAppUpdateInfo>>> {
-    const catalog = await this.catalog()
-    return navigator.locks.request('srl-official-app-install', { mode: 'shared' }, async () => {
-      const installed = await this.list()
-      const installedById = new Map(installed.map((app) => [app.id, app]))
-      const updates: Partial<Record<OfficialAppId, OfficialAppUpdateInfo>> = {}
-      for (const id of OFFICIAL_APP_IDS) {
-        const app = installedById.get(id)
-        if (!app) continue
-        const latest = await this.latestCompatibleDownload(
-          (catalog.apps[id] ?? []).filter(
-            (candidate) =>
-              safeHash(candidate.appContentHash) &&
-              Number.isSafeInteger(candidate.appContentRevision) &&
-              candidate.appContentRevision >= LEGACY_OFFICIAL_APP_CONTENT_REVISION,
-          ),
-        )
-        if (!latest) continue
-        const currentRevision = app.appContentRevision ?? LEGACY_OFFICIAL_APP_CONTENT_REVISION
-        // Only an explicit host contract mismatch justifies a compatibility update.
-        // Missing local package files or a missing shell asset affects readiness,
-        // but must not be presented as a new APP version when its content revision is unchanged.
-        const requiresHostUpdate = (app.hostApiVersion ?? 1) !== this.hostApiVersion
-        const requiresAssetRepair =
-          !requiresHostUpdate &&
-          (this.checkedReady(app) === false || !(await this.isReadyForPackage(app, false)))
-        // Same-content dependency moves are repaired by the gate, not offered as APP updates.
-        if (
-          currentRevision === latest.appContentRevision &&
-          latest.manifest &&
-          !requiresHostUpdate &&
-          app.runtimeEntry === latest.runtimeEntry
-        )
-          continue
-        if (
-          currentRevision >= latest.appContentRevision &&
-          !requiresHostUpdate &&
-          !requiresAssetRepair
-        )
-          continue
-        updates[id] = {
-          currentVersion: String(currentRevision),
-          latestVersion: String(latest.appContentRevision),
-          latestShellVersion: latest.shellVersion,
-          requiresHostUpdate,
-          requiresAssetRepair,
+  async availableUpdates(
+    signal?: AbortSignal,
+  ): Promise<Partial<Record<OfficialAppId, OfficialAppUpdateInfo>>> {
+    signal?.throwIfAborted()
+    const catalog = await (signal ? this.loadCatalog(signal) : this.catalog())
+    return navigator.locks.request(
+      'srl-official-app-install',
+      { mode: 'shared', ...(signal ? { signal } : {}) },
+      async () => {
+        const installed = await this.list()
+        const installedById = new Map(installed.map((app) => [app.id, app]))
+        const updates: Partial<Record<OfficialAppId, OfficialAppUpdateInfo>> = {}
+        for (const id of OFFICIAL_APP_IDS) {
+          signal?.throwIfAborted()
+          const app = installedById.get(id)
+          if (!app) continue
+          const latest = await this.latestCompatibleDownload(
+            (catalog.apps[id] ?? []).filter(
+              (candidate) =>
+                safeHash(candidate.appContentHash) &&
+                Number.isSafeInteger(candidate.appContentRevision) &&
+                candidate.appContentRevision >= LEGACY_OFFICIAL_APP_CONTENT_REVISION,
+            ),
+          )
+          if (!latest) continue
+          const currentRevision = app.appContentRevision ?? LEGACY_OFFICIAL_APP_CONTENT_REVISION
+          // Only an explicit host contract mismatch justifies a compatibility update.
+          // Missing local package files or a missing shell asset affects readiness,
+          // but must not be presented as a new APP version when its content revision is unchanged.
+          const requiresHostUpdate = (app.hostApiVersion ?? 1) !== this.hostApiVersion
+          const requiresAssetRepair =
+            !requiresHostUpdate &&
+            (this.checkedReady(app) === false || !(await this.isReadyForPackage(app, false)))
+          // Same-content dependency moves are repaired by the gate, not offered as APP updates.
+          if (
+            currentRevision === latest.appContentRevision &&
+            latest.manifest &&
+            !requiresHostUpdate &&
+            app.runtimeEntry === latest.runtimeEntry
+          )
+            continue
+          if (
+            currentRevision >= latest.appContentRevision &&
+            !requiresHostUpdate &&
+            !requiresAssetRepair
+          )
+            continue
+          updates[id] = {
+            currentVersion: String(currentRevision),
+            latestVersion: String(latest.appContentRevision),
+            latestShellVersion: latest.shellVersion,
+            requiresHostUpdate,
+            requiresAssetRepair,
+          }
         }
-      }
-      return updates
-    })
+        return updates
+      },
+    )
   }
 
   private matchesHostFiles(

@@ -487,3 +487,27 @@ it('stops through the task center, waits for the owner, and ignores late progres
   await flushPromises()
   expect(service.installMany).toHaveBeenCalledOnce()
 })
+
+it('stops the final update check without losing already installed APPs or hanging the task', async () => {
+  await flushPromises()
+  let checkSignal!: AbortSignal
+  service.availableUpdates.mockImplementationOnce((signal: AbortSignal) => {
+    checkSignal = signal
+    return new Promise((_resolve, reject) =>
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+    )
+  })
+  await wrapper.get('input[value="draw"]').setValue(true)
+  await wrapper.get('.official-app-manager__batch-download').trigger('click')
+  await flushPromises()
+  expect(checkSignal).toBeInstanceOf(AbortSignal)
+  expect(wrapper.text()).toContain('正在检查更新状态')
+  service.list.mockResolvedValue([{ id: 'draw', files: [] }])
+  await wrapper.get('button.button--quiet').trigger('click')
+  await flushPromises()
+  expect(checkSignal.aborted).toBe(true)
+  expect(wrapper.text()).toContain('已停止下载，已完成 1 个')
+  expect(wrapper.text()).not.toContain('暂时无法检查 APP 更新')
+  expect(wrapper.find('input[value="draw"]').exists()).toBe(false)
+  expect(wrapper.get('.official-app-manager').attributes('aria-busy')).toBe('false')
+})

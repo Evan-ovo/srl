@@ -801,12 +801,12 @@
     {
       "path": "src/services/OfficialAppService.ts",
       "guides": ["apps"],
-      "sha256": "9a6579ec04708245b33a16d77e57574c971bb62387fab837a26142d72c72bd29"
+      "sha256": "d0f66a96644480eec10ef2d1ed8288d3693b21dd1af3277b51c2e75fd6df2e8f"
     },
     {
       "path": "src/components/OfficialAppManager.vue",
       "guides": ["apps"],
-      "sha256": "6c4bb824a2184c7a0ccb1517706457c48ac124c9256baef48d0955816d20b780"
+      "sha256": "fb2b474f5c68c3ff65ebe1accf2c0aa5fd72996dd929cb457f29e8950a24a3f0"
     },
     {
       "path": "src/services/ResourceVersionRecognitionService.ts",

@@ -164,8 +164,9 @@ async function installUpdates(
     await refresh()
     if (!controller.signal.aborted) {
       try {
-        await checkForUpdates(false)
+        await checkForUpdates(false, controller.signal)
       } catch (error) {
+        controller.signal.throwIfAborted()
         updateCheckError.value = error instanceof Error ? error.message : '更新检查失败'
       }
     }
@@ -226,9 +227,11 @@ async function checkStatus() {
     busy.value = false
   }
 }
-async function checkForUpdates(showNotice: boolean) {
+async function checkForUpdates(showNotice: boolean, signal?: AbortSignal) {
   updateCheckError.value = ''
-  availableUpdates.value = await officialAppService.availableUpdates()
+  availableUpdates.value = await (signal
+    ? officialAppService.availableUpdates(signal)
+    : officialAppService.availableUpdates())
   await refresh()
   if (!showNotice) return
   const dismissed = dismissedUpdates()

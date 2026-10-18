@@ -441,26 +441,32 @@ describe('official APP package lifecycle', () => {
     expect(records.has('chatReader')).toBe(false)
   })
 
-  it('cancels the private batch catalog request without affecting a shared catalog load', async () => {
-    const { service, fetcher } = await batchFixture(['draw'])
-    const original = fetcher.getMockImplementation()!
-    let batchSignal!: AbortSignal
-    fetcher.mockImplementation((input, options) => {
-      if (!options?.signal) return original(input, options)
-      batchSignal = options.signal
-      return new Promise((_resolve, reject) => {
-        batchSignal.addEventListener('abort', () => reject(batchSignal.reason), { once: true })
+  it.each(['install', 'check'])(
+    'cancels the private %s catalog request without affecting a shared catalog load',
+    async (phase) => {
+      const { service, fetcher } = await batchFixture(['draw'])
+      const original = fetcher.getMockImplementation()!
+      let batchSignal!: AbortSignal
+      fetcher.mockImplementation((input, options) => {
+        if (!options?.signal) return original(input, options)
+        batchSignal = options.signal
+        return new Promise((_resolve, reject) => {
+          batchSignal.addEventListener('abort', () => reject(batchSignal.reason), { once: true })
+        })
       })
-    })
-    const controller = new AbortController()
-    const result = service.installMany(['draw'], undefined, controller.signal)
-    const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' })
-    await vi.waitFor(() => expect(batchSignal).toBeDefined())
-    controller.abort()
-    await rejected
-    await expect(service.catalog()).resolves.toMatchObject({ schemaVersion: 1 })
-    expect(records.size).toBe(0)
-  })
+      const controller = new AbortController()
+      const result =
+        phase === 'check'
+          ? service.availableUpdates(controller.signal)
+          : service.installMany(['draw'], undefined, controller.signal)
+      const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' })
+      await vi.waitFor(() => expect(batchSignal).toBeDefined())
+      controller.abort()
+      await rejected
+      await expect(service.catalog()).resolves.toMatchObject({ schemaVersion: 1 })
+      expect(records.size).toBe(0)
+    },
+  )
 
   it('downloads at most two packages together and commits files one APP at a time', async () => {
     const { service, fetcher, packages } = await batchFixture(['draw', 'stitch', 'chatReader'])
