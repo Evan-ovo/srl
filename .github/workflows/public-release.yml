@@ -34,8 +34,6 @@ jobs:
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
-      GRADLE_USER_HOME: ${{ runner.temp }}/gradle-public
-      SRL_ANDROID_RELEASE_STORE_FILE: ${{ runner.temp }}/public-release.jks
       SRL_ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.PUBLIC_ANDROID_STORE_PASSWORD }}
       SRL_ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.PUBLIC_ANDROID_KEY_ALIAS }}
       SRL_ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.PUBLIC_ANDROID_KEY_PASSWORD }}
@@ -63,12 +61,15 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.PUBLIC_ANDROID_KEYSTORE_BASE64 }}
           EXPECTED_CERTIFICATE: ${{ vars.PUBLIC_ANDROID_CERT_SHA256 }}
         run: |
+          $releaseKeyPath = Join-Path $env:RUNNER_TEMP 'public-release.jks'
+          "GRADLE_USER_HOME=$(Join-Path $env:RUNNER_TEMP 'gradle-public')" >> $env:GITHUB_ENV
+          "SRL_ANDROID_RELEASE_STORE_FILE=$releaseKeyPath" >> $env:GITHUB_ENV
           $required = @('KEYSTORE_BASE64','SRL_ANDROID_RELEASE_STORE_PASSWORD','SRL_ANDROID_RELEASE_KEY_ALIAS','SRL_ANDROID_RELEASE_KEY_PASSWORD','SRL_PUBLIC_ORIGIN','SRL_PUBLIC_ASSET_ORIGIN','EXPECTED_CERTIFICATE')
           foreach ($name in $required) {
             if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing release setting: $name; see README Public release setup." }
           }
           if ($env:EXPECTED_CERTIFICATE -notmatch '^[a-fA-F0-9]{64}$') { throw 'PUBLIC_ANDROID_CERT_SHA256 must be the existing release certificate SHA-256' }
-          [IO.File]::WriteAllBytes($env:SRL_ANDROID_RELEASE_STORE_FILE, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          [IO.File]::WriteAllBytes($releaseKeyPath, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
       - run: pnpm install --frozen-lockfile
       - name: 生成稳定候选编号
         id: candidate
@@ -126,4 +127,5 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          if (Test-Path -LiteralPath $env:SRL_ANDROID_RELEASE_STORE_FILE) { Remove-Item -LiteralPath $env:SRL_ANDROID_RELEASE_STORE_FILE }
+          $releaseKeyPath = Join-Path $env:RUNNER_TEMP 'public-release.jks'
+          if (Test-Path -LiteralPath $releaseKeyPath) { Remove-Item -LiteralPath $releaseKeyPath }

@@ -42,8 +42,8 @@ jobs:
         run: pnpm secret:scan --base "$AUDIT_BASE"
 
       # CI verifies a new candidate. It must not rebuild an immutable Windows release as Linux bytes.
-      - name: 分配未发布候选构建编号
-        run: node scripts/BumpDeployVersion.mjs
+      - name: 准备仅供校验的候选构建（不发布）
+        run: node scripts/PublicRelease.mjs prepare
 
       - name: 安装 Chromium 与 WebKit
         run: pnpm exec playwright-core install --with-deps chromium webkit
