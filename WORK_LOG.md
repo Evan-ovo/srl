@@ -503,3 +503,10 @@
 - 本轮公开审计起点a70742d0aee1d6227a3420d7e9caaba931672ef0；公开前仅审计本轮增量与身份，不重扫历史。旧6根清理拒绝范围及WebKit/3行数门禁限制原位保持，未重试删除、未更改用户凭据或其他会话工作。没有新增持久过程文件，正式测试临时夹具沿原安全路径自动收尾。
 
 - 本地完整类型/生产PWA构建通过，9当前+51兼容包/27可选资产校验通过；公开增量a70742d0至本条所属提交，12路径、0新增二进制/凭据命中。地址复核3个代码/测试文件仅github.com官方发行路径和example.com占位符，无私人邮箱/域名/基础设施；新author/committer使用对应noreply。正式云端发行继续沿原全部门禁，非跳过重建。
+
+
+## 2026-10-19：补齐当前 GitHub APK 资产跳转并重新发行（n6k2）
+
+- 在等待0f227be发行期间，用真实正式APK的HEAD确认GitHub已使用/github-production-release-asset/<repoId>/<assetId>路径；旧共享ApkUpdateUrlPolicy只接受asset-路径，原生下载会拒绝该302。主库先修f05059047e628787ec301ae99f8863bc2b7cb8d3，再将2份Java原样同步Public；仅兼容当前路径前缀并保留旧路径、HTTPS和两个官方资产域名及原校验，无新代理/重试。
+- 正式JUnit新增真实路径回归先红（4项/1失败），修复后原Policy与正式JUnit在电脑JDK直接编译运行4项全过，伪装域名/HTTP/端口/凭据/片段/穿越/空仓库仍拒绝，官版原直连保持。额外电脑Java原Policy+HttpURLConnection真实跟随当前APK的1次跳转，完整流式读取14978200bytes/SHA256匹配，不落盘重复APK；非手机/Android安装实测。
+- run39154430206已主动取消，客户端回归/生产构建阶段通过但未公开发行，latest仍1a08c958；该候选不冒充完整通过。新候选将完整重跑客户端、签名APK、JVM与lint。公开增量基线0f227be636db0e2ed34d54c20a7159d84dddd34f，仅共享Policy/正式JUnit和既有记录，无新增二进制，地址仅GitHub官方域名及example.invalid占位符，author/committer为对应noreply。本条所属提交为下一审计基线。

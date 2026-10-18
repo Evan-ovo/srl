@@ -2,6 +2,7 @@
 
 ## 2026-10-19 当前：Public APK 更新403修复候选（n6k2）
 
+- 原生下载另发现当前GitHub asset/路径被旧asset-白名单拒绝；已从主库f0505904同步2份Java，正式JUnit先红后绿4项及真实Java下载流/SHA通过。旧run39154430206已取消且未公开，新候选完整重跑发行。
 - 原GitHub匿名REST API真实403/remaining0，静态Release清单同网络200；Public更新Owner已改读同仓库latest/download/public-release.json，沿CDN读取已有842bytes清单，不再调用REST API，不需要Token或另配CF。APK固定到清单的产品提交，原哈希/大小/包名/版本/签名与任务停止校验保持。
 - 3文件38项、真实公网loader200/1逻辑请求/0API、定向lint/290知识Owner/14APP33合同通过；Public候选0.0.245，仅助手说明内容49→50。完整类型/生产PWA与9当前+51兼容包校验已通过；新签名发行/小号Fork-CF同步进行中，旧APK需手动覆盖安装一次。旧WebKit附加与3行数门禁、清理拒绝保留，不冒称手机已验证；主库官版更新源未改。
 

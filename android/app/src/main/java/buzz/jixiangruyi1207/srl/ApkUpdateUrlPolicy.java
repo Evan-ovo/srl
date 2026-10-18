@@ -31,6 +31,7 @@ final class ApkUpdateUrlPolicy {
         URI uri = https(value);
         return uri != null && ("release-assets.githubusercontent.com".equalsIgnoreCase(uri.getHost()) ||
             "objects.githubusercontent.com".equalsIgnoreCase(uri.getHost())) &&
-            uri.getRawPath().startsWith("/github-production-release-asset-");
+            (uri.getRawPath().startsWith("/github-production-release-asset/") ||
+             uri.getRawPath().startsWith("/github-production-release-asset-"));
     }
 }
