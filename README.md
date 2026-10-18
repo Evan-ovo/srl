@@ -1,6 +1,6 @@
 # SillyTavern Resource Library
 
-SRL 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作工具。本仓库保留本地与自部署功能，不包含维护者账号系统、账号依赖的资源广场、公告、公共图床、管理后台、反馈服务、维护者预签名 APK、官方 APK 更新通道或账号依赖的在线组件分享。需要云端基础设施的能力由部署者自行配置。功能边界与服务配置见 [Public 版本边界与自部署](docs/PUBLIC_RELEASE_DIFFERENCES.md)。
+SRL 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作工具。本仓库保留本地与自部署功能，不包含维护者账号系统、账号依赖的资源广场、公告、公共图床、管理后台、反馈服务、官版 APK 更新服务或账号依赖的在线组件分享。Public APK 使用本仓库 GitHub Releases 的独立发行通道；需要云端基础设施的能力仍由部署者自行配置。功能边界与服务配置见 [Public 版本边界与自部署](docs/PUBLIC_RELEASE_DIFFERENCES.md)。
 
 > [!WARNING]
 > **关于本文档**
@@ -171,7 +171,7 @@ pnpm secret:scan --base <上次已审计的完整提交SHA>
    pnpm exec wrangler login
    ```
 
-3. 将根目录 `wrangler.example.jsonc` 复制为 `wrangler.jsonc`。按需修改 Worker 名称；模板使用 `workers.dev`，不绑定自定义域名。多账号环境先用 `pnpm exec wrangler whoami --json` 确认身份，在忽略的配置中明确填写自己的 `account_id`；若已配置登录 profile，部署时显式加 `--profile <自己的profile>`，避免发到另一套服务。
+3. 将根目录 `wrangler.example.jsonc` 复制为 `wrangler.jsonc`。按需修改 Worker 名称；模板使用 `workers.dev`，不绑定自定义域名。多账号环境先核对登录身份，并在本次进程的 `CLOUDFLARE_ACCOUNT_ID` 中显式选择目标账号，避免发到另一套服务。真实账号与配置不提交源码。
 4. 部署：
 
    ```bash
@@ -296,7 +296,27 @@ pnpm android:apk -Mode Packaged -Variant Release
 
 APK 构建脚本已生成网页并同步到 Android。签名包完成后，再按上文的 `pnpm exec wrangler deploy --config wrangler.jsonc` 部署此时的 `dist/`，并回读当前 buildId 的 catalog 与每个 `.srlapp` 大小、SHA-256。不要在两者之间重新运行 `pnpm build` 或 `pnpm android:sync`，否则功能包哈希可能变化，线上清单与 APK 对应的构建不一致。
 
-关闭构建终端或移除这四个签名环境变量。`.jks`、密码、Wrangler 本地配置、真实私人部署地址和签名 APK 不加入公开仓库；通过发行者自己的私有或单独分发渠道交付。公开源码不会连接作者官方更新服务器，也不提供通用自建 APK 更新服务；后续更新自行拉取源码、用同一密钥重新构建并覆盖安装。
+关闭构建终端或移除这四个签名环境变量。`.jks`、密码、Wrangler 本地配置与私人部署地址不加入公开源码。手工构建可自行分发；需要应用内检查更新时，使用下面的 GitHub Releases 流程，始终使用相同的 Public 签名和应用 ID。
+
+### 统一 Public APK 与网页发布（一次性配置）
+
+发行仓库由 `public-release.config.json` 声明，默认是本仓库。Actions 的 **Public release** 在 `main` 产品代码变化后构建签名 APK，并一次发布 `SRL_Pubilc.apk`、`public-web.zip` 与 `public-release.json`。APK 内置网页和 CF 部署使用同一网页候选，内置 APP 文件哈希保持一致；第三方 APP 仍每次更新完整 `.srlapp` 包。发布先上传草稿全部资产，全部成功才公开，重跑已发布候选不会覆盖字节。
+
+1. 在发行仓库 **Settings → Secrets and variables → Actions** 添加 Secrets：
+   - `PUBLIC_ANDROID_KEYSTORE_BASE64`：现有 Public 签名文件的 Base64。
+   - `PUBLIC_ANDROID_STORE_PASSWORD`、`PUBLIC_ANDROID_KEY_ALIAS`、`PUBLIC_ANDROID_KEY_PASSWORD`：同一密钥的密码和别名。
+   - `PUBLIC_WEB_ORIGIN`：首次 Public 发行确定的本地 WebView 来源，后续保持不变。
+   - `PUBLIC_ASSET_ORIGIN`：托管网页及 APP 包的公开 HTTPS 站点来源。
+2. 同页 Variables 添加 `PUBLIC_ANDROID_CERT_SHA256`（原 Public 发行证书 SHA-256，64 位十六进制，无冒号）及 `PUBLIC_APK_RELEASE_ENABLED=true`。先完成所有配置再开启；Fork 默认不会发行 APK，也不会获得上游 Secrets。已有安装必须沿用原 Public 密钥，不能拿官版密钥或临时 Debug 密钥替代。
+3. 在 **Actions → Public release → Run workflow** 触发首次发行；之后推送产品更新自动发行。Android versionCode 由完整 Git 历史的提交数生成独立递增号；保留 `main` 历史并快进更新，不重建或压缩已发行历史。
+4. 小号 CF 已连接的 GitHub Fork 保持原 Worker 与账号，只修改 **Settings → Builds → Build configuration**：Build command 为 `pnpm public:web-build`；Deploy command 为 `pnpm exec wrangler deploy --config wrangler.example.jsonc`；构建环境 `NODE_VERSION=24`。Repository 处显示实际的 `owner/repo`，CF 登录邮箱不是仓库名。不需要另建账号或 Worker，也不需要给 CF 签名密钥或 GitHub Token。
+5. 首次 Release 成功后，在该 Fork 点击 **Sync fork → Update branch**，CF 自动取得该产品提交对应的 Release 网页包并部署；核对部署成功与 `/api/version`。以后按“上游推送并发行成功 → 同步 Fork → CF 自动部署”更新即可。
+
+CF 默认从本仓库下载对应 `public-<产品提交 SHA>` 的候选，文档单独更新复用前一个产品候选。构建会补全浅克隆的提交历史，避免仅更新文档时误找不存在的产品发行。Release 尚在构建时最多等待 15 分钟，再给网页包下载 5 分钟；失败会中止此次构建，保留线上旧部署，不改为其他版本。应等上游 Actions 成功后再同步 Fork；若已提前同步导致超时，在 CF 重试同一构建即可。此模式要求 Fork 保留上游产品提交身份；有自己的产品改动时，选择自己发行（设置 CF `SRL_RELEASE_REPOSITORY=自己的owner/repo`，启用自己的发行配置）或使用上面的 `pnpm build` 源码自部署流程。
+
+`PUBLIC_*_ORIGIN` 虽通过 Secrets 注入，但站点来源会编进公开 APK，**并非秘密地址**。只能配置同意公开用于 Public 发行的站点，不能借 Secrets 把私人基础设施地址放进公开附件。密钥与密码不会编进 APK。此发行通道不提供账号、反馈或公共图床服务，也不会替用户配置其云盘、API 或独立中继。
+
+首次需从本仓库 Releases 手动安装支持 GitHub 更新的新 Public APK。之后在“设置 → 检查 APK 版本更新”检查，或由启动/回前台/联网自动检查（12 小时限频）；可选择更新、稍后提醒或忽略。下载会检查仓库、大小、SHA-256、包名、较高版本号和签名，最后仍需 Android 系统确认安装，不能静默安装；任务中心可停止下载。网页更新继续沿 Service Worker，不能替代 APK 原生代码升级。没有 GitHub Release 时提示渠道尚未发布；网络限制或 GitHub 限流可稍后手动检查。
 
 ### 独立 Kotlin 原生版
 

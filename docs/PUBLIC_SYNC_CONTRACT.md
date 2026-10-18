@@ -4,7 +4,7 @@ Public 的共享功能来自维护者授权的主库快照。日常先完成主�
 
 代码使用 `SRL-PUBLIC-SYNC` 标记：`MAIN-ONLY` 排除账号及官方托管服务，`REPLACE` 保留两端同 ID 的必要替代实现，`WORKER-URL` 保留用户配置的服务地址，`PUBLIC-ONLY` 标注 Public 独有适配。标记范围须按真实依赖核查，不能仅因名称包含 `OfficialApp` 或“助手”而排除共享功能。
 
-内置 APP 管理、安装、更新、卸载、内容修订号、加载门及打包代码使用当前站点的静态包，属于共享功能，不按 `OfficialApp` 名称排除。已有安装支持校验清单、复用未变化文件和按需补齐依赖；同内容版本的依赖变化沿共享兼容修复流程处理。第三方 APP 保持完整 `.srlapp` 包导入/更新和整包校验。账号服务、资源广场、公告、反馈、官方共享托管与官方 APK 更新通道继续排除；APP 内容更新与 APK 更新是不同能力。
+内置 APP 管理、安装、更新、卸载、内容修订号、加载门及打包代码使用当前站点的静态包，属于共享功能，不按 `OfficialApp` 名称排除。已有安装支持校验清单、复用未变化文件和按需补齐依赖；同内容版本的依赖变化沿共享兼容修复流程处理。第三方 APP 保持完整 `.srlapp` 包导入/更新和整包校验。账号服务、资源广场、公告、反馈、官方共享托管与官方 APK 更新通道继续排除；APP 内容更新与 APK 更新是不同能力。Public APK 另用 GitHub Releases 版本源，共享下载、校验、取消与系统安装实现；统一网页从同一 Release 候选部署，自部署保留源码构建。
 
 同步后应覆盖所有共享源码、样式、读了么 HTML/脚本、运行时、APP 打包配置和相关测试。逐项核查保留替换区内的上游变化；特别是 Worker 地址适配不能保留整段旧业务实现。复核主库中尚未完整标记的账号绑定、广场 ID 等代码，避免残留导入和入口。
 
@@ -19,3 +19,5 @@ Public 不提供官版内置的公共中继，也不设默认中继地址。`Rel
 “0 差异”表示排除账号代码、保留明确替换区后的源码投影一致，不代表替换区内部逐字相同。完整对齐还需复核替换区中的普通业务和对应回归，不能只看审计计数。当前脚本未覆盖 HTML 模板；应额外检查 `src/templates/`，仅保留私人图片地址的占位替换及不改变行为的格式差异。
 
 共享依赖与锁文件随功能更新，账号服务器的 workspace 不进入 Public。版本号随共享发布基线更新，Public 的 buildId、发行修订、Android 应用身份和签名保持独立。同步维护者当前工作区前须排除未经验证的并行施工；同步成功不等于已推送或部署。
+
+APK 更新继续复用 AndroidAppUpdate / TaskCenter 与原生 ApkUpdaterPlugin、ApkUpdateUrlPolicy、NativeApkUpdateCache；只有版本源使用最小 REPLACE。主库 OfficialAndroidApkRelease 标为 MAIN-ONLY，Public GitHubAndroidApkRelease 标为 PUBLIC-ONLY。独有知识 Owner 在现有知识清单登记；同步保留已复核的 Public 指纹，字节变化未复核时停止，不自动刷新。Public Actions 发行签名 APK 与同字节网页包，CF Fork 按产品提交取得候选，自部署仍可从源码构建；详见 Public README。

@@ -1,7 +1,7 @@
 {
   "name": "sillytavern-resource-library",
   "private": true,
-  "version": "0.0.242",
+  "version": "0.0.243",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "packageManager": "pnpm@11.5.0",
@@ -52,7 +52,8 @@
     "audit:bundle-budget": "node scripts/BundleBudget.mjs",
     "audit:secrets": "node scripts/SecretScan.mjs",
     "test:flaky-candidates": "node scripts/RepeatFlakyCandidates.mjs",
-    "check": "pnpm check:appearance-reference && pnpm check:structure && pnpm check:assistant-knowledge && pnpm check:build-info && pnpm format:check && pnpm lint && pnpm test && pnpm build"
+    "check": "pnpm check:appearance-reference && pnpm check:structure && pnpm check:assistant-knowledge && pnpm check:build-info && pnpm format:check && pnpm lint && pnpm test && pnpm build",
+    "public:web-build": "node scripts/Build-PublicWeb.mjs"
   },
   "dependencies": {
     "@adobe/css-tools": "4.4.4",

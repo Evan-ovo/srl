@@ -1,0 +1,129 @@
+name: Public release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'android/**'
+      - 'public/**'
+      - 'cloudflare/**'
+      - 'patches/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'build-info.json'
+      - 'capacitor.config.ts'
+      - 'vite.config.ts'
+      - 'public-release.config.json'
+      - '.github/workflows/public-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: public-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: vars.PUBLIC_APK_RELEASE_ENABLED == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GRADLE_USER_HOME: ${{ runner.temp }}/gradle-public
+      SRL_ANDROID_RELEASE_STORE_FILE: ${{ runner.temp }}/public-release.jks
+      SRL_ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.PUBLIC_ANDROID_STORE_PASSWORD }}
+      SRL_ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.PUBLIC_ANDROID_KEY_ALIAS }}
+      SRL_ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.PUBLIC_ANDROID_KEY_PASSWORD }}
+      SRL_PUBLIC_ORIGIN: ${{ secrets.PUBLIC_WEB_ORIGIN }}
+      SRL_PUBLIC_ASSET_ORIGIN: ${{ secrets.PUBLIC_ASSET_ORIGIN }}
+      SRL_APK_UPDATE_REPOSITORY: ${{ github.repository }}
+      VITE_SRL_APK_UPDATE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - name: 检查一次性发行配置
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PUBLIC_ANDROID_KEYSTORE_BASE64 }}
+          EXPECTED_CERTIFICATE: ${{ vars.PUBLIC_ANDROID_CERT_SHA256 }}
+        run: |
+          $required = @('KEYSTORE_BASE64','SRL_ANDROID_RELEASE_STORE_PASSWORD','SRL_ANDROID_RELEASE_KEY_ALIAS','SRL_ANDROID_RELEASE_KEY_PASSWORD','SRL_PUBLIC_ORIGIN','SRL_PUBLIC_ASSET_ORIGIN','EXPECTED_CERTIFICATE')
+          foreach ($name in $required) {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing release setting: $name; see README Public release setup." }
+          }
+          if ($env:EXPECTED_CERTIFICATE -notmatch '^[a-fA-F0-9]{64}$') { throw 'PUBLIC_ANDROID_CERT_SHA256 must be the existing release certificate SHA-256' }
+          [IO.File]::WriteAllBytes($env:SRL_ANDROID_RELEASE_STORE_FILE, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+      - run: pnpm install --frozen-lockfile
+      - name: 生成稳定候选编号
+        id: candidate
+        run: node scripts/PublicRelease.mjs prepare
+      - name: 检查是否已经发布同一产品提交
+        id: existing
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          $draft = gh release view $env:RELEASE_TAG --json isDraft --jq .isDraft 2>$null
+          if ($LASTEXITCODE -eq 0 -and $draft -eq 'false') { 'published=true' >> $env:GITHUB_OUTPUT }
+          else { 'published=false' >> $env:GITHUB_OUTPUT }
+          $global:LASTEXITCODE = 0
+      - name: 客户端回归、知识和功能合同
+        if: steps.existing.outputs.published != 'true'
+        run: |
+          pnpm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm check:feature-contracts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm build
+          exit $LASTEXITCODE
+      - name: 构建同一网页候选对应的签名 APK
+        if: steps.existing.outputs.published != 'true'
+        env:
+          EXPECTED_CERTIFICATE: ${{ vars.PUBLIC_ANDROID_CERT_SHA256 }}
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoLogo -NoProfile -File scripts/Build-AndroidApk.ps1 -Mode Packaged -Variant Release -SkipWebBuild -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./android/gradlew.bat -p android :app:testDebugUnitTest :app:lintRelease --console=plain
+          exit $LASTEXITCODE
+      - name: 打包同字节网页与更新清单
+        if: steps.existing.outputs.published != 'true'
+        run: node scripts/PublicRelease.mjs package
+      - name: 全部资产上传后再公开 Release
+        if: steps.existing.outputs.published != 'true'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.candidate.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.candidate.outputs.sourceCommit }}
+        run: |
+          gh release view $env:RELEASE_TAG 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:RELEASE_TAG --target $env:RELEASE_COMMIT --draft --title "SRL Public $env:RELEASE_TAG" --notes-file .codex-tmp/public-release/release-notes.md
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload $env:RELEASE_TAG .codex-tmp/public-release/SRL_Pubilc.apk .codex-tmp/public-release/public-web.zip .codex-tmp/public-release/public-release.json --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --notes-file .codex-tmp/public-release/release-notes.md --draft=false --latest
+          exit $LASTEXITCODE
+      - name: 清理临时签名副本
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath $env:SRL_ANDROID_RELEASE_STORE_FILE) { Remove-Item -LiteralPath $env:SRL_ANDROID_RELEASE_STORE_FILE }

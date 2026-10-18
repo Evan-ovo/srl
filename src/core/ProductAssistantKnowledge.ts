@@ -133,6 +133,9 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     aliases: ['后台音频', '静音音频', '保活', '系统通知', '通知授权', 'PWA通知'],
     entry: ['设置', '后台与通知'],
     steps: [
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=apk-release-check-help
+      '设置最下方可检查 APK 版本；Public 从发行者配置的 GitHub Releases 查询更新，未发布时提示渠道尚未发布；新版本需主动确认下载，校验后由 Android 系统确认安装。可稍后提醒或忽略当前版本，手动检查仍可更新。网页更新只更新网页，不能替换 APK 原生代码。',
+      // SRL-PUBLIC-SYNC: END REPLACE id=apk-release-check-help
       // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-2
       '系统通知权限须在系统或浏览器设置撤销；浏览器通知仅在用户主动授权后启用。',
       // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-2
@@ -481,6 +484,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       'GitHub 分块状态为 starter 表示上传未完成，大小相同也不能算备份成功。保留原件的设备重新执行备份时，会先核对本地块的大小和 SHA，再在原容器补传不完整块；新清单在对象核验完成后才提交。只有云端残件、没有原件时，刷新或反复下载无法补回内容；不要删除本机资源。',
       '“连续45秒没有收到响应或新数据”表示本次请求等待超时，不能仅凭此判断资源损坏；它与先前备份的上传未完成状态是不同问题。保留当前资源、分块、附件编号及失败阶段，检查网络或中继后手动重试，不要清空本机资源。',
       '如果提示云备份任务数据库升级被旧页面占用，关闭其他资源库页面后重试；已有任务记录保留，不需要清空浏览器数据。',
+      'APK 云备份提示“文件不属于资源库原件或导入暂存目录”属于本机原生文件路径校验，不是云盘登录或 Worker 报错。包含生图相册或社区附件时，需安装包含原生数据库附件读取修复的新版 APK；仅刷新网页或更新中继不能替换这段原生代码，不要清空本机资料。',
       'APK 提示“Transaction has already completed or failed”属于本机数据库事务错误；保留本机资源与旧云备份，更新包含事务修复的 APK 后再试，不要把它当成凭据错误或清空数据。',
       '出现“新对象快照已上传成功”说明新备份已提交，旧备份维护单独显示结果。GitHub 删除回执异常时会只读复核；无法确认时保留警告。旧快照已清理而后续内容对象回收失败时，会保留已清理份数，不把整个备份报成失败。可查看“上次任务性能”区分准备、上传、校验与维护时间。',
       '旧快照维护显示引用检查、过期快照删除和无引用内容对象处理计数；准备包含扫描、哈希和对象构建，本机准备只统计原生磁盘与桥接，请求累计耗时与清理耗时可能重叠，不能直接相加。',

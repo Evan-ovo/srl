@@ -3,6 +3,9 @@ apply plugin: 'com.android.application'
 import groovy.json.JsonSlurper
 
 def buildInfo = new JsonSlurper().parse(rootProject.file('../build-info.json'))
+def publicReleaseConfig = new JsonSlurper().parse(rootProject.file('../public-release.config.json'))
+def updateRepository = (System.getenv('SRL_APK_UPDATE_REPOSITORY') ?: publicReleaseConfig.repository).trim()
+if (!(updateRepository ==~ /[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/)) throw new GradleException('APK 更新仓库必须是 owner/repo')
 def publicAssetOrigin = (System.getenv('SRL_PUBLIC_ASSET_ORIGIN') ?: '').trim()
 if (publicAssetOrigin) {
     def assetUri = new URI(publicAssetOrigin)
@@ -42,6 +45,7 @@ android {
         versionName buildInfo.androidVersionName as String
         buildConfigField 'int', 'SRL_NATIVE_API_VERSION', buildInfo.nativeApiVersion.toString()
         buildConfigField 'String', 'SRL_BUILD_ID', '"' + buildInfo.buildId + '"'
+        buildConfigField 'String', 'SRL_APK_UPDATE_REPOSITORY', groovy.json.JsonOutput.toJson(updateRepository)
         buildConfigField 'String', 'SRL_PUBLIC_ASSET_ORIGIN', groovy.json.JsonOutput.toJson(publicAssetOrigin)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

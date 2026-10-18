@@ -2,9 +2,7 @@ import { createApp } from 'vue'
 
 import { placeStartupAppearanceAfterApplicationStyles } from './core/StartupAppearance'
 import { installAndroidAppUpdateChecks } from './core/AndroidAppUpdate'
-// SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=official-apk-update-bootstrap-import
 import { appDatabase } from './core/AppDatabaseInstance'
-// SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=official-apk-update-bootstrap-import
 import { installGlobalErrorHandlers } from './core/FatalErrorNotice'
 import { installNativeRuntime } from './core/NativeRuntime'
 import { installPerformanceMonitor } from './core/PerformanceMonitor'
@@ -137,6 +135,12 @@ function getViewportBounds() {
   }
 }
 
+function isVisualViewportReduced(height: number): boolean {
+  // VisualViewport uses fractional CSS pixels. A subpixel difference after
+  // dismissal must not retain keyboard-only layout once the viewport is back.
+  return Math.floor(expandedVisualViewportHeight - height) > 0
+}
+
 function getViewportSignature(): string {
   const viewport = window.visualViewport
   return [
@@ -160,7 +164,7 @@ function markFocusedMobileInputForReveal(): void {
   stableViewportFrames = 0
   const viewport = getViewportBounds()
   keyboardFocusActive = true
-  focusRevealPending = viewport.height < expandedVisualViewportHeight
+  focusRevealPending = isVisualViewportReduced(viewport.height)
   scheduleViewportState()
 }
 
@@ -191,7 +195,7 @@ function checkViewportStability(): void {
     lastIOSDevice &&
     window.innerWidth <= 860 &&
     (window.visualViewport?.scale ?? 1) === 1 &&
-    getViewportBounds().height < expandedVisualViewportHeight
+    isVisualViewportReduced(getViewportBounds().height)
   ) {
     // Consume this focus/keyboard session before scrolling. A resulting
     // VisualViewport event must not queue a second correction for the same field.
@@ -234,7 +238,7 @@ function applyViewportState(): void {
     if (
       isMobileEditableElement(input) &&
       !focusRevealAttempted &&
-      viewportHeight < expandedVisualViewportHeight
+      isVisualViewportReduced(viewportHeight)
     ) {
       focusRevealPending = true
       focusRevealTarget = input
@@ -278,11 +282,11 @@ function applyViewportState(): void {
     window.innerWidth <= 860 &&
     (window.visualViewport?.scale ?? 1) === 1 &&
     keyboardFocusActive &&
-    viewportHeight < expandedVisualViewportHeight
+    isVisualViewportReduced(viewportHeight)
   if (document.documentElement.dataset.iosKeyboardOpen !== String(iosKeyboardOpen)) {
     document.documentElement.dataset.iosKeyboardOpen = String(iosKeyboardOpen)
   }
-  if (viewportHeight >= expandedVisualViewportHeight && (window.visualViewport?.scale ?? 1) === 1) {
+  if (!isVisualViewportReduced(viewportHeight) && (window.visualViewport?.scale ?? 1) === 1) {
     restorePersonalInputScroll()
     keyboardFocusActive = false
     focusRevealPending = false

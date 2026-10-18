@@ -49,4 +49,64 @@ public class NativeFileAccessTest {
         assertTrue(NativeFileAccess.hasOfficialAppFiles(data, new String[0], new long[0]));
         assertFalse(new File(data, "official-apps").exists());
     }
+
+    @Test public void acceptsNativeDatabaseAlbumAndAttachmentObjectsForBackup() throws Exception {
+        File data = temporary.newFolder("files"), cache = temporary.newFolder("cache"), library = temporary.newFolder("library");
+        String hash = "ab".repeat(32);
+        File source = new File(data, "srl-app-data/blobs/ab/" + hash + ".bin");
+        assertTrue(source.getParentFile().mkdirs());
+        Files.write(source.toPath(), new byte[] {1, 2, 3});
+        assertEquals(source.getCanonicalFile(), NativeFileAccess.resolve(data, cache, library, source));
+    }
+
+    @Test public void rejectsMalformedDatabaseObjectsAndOtherPrivateFiles() throws Exception {
+        File data = temporary.newFolder("files"), cache = temporary.newFolder("cache"), library = temporary.newFolder("library");
+        String hash = "ab".repeat(32);
+        for (String relative : new String[] {
+            "srl-app-data/blobs/ab/secret.bin", "srl-app-data/blobs/cd/" + hash + ".bin",
+            "srl-app-data/blobs/ab/" + hash + ".tmp", "srl-app-data/blobs-evil/ab/" + hash + ".bin",
+            "srl-app-data/blobs/ab/nested/" + hash + ".bin", "srl-app-data/srl-app-data.db", "preferences/session.xml",
+            "srl-app-data/blobs/ab/../../../preferences/session.xml"
+        }) {
+            File source = new File(data, relative);
+            assertTrue(source.getParentFile().isDirectory() || source.getParentFile().mkdirs());
+            Files.write(source.toPath(), new byte[] {1});
+            assertThrows(IOException.class, () -> NativeFileAccess.resolve(data, cache, library, source));
+        }
+        File missing = new File(data, "srl-app-data/blobs/ab/" + hash + ".bin");
+        assertThrows(IOException.class, () -> NativeFileAccess.resolve(data, cache, library, missing));
+        assertTrue(missing.mkdir());
+        assertThrows(IOException.class, () -> NativeFileAccess.resolve(data, cache, library, missing));
+    }
+
+    @Test public void stillAcceptsOwnedOriginalsAndImportFiles() throws Exception {
+        File data = temporary.newFolder("files"), cache = temporary.newFolder("cache"), library = temporary.newFolder("library");
+        for (File source : new File[] {
+            new File(library, "objects/ab/original.bin"), new File(data, "srl-shared-intake/import.bin"),
+            new File(data, "srl-archive-jobs/job/input.bin"), new File(cache, "picked-images/image.png"),
+            new File(data, "srl-archive-tasks/12345678-1234-1234-1234-123456789abc.source")
+        }) {
+            assertTrue(source.getParentFile().isDirectory() || source.getParentFile().mkdirs());
+            Files.write(source.toPath(), new byte[] {1});
+            assertEquals(source.getCanonicalFile(), NativeFileAccess.resolve(data, cache, library, source));
+        }
+    }
+
+    @Test public void hashesAndStagesTheCommittedDatabaseFileWithoutChangingItsBytes() throws Exception {
+        File data = temporary.newFolder("files"), cache = temporary.newFolder("cache"), library = temporary.newFolder("library");
+        byte[] original = new byte[] {1, 2, 3, 4};
+        File seed = temporary.newFile("seed.bin");
+        Files.write(seed.toPath(), original);
+        String hash = NativeFileAccess.hash(seed);
+        File source = new File(data, "srl-app-data/blobs/" + hash.substring(0, 2) + "/" + hash + ".bin");
+        assertTrue(source.getParentFile().mkdirs());
+        Files.move(seed.toPath(), source.toPath());
+        File resolved = NativeFileAccess.resolve(data, cache, library, source);
+        assertEquals(hash, NativeFileAccess.hash(resolved));
+        File expected = temporary.newFile("expected.bin"), staged = new File(temporary.getRoot(), "staged.part");
+        Files.write(expected.toPath(), new byte[] {2, 3});
+        NativeCloudTransferPlugin.copyVerifiedFileRange(resolved, staged, 1, 2, NativeFileAccess.hash(expected));
+        assertArrayEquals(new byte[] {2, 3}, Files.readAllBytes(staged.toPath()));
+        assertArrayEquals(original, Files.readAllBytes(source.toPath()));
+    }
 }

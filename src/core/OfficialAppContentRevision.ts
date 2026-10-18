@@ -11,7 +11,7 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=frontend-workshop-content-revision
   frontendWorkshop: 7,
   // SRL-PUBLIC-SYNC: END REPLACE id=frontend-workshop-content-revision
-  imageGeneration: 8,
+  imageGeneration: 9,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-album-content-revision
   imageAlbum: 3,
   // SRL-PUBLIC-SYNC: END REPLACE id=image-album-content-revision

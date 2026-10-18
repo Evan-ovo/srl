@@ -3,14 +3,10 @@
   "apps": {
     "draw": {
       "owner": "src/services/CharacterDrawService.ts",
-      "tests": [
-        "src/services/CharacterDrawService.test.ts"
-      ],
+      "tests": ["src/services/CharacterDrawService.test.ts"],
       "backup": {
         "policy": "supported",
-        "scopes": [
-          "extra.characterDraw"
-        ]
+        "scopes": ["extra.characterDraw"]
       },
       "starter": "available",
       "cleanup": {
@@ -36,10 +32,7 @@
       ],
       "backup": {
         "policy": "supported",
-        "scopes": [
-          "resource.chat",
-          "extra.chatReader"
-        ]
+        "scopes": ["resource.chat", "extra.chatReader"]
       },
       "starter": "none",
       "starterReason": "阅读外观使用读了么自身设置；当前通用示例映射没有阅读器样式",
@@ -66,13 +59,14 @@
         "scripts/AppearanceReferenceCatalog.test.ts",
         "src/services/AppearanceReferenceService.test.ts",
         "src/components/CustomUiFrame.test.ts",
-        "src/components/AppearanceUiEditor.test.ts"
+        "src/components/AppearanceUiEditor.test.ts",
+        "src/core/AndroidAppUpdate.test.ts",
+        "src/core/GitHubAndroidApkRelease.test.ts",
+        "scripts/PublicRelease.test.ts"
       ],
       "backup": {
         "policy": "supported",
-        "scopes": [
-          "extra.appearance"
-        ],
+        "scopes": ["extra.appearance"],
         "reason": "外观与预览权限沿原便携设置；增加多线路下载为本机负担偏好，恢复时关闭，需本机再次确认"
       },
       "appearance": "正式设置入口App.vue绑定多线路状态与事件；NativeIntakeFilesAudit在完整APP内覆盖取消、确认、重开保留和关闭，不能只用隔离设置组件替代",
@@ -81,7 +75,14 @@
         "policy": "not-applicable",
         "reason": "系统入口不提供官方 APP 卸载；数据操作复用各自既有 Owner"
       },
-      "cssReference": "available"
+      "cssReference": "available",
+      "apkUpdate": {
+        "owner": "src/core/AndroidAppUpdate.ts",
+        "nativeOwner": "android/app/src/main/java/buzz/jixiangruyi1207/srl/ApkUpdaterPlugin.java",
+        "backup": "更新偏好仅本机；不备份发行签名或下载缓存",
+        "cleanup": "NativeApkUpdateCache保留最新完整包和下载/安装在用文件，结束旧包与残片自动清理；用户资料不参与",
+        "appearance": "设置底部版本检查入口，沿既有确认弹窗与TaskCenter停止下载"
+      }
     },
     "assistant": {
       "owner": "src/services/ProductAssistantService.ts",
@@ -121,11 +122,7 @@
       ],
       "backup": {
         "policy": "supported",
-        "scopes": [
-          "extra.assistantData",
-          "extra.appearance",
-          "extra.credentials"
-        ],
+        "scopes": ["extra.assistantData", "extra.appearance", "extra.credentials"],
         "reason": "聊天、记忆、项目、模板、偏好和APK配置步骤元数据需单独选择蒜惹菈本地资料，续接/重开复用同一进度Owner；桌宠排查复用DiscordSourceConnectionService原连接检查，修复保留原任务对话，诊断许可只留运行期；助手备份只存模式与参数卡引用，参数卡需另选密钥资源范围；Bot私密字段沿原统一密码加密，配置浏览器Cookie、网页编辑全文与秘密不进入助手资料；作用域 CSS 随外观与 CSS 预设，API 密钥随凭据单独选择；桌宠图片为可重新下载的缓存"
       },
       "starter": "none",
@@ -202,9 +199,7 @@
       ],
       "backup": {
         "policy": "partial",
-        "scopes": [
-          "extra.communitySources"
-        ],
+        "scopes": ["extra.communitySources"],
         "reason": "已保存社区正文与现存附件可归档；显式清理后的媒体仅保留远程链接，远程失效时无法从链接恢复本地文件；云端短期收件任务与 Android 当前收件会话不作为本机恢复副本；未入库的接收暂存不作为资源备份，显式放弃后需重新分享或下载"
       },
       "starter": "none",
@@ -225,10 +220,7 @@
       ],
       "backup": {
         "policy": "supported",
-        "scopes": [
-          "extra.cloudBackup",
-          "extra.credentials"
-        ]
+        "scopes": ["extra.cloudBackup", "extra.credentials"]
       },
       "starter": "available",
       "cleanup": {
@@ -281,10 +273,7 @@
       ],
       "backup": {
         "policy": "supported",
-        "scopes": [
-          "resource.preset",
-          "extra.stitchWork"
-        ]
+        "scopes": ["resource.preset", "extra.stitchWork"]
       },
       "starter": "available",
       "cleanup": {
@@ -295,15 +284,10 @@
     },
     "frontendWorkshop": {
       "owner": "src/services/FrontendWorkshopProjectService.ts",
-      "tests": [
-        "src/services/FrontendWorkshopProjectService.test.ts"
-      ],
+      "tests": ["src/services/FrontendWorkshopProjectService.test.ts"],
       "backup": {
         "policy": "partial",
-        "scopes": [
-          "resource.beautification",
-          "resource.regex"
-        ],
+        "scopes": ["resource.beautification", "resource.regex"],
         "reason": "落库资源可归档；现有 ZIP 选择合同未单独包含 Source 项目与组件库，不宣称整库归档覆盖工作台全部项目"
       },
       "starter": "available",
@@ -333,9 +317,7 @@
     },
     "imageAlbum": {
       "owner": "src/services/GeneratedImageAlbumService.ts",
-      "tests": [
-        "src/services/GeneratedImageAlbumService.test.ts"
-      ],
+      "tests": ["src/services/GeneratedImageAlbumService.test.ts"],
       "backup": {
         "policy": "unsupported",
         "scopes": [],
@@ -350,14 +332,10 @@
     },
     "userPersona": {
       "owner": "src/services/UserPersonaService.ts",
-      "tests": [
-        "src/services/UserPersonaService.test.ts"
-      ],
+      "tests": ["src/services/UserPersonaService.test.ts"],
       "backup": {
         "policy": "partial",
-        "scopes": [
-          "resource.userPersona"
-        ],
+        "scopes": ["resource.userPersona"],
         "reason": "已保存人设原件可归档；本机模板偏好未在现有额外范围中独立声明"
       },
       "starter": "available",
@@ -369,14 +347,10 @@
     },
     "extensions": {
       "owner": "src/services/ExternalAppService.ts",
-      "tests": [
-        "src/services/ExternalAppService.test.ts"
-      ],
+      "tests": ["src/services/ExternalAppService.test.ts"],
       "backup": {
         "policy": "supported",
-        "scopes": [
-          "extra.externalApps"
-        ],
+        "scopes": ["extra.externalApps"],
         "reason": "恢复后保持禁用，授权复用既有扩展合同"
       },
       "starter": "available",

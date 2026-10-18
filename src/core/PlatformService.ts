@@ -174,5 +174,11 @@ export const platform = {
     isAndroidApk(): boolean {
       return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
     },
+    async check(manual = false): Promise<string> {
+      return (await import('./AndroidAppUpdate')).checkForAndroidAppUpdate(manual)
+    },
+    async installChecks(): Promise<void> {
+      ;(await import('./AndroidAppUpdate')).installAndroidAppUpdateChecks()
+    },
   },
 } as const

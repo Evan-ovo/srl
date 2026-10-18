@@ -199,6 +199,45 @@ describe('Main viewport state', () => {
     },
   )
 
+  it.each([
+    { expanded: 778, restored: 777.75, blur: false },
+    { expanded: 778, restored: 777.75, blur: true },
+    { expanded: 778.5, restored: 778.25, blur: false },
+    { expanded: 778.5, restored: 778.25, blur: true },
+    { expanded: 778.1, restored: 777.9, blur: false },
+    { expanded: 778.1, restored: 777.9, blur: true },
+  ])(
+    'restores the keyboard UI within the same CSS pixel: %j',
+    async ({ expanded, restored, blur }) => {
+      iosStandalone = true
+      vi.stubGlobal('innerWidth', 390)
+      viewport.height = expanded
+      const input = document.createElement('textarea')
+      input.value = '保留已输入的画面描述'
+      document.body.append(input)
+      input.focus()
+      await import('./Main')
+
+      viewport.height = 420
+      applyScheduledViewport()
+      expect(document.documentElement.dataset.iosKeyboardOpen).toBe('true')
+      if (blur) input.blur()
+      viewport.height = restored
+      applyScheduledViewport()
+      expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+      expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe(
+        `${restored}px`,
+      )
+      expect(input.value).toBe('保留已输入的画面描述')
+
+      input.focus()
+      notifyFocusIn()
+      viewport.height = 420
+      applyScheduledViewport()
+      expect(document.documentElement.dataset.iosKeyboardOpen).toBe('true')
+    },
+  )
+
   it('keeps the iOS keyboard marker when innerHeight shrinks with visualViewport', async () => {
     iosStandalone = true
     vi.stubGlobal('innerWidth', 390)

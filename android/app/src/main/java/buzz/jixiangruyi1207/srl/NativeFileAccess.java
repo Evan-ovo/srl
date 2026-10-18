@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.util.Locale;
 
-/** Only files owned by resource/import pipelines may be exposed to bridge operations. */
+/** Only committed library/database objects and import files may be exposed to bridge operations. */
 final class NativeFileAccess {
     interface Progress { void update(long readBytes, long totalBytes) throws Exception; }
 
@@ -36,14 +36,21 @@ final class NativeFileAccess {
         if (value == null) throw new IOException("缺少原生文件位置");
         Uri uri = Uri.parse(value);
         if (uri.getScheme() != null && !"file".equals(uri.getScheme())) throw new IOException("不支持的原生文件位置");
-        File file = new File(uri.getScheme() == null ? value : uri.getPath()).getCanonicalFile();
-        File taskRoot = new File(context.getFilesDir(), "srl-archive-tasks").getCanonicalFile();
+        return resolve(context.getFilesDir(), context.getCacheDir(), NativeLibraryPlugin.libraryRoot(context),
+            new File(uri.getScheme() == null ? value : uri.getPath()));
+    }
+
+    static File resolve(File filesDir, File cacheDir, File libraryRoot, File requested) throws IOException {
+        File file = requested.getCanonicalFile();
+        File blob = resolveDatabaseObject(filesDir, file);
+        if (blob != null) return blob;
+        File taskRoot = new File(filesDir, "srl-archive-tasks").getCanonicalFile();
         if(taskRoot.equals(file.getParentFile()) && file.isFile() && file.getName().matches("[0-9a-f]{8}-[0-9a-f-]{27}\\.source")) return file;
         File[] roots = {
-            new File(NativeLibraryPlugin.libraryRoot(context), "objects"),
-            new File(context.getFilesDir(), "srl-shared-intake"),
-            new File(context.getFilesDir(), "srl-archive-jobs"),
-            new File(context.getCacheDir(), "picked-images")
+            new File(libraryRoot, "objects"),
+            new File(filesDir, "srl-shared-intake"),
+            new File(filesDir, "srl-archive-jobs"),
+            new File(cacheDir, "picked-images")
         };
         for (File root : roots) {
             if (file.getPath().startsWith(root.getCanonicalPath() + File.separator) && file.isFile()) return file;
@@ -51,20 +58,25 @@ final class NativeFileAccess {
         throw new IOException("文件不属于资源库原件或导入暂存目录");
     }
 
-    /** Image-only access to immutable native database objects; never other app-private files. */
+    private static File resolveDatabaseObject(File filesDir, File file) throws IOException {
+        File data = filesDir.getCanonicalFile();
+        File blobs = new File(data, "srl-app-data/blobs").getCanonicalFile();
+        String prefix = blobs.getPath() + File.separator;
+        if (!file.getPath().startsWith(prefix)) return null;
+        String relative = file.getPath().substring(prefix.length()).replace(File.separatorChar, '/');
+        if (blobs.getPath().startsWith(data.getPath() + File.separator)
+                && relative.matches("[a-f0-9]{2}/[a-f0-9]{64}\\.bin")
+                && relative.substring(0, 2).equals(relative.substring(3, 5)) && file.isFile()) return file;
+        throw new IOException("原生二进制附件位置无效");
+    }
+
+    /** Images reuse the blob boundary without initializing the external library. */
     static File resolveImage(Context context, String value) throws Exception {
         if (value == null) throw new IOException("缺少原生文件位置");
         Uri uri = Uri.parse(value);
         if ("file".equals(uri.getScheme())) {
-            File root = new File(context.getFilesDir(), "srl-app-data/blobs").getCanonicalFile();
-            File file = new File(uri.getPath()).getCanonicalFile();
-            String prefix = root.getPath() + File.separator;
-            if (file.getPath().startsWith(prefix)) {
-                String relative = file.getPath().substring(prefix.length()).replace(File.separatorChar, '/');
-                if (relative.matches("[a-f0-9]{2}/[a-f0-9]{64}\\.bin")
-                        && relative.substring(0, 2).equals(relative.substring(3, 5)) && file.isFile()) return file;
-                throw new IOException("原生图片附件位置无效");
-            }
+            File blob = resolveDatabaseObject(context.getFilesDir(), new File(uri.getPath()).getCanonicalFile());
+            if (blob != null) return blob;
         }
         return resolve(context, value);
     }

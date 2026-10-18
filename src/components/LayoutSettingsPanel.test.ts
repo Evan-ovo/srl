@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const runtime = vi.hoisted(() => ({
   android: false,
+  checkUpdate: vi.fn(async () => 'APK 更新渠道尚未发布'),
   postMedia: false,
   save: vi.fn(),
   permission: 'default' as 'unsupported' | NotificationPermission,
@@ -70,7 +71,7 @@ vi.mock('../core/LibraryContainer', async () => ({
 }))
 vi.mock('../core/PlatformService', () => ({
   platform: {
-    update: { isAndroidApk: () => runtime.android },
+    update: { isAndroidApk: () => runtime.android, check: runtime.checkUpdate },
     security: {
       getState: async () =>
         runtime.android
@@ -109,6 +110,19 @@ vi.mock('./ResourceHealthCenter.vue', () => ({ default: { template: '<div />' } 
 import LayoutSettingsPanel from './LayoutSettingsPanel.vue'
 
 const wrappers: Array<ReturnType<typeof shallowMount>> = []
+it('uses the APK update owner from the visible settings button', async () => {
+  runtime.android = true
+  const wrapper = mountSettings()
+  await flushPromises()
+  const button = wrapper
+    .findAll('button')
+    .find((item) => item.text().includes('检查 APK 版本更新'))!
+  expect(button).toBeDefined()
+  await button.trigger('click')
+  await flushPromises()
+  expect(runtime.checkUpdate).toHaveBeenCalledWith(true)
+  expect(wrapper.text()).toContain('APK 更新渠道尚未发布')
+})
 it('places factory reset last in the scrollable settings sections before the footer', () => {
   const view = mountSettings()
   expect(view.get('.settings-sections > :last-child').element.tagName.toLowerCase()).toBe(

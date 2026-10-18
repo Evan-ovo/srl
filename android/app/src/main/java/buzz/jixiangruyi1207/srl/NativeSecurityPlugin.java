@@ -2,17 +2,12 @@ package buzz.jixiangruyi1207.srl;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.net.Uri;
 import android.os.Build;
 import android.view.WindowManager;
 import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
-import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.FragmentActivity;
 import com.getcapacitor.JSObject;
@@ -63,7 +58,7 @@ public class NativeSecurityPlugin extends Plugin {
         result.put("secureScreen", getContext().getSharedPreferences(PREFS, Activity.MODE_PRIVATE).getBoolean(SECURE_SCREEN, false));
         int authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG | BiometricManager.Authenticators.DEVICE_CREDENTIAL;
         result.put("biometricAvailable", BiometricManager.from(getContext()).canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS);
-        result.put("notificationsGranted", Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED);
+        result.put("notificationsGranted", notificationsGranted());
         call.resolve(result);
     }
 
@@ -86,12 +81,17 @@ public class NativeSecurityPlugin extends Plugin {
 
     @PluginMethod
     public void requestNotifications(PluginCall call) {
-        if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) { JSObject result = new JSObject(); result.put("granted", true); call.resolve(result); return; }
+        if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) { JSObject result = new JSObject(); result.put("granted", notificationsGranted()); call.resolve(result); return; }
         requestPermissionForAlias("notifications", call, "notificationPermissionResult");
     }
 
     @PermissionCallback
     private void notificationPermissionResult(PluginCall call) {
-        JSObject result = new JSObject(); result.put("granted", getPermissionState("notifications") == PermissionState.GRANTED); call.resolve(result);
+        JSObject result = new JSObject(); result.put("granted", notificationsGranted()); call.resolve(result);
+    }
+
+    private boolean notificationsGranted() {
+        return (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+            && NotificationManagerCompat.from(getContext()).areNotificationsEnabled();
     }
 }

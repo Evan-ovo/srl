@@ -178,11 +178,9 @@ onBeforeUnmount(() => {
 async function handleCheckUpdate(): Promise<void> {
   updateCheckResult.value = '正在检查…'
   try {
-    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=apk-update-check-result
     updateCheckResult.value = isNativeApk
-      ? '此 Public APK 由部署者自行维护，请从原发行渠道获取更新'
+      ? await platform.update.check(true)
       : await manualCheckForUpdate()
-    // SRL-PUBLIC-SYNC: END REPLACE id=apk-update-check-result
   } catch (error) {
     updateCheckResult.value = `检查失败：${error instanceof Error ? error.message : '未知错误'}`
   }

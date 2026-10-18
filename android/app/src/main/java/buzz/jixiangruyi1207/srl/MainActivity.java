@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ShareReceiverPlugin.class);
+        registerPlugin(ApkUpdaterPlugin.class);
         registerPlugin(NativeLibraryPlugin.class);
         registerPlugin(NativeAppDatabasePlugin.class);
         registerPlugin(NativeArchivePlugin.class);

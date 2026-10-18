@@ -528,7 +528,7 @@ summary {
     padding: 6px 10px;
   }
 
-  :root[data-ios-keyboard-open='true'] .image-generation-app .footerbar {
+  :root[data-ios-keyboard-open='true'] .image-generation-app :is(.footerbar, .quick-sizes) {
     display: none;
   }
 
