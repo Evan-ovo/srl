@@ -801,7 +801,7 @@
     {
       "path": "src/services/OfficialAppService.ts",
       "guides": ["apps"],
-      "sha256": "d0f66a96644480eec10ef2d1ed8288d3693b21dd1af3277b51c2e75fd6df2e8f"
+      "sha256": "009f39c2ed008a193e9402f07aff056ae793327013322077647ede5eb37334ca"
     },
     {
       "path": "src/components/OfficialAppManager.vue",
@@ -931,7 +931,7 @@
     {
       "path": "src/storage/InstalledOfficialAppStorage.ts",
       "guides": ["apps"],
-      "sha256": "8c0b394f2636d0c7e41f1b96ccb62ddd3876252d3b5b4fca54594a0859c45bd6"
+      "sha256": "8e50d9854d3293c304bc8be7ef2a3258952f99a00d8abf21e4141bd31314dd10"
     },
     {
       "path": "src/workers/ExternalAppUnzipWorker.ts",

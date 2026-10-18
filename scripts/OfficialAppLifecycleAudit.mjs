@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import console from 'node:console'
 import { auditButtonMaterial } from './SharedAppearanceAudit.mjs'
 import process from 'node:process'
+import { clearTimeout, setTimeout } from 'node:timers'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { URL } from 'node:url'
@@ -95,13 +96,17 @@ try {
   await managerHelp.waitFor({ state: 'hidden' })
   // A separate profile keeps the existing single-install/offline lifecycle intact.
   const batchContext = await browser.newContext({
+    // Routing cannot hold requests served through a Service Worker. The main
+    // profile below retains its Worker for the real install/offline lifecycle.
+    serviceWorkers: 'block',
     viewport: { width: 390, height: 844 },
     hasTouch: true,
     storageState: environment.storageState,
   })
+  let batchPage
   try {
     await prepareAuditContext(batchContext, environment)
-    const batchPage = await batchContext.newPage()
+    batchPage = await batchContext.newPage()
     await batchPage.goto(previewUrl)
     await batchPage.getByRole('button', { name: '功能', exact: true }).tap()
     await batchPage.getByRole('button', { name: 'APP 管理', exact: true }).tap()
@@ -126,12 +131,14 @@ try {
     assert.equal(await downloads.getAttribute('aria-label'), '下载所选（2）')
     let releasePackages
     let requestsReady
+    let requestsFailed
     let packageRequests = 0
     const packagesHeld = new Promise((accept) => {
       releasePackages = accept
     })
-    const twoRequests = new Promise((accept) => {
+    const twoRequests = new Promise((accept, reject) => {
       requestsReady = accept
+      requestsFailed = reject
     })
     const holdPackage = async (route) => {
       if (++packageRequests === 2) requestsReady()
@@ -140,7 +147,16 @@ try {
     }
     await batchContext.route('**/*.srlapp', holdPackage)
     await downloads.tap()
-    await twoRequests
+    const requestTimer = setTimeout(
+      () =>
+        requestsFailed(new Error(`Expected 2 held package requests; observed ${packageRequests}`)),
+      30_000,
+    )
+    try {
+      await twoRequests
+    } finally {
+      clearTimeout(requestTimer)
+    }
     await batchPage.getByRole('button', { name: '停止下载', exact: true }).tap()
     await batchPage.getByRole('status').filter({ hasText: '已停止下载，已完成 0 个' }).waitFor()
     assert.equal(packageRequests, 2)
@@ -201,14 +217,42 @@ try {
       assert.equal(await batchPage.locator('.official-app-manager__batch-update').isVisible(), true)
     }
     assert.ok((await downloads.getAttribute('aria-label')).startsWith('下载全部'))
+    const expectedDownloads = await batchPage
+      .getByRole('button', { name: '下载', exact: true })
+      .count()
     await downloads.tap()
-    await batchPage.getByRole('status').filter({ hasText: '下载结束：完成' }).waitFor()
+    const batchPanel = batchPage.locator('.official-app-manager')
+    // Bound each stalled phase, not the total duration of a multi-package batch.
+    // WebKit's verified writes can advance normally for longer than 30 seconds.
+    while ((await batchPanel.getAttribute('aria-busy')) === 'true') {
+      const previous = await batchPanel.innerText()
+      const change = await batchPage.waitForFunction((old) => {
+        const panel = document.querySelector('.official-app-manager')
+        return panel && (panel.getAttribute('aria-busy') !== 'true' || panel.innerText !== old)
+      }, previous)
+      await change.dispose()
+    }
+    await batchPage
+      .getByRole('status')
+      .filter({ hasText: `下载结束：完成 ${expectedDownloads} 个` })
+      .waitFor()
     assert.equal(
       await batchPage.getByRole('button', { name: '卸载', exact: true }).count(),
       officialAppIds().length,
     )
     assert.equal(await downloads.count(), 0)
     console.log('多选下载、下载全部、刷新不复活、四种移动宽度浅深主题：通过')
+  } catch (error) {
+    const messages = await batchPage
+      ?.getByRole('status')
+      .allTextContents()
+      .catch(() => [])
+    await saveAuditFailure(
+      batchContext,
+      { ...environment, outputDir: resolve(environment.outputDir, 'batch') },
+      error,
+    )
+    throw new Error(`APP 批量下载审计失败；当前状态：${messages?.join('；')}`, { cause: error })
   } finally {
     await batchContext.close()
   }

@@ -15,6 +15,41 @@ vi.mock('@capacitor/core', () => ({
 }))
 
 describe('installed official APP storage', () => {
+  it('removes only an unreadable indexed cache entry before rewriting verified bytes', async () => {
+    const bytes = new TextEncoder().encode('export default 1')
+    let response: Response | undefined
+    const cache = {
+      match: vi.fn(async () => response?.clone()),
+      delete: vi.fn(async () => true),
+      put: vi.fn(async (_path, value: Response) => {
+        response = value
+      }),
+    }
+    vi.stubGlobal('caches', { has: async () => true, open: async () => cache })
+    const storage = new InstalledOfficialAppStorage({} as AppDatabase)
+    expect(await storage.repairUnreadableFile('/assets/app.js', bytes)).toBe(true)
+    expect(cache.delete).toHaveBeenCalledExactlyOnceWith('/assets/app.js')
+    expect(cache.put).toHaveBeenCalledTimes(1)
+    expect(await storage.hasFileHash('/assets/app.js', bytes.length, await hashBytes(bytes))).toBe(
+      true,
+    )
+    expect(await storage.repairUnreadableFile('/assets/app.js', bytes)).toBe(false)
+    expect(cache.delete).toHaveBeenCalledTimes(1)
+    expect(cache.put).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not rewrite absent cache entries or native files as a cache repair', async () => {
+    const cache = { match: vi.fn(), delete: vi.fn(async () => false), put: vi.fn() }
+    const open = vi.fn(async () => cache)
+    vi.stubGlobal('caches', { has: async () => true, open })
+    const storage = new InstalledOfficialAppStorage({} as AppDatabase)
+    expect(await storage.repairUnreadableFile('/assets/app.js', new Uint8Array([1]))).toBe(false)
+    expect(cache.put).not.toHaveBeenCalled()
+    vi.stubGlobal('window', { Capacitor: { isNativePlatform: () => true } })
+    open.mockClear()
+    expect(await storage.repairUnreadableFile('/assets/app.js', new Uint8Array([1]))).toBe(false)
+    expect(open).not.toHaveBeenCalled()
+  })
   it('reads only the target APP installation record', async () => {
     const get = vi.fn().mockResolvedValue({ value: { id: 'draw' } })
     const storage = new InstalledOfficialAppStorage({ settings: { get } } as unknown as AppDatabase)

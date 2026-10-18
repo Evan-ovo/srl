@@ -100,6 +100,41 @@ describe('official APP package lifecycle', () => {
     expect(files.size).toBe(0)
   })
 
+  it('repairs an unreadable cache entry only after a failed write verification', async () => {
+    const { service } = await fixture()
+    const write = vi.spyOn(storage, 'writeFile').mockImplementationOnce(async () => {})
+    storage.repairUnreadableFile = vi.fn(async (path, bytes) => {
+      files.set(path, bytes)
+      return true
+    })
+    await service.install('draw')
+    expect(records.has('draw')).toBe(true)
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(storage.repairUnreadableFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not add repair reads or writes to successful installations', async () => {
+    const { service } = await fixture()
+    storage.repairUnreadableFile = vi.fn()
+    const write = vi.spyOn(storage, 'writeFile')
+    await service.install('draw')
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(storage.repairUnreadableFile).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])(
+    'keeps hash verification mandatory after cache repair (%s)',
+    async (result) => {
+      const { service } = await fixture()
+      vi.spyOn(storage, 'writeFile').mockImplementation(async () => {})
+      storage.repairUnreadableFile = vi.fn(async () => result)
+      await expect(service.install('draw')).rejects.toThrow('写入后的校验失败')
+      expect(storage.repairUnreadableFile).toHaveBeenCalledTimes(1)
+      expect(records.size).toBe(0)
+      expect(files.size).toBe(0)
+    },
+  )
+
   let records: Map<OfficialAppId, InstalledOfficialApp>
   let files: Map<string, Uint8Array>
   let storage: OfficialAppPackageStorage

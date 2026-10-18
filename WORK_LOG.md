@@ -465,3 +465,13 @@
 - 候选3cd8e47的run39147908604：客户端6402通过/2跳过、知识/功能合同与生产网页通过，APK编译和原证书验签成功；后继JVM265项中NativePreviewConcurrencyTest第43行峰值断言失败（预期3实际4），未公开新Release/未同步Fork。没有跳过检查或放宽并发断言。
 - 用电脑JDK21直接编译原NativeExecutors/NativePreviewAssetRequests及原JUnit测试，重复实际队列切档约第96轮（192项）复现相同43行预期3实际4；Future完成早于worker的finally/降档退休，下一独立批次立即入队把允许收尾的多余线程算入峰值。现在仅测试在新批次前等待原线程池空闲/队列清空/池大小回到目标；沿原5秒等待预算，3/6/3峰值和运行中降档保留6个活动任务/不打断断言保持。产品线程池、网络并发、超时和安装逻辑未改。
 - 主库/Public同修1个JUnit测试；真实原Owner类重复1000轮/2000项通过，未用模拟生产替身、实体手机或调小并发。临时Java探针只在本轮.codex-tmp/20261019-u4m7-jvm，后续核清清理；编译/运行输出取证未加入产品代码。上一候选的客户端和签名成功不冒充完整发行，新候选继续完整发行流程。
+
+## 2026-10-19：冻结最终官版 APP 缓存修正并同步（u4m7）
+
+- 官版并行验收在本轮期间提交WebKit不可读缓存修正，现一并同步已提交内容，最终冻结于包含预览JUnit修正的官版输入；不继续追逐其他发布记录。仍走原InstalledOfficialAppStorage/OfficialAppService：仅写后SHA验证失败、CacheStorage确有不可读索引时删除该损坏索引并重写，之后仍要求完整SHA复核，APK原生存储保持；未绕过完整性或增加通用重试。
+- 同步原生命周期审计的Service Worker路由隔离及有界失败定位，避免WebKit路由测试被Worker接管后无期限等待。主测试profile仍保留Worker覆盖真实离线/缓存流程；产品无新增timeout/retry。Public本地3文件101项、知识290 Owner、类型与生产PWA/9当前APP包通过，1693共享路径投影一致0差异；两引擎实际触控结果后补。
+- 较旧50b4e1a发行run39149223235由本轮主动取消，等待最终共享输入统一发行；原6402/2跳过及APK编译/签名成功为前候选证据，不冒充此候选已公开。增量隐私基线50b4e1ad14a7ce3fcecb8a93a47fdfe64b2272bd，本轮仅共享代码/测试/审计脚本和既有日志，无新增二进制，公开前后复核noreply与地址匹配项。
+- JVM一次性探针根.codex-tmp/20261019-u4m7-jvm已只读核对9文件22112bytes/无受保护属性或链接/无存活进程，逐个LiteralPath清理及空目录删除，当前不存在；原Owner与正式JUnit测试由Git保留，未重试先前被拒范围。
+
+- Public追加Chromium全生命周期通过，0运行时异常；额外Windows WebKit在下载全部中挂于前端包校验与助手文件写入，原30秒断言未通过。补齐batch上下文失败留证，截图/trace确认阶段；用项目现成持久存储上下文复核没有改善，已撤回该未证实改动，不叠加产品fallback、timeout或声称Safari通过。保留一次有效batch失败证据供后续实际WebKit/Safari专项复核；本轮功能/Chromium已满足四宽度浅深与触控合同，原Android完整发行继续验收。
+- 最新源只比官版已提交内容增加审计失败时的batch状态/截图/trace留证，沿saveAuditFailure原Owner，不改产品行为；Main/Public成对保留。未用实体手机。最终发行、签名与CF上线仍待云端实际回执。

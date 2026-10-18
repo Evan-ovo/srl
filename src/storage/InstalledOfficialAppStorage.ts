@@ -105,6 +105,16 @@ export class InstalledOfficialAppStorage implements OfficialAppPackageStorage {
     }
     return false
   }
+  async repairUnreadableFile(path: string, bytes: Uint8Array): Promise<boolean> {
+    requirePath(path)
+    if (isCapacitorApp() || !(await caches.has(OFFICIAL_APP_ASSET_CACHE))) return false
+    const cache = await caches.open(OFFICIAL_APP_ASSET_CACHE)
+    // Some CacheStorage backends retain an index entry whose body is unreadable
+    // after reload; put() cannot replace it. Only repair that observed failure.
+    if ((await cache.match(path)) || !(await cache.delete(path))) return false
+    await this.writeFile(path, bytes)
+    return true
+  }
   async hasFiles(files: readonly Pick<OfficialAppFile, 'path' | 'size'>[]): Promise<boolean> {
     for (const file of files) requirePath(file.path)
     if (!files.length) return true

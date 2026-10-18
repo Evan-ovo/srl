@@ -801,8 +801,15 @@ export class OfficialAppService {
         }
         written.push(file.path)
         await this.storage.writeFile(file.path, files[path]!)
-        if (!(await this.storage.hasFileHash(file.path, file.size, file.sha256, file.bundled)))
-          throw new Error('APP 文件写入后的校验失败，当前版本未切换')
+        let verified = await this.storage.hasFileHash(
+          file.path,
+          file.size,
+          file.sha256,
+          file.bundled,
+        )
+        if (!verified && (await this.storage.repairUnreadableFile?.(file.path, files[path]!)))
+          verified = await this.storage.hasFileHash(file.path, file.size, file.sha256, file.bundled)
+        if (!verified) throw new Error('APP 文件写入后的校验失败，当前版本未切换')
         verifiedFiles.set(file.path, identity)
         delete files[path]
         reportFile()
