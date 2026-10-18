@@ -1,6 +1,13 @@
 # 当前进度
 
-## 2026-10-18 当前：发行环境已配置，首次 GitHub 构建验证中
+## 2026-10-18 当前：Public APK 与网页同候选已发布
+
+- 正式产品候选9d7a7dd8e8682fcd3bf1cbe152dade3a52cd5673，GitHub发行run39140125795成功；Release附SRL_Pubilc.apk、public-web.zip和public-release.json。APK0.0.243/code1000038，原Public签名与新公开来源核验一致，包内0个.srlapp，首次需手动安装支持GitHub更新的新版，之后可应用内检查更新。
+- 用户已同步Fork；既有小号Worker的CF构建f38ebba2-e323-451b-8b54-924cf25a1dd7成功（2m26s），公网版本public-sync-release-1000038-v1000038，主页/模块正常、缺失脚本404；网页与APK的APP清单和catalog逐字节一致，9个APP中抽查包SHA匹配。以后等上游Release成功再Sync fork，CF自动部署；源码自部署保留。
+- GitHub6Secrets/2Variables和CF构建命令/Node24已代填；原Public签名沿用，用户明确放弃旧WebView来源，两来源统一指定公开站点，不进入源码/公开记录。6345云端测试通过/2跳过，网页生产构建、APK编译/验签/JVM/lint通过，下载APK再次核对清单/资产SHA/包名/版本/签名/来源；未操作实体手机或宣称安装实测。
+- 普通check工作流39140125797仍被3处既有行数门禁阻挡（ProductAssistant/ChatReaderView/DiscordSetupService），没有放宽或无关拆分。夹具超时定位、撤回的并发实验及原清理保留项见WORK_LOG；现无新增调试计时/测试临时文件。当前后续仅补记录，不改变已发布候选。
+
+## 2026-10-18 过程：环境配置与首次云构建验证
 
 - 原 Public 签名已找到并通过 keytool 导出证书 SHA-256 与原发行基线一致性校验；6个 GitHub Secrets 与证书指纹/启用变量已写入并核对名称/状态。用户明确不再保留旧 WebView 来源，两个站点来源统一为指定的新公开站点，通过Secrets注入，不写源码。
 - 已从现有小号会话保存 CF 的 `pnpm public:web-build`、原模板部署命令及 `NODE_VERSION=24`，刷新后回读保持；原Worker、Fork和大号登录保持。构建设置仍提示 GitHub User/Organization 详情获取警告，实际自动部署待首轮回读；没有擅自断开/扩大授权。

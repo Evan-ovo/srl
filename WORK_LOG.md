@@ -417,3 +417,11 @@
 - bc11f8f候选run39139105258在2 worker下6344通过/仅一万条附件夹具超时，并发假设不能解释全部现象，撤回workflow调度修改，恢复原pnpm test/4 worker。停止原样复跑，定位ResourceAttachmentService回归的准备阶段：saveMany对9999份相同原件逐条prepareResourceForStorage；临时测量本机准备2434ms、真实列表断言6ms，5秒时限把夹具准备也算入。测量日志/计时代码已移除，没有放宽超时。
 - 先在主库修正同一测试，再以相同内容同步Public：复用TavernChatImport现有事务造数做法，从已保存的真实owner记录批量填充resources/resourceSummaries/resourceListSummaries；三表均断言10000条，真实attachment.add/list路径和不读取原件/不全库扫描断言保持。准备实测1669ms、列表约5ms，仅为本机测试夹具对照，不宣称产品整链路性能提升或云端已通过。主库11项和Public三个相关文件40项、目标格式/lint通过；无产品功能/Owner变更。
 - 基线bc11f8f964ac7c0eb199e875e68897a770b040a8，只审计测试/撤回的workflow及既有记录四路径，author/committer使用对应noreply；本条所属提交为下一内容基线。新云端完整检查及最终发行仍待回执，用户Fork此前已到bc11f8f、CF4bf12fd0等待失败候选；待新Release成功再同步，避免用户反复操作。原签名/配置和其它并行工作保持，未用手机。
+
+## 2026-10-18：Public APK 与小号 CF 网页首次发行完成
+
+- 正式产品提交9d7a7dd8e8682fcd3bf1cbe152dade3a52cd5673，发行run39140125795成功，6345测试通过/2跳过（209.21s）、网页生产构建和Android编译/原证书比较/JVM/lint通过，先完整上传再公开三附件。Release public-9d7a7dd8e8682fcd3bf1cbe152dade3a52cd5673；APK0.0.243/code1000038，14962625bytes，SHA256 1e563634e766ca90d152cbb7fd87b58ec0a786db1b2b4ee447a360d2daee7482；网页ZIP89324127bytes，SHA256 03131c03c70d999ce755dfaa6ce5c3fa07ca01dabb2e5117ad98fa6638ecc2e3。
+- 从公开Release重新下载APK，核对GitHub资产摘要、public-release.json与Release正文机器清单一致；本机apksigner验证及原签名指纹、aapt包名/版本、新公开来源/Packaged模式匹配，0个.srlapp且无签名文件。交付副本和CF成功截图仅放聊天outputs，不进仓库。未用实体手机，系统安装/真实用户云配置未验收。
+- 用户最后Sync fork到9d7a7dd后，既有小号Worker自动构建f38ebba2-e323-451b-8b54-924cf25a1dd7成功，用时2m26s（网页候选下载/校验8s），原Worker/Fork/Deploy命令保持。公网/api/version为public-sync-release-1000038-v1000038且no-store；首页/模块可读、缺失脚本404；线上official-app-assets.json和catalog与APK内逐字节相同，9个APP抽查包SHA匹配。CF详情警告没有阻止实际部署，不擅自重连或扩大GitHub权限。
+- 普通check run39140125797的15项接口手册测试通过，仍止于与原基线相同的3处行数门禁（2002>2000、3135>2000、3606>2897），未放宽，不能称全部CI绿色。先前并发实验已撤回、夹具计时代码已删除，原保留工作/旧拒绝清理范围保持；无新增测试临时残留。
+- 此次收尾只更新既有进度和日志，产品候选不变，用户无需为这些记录再次同步。以已审计9d7a7dd8e8682fcd3bf1cbe152dade3a52cd5673为增量基线，仅2文档、无二进制或私人地址；提交前后复核隐私和对应noreply身份。本条所属提交为下一内容基线，完整回执维护者既有日志记录。
