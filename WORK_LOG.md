@@ -475,3 +475,12 @@
 
 - Public追加Chromium全生命周期通过，0运行时异常；额外Windows WebKit在下载全部中挂于前端包校验与助手文件写入，原30秒断言未通过。补齐batch上下文失败留证，截图/trace确认阶段；用项目现成持久存储上下文复核没有改善，已撤回该未证实改动，不叠加产品fallback、timeout或声称Safari通过。保留一次有效batch失败证据供后续实际WebKit/Safari专项复核；本轮功能/Chromium已满足四宽度浅深与触控合同，原Android完整发行继续验收。
 - 最新源只比官版已提交内容增加审计失败时的batch状态/截图/trace留证，沿saveAuditFailure原Owner，不改产品行为；Main/Public成对保留。未用实体手机。最终发行、签名与CF上线仍待云端实际回执。
+
+- u4m7新增浏览器根清理再次被exec_command自动审批在CreateProcess前拒绝，原始理由仅blocked by policy；未执行/未重试，也未换工具删除。准确范围本仓库.codex-tmp/下20261019-u4m7-cache-chromium（18文件2097242bytes）、20261019-u4m7-cache-webkit（4文件438323bytes）、20261019-u4m7-cache-webkit-probe（7文件11939311bytes）、20261019-u4m7-cache-webkit-persist（437文件57443003bytes）；合计466文件71917879bytes，0链接/受保护属性，5287/5288均无监听、对应浏览器已关闭。持久上下文尝试已撤回源码，其隔离测试profile属于可再生失败尝试；拟只保留Chromium结果、一个有效batch失败截图/trace/JSON和该上下文失败结果，清理其余460文件，但本次全部未删除。
+- 连同此前被拒batch/batch-final两个根，共6根502文件76161637bytes保持原位，待后续正式清理获准；另有latest/result.json（350bytes）为成功回执。有效失败trace可在WebKit/Safari专项复核后退役，其余重复截图/隔离profile无产品依赖。已成功清理的Main source/误装依赖、JVM探针和latest重复截图不受影响；旧u4p7/f8m2/Bridge等用户工作未触碰。
+
+## 2026-10-19：发行测试隔离两个重夹具（u4m7）
+
+- run39150116152在Windows完整客户端6406通过/2超时/2跳过（307.66s）；超时仅为原5000ms的AppearanceReferenceCatalog双手册构建和ResourceAttachmentService一万条夹具，前一候选同类集合已通过。对照前次约195s，导入/环境/测试整体均约1.5倍，当前验证资源竞争假设，不能把它称产品功能失败或再原样碰运气重跑。
+- 只改Public独立发行workflow的测试编排：上述两个文件先用单worker独立运行，随后原pnpm test保持默认4 worker、显式排除刚执行的两个文件；所有用例各执行一次，断言、5000ms时限、万条规模、产品并发和本机默认测试脚本均保持。两文件本机26项通过（8.11s测试合计）；YAML解析和实际命令核对通过。此次与先前全套降2 worker的失败实验不同，隔离具体重夹具，其余595文件集合不漏测；最终云端总数回执验证覆盖。
+- 本轮公开增量基线8d4cdbd97ad06834d723a3b475d0a7cd99ca800c，仅workflow及既有记录；复核noreply/地址/二进制后推送，以新候选完成完整编译、签名、JVM/lint和三资产发布。当前旧线上/签名/CF配置保持，没有发布失败APK或要求用户同步Fork。
