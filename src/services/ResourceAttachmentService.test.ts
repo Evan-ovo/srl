@@ -47,6 +47,7 @@ async function fixture(encrypted = false) {
   const categories = new CategoryService(new IndexedDbCategoryStorage(db, vault))
   const restore = new RestoreService(new IndexedDbArchiveStorage(db, vault))
   const exporter = new ExportService()
+  const attachments = new ResourceAttachmentService(storage)
   const recycle = new RecycleBinService(
     db,
     service,
@@ -55,8 +56,8 @@ async function fixture(encrypted = false) {
     restore,
     vault,
     new UserPersonaService(service),
+    attachments,
   )
-  const attachments = new ResourceAttachmentService(storage)
   const originalBlob = new Blob(['{"spec":"chara_card_v2","data":{"name":"角色"}}'], {
     type: 'application/json',
   })
@@ -305,7 +306,10 @@ describe('resource attachment lifecycle', () => {
     expect(await f.storage.findVersionByHash(a.contentHash)).toBeUndefined()
     const current = await f.attachments.get('card', a.id)
     expect(await f.storage.findByHash(current.contentHash)).toBeUndefined()
-    expect(await (await f.attachments.original('card', a.id)).originalBlob.text()).toBe('独立原件')
+    const oldest = (await f.attachments.history('card', a.id))[0]!
+    expect(
+      await (await f.attachments.getHistory('card', a.id, oldest.id)).originalBlob.text(),
+    ).toBe('独立原件')
   })
 
   it('cancels before persistence and removes a late write when the owner disappeared', async () => {
@@ -322,4 +326,166 @@ describe('resource attachment lifecycle', () => {
     await expect(f.attachments.add('card', new File(['x'], 'x.txt'))).rejects.toThrow('所属资源')
     expect(await f.storage.listSummaries()).toHaveLength(0)
   })
+})
+
+it.each([false, true])(
+  'previews, recycles and restores attachment history without replacing current bytes, vault=%s',
+  async (encrypted) => {
+    const f = await fixture(encrypted)
+    const a = await f.attachments.add('card', new File(['A'], 'A.txt'))
+    const b = await f.attachments.replace('card', a.id, new File(['B'], 'B.md'), a.contentHash)
+    const c = await f.attachments.replace('card', a.id, new File(['C'], 'C.bin'), b.contentHash)
+    const history = await f.attachments.history('card', a.id)
+    expect(history).toHaveLength(2)
+    const oldB = history.find((row) => row.contentHash === b.contentHash)!
+    expect(await (await f.attachments.getHistory('card', a.id, oldB.id)).originalBlob.text()).toBe(
+      'B',
+    )
+    await f.recycle.moveAttachmentVersionToRecycleBin('card', a.id, oldB.id)
+    expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+    expect(await (await f.attachments.get('card', a.id)).originalBlob.text()).toBe('C')
+    const record = (await f.recycle.list())[0]!
+    expect(record.itemKind).toBe('attachment-version')
+    expect(record.encrypted).toBe(encrypted)
+    const d = await f.attachments.replace('card', a.id, new File(['D'], 'D.txt'), c.contentHash)
+    f.db.close()
+    await f.db.open()
+    await f.recycle.restore(record.id)
+    expect(await f.recycle.list()).toHaveLength(0)
+    expect(await (await f.attachments.get('card', a.id)).originalBlob.text()).toBe('D')
+    const restored = (await f.attachments.history('card', a.id)).find((row) => row.id === oldB.id)!
+    expect(restored.fileName).toBe('B.md')
+    expect(
+      await (await f.attachments.getHistory('card', a.id, restored.id)).originalBlob.text(),
+    ).toBe('B')
+    expect((await f.attachments.get('card', a.id)).contentHash).toBe(d.contentHash)
+  },
+)
+
+it('uses bounded history summaries and rejects other attachment/version identities', async () => {
+  const f = await fixture()
+  const a = await f.attachments.add('card', new File(['A'], 'A.txt'))
+  await f.attachments.replace('card', a.id, new File(['B'], 'B.txt'), a.contentHash)
+  const other = await f.attachments.add('card', new File(['X'], 'X.txt'))
+  const read = vi
+    .spyOn(f.storage, 'get')
+    .mockRejectedValue(new Error('no body read for history list'))
+  const history = await f.attachments.history('card', a.id)
+  expect(history).toHaveLength(1)
+  expect(read).not.toHaveBeenCalled()
+  read.mockRestore()
+  await expect(f.attachments.getHistory('card', other.id, history[0]!.id)).rejects.toThrow('不属于')
+  await expect(f.attachments.deleteHistory('card', a.id, a.id, a.contentHash)).rejects.toThrow()
+  await expect(f.attachments.deleteHistory('card', a.id, history[0]!.id, 'stale')).rejects.toThrow(
+    '已变化',
+  )
+  expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+  await expect(f.attachments.history('missing-owner', a.id)).rejects.toThrow('所属资源')
+})
+
+it('keeps history when the recovery copy cannot be saved and retains the copy while the parent is unavailable', async () => {
+  const f = await fixture()
+  const a = await f.attachments.add('card', new File(['A'], 'A.txt'))
+  await f.attachments.replace('card', a.id, new File(['B'], 'B.txt'), a.contentHash)
+  const old = (await f.attachments.history('card', a.id))[0]!
+  const save = vi.spyOn(f.db.backupRecords, 'put').mockRejectedValueOnce(new Error('disk full'))
+  await expect(f.recycle.moveAttachmentVersionToRecycleBin('card', a.id, old.id)).rejects.toThrow(
+    'disk full',
+  )
+  expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+  save.mockRestore()
+  await f.recycle.moveAttachmentVersionToRecycleBin('card', a.id, old.id)
+  const record = (await f.recycle.list())[0]!
+  const get = vi.spyOn(f.storage, 'getSummary').mockResolvedValue(undefined)
+  await expect(f.recycle.restore(record.id)).rejects.toThrow('所属资源')
+  expect(await f.recycle.list()).toHaveLength(1)
+  get.mockRestore()
+  await f.recycle.restore(record.id)
+  expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+})
+
+it('refuses to remove history when recovery readback is corrupted', async () => {
+  const f = await fixture()
+  const a = await f.attachments.add('card', new File(['A'], 'A.txt'))
+  await f.attachments.replace('card', a.id, new File(['B'], 'B.txt'), a.contentHash)
+  const old = (await f.attachments.history('card', a.id))[0]!
+  const read = vi
+    .spyOn(f.db.backupRecords, 'get')
+    .mockResolvedValue({ blob: new Blob(['corrupt']) } as never)
+  await expect(f.recycle.moveAttachmentVersionToRecycleBin('card', a.id, old.id)).rejects.toThrow(
+    '保存校验失败',
+  )
+  read.mockRestore()
+  expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+})
+
+it('restores a colliding historical ID without overwriting another attachment and is idempotent', async () => {
+  const f = await fixture()
+  const a = await f.attachments.add('card', new File(['A'], 'A.txt'))
+  await f.attachments.replace('card', a.id, new File(['B'], 'B.txt'), a.contentHash)
+  const old = await f.attachments.getHistory(
+    'card',
+    a.id,
+    (await f.attachments.history('card', a.id))[0]!.id,
+  )
+  await f.attachments.restoreHistory('card', a.id, old)
+  expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+  await f.attachments.deleteHistory('card', a.id, old.id, old.contentHash)
+  const other = await f.attachments.add('card', new File(['X'], 'X.txt'))
+  const occupied = {
+    ...old,
+    versionGroupId: other.id,
+    originalBlob: new Blob(['X']),
+    contentHash: other.contentHash,
+  }
+  await f.storage.saveVersion(occupied)
+  await f.attachments.restoreHistory('card', a.id, old)
+  const restored = (await f.attachments.history('card', a.id))[0]!
+  expect(restored.id).not.toBe(old.id)
+  expect(
+    await (await f.attachments.getHistory('card', a.id, restored.id)).originalBlob.text(),
+  ).toBe('A')
+  expect((await f.storage.getVersion(old.id))!.versionGroupId).toBe(other.id)
+  await f.attachments.restoreHistory('card', a.id, old)
+  expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+})
+
+it('stops an in-progress history archive before saving or removing the original', async () => {
+  const f = await fixture()
+  const a = await f.attachments.add('card', new File(['A'.repeat(1024 * 1024)], 'A.txt'))
+  await f.attachments.replace('card', a.id, new File(['B'], 'B.txt'), a.contentHash)
+  const old = (await f.attachments.history('card', a.id))[0]!
+  const controller = new AbortController()
+  let sawBytes = false
+  await expect(
+    f.recycle.moveAttachmentVersionToRecycleBin('card', a.id, old.id, {
+      signal: controller.signal,
+      onProgress: (p) => {
+        if (p.writtenBytes !== undefined) {
+          sawBytes = true
+          controller.abort()
+        }
+      },
+    }),
+  ).rejects.toMatchObject({ name: 'AbortError' })
+  expect(sawBytes).toBe(true)
+  expect(await f.attachments.history('card', a.id)).toHaveLength(1)
+  expect(await f.recycle.list()).toHaveLength(0)
+})
+
+it('finishes the single-version atomic save/delete boundary when a stop arrives after it starts', async () => {
+  const f = await fixture()
+  const a = await f.attachments.add('card', new File(['A'], 'A.txt'))
+  await f.attachments.replace('card', a.id, new File(['B'], 'B.txt'), a.contentHash)
+  const old = (await f.attachments.history('card', a.id))[0]!
+  const controller = new AbortController()
+  await f.recycle.moveAttachmentVersionToRecycleBin('card', a.id, old.id, {
+    signal: controller.signal,
+    onProgress: (p) => {
+      if (p.phase === 'save') controller.abort()
+    },
+  })
+  expect(await f.attachments.history('card', a.id)).toHaveLength(0)
+  expect(await f.recycle.list()).toHaveLength(1)
+  expect(await (await f.attachments.get('card', a.id)).originalBlob.text()).toBe('B')
 })

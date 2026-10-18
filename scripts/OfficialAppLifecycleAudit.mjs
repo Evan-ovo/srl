@@ -93,6 +93,125 @@ try {
   )
   await managerHelp.getByRole('button', { name: '知道了' }).click()
   await managerHelp.waitFor({ state: 'hidden' })
+  // A separate profile keeps the existing single-install/offline lifecycle intact.
+  const batchContext = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    storageState: environment.storageState,
+  })
+  try {
+    await prepareAuditContext(batchContext, environment)
+    const batchPage = await batchContext.newPage()
+    await batchPage.goto(previewUrl)
+    await batchPage.getByRole('button', { name: '功能', exact: true }).tap()
+    await batchPage.getByRole('button', { name: 'APP 管理', exact: true }).tap()
+    await batchPage.locator('.official-app-manager[aria-busy="false"]').waitFor()
+    const downloads = batchPage.locator('.official-app-manager__batch-download')
+    for (const width of [320, 375, 390, 430]) {
+      await batchPage.setViewportSize({ width, height: 844 })
+      for (const theme of ['light', 'dark']) {
+        await batchPage.evaluate((value) => {
+          document.documentElement.dataset.theme = value
+        }, theme)
+        const bounds = await downloads.boundingBox()
+        assert.ok(bounds && bounds.width >= 44 && bounds.height >= 44)
+        assert.equal(
+          await batchPage.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+          false,
+        )
+      }
+    }
+    await batchPage.locator('input[value="draw"]').locator('..').tap()
+    await batchPage.locator('input[value="stitch"]').locator('..').tap()
+    assert.equal(await downloads.getAttribute('aria-label'), '下载所选（2）')
+    let releasePackages
+    let requestsReady
+    let packageRequests = 0
+    const packagesHeld = new Promise((accept) => {
+      releasePackages = accept
+    })
+    const twoRequests = new Promise((accept) => {
+      requestsReady = accept
+    })
+    const holdPackage = async (route) => {
+      if (++packageRequests === 2) requestsReady()
+      await packagesHeld
+      await route.continue().catch(() => {})
+    }
+    await batchContext.route('**/*.srlapp', holdPackage)
+    await downloads.tap()
+    await twoRequests
+    await batchPage.getByRole('button', { name: '停止下载', exact: true }).tap()
+    await batchPage.getByRole('status').filter({ hasText: '已停止下载，已完成 0 个' }).waitFor()
+    assert.equal(packageRequests, 2)
+    assert.equal(await batchPage.getByRole('button', { name: '卸载', exact: true }).count(), 0)
+    releasePackages()
+    await batchContext.unroute('**/*.srlapp', holdPackage)
+    assert.equal(await batchPage.locator('input[value="draw"]').isChecked(), true)
+    assert.equal(await batchPage.locator('input[value="stitch"]').isChecked(), true)
+    await downloads.tap()
+    await batchPage.getByRole('status').filter({ hasText: '下载结束：完成 2 个' }).waitFor()
+    assert.equal(await batchPage.getByRole('button', { name: '卸载', exact: true }).count(), 2)
+    await batchPage.evaluate(
+      () =>
+        new Promise((accept, reject) => {
+          const opening = indexedDB.open('SillyTavernResourceLibrary')
+          opening.onerror = () => reject(opening.error)
+          opening.onsuccess = () => {
+            const database = opening.result
+            const transaction = database.transaction('settings', 'readwrite')
+            const store = transaction.objectStore('settings')
+            const getting = store.get('official-app:draw')
+            getting.onsuccess = () => {
+              const row = getting.result
+              delete row.value.runtimeEntry
+              store.put(row)
+            }
+            transaction.oncomplete = () => {
+              database.close()
+              accept()
+            }
+            transaction.onabort = () => {
+              database.close()
+              reject(transaction.error)
+            }
+          }
+        }),
+    )
+    await batchPage.reload()
+    await batchPage.getByRole('button', { name: '功能', exact: true }).tap()
+    await batchPage.getByRole('button', { name: 'APP 管理', exact: true }).tap()
+    await batchPage.locator('.official-app-manager[aria-busy="false"]').waitFor()
+    const notice = batchPage.locator('.official-app-manager__updates-dialog')
+    await notice.waitFor({ state: 'visible' })
+    await notice.getByRole('button', { name: '稍后处理' }).tap()
+    for (const width of [320, 375, 390, 430]) {
+      await batchPage.setViewportSize({ width, height: 844 })
+      assert.equal(
+        await batchPage.evaluate(() => {
+          const title = document.querySelector('.feature-app-header h1')
+          return (
+            document.documentElement.scrollWidth > innerWidth ||
+            title.scrollWidth > title.clientWidth
+          )
+        }),
+        false,
+        `both batch actions/${width}`,
+      )
+      assert.equal(await batchPage.locator('.official-app-manager__batch-update').isVisible(), true)
+    }
+    assert.ok((await downloads.getAttribute('aria-label')).startsWith('下载全部'))
+    await downloads.tap()
+    await batchPage.getByRole('status').filter({ hasText: '下载结束：完成' }).waitFor()
+    assert.equal(
+      await batchPage.getByRole('button', { name: '卸载', exact: true }).count(),
+      officialAppIds().length,
+    )
+    assert.equal(await downloads.count(), 0)
+    console.log('多选下载、下载全部、刷新不复活、四种移动宽度浅深主题：通过')
+  } finally {
+    await batchContext.close()
+  }
   const names = []
   for (const row of await page.locator('.official-app-manager li').all()) {
     const name = await row.locator('strong').innerText()

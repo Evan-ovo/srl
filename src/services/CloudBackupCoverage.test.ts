@@ -33,6 +33,11 @@ import {
   prune,
 } from './CloudBackupSnapshotOperations'
 import { ExportService } from './ExportService'
+import { GeneratedImageAlbumService } from './GeneratedImageAlbumService'
+import { IndexedDbGeneratedImageAlbumStorage } from '../storage/IndexedDbGeneratedImageAlbumStorage'
+import type { ArchiveRestoreProgress } from '../storage/ArchiveStorageAdapter'
+
+vi.mock('../utils/createImageThumbnail', () => ({ createImageThumbnail: async () => undefined }))
 
 async function resource(
   id: string,
@@ -146,6 +151,96 @@ function reader(created: Awaited<ReturnType<typeof createStructuredSnapshot>>) {
 }
 
 describe('cloud backup registered content round trips', () => {
+  it.each(['complete', 'failed', 'cancelled'] as const)(
+    'reports whole preparation progress before album/Discord downloads and preserves it across resources: %s',
+    async (mode) => {
+      const db = new AppDatabase(`cloud-whole-progress-${crypto.randomUUID()}`)
+      const image = new Blob(['album image'], { type: 'image/png' })
+      const attachment = new Blob(['saved bytes'], { type: 'text/plain' })
+      const assetId = `asset-${await hashCloudBlob(attachment)}`
+      const original = await resource('remote')
+      const created = await createStructuredSnapshot(
+        [original],
+        [],
+        [],
+        {
+          version: 1,
+          generatedImageAlbum: [
+            {
+              item: {
+                id: 'album',
+                name: 'album.png',
+                source: 'imported',
+                category: '',
+                mimeType: 'image/png',
+                sizeBytes: image.size,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            },
+          ],
+          communitySources: { data: community(assetId), attachments: [] },
+        },
+        { readAlbumFile: async () => image, readAttachment: async () => attachment },
+      )
+      const events: ArchiveRestoreProgress[] = []
+      const controller = new AbortController()
+      const album = new GeneratedImageAlbumService(
+        new IndexedDbGeneratedImageAlbumStorage(db),
+        async () => {
+          throw new Error('unused')
+        },
+      )
+      const service = new CommunitySourceRestoreService(
+        new IndexedDbArchiveStorage(db),
+        new MemoryRestoreStagingStore(),
+        {
+          restoreBackup: async () => {},
+          replaceAll: async () => {},
+        },
+        (entries) => restoreCommunitySourceLocalAttachments(new IndexedDbAssetStore(db), entries),
+        album,
+      )
+      const blobs = new Map([
+        [await hashCloudBlob(image), image],
+        [await hashCloudBlob(attachment), attachment],
+        [original.contentHash, original.originalBlob],
+      ])
+      const read = vi.fn(async (object: import('./GitHubBackupBundle').GitHubBundleManifest) => {
+        expect(events.at(-1)).toMatchObject({ phase: 'prepare', total: 3 })
+        if (object.totalSha256 === (await hashCloudBlob(attachment))) {
+          expect(events.at(-1)?.completed).toBe(1)
+          if (mode === 'failed') throw new Error('attachment download failed')
+          if (mode === 'cancelled') controller.abort(new DOMException('stopped', 'AbortError'))
+        }
+        return blobs.get(object.totalSha256)!
+      })
+      try {
+        const restoring = service.restoreStructured(created.snapshot, read, [], [], 'progress', {
+          signal: controller.signal,
+          onProgress: (progress) => events.push(progress),
+        })
+        if (mode === 'complete') {
+          await restoring
+          const counts = events.filter((e) => e.phase === 'prepare').map((e) => e.completed)
+          expect(counts).toEqual([...counts].sort((a, b) => a - b))
+          expect(new Set(counts)).toEqual(new Set([0, 1, 2, 3]))
+          expect(read).toHaveBeenCalledTimes(3)
+          expect((await db.resources.get('remote'))?.contentHash).toBe(original.contentHash)
+        } else {
+          await expect(restoring).rejects.toThrow(
+            mode === 'failed' ? 'attachment download failed' : 'stopped',
+          )
+          expect(events.every((e) => e.phase === 'prepare' && e.completed <= 1)).toBe(true)
+          expect(read).toHaveBeenCalledTimes(2)
+          expect(await db.resources.count()).toBe(0)
+        }
+      } finally {
+        db.close()
+        await db.delete()
+      }
+    },
+  )
   it.each([4, 5] as const)(
     'keeps ordinary revision 3 and prevents old retention readers from deleting revision %s data',
     async (revision) => {

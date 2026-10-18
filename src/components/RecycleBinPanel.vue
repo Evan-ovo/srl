@@ -115,9 +115,11 @@ function formatBytes(value = 0): string {
                   {{
                     record.itemKind === 'persona-version'
                       ? '1 个人设版本'
-                      : record.itemKind === 'persona-character'
-                        ? '1 组角色卡人设'
-                        : `${record.resourceCount} 项资源`
+                      : record.itemKind === 'attachment-version'
+                        ? '1 个附件历史版本'
+                        : record.itemKind === 'persona-character'
+                          ? '1 组角色卡人设'
+                          : `${record.resourceCount} 项资源`
                   }}
                   · {{ formatBytes(record.size) }}
                   <template v-if="record.encrypted"> · 已加密</template>

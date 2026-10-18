@@ -918,6 +918,18 @@ export class RestoreService {
       return hydrated
     }
     const queue = [...prepared.resources, ...prepared.versions]
+    const extraCount =
+      (prepared.portableData?.generatedImageAlbum?.length ?? 0) +
+      (prepared.portableData?.communitySources?.attachments.length ?? 0)
+    let preparedExtras = 0
+    const extraPrepared = (fileName: string) => {
+      options.onProgress?.({
+        phase: 'prepare',
+        completed: ++preparedExtras,
+        total: queue.length + extraCount,
+        fileName,
+      })
+    }
     const queueIndexes = new Map(queue.map((record, index) => [record, index]))
     const concurrency = Math.max(1, Math.min(3, Math.floor(options.concurrency ?? 3)))
     const byteLimit = Math.max(1, options.maxPreparedBytes ?? 32 * 1024 * 1024)
@@ -982,15 +994,29 @@ export class RestoreService {
       return hydrated
     }
     try {
-      await this.restoreStructuredAlbum(prepared.portableData, readObject, options.signal)
+      options.signal?.throwIfAborted()
+      // Publish the known whole plan before the first sidecar download. Sidecars
+      // report completion only after their owner has verified or saved the item.
+      options.onProgress?.({ phase: 'prepare', completed: 0, total: queue.length + extraCount })
+      await this.restoreStructuredAlbum(
+        prepared.portableData,
+        readObject,
+        options.signal,
+        extraPrepared,
+      )
       await this.restoreStructuredCommunityAttachments(
         prepared.portableData,
         readObject,
         options.signal,
+        extraPrepared,
       )
       const report = await this.restore(prepared, prepare, (progress) => {
         if (progress.phase === 'prepare') options.signal?.throwIfAborted()
-        options.onProgress?.(progress)
+        options.onProgress?.({
+          ...progress,
+          completed: preparedExtras + progress.completed,
+          total: extraCount + progress.total,
+        })
       })
       return {
         ...report,
@@ -1015,6 +1041,7 @@ export class RestoreService {
     data: ArchivePortableData | undefined,
     readObject: (object: GitHubBundleManifest) => Promise<Blob>,
     signal?: AbortSignal,
+    onPrepared?: (fileName: string) => void,
   ): Promise<void> {
     if (!data?.generatedImageAlbum?.length) return
     if (!this.albumOwner) throw new Error('当前恢复服务没有接入生图相册')
@@ -1022,6 +1049,7 @@ export class RestoreService {
       parseAlbumBackup(data.generatedImageAlbum),
       (entry) => readObject(entry.object!),
       signal,
+      onPrepared,
     )
   }
 
@@ -1041,6 +1069,7 @@ export class RestoreService {
     data: ArchivePortableData | undefined,
     _readObject: (object: GitHubBundleManifest) => Promise<Blob>,
     _signal?: AbortSignal,
+    _onPrepared?: (fileName: string) => void,
   ): Promise<void> {
     if (data?.communitySources?.attachments.length)
       throw new Error('当前恢复服务没有接入 Discord 附件存储')

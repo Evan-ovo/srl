@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import DOMPurify from 'dompurify'
+import { usePreviewPolicy } from '../composables/UsePreviewPolicy'
 import type { Resource } from '../types/Resource'
 import {
   attachmentFormat,
@@ -11,6 +12,76 @@ import { formatBytes } from '../utils/LibraryFormatting'
 
 const props = defineProps<{ resource: Resource }>()
 const format = attachmentFormat(props.resource.fileName)
+const previewPolicy = format === 'markdown' ? usePreviewPolicy() : undefined
+const markdownSource = ref('')
+const markdownHtml = computed(() => {
+  const safe = DOMPurify.sanitize(markdownSource.value, {
+    ALLOWED_TAGS: [
+      'p',
+      'br',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+      'strong',
+      'em',
+      'del',
+      'blockquote',
+      'ul',
+      'ol',
+      'li',
+      'pre',
+      'code',
+      'hr',
+      'a',
+      'img',
+      'table',
+      'thead',
+      'tbody',
+      'tfoot',
+      'tr',
+      'th',
+      'td',
+      'input',
+      'sup',
+      'sub',
+    ],
+    ALLOWED_ATTR: [
+      'href',
+      'src',
+      'alt',
+      'title',
+      'type',
+      'checked',
+      'disabled',
+      'start',
+      'colspan',
+      'rowspan',
+    ],
+    ALLOW_DATA_ATTR: false,
+  })
+  const template = document.createElement('template')
+  template.innerHTML = safe
+  for (const anchor of template.content.querySelectorAll('a')) {
+    if (!/^(?:https?:|mailto:)/iu.test(anchor.getAttribute('href') ?? ''))
+      anchor.removeAttribute('href')
+    anchor.setAttribute('target', '_blank')
+    anchor.setAttribute('rel', 'noopener noreferrer')
+  }
+  for (const image of template.content.querySelectorAll('img')) {
+    const src = image.getAttribute('src') ?? ''
+    const embedded = /^data:image\/(?:png|jpeg|gif|webp|avif);base64,/iu.test(src)
+    if (!embedded && !(previewPolicy?.value.allowRemoteResources && /^https?:\/\//iu.test(src)))
+      image.removeAttribute('src')
+  }
+  for (const input of template.content.querySelectorAll('input')) {
+    if (input.type !== 'checkbox') input.remove()
+    else input.disabled = true
+  }
+  return template.innerHTML
+})
 const text = ref('')
 const error = ref('')
 const loading = ref(true)
@@ -105,6 +176,17 @@ onMounted(async () => {
       })
       // The document gets an isolated, script-free surface and cannot fetch remote content.
       frame.value = `<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><style>html,body{margin:0;background:#e5e7eb} .docx-wrapper{padding:12px!important} section.docx{max-width:100%;box-sizing:border-box}</style></head><body>${html}</body></html>`
+    } else if (format === 'markdown') {
+      const source = await readAttachmentText(file, controller.signal)
+      const { default: showdown } = await import('showdown')
+      if (controller.signal.aborted) return
+      markdownSource.value = new showdown.Converter({
+        tables: true,
+        strikethrough: true,
+        tasklists: true,
+        simplifiedAutoLink: true,
+        noHeaderId: true,
+      }).makeHtml(source)
     } else if (format === 'word' || format === 'txt') {
       text.value = await readAttachmentText(file, controller.signal)
     }
@@ -174,6 +256,12 @@ onBeforeUnmount(() => {
           下一页
         </button>
       </nav>
+    </template>
+    <template v-else-if="format === 'markdown' && !loading && !error">
+      <p class="attachment-preview__caption">Markdown · 只读</p>
+      <!-- Only the allowlisted, sanitized Markdown enters this read-only surface. -->
+      <!-- eslint-disable-next-line vue/no-v-html -->
+      <article class="attachment-markdown" aria-label="Markdown 文档预览" v-html="markdownHtml" />
     </template>
     <pre v-else-if="format === 'txt' || format === 'word'">{{ text }}</pre>
     <p v-else-if="!loading">此格式暂不支持预览，可导出后打开。</p>

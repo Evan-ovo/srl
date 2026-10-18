@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   replace: vi.fn(),
   recycle: vi.fn(),
+  history: vi.fn(),
 }))
 vi.mock('../core/AppContainer', () => ({
   resourceAttachmentService: mocks,
@@ -103,5 +104,154 @@ it('stops a paused import, retains a late atomic commit and never starts the nex
     expect(mocks.add).toHaveBeenCalledTimes(1)
   } finally {
     reopened.view.unmount()
+  }
+})
+
+it('opens the replacement chooser in the menu click before reading attachment contents', async () => {
+  const attachment = {
+    ...resource,
+    id: 'attachment',
+    fileName: '说明.txt',
+    contentHash: 'previous-hash',
+    originalBlob: new Blob(['previous']),
+  } as Resource
+  let finishRead: ((value: Resource) => void) | undefined
+  mocks.get.mockImplementation(() => new Promise<Resource>((resolve) => (finishRead = resolve)))
+  const view = mount(ResourceAttachmentPanel, {
+    props: { resource, initialItems: [attachment] },
+    attachTo: document.body,
+    global: { stubs: { teleport: true } },
+  })
+  const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
+  try {
+    await view.get('[aria-label="说明.txt 的操作"]').trigger('click')
+    await flushPromises()
+    view
+      .findAll('button')
+      .find((button) => button.text() === '替换文件')!
+      .element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(click).toHaveBeenCalledOnce()
+    expect(mocks.get).not.toHaveBeenCalled()
+  } finally {
+    view.unmount()
+    finishRead?.(attachment)
+    await flushPromises()
+    click.mockRestore()
+  }
+})
+
+it('cancels replacement without changes and validates the captured target after file selection', async () => {
+  const attachment = {
+    ...resource,
+    id: 'attachment',
+    fileName: '说明.txt',
+    contentHash: 'previous-hash',
+  } as Resource
+  const file = new File(['new contents'], '新版.txt', { type: 'text/plain' })
+  const updated = {
+    ...attachment,
+    fileName: file.name,
+    contentHash: 'updated-hash',
+    originalBlob: file,
+  } as Resource
+  mocks.get.mockRejectedValue(new Error('Do not read contents to open a picker'))
+  mocks.replace.mockResolvedValue(updated)
+  mocks.list.mockResolvedValue([updated])
+  const view = mount(ResourceAttachmentPanel, {
+    props: { resource, initialItems: [attachment] },
+    attachTo: document.body,
+    global: { stubs: { teleport: true } },
+  })
+  const input = view.get<HTMLInputElement>('input[aria-label="替换附件文件"]')
+  const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
+  const replace = async () => {
+    await view.get('[aria-label="说明.txt 的操作"]').trigger('click')
+    await flushPromises()
+    await view
+      .findAll('button')
+      .find((button) => button.text() === '替换文件')!
+      .trigger('click')
+  }
+  try {
+    await replace()
+    await input.trigger('cancel')
+    expect(mocks.replace).not.toHaveBeenCalled()
+    expect(view.text()).toContain('说明.txt')
+    await replace()
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+    await input.trigger('change')
+    await flushPromises()
+    expect(click).toHaveBeenCalledTimes(2)
+    expect(mocks.get).not.toHaveBeenCalled()
+    expect(mocks.replace).toHaveBeenCalledExactlyOnceWith(
+      'owner',
+      'attachment',
+      file,
+      'previous-hash',
+    )
+    expect(view.text()).toContain('附件已替换')
+    expect(view.emitted('changed')?.at(-1)?.[1]).toEqual(['attachment'])
+  } finally {
+    view.unmount()
+    click.mockRestore()
+  }
+})
+
+it('keeps Markdown read-only in the preview header and attachment menu', async () => {
+  const attachment = {
+    ...resource,
+    id: 'markdown',
+    fileName: '说明.md',
+    contentHash: 'md-hash',
+    originalBlob: new Blob(['# 正文']),
+  } as Resource
+  mocks.get.mockResolvedValue(attachment)
+  const view = mount(ResourceAttachmentPanel, {
+    props: { resource, initialItems: [attachment] },
+    attachTo: document.body,
+    global: { stubs: { teleport: true } },
+  })
+  try {
+    await view.get('.resource-attachments__file').trigger('click')
+    await flushPromises()
+    expect(view.findAll('button').some((button) => button.text() === '编辑文本')).toBe(false)
+    await view.get('[aria-label="附件操作"]').trigger('click')
+    await flushPromises()
+    const labels = view.findAll('button').map((button) => button.text())
+    expect(labels).not.toContain('编辑文本')
+    expect(labels).toContain('导出')
+    expect(labels).toContain('重命名')
+    expect(view.find('textarea').exists()).toBe(false)
+  } finally {
+    view.unmount()
+  }
+})
+
+it('opens history from the attachment menu and routes the system back through the child panel', async () => {
+  const attachment = { ...resource, id: 'attachment', fileName: 'C.txt' } as Resource
+  mocks.history.mockResolvedValue([])
+  const view = mount(ResourceAttachmentPanel, {
+    props: { resource, initialItems: [attachment] },
+    attachTo: document.body,
+    global: { stubs: { teleport: true } },
+  })
+  try {
+    await view.get('[aria-label="C.txt 的操作"]').trigger('click')
+    await flushPromises()
+    await view
+      .findAll('button')
+      .find((button) => button.text() === '历史版本')!
+      .trigger('click')
+    await flushPromises()
+    expect(view.get('[aria-label="附件历史版本"]').isVisible()).toBe(true)
+    expect(view.get('[aria-label="资源附件"]').isVisible()).toBe(false)
+    expect(mocks.history).toHaveBeenCalledWith('owner', 'attachment')
+    await (view.vm as unknown as { requestBack: () => Promise<void> }).requestBack()
+    await flushPromises()
+    expect(view.find('[aria-label="附件历史版本"]').exists()).toBe(false)
+    expect(view.get('[aria-label="资源附件"]').isVisible()).toBe(true)
+    expect(view.emitted('close')).toBeUndefined()
+  } finally {
+    view.unmount()
   }
 })

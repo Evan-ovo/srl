@@ -431,7 +431,7 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
                 aria-label="当前导入阶段进度"
               />
               <small
-                >包含历史版本 ·
+                >按所选内容统计，包含历史版本、相册和附件 ·
                 {{
                   restoreProgress.phase === 'prepare'
                     ? '下载、校验与暂存'

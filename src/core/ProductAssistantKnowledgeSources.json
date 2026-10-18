@@ -1,6 +1,16 @@
 {
-  "knowledgeSha256": "633674d8513f7ad039891f0d22a5f0c1423f08115b96e846b9a4071691c65768",
+  "knowledgeSha256": "effcf70caf21a668886349cca94e6ec217f1548532bac97d91161af7a8df9f19",
   "sources": [
+    {
+      "path": "src/components/RecycleBinPanel.vue",
+      "guides": ["resource-attachments", "data-protection"],
+      "sha256": "a93f147da13a7473546dcec38fcf9ac9537b755bcba6451fe9c0145dc779eaa7"
+    },
+    {
+      "path": "src/components/ResourceAttachmentHistory.vue",
+      "guides": ["resource-attachments"],
+      "sha256": "238643e6cdc682fb407520522e3e48d0b60460bc97f2d7238ed60ccfa46fdfcb"
+    },
     {
       "path": "src/parser/ExtraStoryText.ts",
       "guides": ["personal-resources"],
@@ -94,7 +104,7 @@
     {
       "path": "src/components/CloudBackupCenter.vue",
       "guides": ["backup"],
-      "sha256": "56dab752962316877fb864d793d2ebb231c0ae9a6611f96612d1a3a0f6005e2b"
+      "sha256": "19b8e976ec79830ec476891cee8d61c44ec041fcd4f3bb09f692c6c633c16649"
     },
     {
       "path": "src/services/PersonalResourceBackup.ts",
@@ -109,7 +119,7 @@
     {
       "path": "src/services/RestoreService.ts",
       "guides": ["backup"],
-      "sha256": "60e46676417ae0ed962d7fd5d448d4ea4ccfdb34e811f6ddc9920cf15e85ffac"
+      "sha256": "a3966ddc09df53bac5f3fa412643f593c1669bbb4f8797c0d08e576cb58fc77a"
     },
     {
       "path": "src/components/TavernBridgeCenter.vue",
@@ -465,12 +475,17 @@
     {
       "path": "src/components/GeneratedImageAlbumApp.vue",
       "guides": ["image-album"],
-      "sha256": "5b39471b3ce85c301ac36a3f18325ae645431af6664b9fa438fc890edc4d21c0"
+      "sha256": "04a9b6efda161fde25b1d0b1ec25c50c85d38e6358bb5eb133c2b378232b12fd"
+    },
+    {
+      "path": "src/components/ImageHostingConnectionForm.vue",
+      "guides": ["image-album", "image-generation"],
+      "sha256": "eb4da2eee2fb20930054b915b52ee542dd97a300d265cdfea0a0ad742e6a2919"
     },
     {
       "path": "src/services/GeneratedImageAlbumService.ts",
       "guides": ["image-album"],
-      "sha256": "4248f58b4098cb6c3559c19a276ffcde3efc083738e2c73cc54656fea98e5b05"
+      "sha256": "89fb003c051456fed432eb2181714e8d9f82afed133a29c866368c5efca69c63"
     },
     {
       "path": "src/storage/IndexedDbGeneratedImageAlbumStorage.ts",
@@ -595,7 +610,7 @@
     {
       "path": "src/services/RecycleBinService.ts",
       "guides": ["data-protection"],
-      "sha256": "2b3e1861874329a4ebf53aab4b341f20017d8329dc8026a347d1c87e6a0fc33e"
+      "sha256": "a6b9b5e933690252432d0df5e64e7d94db15f4a37ace5eeae42fff3777fa779d"
     },
     {
       "path": "src/services/ProductAssistantPetAssets.ts",
@@ -635,7 +650,7 @@
     {
       "path": "src/core/LibraryContainer.ts",
       "guides": ["import"],
-      "sha256": "3d797d8a65abd1b8aa64c45d179fe97ef27e7b81fde39d2deb88d44b44cf7d54"
+      "sha256": "e466fd864f4f18caf961ce689c29253fb5fcf27ddda0a2d46ec0ce15d243774d"
     },
     {
       "path": "src/services/ResourceImportOperations.ts",
@@ -786,12 +801,12 @@
     {
       "path": "src/services/OfficialAppService.ts",
       "guides": ["apps"],
-      "sha256": "ae5a8dcbb91eafadf9382c2eb28618430b2176966eefb11c2686602f07b0f930"
+      "sha256": "9a6579ec04708245b33a16d77e57574c971bb62387fab837a26142d72c72bd29"
     },
     {
       "path": "src/components/OfficialAppManager.vue",
       "guides": ["apps"],
-      "sha256": "b98b3244fa955b91d2d769782f543d660e37ba5db2ce8547298e78d2309fe1a3"
+      "sha256": "6c4bb824a2184c7a0ccb1517706457c48ac124c9256baef48d0955816d20b780"
     },
     {
       "path": "src/services/ResourceVersionRecognitionService.ts",
@@ -896,7 +911,7 @@
     {
       "path": "src/types/Resource.ts",
       "guides": ["backup", "import"],
-      "sha256": "bbf6933b8ef46ea17164d3e0de35ab68f20b925bf57fcc44bd09afa373e17bd8"
+      "sha256": "181ef3e30aad5ac3f60a15ac76ed8f2eb6ec07d1e03ae931cde472654c362c7c"
     },
     {
       "path": "src/core/OfficialAppHostApi.ts",
@@ -1421,22 +1436,22 @@
     {
       "path": "src/components/ResourceAttachmentPanel.vue",
       "guides": ["resource-attachments"],
-      "sha256": "b9aa5388662e5c8f0cf46cf5d8a1f33685f2fcf3eae5f3245d994f0e8b9014f5"
+      "sha256": "d1502ec1a80281adb161579126b890bcee4d0f9160e2284990faa8f95b90f378"
     },
     {
       "path": "src/components/AttachmentDocumentPreview.vue",
       "guides": ["resource-attachments"],
-      "sha256": "12cdb207b9a05ebce8823e1b81ae376c4c5d67f017a76c0db7dc068f56e785f4"
+      "sha256": "aa6f12649ec11bb8468d36500c7e904541d15e907f2d29bef457edd77c2d8876"
     },
     {
       "path": "src/services/ResourceAttachmentService.ts",
       "guides": ["resource-attachments"],
-      "sha256": "33a3eef3fb5871647cd7b6eaf051e25cbd3010c38196e11d149d9cf1d4c992bb"
+      "sha256": "449de050f4533ea472efe86c3569cc08791c4851781e88eb01725a56335bcd12"
     },
     {
       "path": "src/services/AttachmentDocument.ts",
       "guides": ["resource-attachments"],
-      "sha256": "300465d417999bad41f666eb8f6d8c51b64f7c406c035d5c913d25a664faf1f8"
+      "sha256": "a0ea6e1159c1c435eca9b6b87b07c70ba186428045df2f16682223bbe69e7d92"
     },
     {
       "path": "src/services/AttachmentWordEditing.ts",

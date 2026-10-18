@@ -18,6 +18,8 @@ import { hashBlob } from './HashService'
 import type { CategoryService } from './CategoryService'
 import { createResourceArchiveSource, type ExportService } from './ExportService'
 import type { ResourceService } from './ResourceService'
+import type { ResourceAttachmentService } from './ResourceAttachmentService'
+import { resourceOwnedFileOwnerId } from '../types/ResourceAttachment'
 import type { RestoreService } from './RestoreService'
 import type { VaultService } from './VaultService'
 import type { UserPersonaService } from './UserPersonaService'
@@ -76,6 +78,7 @@ export class RecycleBinService {
   private readonly restoreService: RestoreService
   private readonly vaultService: VaultService
   private readonly userPersonaService: UserPersonaService
+  private readonly attachments?: ResourceAttachmentService
 
   constructor(
     database: AppDatabase,
@@ -85,6 +88,7 @@ export class RecycleBinService {
     restoreService: RestoreService,
     vaultService: VaultService,
     userPersonaService: UserPersonaService,
+    attachments?: ResourceAttachmentService,
   ) {
     this.database = database
     this.resourceService = resourceService
@@ -93,6 +97,7 @@ export class RecycleBinService {
     this.restoreService = restoreService
     this.vaultService = vaultService
     this.userPersonaService = userPersonaService
+    this.attachments = attachments
   }
 
   async list(): Promise<BackupRecordSummary[]> {
@@ -401,6 +406,77 @@ export class RecycleBinService {
     return record
   }
 
+  async moveAttachmentVersionToRecycleBin(
+    ownerId: string,
+    attachmentId: string,
+    versionId: string,
+    options: { signal?: AbortSignal; onProgress?: (progress: RecycleBinMoveProgress) => void } = {},
+  ): Promise<void> {
+    const { signal, onProgress } = options
+    signal?.throwIfAborted()
+    if (!this.attachments) throw new Error('附件历史服务不可用')
+    const version = await this.attachments.getHistory(ownerId, attachmentId, versionId)
+    signal?.throwIfAborted()
+    const resource = {
+      ...version,
+      metadata: {
+        ...version.metadata,
+        attachmentHistoryRecycle: {
+          attachmentId,
+          versionImportedAt: version.versionImportedAt,
+          versionNote: version.versionNote,
+        },
+      },
+    }
+    onProgress?.({ phase: 'archive' })
+    const archive = await this.exportService.createArchive(
+      [resource],
+      [],
+      {
+        mode: 'partial',
+        preserveExternalRelatedResourceIds: true,
+      },
+      [],
+      {
+        signal,
+        onProgress: ({ writtenBytes }) => onProgress?.({ phase: 'archive', writtenBytes }),
+      },
+    )
+    signal?.throwIfAborted()
+    let blob = archive.blob
+    let encryptionIv: string | undefined
+    const encrypted = this.vaultService.isEnabled()
+    if (encrypted) {
+      const protectedBlob = await this.vaultService.protectBlob(blob)
+      blob = protectedBlob.data
+      encryptionIv = protectedBlob.iv
+    }
+    const digest = await hashBlob(blob)
+    signal?.throwIfAborted()
+    const createdAt = Date.now()
+    const record: BackupRecord = {
+      id: crypto.randomUUID(),
+      adapter: RECYCLE_BIN_ADAPTER,
+      itemKind: 'attachment-version',
+      objectKey: recycleArchiveFileName(new Date(createdAt)),
+      resourceCount: 1,
+      createdAt,
+      reason: `${version.fileName} · 附件历史版本`,
+      size: blob.size,
+      blob,
+      encrypted,
+      encryptionIv,
+    }
+    // Saving the recovery copy and removing this one version form the atomic boundary.
+    onProgress?.({ phase: 'save' })
+    await this.database.backupRecords.put(record)
+    const saved = await this.database.backupRecords.get(record.id)
+    if (!saved?.blob || (await hashBlob(saved.blob)) !== digest)
+      throw new Error('回收站记录保存校验失败，历史版本未删除')
+    onProgress?.({ phase: 'delete' })
+    await this.attachments.deleteHistory(ownerId, attachmentId, versionId, version.contentHash)
+  }
+
   async moveToRecycleBin(
     ids: string[],
     onProgress?: (progress: RecycleBinMoveProgress) => void,
@@ -487,6 +563,42 @@ export class RecycleBinService {
         { iv: record.encryptionIv, data: record.blob },
         'application/zip',
       )
+    }
+    if (record.itemKind === 'attachment-version') {
+      if (!this.attachments) throw new Error('附件历史服务不可用')
+      const prepared = await this.restoreService.prepare(
+        new File([blob], record.objectKey, { type: 'application/zip' }),
+        [],
+        [],
+      )
+      if (prepared.resources.length !== 1) throw new Error('附件历史恢复记录无效')
+      const version = prepared.resources[0]!
+      const history = version.metadata.attachmentHistoryRecycle as
+        { attachmentId?: string; versionImportedAt?: number; versionNote?: string } | undefined
+      if (
+        !history ||
+        typeof history.attachmentId !== 'string' ||
+        (history.versionImportedAt !== undefined &&
+          (typeof history.versionImportedAt !== 'number' ||
+            !Number.isFinite(history.versionImportedAt))) ||
+        (history.versionNote !== undefined && typeof history.versionNote !== 'string')
+      )
+        throw new Error('附件历史恢复记录无效')
+      const metadata = { ...version.metadata }
+      delete metadata.attachmentHistoryRecycle
+      await this.attachments.restoreHistory(
+        resourceOwnedFileOwnerId(version),
+        history.attachmentId,
+        {
+          ...version,
+          metadata,
+          versionGroupId: history.attachmentId,
+          versionImportedAt: history.versionImportedAt,
+          versionNote: history.versionNote,
+        },
+      )
+      await this.database.backupRecords.delete(record.id)
+      return
     }
     const [resources, categories] = await Promise.all([
       this.resourceService.listResourceListSummaries(),

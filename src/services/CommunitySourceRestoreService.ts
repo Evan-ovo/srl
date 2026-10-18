@@ -101,6 +101,7 @@ export class CommunitySourceRestoreService extends RestoreService {
     data: ArchivePortableData | undefined,
     readObject: (object: GitHubBundleManifest) => Promise<Blob>,
     signal?: AbortSignal,
+    onPrepared?: (fileName: string) => void,
   ): Promise<void> {
     for (const entry of data?.communitySources?.attachments ?? []) {
       signal?.throwIfAborted()
@@ -115,6 +116,7 @@ export class CommunitySourceRestoreService extends RestoreService {
       await this.attachmentRestore([
         { assetId: entry.assetId, blob: uri ? rememberNativeFile(blob, uri) : blob },
       ])
+      onPrepared?.(entry.object.fileName)
     }
   }
 

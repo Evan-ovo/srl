@@ -1,9 +1,12 @@
 import { extractExtraStoryText } from '../parser/ExtraStoryText'
 import { zipArchiveChunks } from '../utils/ZipArchiveStream'
 
-export function attachmentFormat(name: string): 'txt' | 'word' | 'pdf' | 'zip' | 'other' {
+export function attachmentFormat(
+  name: string,
+): 'txt' | 'markdown' | 'word' | 'pdf' | 'zip' | 'other' {
   const ext = name.split('.').at(-1)?.toLowerCase()
   if (ext === 'txt') return 'txt'
+  if (ext === 'md' || ext === 'markdown') return 'markdown'
   if (ext === 'doc' || ext === 'docx') return 'word'
   if (ext === 'pdf' || ext === 'zip') return ext
   return 'other'

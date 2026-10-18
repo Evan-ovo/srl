@@ -72,6 +72,7 @@ export class GeneratedImageAlbumService {
     entries: import('./GeneratedImageAlbumBackup').AlbumBackup,
     read: (entry: import('./GeneratedImageAlbumBackup').AlbumBackup[number]) => Promise<Blob>,
     signal?: AbortSignal,
+    onPrepared?: (fileName: string) => void,
   ): Promise<void> {
     const { hashCloudBlob } = await import('./CloudArchiveCodec')
     const { hashBytes } = await import('./HashService')
@@ -149,6 +150,7 @@ export class GeneratedImageAlbumService {
             entry.object!.totalSha256.toLowerCase()
         )
           throw new Error(`相册恢复身份冲突：${item.name}`)
+        onPrepared?.(item.name)
         continue
       }
       const original = await read(entry)
@@ -181,6 +183,7 @@ export class GeneratedImageAlbumService {
           entry.object!.totalSha256.toLowerCase()
       )
         throw new Error(`相册原图保存后读回失败：${item.name}`)
+      onPrepared?.(item.name)
     }
   }
 

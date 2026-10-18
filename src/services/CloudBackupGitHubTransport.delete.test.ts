@@ -61,7 +61,8 @@ describe('GitHub asset deletion receipts', () => {
     vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
       const requested = new URL(url, `http://127.0.0.1:${address.port}`)
       const upstream = new URL(requested.searchParams.get('url') ?? requested.toString())
-      if (upstream.hostname !== 'api.github.com') throw new Error('Unexpected GitHub fixture target')
+      if (upstream.hostname !== 'api.github.com')
+        throw new Error('Unexpected GitHub fixture target')
       const local = new URL('/github-fixture', `http://127.0.0.1:${address.port}`)
       local.searchParams.set('url', upstream.toString())
       return originalFetch(local, init)

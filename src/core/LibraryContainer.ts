@@ -119,6 +119,7 @@ export const recycleBinService = new RecycleBinService(
   restoreService,
   vaultService,
   userPersonaService,
+  resourceAttachmentService,
 )
 
 let nativeResourceSync: Promise<void> | undefined

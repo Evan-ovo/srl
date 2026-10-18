@@ -148,6 +148,90 @@
   line-height: 1.8;
   margin: 8px 0;
 }
+.attachment-preview__caption {
+  margin: 4px 0 12px;
+  color: var(--color-ink-soft);
+  font-size: var(--text-caption);
+}
+.attachment-markdown {
+  min-width: 0;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.attachment-markdown > :first-child {
+  margin-top: 0;
+}
+.attachment-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1em 0 0.4em;
+  line-height: 1.35;
+  font-family: inherit;
+}
+.attachment-markdown h1 {
+  font-size: 1.6em;
+}
+.attachment-markdown h2 {
+  font-size: 1.3em;
+}
+.attachment-markdown :is(h3, h4, h5, h6) {
+  font-size: 1.1em;
+}
+.attachment-markdown :is(p, ul, ol, blockquote, table) {
+  margin: 0.65em 0;
+}
+.attachment-markdown :is(ul, ol) {
+  padding-left: 1.5em;
+}
+.attachment-markdown li:has(> input[type='checkbox']) {
+  list-style: none;
+}
+.attachment-markdown blockquote {
+  margin-inline: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--color-line-strong);
+  color: var(--color-ink-soft);
+}
+.attachment-markdown code {
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+  background: var(--glass-panel-muted);
+  font-family: var(--font-code, monospace);
+}
+.attachment-markdown pre {
+  max-width: 100%;
+  padding: 12px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-control);
+  overflow: auto;
+  background: var(--glass-panel-muted);
+  white-space: pre;
+  overflow-wrap: normal;
+  font: 0.875em/1.6 var(--font-code, monospace);
+}
+.attachment-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+.attachment-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.attachment-markdown :is(th, td) {
+  padding: 6px 10px;
+  border: 1px solid var(--color-line);
+  text-align: left;
+}
+.attachment-markdown th {
+  background: var(--glass-panel-muted);
+}
+.attachment-markdown img {
+  max-width: 100%;
+  height: auto;
+}
+.attachment-markdown a {
+  color: var(--color-accent);
+}
 .attachment-preview iframe {
   flex: 1;
   min-height: 240px;

@@ -15,6 +15,18 @@ beforeAll(() => {
 })
 afterAll(() => vi.unstubAllGlobals())
 describe('attachment text and archive views', () => {
+  it('reads Markdown text with the existing decoder and preview limit without offering text writes', async () => {
+    expect(attachmentFormat('README.MD')).toBe('markdown')
+    expect(attachmentFormat('作者.markdown')).toBe('markdown')
+    const source = '# 标题\n\n**正文**'
+    expect(await readAttachmentText(new File([source], '说明.md'))).toBe(source)
+    expect(() => attachmentTextFile('说明.md', '改动')).toThrow('只保存 TXT')
+    const large = new File(['original'], '大文件.md')
+    Object.defineProperty(large, 'size', { value: 16 * 1024 * 1024 + 1 })
+    const read = vi.spyOn(large, 'arrayBuffer')
+    await expect(readAttachmentText(large)).rejects.toThrow('16 MiB')
+    expect(read).not.toHaveBeenCalled()
+  })
   it('reads empty TXT, UTF16 and GBK and writes UTF8 without changing newlines', async () => {
     expect(await readAttachmentText(new File([], '空.txt'))).toBe('')
     expect(

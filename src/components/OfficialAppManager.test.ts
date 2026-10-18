@@ -2,6 +2,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import OfficialAppManager from './OfficialAppManager.vue'
+import { taskCenter } from '../core/TaskCenter'
 
 const service = vi.hoisted(() => ({
   list: vi.fn(),
@@ -77,6 +78,82 @@ function remountManager() {
   wrapper.unmount()
   wrapper = mount(OfficialAppManager, { attachTo: document.body })
 }
+it('downloads selected missing APPs without updating or reinstalling existing APPs', async () => {
+  service.list.mockResolvedValue([{ id: 'draw', files: [] }])
+  service.availableUpdates.mockResolvedValue({
+    draw: {
+      currentVersion: '1',
+      latestVersion: '2',
+      latestShellVersion: 'test-shell',
+      requiresHostUpdate: false,
+    },
+  })
+  remountManager()
+  await flushPromises()
+  await wrapper.get('[aria-label="选择下载缝了么"]').setValue(true)
+  await wrapper.get('[aria-label="选择下载读了么"]').setValue(true)
+  expect(wrapper.find('[aria-label="选择下载抽了么"]').exists()).toBe(false)
+  await wrapper.get('.official-app-manager__batch-download').trigger('click')
+  await flushPromises()
+  expect(service.installMany).toHaveBeenCalledWith(
+    ['chatReader', 'stitch'],
+    expect.any(Function),
+    expect.any(AbortSignal),
+  )
+  expect(wrapper.text()).toContain('下载结束：完成 2 个')
+  expect(wrapper.find('[aria-label="选择更新抽了么"]').exists()).toBe(true)
+})
+it('downloads all missing APPs by default and disables repeated batch submissions', async () => {
+  service.list.mockResolvedValue([{ id: 'draw', files: [] }])
+  remountManager()
+  await flushPromises()
+  const expected = wrapper
+    .findAll('input[aria-label^="选择下载"]')
+    .map((input) => (input.element as HTMLInputElement).value)
+  let finish!: (value: unknown) => void
+  service.installMany.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  const button = wrapper.get('.official-app-manager__batch-download').element as HTMLButtonElement
+  button.click()
+  button.click()
+  await flushPromises()
+  expect(service.installMany).toHaveBeenCalledExactlyOnceWith(
+    expected,
+    expect.any(Function),
+    expect.any(AbortSignal),
+  )
+  expect(expected).not.toContain('draw')
+  expect(wrapper.get('.official-app-manager__batch-download').attributes('disabled')).toBeDefined()
+  service.list.mockResolvedValue([...expected, 'draw'].map((id) => ({ id, files: [] })))
+  finish(expected.map((id) => ({ id })))
+  await flushPromises()
+  expect(wrapper.find('.official-app-manager__batch-download').exists()).toBe(false)
+})
+it('retains failed download selections for retry and drops successful selections', async () => {
+  await flushPromises()
+  await wrapper.get('[aria-label="选择下载缝了么"]').setValue(true)
+  await wrapper.get('[aria-label="选择下载读了么"]').setValue(true)
+  service.installMany.mockResolvedValueOnce([
+    { id: 'chatReader' },
+    { id: 'stitch', error: new Error('用户已停止') },
+  ])
+  service.list.mockResolvedValue([{ id: 'chatReader', files: [] }])
+  await wrapper.get('.official-app-manager__batch-download').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('下载结束：完成 1 个，失败 1 个')
+  expect(wrapper.get('[aria-label="选择下载缝了么"]').element).toHaveProperty('checked', true)
+  await wrapper.get('.official-app-manager__batch-download').trigger('click')
+  await flushPromises()
+  expect(service.installMany).toHaveBeenLastCalledWith(
+    ['stitch'],
+    expect.any(Function),
+    expect.any(AbortSignal),
+  )
+})
 it('selects several updates, shows per-APP progress, and refreshes the catalog once after the batch', async () => {
   service.list.mockResolvedValue([
     { id: 'draw', files: [] },
@@ -108,7 +185,11 @@ it('selects several updates, shows per-APP progress, and refreshes the catalog o
   })
   service.availableUpdates.mockClear()
   await wrapper.get('.official-app-manager__batch-update').trigger('click')
-  expect(service.installMany).toHaveBeenCalledWith(['draw', 'stitch'], expect.any(Function))
+  expect(service.installMany).toHaveBeenCalledWith(
+    ['draw', 'stitch'],
+    expect.any(Function),
+    expect.any(AbortSignal),
+  )
   expect(wrapper.text()).toContain('正在下载')
   expect(wrapper.text()).toContain('正在校验')
   expect(wrapper.get('[aria-label="选择更新缝了么"]').attributes('disabled')).toBeDefined()
@@ -365,4 +446,44 @@ it('shows the actual cleanup failure next to confirmation and allows retry', asy
   await flushPromises()
   expect(service.clearAppData).toHaveBeenCalledTimes(2)
   expect(dialog.querySelector('[role="status"]')?.textContent).toContain('已清理')
+})
+
+it('stops through the task center, waits for the owner, and ignores late progress after reopening', async () => {
+  await flushPromises()
+  let finish!: () => void
+  let report!: (progress: { id: string; stage: string }) => void
+  let signal!: AbortSignal
+  service.installMany.mockImplementation((_ids, onProgress, stopSignal) => {
+    report = onProgress
+    signal = stopSignal
+    return new Promise((_resolve, reject) => {
+      finish = () => reject(signal.reason)
+    })
+  })
+  await wrapper.get('input[value="draw"]').setValue(true)
+  await wrapper.get('input[value="stitch"]').setValue(true)
+  await wrapper.get('.official-app-manager__batch-download').trigger('click')
+  report({ id: 'draw', stage: 'done' })
+  const task = taskCenter
+    .list()
+    .find((task) => task.name === '下载内置 APP' && task.status === 'running')!
+  expect(taskCenter.cancel(task.operationId)).toBe(true)
+  expect(signal.aborted).toBe(true)
+  expect(taskCenter.list().find((item) => item.operationId === task.operationId)?.status).toBe(
+    'running',
+  )
+  report({ id: 'stitch', stage: 'downloading' })
+  await flushPromises()
+  expect(wrapper.text()).toContain('正在停止')
+  service.list.mockResolvedValue([{ id: 'draw', files: [] }])
+  finish()
+  await flushPromises()
+  expect(wrapper.text()).toContain('已停止下载，已完成 1 个')
+  expect(taskCenter.list().find((item) => item.operationId === task.operationId)?.status).toBe(
+    'cancelled',
+  )
+  expect(wrapper.get('input[value="stitch"]').element).toHaveProperty('checked', true)
+  remountManager()
+  await flushPromises()
+  expect(service.installMany).toHaveBeenCalledOnce()
 })

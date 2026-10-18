@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef } from 'vue'
 import '../styles/ConfirmDialog.css'
 import FeatureAppHeader from './FeatureAppHeader.vue'
 import { FEATURE_APP_REGISTRY } from '../core/FeatureAppRegistry'
 import { officialAppService } from '../core/OfficialAppRuntime'
+import { taskCenter } from '../core/TaskCenter'
 import {
   isOfficialAppId,
   type InstalledOfficialApp,
@@ -18,6 +19,9 @@ const installed = ref<InstalledOfficialApp[]>([...officialAppService.installedSn
 const availableUpdates = ref<Partial<Record<OfficialAppId, OfficialAppUpdateInfo>>>({})
 const busy = ref(false)
 const selectedUpdates = ref<OfficialAppId[]>([])
+const selectedDownloads = ref<OfficialAppId[]>([])
+const stopBatch = shallowRef<() => void>()
+const batchAction = ref<'更新' | '下载'>('更新')
 const installProgress = ref<Partial<Record<OfficialAppId, OfficialAppInstallProgress>>>({})
 const message = ref('')
 const updateCheckError = ref('')
@@ -73,6 +77,15 @@ const batchIds = computed(() => {
   const chosen = updatable.value.filter((update) => selectedUpdates.value.includes(update.id))
   return (chosen.length ? chosen : updatable.value).map((update) => update.id)
 })
+const downloadable = computed(() =>
+  apps.flatMap(({ id }) =>
+    isOfficialAppId(id) && !installed.value.some((app) => app.id === id) ? [id] : [],
+  ),
+)
+const downloadIds = computed(() => {
+  const chosen = downloadable.value.filter((id) => selectedDownloads.value.includes(id))
+  return chosen.length ? chosen : downloadable.value
+})
 function progressText(id: string): string {
   if (!isOfficialAppId(id)) return ''
   const progress = installProgress.value[id]
@@ -89,46 +102,95 @@ function progressText(id: string): string {
     case 'installing':
       return `正在安装 ${progress.completedFiles ?? 0} / ${progress.totalFiles ?? 0} 个文件`
     case 'done':
-      return '更新成功'
+      return `${batchAction.value}成功`
     case 'failed':
-      return `更新失败：${progress.message}`
+      return progress.message ?? `${batchAction.value}失败`
   }
 }
-async function installUpdates(ids: OfficialAppId[] = batchIds.value) {
+async function installUpdates(
+  ids: OfficialAppId[] = batchIds.value,
+  action: '更新' | '下载' = '更新',
+) {
   if (busy.value || !ids.length) return
   const targets = [...ids]
   updatesDialog.value?.close()
   busy.value = true
-  message.value = `正在更新 ${targets.length} 个 APP，最多同时下载两个包…`
+  batchAction.value = action
+  message.value = `正在${action} ${targets.length} 个 APP，最多同时下载两个包…`
   installProgress.value = Object.fromEntries(targets.map((id) => [id, { id, stage: 'queued' }]))
+  const controller = new AbortController()
+  let acknowledgeStop!: () => void
+  const settled = new Promise<void>((resolve) => {
+    acknowledgeStop = resolve
+  })
+  const completed = new Set<OfficialAppId>()
+  const task = taskCenter.start({
+    name: `${action}内置 APP`,
+    phase: message.value,
+    cancelable: true,
+    cancel: () => {
+      controller.abort(new DOMException('用户已停止', 'AbortError'))
+      stopBatch.value = undefined
+      message.value = '正在停止，等待已开始的安装提交结束…'
+      taskCenter.update(task, { phase: message.value })
+      return settled
+    },
+  })
+  stopBatch.value = () => {
+    taskCenter.cancel(task)
+  }
   try {
-    const results = await officialAppService.installMany(targets, (progress) => {
-      installProgress.value[progress.id] = progress
-    })
-    const succeeded = results.filter((result) => !result.error).map((result) => result.id)
+    const results = await officialAppService.installMany(
+      targets,
+      (progress) => {
+        if (progress.stage === 'done') completed.add(progress.id)
+        if (controller.signal.aborted && progress.stage !== 'done') return
+        installProgress.value[progress.id] = progress
+        if (!controller.signal.aborted)
+          taskCenter.update(task, {
+            phase: progressText(progress.id),
+            itemProgress: { completed: completed.size, total: targets.length },
+          })
+      },
+      controller.signal,
+    )
     for (const result of results) {
+      if (!result.error) completed.add(result.id)
       installProgress.value[result.id] = result.error
         ? { id: result.id, stage: 'failed', message: result.error.message }
         : { id: result.id, stage: 'done' }
     }
-    selectedUpdates.value = selectedUpdates.value.filter((id) => !succeeded.includes(id))
-    updateNoticeItems.value = updateNoticeItems.value.filter(
-      (notice) => !succeeded.includes(notice.id),
-    )
     message.value = '安装已完成，正在检查更新状态…'
-    // Refresh once for the batch after every installation has committed or failed.
-    try {
-      await refresh()
-      await checkForUpdates(false)
-    } catch (error) {
-      updateCheckError.value = error instanceof Error ? error.message : '更新检查失败'
+    await refresh()
+    if (!controller.signal.aborted) {
+      try {
+        await checkForUpdates(false)
+      } catch (error) {
+        updateCheckError.value = error instanceof Error ? error.message : '更新检查失败'
+      }
     }
-    message.value = `更新结束：完成 ${succeeded.length} 个${results.length > succeeded.length ? `，失败 ${results.length - succeeded.length} 个` : ''}`
+    controller.signal.throwIfAborted()
+    message.value = `${action}结束：完成 ${completed.size} 个${results.length > completed.size ? `，失败 ${results.length - completed.size} 个` : ''}`
+    if (results.some((result) => result.error)) taskCenter.fail(task, new Error(message.value))
+    else taskCenter.complete(task)
   } catch (error) {
-    message.value = error instanceof Error ? error.message : '更新失败'
-    for (const id of targets)
-      installProgress.value[id] = { id, stage: 'failed', message: message.value }
+    message.value = controller.signal.aborted
+      ? `已停止${action}，已完成 ${completed.size} 个；未完成项可手动重试。`
+      : error instanceof Error
+        ? error.message
+        : `${action}失败`
+    for (const id of targets) {
+      if (!completed.has(id))
+        installProgress.value[id] = { id, stage: 'failed', message: message.value }
+    }
+    await refresh()
+    if (!controller.signal.aborted) taskCenter.fail(task, error)
   } finally {
+    selectedUpdates.value = selectedUpdates.value.filter((id) => !completed.has(id))
+    selectedDownloads.value = selectedDownloads.value.filter((id) => !completed.has(id))
+    updateNoticeItems.value = updateNoticeItems.value.filter((notice) => !completed.has(notice.id))
+    stopBatch.value = undefined
+    acknowledgeStop()
     busy.value = false
   }
 }
@@ -292,16 +354,6 @@ onMounted(async () => {
   <FeatureAppHeader title="APP 管理" @back="$emit('back')">
     <template #actions>
       <button
-        v-if="batchIds.length"
-        class="feature-header-action official-app-manager__batch-update"
-        type="button"
-        :disabled="busy"
-        :aria-label="`${selectedUpdates.some((id) => batchIds.includes(id)) ? '更新所选' : '更新全部'}（${batchIds.length}）`"
-        @click="installUpdates()"
-      >
-        {{ selectedUpdates.some((id) => batchIds.includes(id)) ? '更新所选' : '更新全部' }}
-      </button>
-      <button
         type="button"
         class="feature-header-action feature-header-action--icon official-app-manager__help-trigger"
         aria-label="查看 APP 管理说明"
@@ -318,13 +370,46 @@ onMounted(async () => {
     </template>
   </FeatureAppHeader>
   <section class="official-app-manager" :aria-busy="busy">
+    <div v-if="downloadIds.length || batchIds.length" class="official-app-manager__batch-actions">
+      <button
+        v-if="downloadIds.length"
+        class="feature-header-action official-app-manager__batch-download"
+        type="button"
+        :disabled="busy"
+        :aria-label="`${selectedDownloads.some((id) => downloadIds.includes(id)) ? '下载所选' : '下载全部'}（${downloadIds.length}）`"
+        @click="installUpdates(downloadIds, '下载')"
+      >
+        {{ selectedDownloads.some((id) => downloadIds.includes(id)) ? '下载所选' : '下载全部' }}
+      </button>
+      <button
+        v-if="batchIds.length"
+        class="feature-header-action official-app-manager__batch-update"
+        type="button"
+        :disabled="busy"
+        :aria-label="`${selectedUpdates.some((id) => batchIds.includes(id)) ? '更新所选' : '更新全部'}（${batchIds.length}）`"
+        @click="installUpdates()"
+      >
+        {{ selectedUpdates.some((id) => batchIds.includes(id)) ? '更新所选' : '更新全部' }}
+      </button>
+    </div>
     <p v-if="message" role="status">{{ message }}</p>
+    <button v-if="stopBatch" class="button button--quiet" type="button" @click="stopBatch()">
+      停止{{ batchAction }}
+    </button>
     <p v-if="updateCheckError" role="status">暂时无法检查 APP 更新：{{ updateCheckError }}</p>
     <ul>
       <li v-for="app in apps" :key="app.id">
         <div class="official-app-manager__app-info">
           <strong class="official-app-manager__app-name"
-            ><label v-if="updateFor(app.id)" class="official-app-manager__select-update">
+            ><label v-if="!find(app.id)" class="official-app-manager__select-update">
+              <input
+                v-model="selectedDownloads"
+                type="checkbox"
+                :value="app.id"
+                :disabled="busy"
+                :aria-label="`选择下载${app.name}`"
+              /> </label
+            ><label v-else-if="updateFor(app.id)" class="official-app-manager__select-update">
               <input
                 v-model="selectedUpdates"
                 type="checkbox"
@@ -398,11 +483,15 @@ onMounted(async () => {
       <h3 id="official-app-manager-help-title">APP 管理说明</h3>
       <p>
         程序按需下载。资源库升级后，兼容且完整的已安装版本会继续使用；有新版本时可在此更新，原有数据保留。
+        未安装的 APP 可勾选后下载所选，不勾选时可下载全部；已安装 APP 的多选更新独立操作。
       </p>
       <button type="button" class="button button--quiet" :disabled="busy" @click="checkStatus">
         检查 APP 状态
       </button>
       <p v-if="message" role="status">{{ message }}</p>
+      <button v-if="stopBatch" class="button button--quiet" type="button" @click="stopBatch()">
+        停止{{ batchAction }}
+      </button>
       <footer>
         <button type="button" autofocus @click="closeHelp">知道了</button>
       </footer>
@@ -542,6 +631,12 @@ onMounted(async () => {
 <style scoped>
 .official-app-manager {
   padding: 0.75rem;
+}
+.official-app-manager__batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 .official-app-manager__help-trigger svg {
   stroke: currentColor;

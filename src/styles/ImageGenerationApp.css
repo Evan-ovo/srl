@@ -626,13 +626,8 @@ summary {
   gap: 8px;
   flex-wrap: wrap;
 }
-.image-generation-actions button,
-.image-generation-hosting-form button {
+.image-generation-actions button {
   padding: 8px 11px;
-}
-.image-generation-hosting-form {
-  display: grid;
-  gap: 10px;
 }
 .image-generation-provider__switch--hosting {
   display: flex;

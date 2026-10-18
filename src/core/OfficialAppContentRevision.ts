@@ -9,16 +9,16 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   draw: 1,
   stitch: 16,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=frontend-workshop-content-revision
-  frontendWorkshop: 7,
+  frontendWorkshop: 8,
   // SRL-PUBLIC-SYNC: END REPLACE id=frontend-workshop-content-revision
-  imageGeneration: 9,
+  imageGeneration: 10,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-album-content-revision
-  imageAlbum: 3,
+  imageAlbum: 4,
   // SRL-PUBLIC-SYNC: END REPLACE id=image-album-content-revision
   userPersona: 7,
   tavernBridge: 9,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-content-revision
-  assistant: 47,
+  assistant: 48,
   // SRL-PUBLIC-SYNC: END REPLACE id=assistant-content-revision
 }
 

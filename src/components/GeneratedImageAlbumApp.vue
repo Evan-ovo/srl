@@ -16,6 +16,7 @@ import type {
   GeneratedImageHostingMode,
 } from '../types/GeneratedImageAlbum'
 import FeatureAppHeader from './FeatureAppHeader.vue'
+import ImageHostingConnectionForm from './ImageHostingConnectionForm.vue'
 
 defineEmits<{ back: [] }>()
 
@@ -696,36 +697,14 @@ onUnmounted(() => {
                 <span>直链来源</span>
                 <span>我的 ImgBed</span>
               </div>
-              <form
-                v-if="hostingMode === 'self-hosted' && !selfHostedReady"
-                class="generated-album__connection"
-                @submit.prevent="saveSelfHostedConnection"
-              >
-                <input
-                  v-model="selfHostedOrigin"
-                  type="url"
-                  inputmode="url"
-                  placeholder="https://你的图床域名"
-                  required
-                />
-                <input
-                  v-model="selfHostedToken"
-                  type="password"
-                  autocomplete="off"
-                  placeholder="API Token 或 AUTH_CODE"
-                  required
-                />
-                <label
-                  ><input v-model="rememberSelfHosted" type="checkbox" /><span
-                    >仅保存在这台设备</span
-                  ></label
-                >
-                <button type="submit">连接</button>
-              </form>
-              <p v-if="hostingMode === 'self-hosted'" class="generated-album__hint">
-                使用你自己的 ImgBed，不占共享图床名额、每日次数或容量。远端永久删除需要包含 delete
-                权限的 API Token；AUTH_CODE 仍可正常上传。
-              </p>
+              <ImageHostingConnectionForm
+                v-model:origin="selfHostedOrigin"
+                v-model:token="selfHostedToken"
+                v-model:remember="rememberSelfHosted"
+                :connected="selfHostedReady"
+                :busy="busy"
+                @submit="saveSelfHostedConnection"
+              />
               <!-- SRL-PUBLIC-SYNC: END REPLACE id=generated-album-hosting-controls -->
               <div class="generated-album__actions">
                 <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-create-link-button -->

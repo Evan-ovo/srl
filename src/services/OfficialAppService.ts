@@ -305,10 +305,10 @@ export class OfficialAppService {
     return this.catalogLoad
   }
 
-  private async loadCatalog(): Promise<OfficialAppCatalog> {
+  private async loadCatalog(signal?: AbortSignal): Promise<OfficialAppCatalog> {
     const response = await this.fetcher(
       new URL(`/official-apps/api-${this.hostApiVersion}/catalog.json`, this.origin),
-      { cache: 'no-store' },
+      { cache: 'no-store', ...(signal ? { signal } : {}) },
     )
     if (!response.ok) throw new Error('无法获取官方 APP 列表，请检查网络后重试')
     const catalog = (await response.json()) as OfficialAppCatalog
@@ -498,8 +498,9 @@ export class OfficialAppService {
   installMany(
     ids: readonly OfficialAppId[],
     onProgress?: (progress: OfficialAppInstallProgress) => void,
+    signal?: AbortSignal,
   ): Promise<OfficialAppInstallResult[]> {
-    return this.installBatch(ids, onProgress)
+    return this.installBatch(ids, onProgress, undefined, undefined, signal)
   }
 
   private async installBatch(
@@ -509,6 +510,7 @@ export class OfficialAppService {
     repairRevision?: number,
     signal?: AbortSignal,
   ): Promise<OfficialAppInstallResult[]> {
+    signal?.throwIfAborted()
     const ids = [...new Set(requested)]
     if (ids.some((id) => !isOfficialAppId(id))) throw new Error('APP 标识无效')
     if (!ids.length) return []
@@ -519,59 +521,72 @@ export class OfficialAppService {
         if (!downloadLock) throw new Error('另一个内置 APP 正在下载或更新，请完成后再试')
         // Hold the existing cross-tab mutation lock while reusing verified shared files.
         // Only two packages can be downloading/prepared; commits remain sequential.
-        return navigator.locks.request('srl-official-app-install', async () => {
-          const catalog = await this.catalog()
-          const verifiedFiles = new Map<string, string>()
-          const results: OfficialAppInstallResult[] = new Array(ids.length)
-          let next = 0
-          let commitTail = Promise.resolve()
-          for (const id of ids) onProgress?.({ id, stage: 'queued' })
-          const worker = async () => {
-            while (next < ids.length) {
-              const index = next++
-              const id = ids[index]!
-              const work = async () => {
+        return navigator.locks.request(
+          'srl-official-app-install',
+          { ...(signal ? { signal } : {}) },
+          async () => {
+            signal?.throwIfAborted()
+            const catalog = await (signal ? this.loadCatalog(signal) : this.catalog())
+            const verifiedFiles = new Map<string, string>()
+            const results: OfficialAppInstallResult[] = new Array(ids.length)
+            let next = 0
+            let commitTail = Promise.resolve()
+            for (const id of ids) onProgress?.({ id, stage: 'queued' })
+            const worker = async () => {
+              while (next < ids.length) {
                 signal?.throwIfAborted()
-                if (
-                  repairRevision !== undefined &&
-                  (await this.getInstalled(id))?.appContentRevision !== repairRevision
-                )
-                  return
-                const candidates = (catalog.apps[id] ?? []).filter(
-                  (candidate) =>
-                    repairRevision === undefined || candidate.appContentRevision === repairRevision,
-                )
-                const prepared = await this.prepareInstall(
-                  id,
-                  candidates,
-                  onProgress,
-                  verifiedFiles,
-                  signal,
-                )
-                onProgress?.({ id, stage: 'waiting' })
-                const commit = commitTail.then(() => {
+                const index = next++
+                const id = ids[index]!
+                const work = async () => {
                   signal?.throwIfAborted()
-                  return this.applyInstall(id, prepared, verifiedFiles, onProgress)
-                })
-                commitTail = commit.catch(() => {})
-                await commit
-              }
-              try {
-                if (id === heldApp) await work()
-                else await this.withExclusiveAppUse(id, '更新', work)
-                results[index] = { id }
-                onProgress?.({ id, stage: 'done' })
-              } catch (failure) {
-                if (signal?.aborted) throw signal.reason
-                const error = failure instanceof Error ? failure : new Error('APP 安装失败')
-                results[index] = { id, error }
-                onProgress?.({ id, stage: 'failed', message: error.message })
+                  if (
+                    repairRevision !== undefined &&
+                    (await this.getInstalled(id))?.appContentRevision !== repairRevision
+                  )
+                    return
+                  const candidates = (catalog.apps[id] ?? []).filter(
+                    (candidate) =>
+                      repairRevision === undefined ||
+                      candidate.appContentRevision === repairRevision,
+                  )
+                  const prepared = await this.prepareInstall(
+                    id,
+                    candidates,
+                    onProgress,
+                    verifiedFiles,
+                    signal,
+                  )
+                  onProgress?.({ id, stage: 'waiting' })
+                  const commit = commitTail.then(() => {
+                    signal?.throwIfAborted()
+                    return this.applyInstall(id, prepared, verifiedFiles, onProgress)
+                  })
+                  commitTail = commit.catch(() => {})
+                  await commit
+                }
+                try {
+                  if (id === heldApp) await work()
+                  else await this.withExclusiveAppUse(id, '更新', work)
+                  results[index] = { id }
+                  onProgress?.({ id, stage: 'done' })
+                } catch (failure) {
+                  if (signal?.aborted) throw signal.reason
+                  const error = failure instanceof Error ? failure : new Error('APP 安装失败')
+                  results[index] = { id, error }
+                  onProgress?.({ id, stage: 'failed', message: error.message })
+                }
               }
             }
-          }
-          await Promise.all(Array.from({ length: Math.min(2, ids.length) }, worker))
-          return results
-        })
+            // Wait for in-flight atomic commits before acknowledging a stop.
+            const workers = await Promise.allSettled(
+              Array.from({ length: Math.min(2, ids.length) }, worker),
+            )
+            signal?.throwIfAborted()
+            const failed = workers.find((result) => result.status === 'rejected')
+            if (failed?.status === 'rejected') throw failed.reason
+            return results
+          },
+        )
       },
     )
   }
@@ -649,6 +664,7 @@ export class OfficialAppService {
             totalBytes: download.downloadBytes,
           }),
         () => onProgress?.({ id, stage: 'checking' }),
+        signal,
       )
     if (!files['manifest.json'] || files['manifest.json'].length > 128 * 1024)
       throw new Error('APP 缺少文件清单')

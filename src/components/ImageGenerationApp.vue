@@ -3,6 +3,7 @@ import '../styles/ImageGenerationTouchFeedback.css'
 import ImageCharacterPromptPanel from './ImageCharacterPromptPanel.vue'
 import { proxyRefs } from 'vue'
 import FeatureAppHeader from './FeatureAppHeader.vue'
+import ImageHostingConnectionForm from './ImageHostingConnectionForm.vue'
 import {
   useImageGenerationApp,
   type ImageGenerationAppEvents,
@@ -994,19 +995,14 @@ const {
         </div>
       </header>
       <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-generation-hosting-controls -->
-      <div class="image-generation-hosting-form">
-        <label
-          ><span>Origin</span
-          ><input v-model="selfHostedOrigin" type="url" placeholder="https://img.example.com"
-        /></label>
-        <label><span>Token</span><input v-model="selfHostedToken" type="password" /></label>
-        <label class="image-generation-check"
-          ><input v-model="rememberSelfHosted" type="checkbox" /> 记住连接</label
-        >
-        <button type="button" @click="saveSelfHostedConnection">
-          {{ selfHostedReady ? '更新连接' : '保存连接' }}
-        </button>
-      </div>
+      <ImageHostingConnectionForm
+        v-model:origin="selfHostedOrigin"
+        v-model:token="selfHostedToken"
+        v-model:remember="rememberSelfHosted"
+        :connected="selfHostedReady"
+        :busy="hostingBusy || busy"
+        @submit="saveSelfHostedConnection"
+      />
       <button
         class="btn primary image-generation-primary"
         type="button"

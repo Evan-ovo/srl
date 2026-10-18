@@ -98,6 +98,8 @@
   min-height: 54px;
   border: 0;
   background: transparent;
+  border-radius: 0;
+  box-shadow: none;
   text-align: left;
 }
 .fw-home__project span {

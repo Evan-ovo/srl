@@ -116,7 +116,14 @@ describe('portable app migration', () => {
       database = db(),
       service = album(database)
     const read = vi.fn(async () => blob)
-    await service.importPortableState(result.snapshot.portableData.generatedImageAlbum!, read)
+    const progress = vi.fn()
+    await service.importPortableState(
+      result.snapshot.portableData.generatedImageAlbum!,
+      read,
+      undefined,
+      progress,
+    )
+    expect(progress.mock.calls).toEqual([['已保存图片'], ['已保存图片']])
     const expected = result.snapshot.portableData.generatedImageAlbum!.map((entry) => entry.item)
     expect(
       (await service.exportPortableState())
@@ -129,11 +136,15 @@ describe('portable app migration', () => {
       await hashCloudBlob(blob),
     )
     read.mockClear()
+    progress.mockClear()
     await album(database).importPortableState(
       result.snapshot.portableData.generatedImageAlbum!,
       read,
+      undefined,
+      progress,
     )
     expect(read).not.toHaveBeenCalled()
+    expect(progress).toHaveBeenCalledTimes(2)
     expect(await service.count()).toBe(2)
   })
 

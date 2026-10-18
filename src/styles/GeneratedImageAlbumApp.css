@@ -61,8 +61,7 @@
 
 .generated-album__search input,
 .generated-album__filters select,
-.generated-album__edit-fields input,
-.generated-album__connection > input {
+.generated-album__edit-fields input {
   box-sizing: border-box;
   min-width: 0;
   height: 2.25rem;
@@ -420,8 +419,7 @@
   font-weight: 700;
 }
 
-.generated-album__edit-fields input,
-.generated-album__connection > input {
+.generated-album__edit-fields input {
   width: 100%;
   padding: 0 0.55rem;
 }
@@ -481,13 +479,7 @@
   white-space: nowrap;
 }
 
-:is(
-    .generated-album__url,
-    .generated-album__hosting,
-    .generated-album__connection,
-    .generated-album__actions
-  )
-  button {
+:is(.generated-album__url, .generated-album__hosting, .generated-album__actions) button {
   min-height: var(--size-touch);
   font-family: var(--font-body);
   font-size: var(--text-body);
@@ -513,32 +505,6 @@
   border-color: var(--selection-border, var(--color-accent));
   color: var(--selection-color, var(--color-accent));
   background: var(--selection-background, var(--color-accent-soft));
-}
-
-.generated-album__connection {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 0.35rem;
-  margin-top: 0.45rem;
-}
-
-.generated-album__connection label {
-  display: flex;
-  grid-column: 1 / -1;
-  align-items: center;
-  min-height: var(--size-touch);
-  gap: 0.4rem;
-  color: var(--color-ink-soft);
-  font-size: var(--text-body);
-}
-
-.generated-album__connection label input {
-  width: 1rem;
-  height: 1rem;
-}
-
-.generated-album__connection button {
-  padding: 0 0.65rem;
 }
 
 .generated-album__hint {
@@ -624,14 +590,6 @@
   .generated-album__detail-copy {
     padding: 0.65rem;
     overflow: visible;
-  }
-
-  .generated-album__connection {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .generated-album__connection > input {
-    grid-column: 1 / -1;
   }
 }
 

@@ -380,6 +380,88 @@ describe('official APP package lifecycle', () => {
     return { service, fetcher, packages }
   }
 
+  it('aborts both package requests and never claims a third APP after stopping', async () => {
+    const { service, fetcher } = await batchFixture(['draw', 'stitch', 'chatReader'])
+    const original = fetcher.getMockImplementation()!
+    const signals: AbortSignal[] = []
+    fetcher.mockImplementation((input, options) => {
+      if (String(input).endsWith('catalog.json')) return original(input, options)
+      const signal = options!.signal!
+      signals.push(signal)
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+    })
+    const controller = new AbortController()
+    const result = service.installMany(
+      ['draw', 'stitch', 'chatReader'],
+      undefined,
+      controller.signal,
+    )
+    const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(signals).toHaveLength(2))
+    controller.abort()
+    await rejected
+    expect(signals.every((signal) => signal.aborted)).toBe(true)
+    expect(fetcher.mock.calls.some(([url]) => String(url).endsWith('/chatReader.srlapp'))).toBe(
+      false,
+    )
+    expect(records.size).toBe(0)
+  })
+
+  it('acknowledges a stop only after an active atomic save finishes and preserves that APP', async () => {
+    const { service } = await batchFixture(['draw', 'stitch', 'chatReader'])
+    const original = storage.save
+    let release!: () => void
+    storage.save = async (app) => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      await original(app)
+    }
+    const controller = new AbortController()
+    let settled = false
+    const result = service.installMany(
+      ['draw', 'stitch', 'chatReader'],
+      undefined,
+      controller.signal,
+    )
+    const rejected = expect(result)
+      .rejects.toMatchObject({ name: 'AbortError' })
+      .finally(() => {
+        settled = true
+      })
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    controller.abort()
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    release()
+    await rejected
+    expect(records.size).toBe(1)
+    expect(records.has('chatReader')).toBe(false)
+  })
+
+  it('cancels the private batch catalog request without affecting a shared catalog load', async () => {
+    const { service, fetcher } = await batchFixture(['draw'])
+    const original = fetcher.getMockImplementation()!
+    let batchSignal!: AbortSignal
+    fetcher.mockImplementation((input, options) => {
+      if (!options?.signal) return original(input, options)
+      batchSignal = options.signal
+      return new Promise((_resolve, reject) => {
+        batchSignal.addEventListener('abort', () => reject(batchSignal.reason), { once: true })
+      })
+    })
+    const controller = new AbortController()
+    const result = service.installMany(['draw'], undefined, controller.signal)
+    const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(batchSignal).toBeDefined())
+    controller.abort()
+    await rejected
+    await expect(service.catalog()).resolves.toMatchObject({ schemaVersion: 1 })
+    expect(records.size).toBe(0)
+  })
+
   it('downloads at most two packages together and commits files one APP at a time', async () => {
     const { service, fetcher, packages } = await batchFixture(['draw', 'stitch', 'chatReader'])
     const release = new Map<string, () => void>()

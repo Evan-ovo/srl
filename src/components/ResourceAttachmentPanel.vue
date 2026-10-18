@@ -15,6 +15,7 @@ import { formatBytes, downloadBlob } from '../utils/LibraryFormatting'
 import FeatureAppHeader from './FeatureAppHeader.vue'
 import ActionSheet, { type ActionSheetAction } from './ActionSheet.vue'
 import AttachmentDocumentPreview from './AttachmentDocumentPreview.vue'
+import ResourceAttachmentHistory from './ResourceAttachmentHistory.vue'
 import '../styles/ResourceAttachments.css'
 
 const props = defineProps<{ resource: Resource; initialItems: ResourceSummary[] }>()
@@ -36,9 +37,11 @@ const error = ref('')
 const status = ref('')
 const menu = ref<ResourceSummary>()
 const menuOpen = ref(false)
+const historyTarget = ref<ResourceSummary>()
+const historyPanel = ref<InstanceType<typeof ResourceAttachmentHistory>>()
 const picker = ref<HTMLInputElement>()
 const replacePicker = ref<HTMLInputElement>()
-const replacing = ref<Resource>()
+const replacing = ref<ResourceSummary>()
 const importing = ref(false)
 const paused = ref(false)
 let disposed = false
@@ -90,13 +93,13 @@ const actions = computed<ActionSheetAction[]>(() => [
   { id: 'rename', label: '重命名' },
   { id: 'replace', label: '替换文件' },
   { id: 'export', label: '导出' },
-  { id: 'original', label: '导出最初原件' },
+  { id: 'history', label: '历史版本' },
   { id: 'delete', label: '删除', danger: true },
 ])
 function trapTab(event: KeyboardEvent) {
   const controls = [
     ...(root.value?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled),input:not([hidden]):not(:disabled),textarea:not(:disabled),select:not(:disabled),iframe',
+      'button:not(:disabled),input:not([hidden]):not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],iframe',
     ) ?? []),
   ].filter((element) => element.getClientRects().length)
   const first = controls[0],
@@ -127,6 +130,11 @@ function showMenu(item?: ResourceSummary) {
   menu.value = item
   menuOpen.value = true
 }
+async function closeHistory() {
+  historyTarget.value = undefined
+  await nextTick()
+  root.value?.focus({ preventScroll: true })
+}
 function message(cause: unknown) {
   return cause instanceof Error ? cause.message : '操作失败，请重试'
 }
@@ -151,20 +159,12 @@ async function run(action: () => Promise<void>) {
     if (!disposed) busy.value = false
   }
 }
-async function open(
-  item: ResourceSummary,
-  action: 'open' | 'edit' | 'rename' | 'replace' = 'open',
-) {
+async function open(item: ResourceSummary, action: 'open' | 'edit' | 'rename' = 'open') {
   const token = ++revision
   await run(async () => {
     const file = await attachments.get(props.resource.id, item.id)
     if (disposed || token !== revision) return
     current.value = file
-    if (action === 'replace') {
-      replacing.value = file
-      replacePicker.value?.click()
-      return
-    }
     name.value = file.fileName
     if (action === 'edit') await startEdit()
     else mode.value = action === 'rename' ? 'rename' : 'view'
@@ -173,6 +173,8 @@ async function open(
 async function startEdit() {
   const file = current.value
   if (!file) return
+  if (!['word', 'txt'].includes(attachmentFormat(file.fileName)))
+    throw new Error('此格式仅支持阅读，不能编辑正文')
   const token = revision
   const input = new File([file.originalBlob], file.fileName, { type: file.mimeType })
   if (attachmentFormat(file.fileName) === 'word') {
@@ -230,6 +232,10 @@ async function save(): Promise<boolean> {
 }
 async function requestBack() {
   if (busy.value) return
+  if (historyTarget.value) {
+    historyPanel.value?.requestBack()
+    return
+  }
   if (menuOpen.value) {
     menuOpen.value = false
     return
@@ -361,15 +367,21 @@ async function selectAction(action: ActionSheetAction) {
   const item = menu.value
   if (!item) return
   menuOpen.value = false
-  if (['open', 'edit', 'rename', 'replace'].includes(action.id))
-    return open(item, action.id as 'open' | 'edit' | 'rename' | 'replace')
+  if (action.id === 'replace') {
+    if (busy.value || disposed) return
+    replacing.value = item
+    error.value = ''
+    // Keep the file picker in the menu's user gesture; read and validate after selection.
+    replacePicker.value?.click()
+    return
+  }
+  if (['open', 'edit', 'rename'].includes(action.id))
+    return open(item, action.id as 'open' | 'edit' | 'rename')
   if (action.id === 'export') return exportFile(item)
-  if (action.id === 'original')
-    return run(async () => {
-      const original = await attachments.original(props.resource.id, item.id)
-      await downloadBlob(original.originalBlob, original.fileName)
-      status.value = '最初原件已导出'
-    })
+  if (action.id === 'history') {
+    historyTarget.value = item
+    return
+  }
   if (
     action.id === 'delete' &&
     (await confirmAction({
@@ -408,6 +420,7 @@ defineExpose({ requestBack })
 <template>
   <Teleport to="body">
     <section
+      v-show="!historyTarget"
       ref="root"
       tabindex="-1"
       class="resource-attachments"
@@ -481,6 +494,7 @@ defineExpose({ requestBack })
         type="file"
         hidden
         aria-label="替换附件文件"
+        @cancel="replacing = undefined"
         @change="replaceFile"
       />
       <p v-if="error" class="resource-attachments__message" role="alert">{{ error }}</p>
@@ -581,5 +595,14 @@ defineExpose({ requestBack })
         @select="selectAction"
       />
     </section>
+    <ResourceAttachmentHistory
+      v-if="historyTarget"
+      :key="`${resource.id}:${historyTarget.id}`"
+      ref="historyPanel"
+      :owner-id="resource.id"
+      :attachment="historyTarget"
+      @close="closeHistory"
+      @changed="refresh([historyTarget!.id])"
+    />
   </Teleport>
 </template>

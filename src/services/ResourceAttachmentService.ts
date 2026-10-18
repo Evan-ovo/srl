@@ -88,21 +88,103 @@ export class ResourceAttachmentService {
     return resource
   }
 
-  async original(ownerId: string, id: string): Promise<Resource> {
-    const current = await this.get(ownerId, id)
-    const versions = await (this.storage.listVersionListSummariesForResources?.([id]) ??
+  private async historyParent(ownerId: string, id: string): Promise<void> {
+    await this.owner(ownerId)
+    const current = await (this.storage.getSummary?.(id) ?? this.storage.get(id))
+    if (!current || !isResourceAttachment(current) || resourceOwnedFileOwnerId(current) !== ownerId)
+      throw new Error('附件已移除或不属于当前资源')
+  }
+
+  async history(ownerId: string, id: string): Promise<ResourceSummary[]> {
+    await this.historyParent(ownerId, id)
+    const rows = await (this.storage.listVersionListSummariesForResources?.([id]) ??
       this.storage.listVersionSummaries())
-    const first = versions
-      .filter((r) => r.versionGroupId === id)
+    return rows
+      .filter(
+        (row) =>
+          row.versionGroupId === id &&
+          isResourceAttachment(row) &&
+          resourceOwnedFileOwnerId(row) === ownerId,
+      )
       .sort(
-        (a, b) => (a.versionImportedAt ?? a.createdAt) - (b.versionImportedAt ?? b.createdAt),
-      )[0]
-    if (!first) return current
-    const original = this.storage.getVersion
-      ? await this.storage.getVersion(first.id)
-      : (await this.storage.listVersions(id)).find((r) => r.id === first.id)
-    if (!original || original.versionGroupId !== id) throw new Error('历史原件已经不存在')
-    return original
+        (a, b) =>
+          (b.versionImportedAt ?? b.updatedAt) - (a.versionImportedAt ?? a.updatedAt) ||
+          a.id.localeCompare(b.id),
+      )
+  }
+
+  async getHistory(ownerId: string, id: string, versionId: string): Promise<Resource> {
+    await this.historyParent(ownerId, id)
+    const version = this.storage.getVersion
+      ? await this.storage.getVersion(versionId)
+      : (await this.storage.listVersions(id)).find((row) => row.id === versionId)
+    if (
+      !version ||
+      version.id === id ||
+      version.versionGroupId !== id ||
+      !isResourceAttachment(version) ||
+      resourceOwnedFileOwnerId(version) !== ownerId
+    )
+      throw new Error('历史版本已移除或不属于当前附件')
+    return version
+  }
+
+  async deleteHistory(
+    ownerId: string,
+    id: string,
+    versionId: string,
+    expectedHash: string,
+  ): Promise<void> {
+    await this.historyParent(ownerId, id)
+    const version = await (this.storage.getSummary?.(versionId, true) ??
+      this.getHistory(ownerId, id, versionId))
+    if (
+      !version ||
+      versionId === id ||
+      version.versionGroupId !== id ||
+      !isResourceAttachment(version) ||
+      resourceOwnedFileOwnerId(version) !== ownerId ||
+      version.contentHash !== expectedHash
+    )
+      throw new Error('历史版本已变化，请重新打开后操作')
+    await this.storage.deleteVersion(versionId)
+    if ((await this.history(ownerId, id)).some((row) => row.id === versionId))
+      throw new Error('历史版本删除后校验失败')
+  }
+
+  async restoreHistory(ownerId: string, id: string, version: Resource): Promise<void> {
+    await this.historyParent(ownerId, id)
+    if (
+      version.id === id ||
+      version.versionGroupId !== id ||
+      !isResourceAttachment(version) ||
+      resourceOwnedFileOwnerId(version) !== ownerId ||
+      nativeFileSize(version.originalBlob) !== version.fileSize ||
+      (await hashBlob(version.originalBlob)) !== version.contentHash
+    )
+      throw new Error('附件历史恢复记录无效')
+    const existing = this.storage.getVersion
+      ? await this.storage.getVersion(version.id)
+      : (await this.storage.listAllVersions()).find((row) => row.id === version.id)
+    if (existing?.versionGroupId === id && existing.contentHash === version.contentHash) return
+    if (
+      existing &&
+      (await this.history(ownerId, id)).some(
+        (row) =>
+          row.contentHash === version.contentHash &&
+          row.fileSize === version.fileSize &&
+          row.fileName === version.fileName &&
+          row.versionImportedAt === version.versionImportedAt &&
+          row.versionNote === version.versionNote &&
+          row.createdAt === version.createdAt,
+      )
+    )
+      return
+    const restored = { ...version, id: existing ? crypto.randomUUID() : version.id }
+    await this.storage.saveVersion(restored)
+    const saved = await this.getHistory(ownerId, id, restored.id)
+    if (saved.contentHash !== restored.contentHash || saved.fileSize !== restored.fileSize)
+      throw new Error('附件历史恢复后校验失败')
   }
 
   async rename(ownerId: string, id: string, fileName: string): Promise<void> {
