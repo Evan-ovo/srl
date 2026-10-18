@@ -400,3 +400,8 @@
 - CF命令行Public登录可核对目标账号/Worker，但Builds接口返回403；改用已有独立浏览器小号会话，在同一个Worker保存Build命令pnpm public:web-build和NODE_VERSION=24，原模板部署命令/根目录/Fork保持，刷新后回读一致。没有修改大号登录或扩大Token权限。页面仍有GitHub账号详情获取警告，需实际部署验证；浏览器保存为键盘提交，非pointer验收。设置截图只留聊天outputs，不加入公开仓库。
 - 首轮真实GitHub发行run39136925956在android-actions/setup-android@v3默认tools包安装失败（Failed to find package tools），尚未到签名或发布。改为明确packages=platform-tools，现有后续步骤继续装Android36平台与build-tools；同时不再输出许可证全文。只核验该配置/引用与增量隐私，再由下一次真实云构建验证；原本地业务测试无需因配置变更全量重跑。
 - 公开增量基线e581b18e125dae1fbecf76aecf26b9ab6f70ace3，本轮仅工作流和现有记录，全部新增内容审计，不含二进制或真实私人地址/邮箱/密码。提交使用对应GitHub noreply；未使用实体手机，旧被拒清理目标和用户并行工作不动。
+
+## 2026-10-18：云端新版 apksigner 输出兼容
+
+- run39137127754已通过客户端回归、知识/功能合同、网页生产构建及APK编译；apksigner输出Verifies和原证书SHA，但以V2 Signer开头，旧脚本仅接受Signer #1，因无法读取指纹停止，未公开发行。复用主库已提交6b8d0192e274c09597d9a59eda87257d56ef59f8的单行解析修复，同时接受新旧格式，仍严格比较预期证书；不绕过验签、不固定旧SDK或修改业务功能。
+- PowerShell AST无错误，新旧及无效指纹5例通过、diff格式通过；原证书元数据不含邮箱或URL。以已审计6881d6cf796ca38859f98f2f4f4b3e33a9e1ec87为增量基线，仅本次脚本/进度/日志三路径，公开前复核新增内容和noreply邮箱。本条所属提交作为下一内容基线；云端签名发行与小号Fork自动部署仍待实际回执，未使用实体手机。

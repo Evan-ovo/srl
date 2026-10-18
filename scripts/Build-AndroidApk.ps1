@@ -363,7 +363,7 @@ try {
         $signatureOutput = @(& $apkSigner verify --verbose --print-certs $apkPath 2>&1)
         if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed: $apkPath" }
         $signatureOutput | ForEach-Object { Write-Host $_ }
-        $certificateMatch = [regex]::Match(($signatureOutput -join "`n"), '(?im)^Signer #1 certificate SHA-256 digest:\s*([0-9a-f]{64})\s*$')
+        $certificateMatch = [regex]::Match(($signatureOutput -join "`n"), '(?im)^(?:Signer #1 certificate|V[0-9.]+ Signer: certificate) SHA-256 digest:\s*([0-9a-f]{64})\s*$')
         if (-not $certificateMatch.Success) { throw 'Could not read APK certificate SHA-256.' }
         if ($ExpectedCertificateSha256 -and $certificateMatch.Groups[1].Value -ne $ExpectedCertificateSha256) {
             throw '新 APK 的签名证书与正式发行基线不一致，停止发布。'
