@@ -66,6 +66,8 @@ import {
 } from '../services/BackupScopeRegistry'
 
 import { downloadBlob } from '../utils/LibraryFormatting'
+import type { StructuredRestoreFailure } from '../types/Backup'
+import type { CloudDownloadProgress } from '../services/CloudBackupTransport'
 
 import { taskCenter } from '../core/TaskCenter'
 
@@ -215,6 +217,7 @@ export function useCloudBackupCenter(
       message.value = '云备份仍在进行，请完成后再恢复。'
       return
     }
+    if (name.startsWith('download:')) downloadProgress.value = undefined
     busyAction.value = name
     try {
       const title =
@@ -269,6 +272,11 @@ export function useCloudBackupCenter(
   const restoreProgress = ref<ArchiveRestoreProgress>()
   const restorePhase = ref<'manifest' | 'prepare' | 'commit' | 'extras'>('manifest')
   const restoreOperation = ref('')
+  const restoreFailures = ref<StructuredRestoreFailure[]>([])
+  const downloadProgress = ref<CloudDownloadProgress>()
+  const downloadOperation = ref('')
+  let downloadController: AbortController | undefined
+  const stopDownload = () => downloadOperation.value && taskCenter.cancel(downloadOperation.value)
   let restoreController: AbortController | undefined
   const stopRestore = () => restoreOperation.value && taskCenter.cancel(restoreOperation.value)
 
@@ -828,7 +836,8 @@ export function useCloudBackupCenter(
     )
   }
 
-  async function restore(item: CloudBackupItem): Promise<void> {
+  async function restore(item: CloudBackupItem, retry = false): Promise<void> {
+    const retryFailures = retry ? [...restoreFailures.value] : undefined
     const target = restoreTarget()
     if (
       (listedTarget && listedTarget !== target) ||
@@ -874,6 +883,7 @@ export function useCloudBackupCenter(
       return
     }
     if (
+      !retry &&
       !(await confirmAction({
         title: '从云端导入',
         message: `将从“${item.objectKey}”导入选中的 ${selectedKeys.length} 项资源和勾选的附加数据吗？预计新增 ${restorePreview.value.added} 项，已有内容 ${restorePreview.value.skipped} 项；${restorePreview.value.conflicts} 项 ID 冲突将保留两份。历史另行合并，实际以导入结果为准；不会清空现有资源。${selectedRestoreScopes.value.includes('extra.credentials') ? '该备份可能包含你明确选择迁移的 API 凭据，恢复后会写入本机受保护存储。' : ''}`,
@@ -884,7 +894,9 @@ export function useCloudBackupCenter(
     if (disposed || target !== restoreTarget()) return
     if (!(await saveConfig(true))) return
     busyAction.value = `restore:${item.id}`
-    message.value = '正在下载、校验并合并备份…'
+    nativeStateGeneration++
+    message.value = '正在下载、校验并逐组保存备份…'
+    restoreFailures.value = []
     restoreProgress.value = undefined
     restorePhase.value = 'manifest'
     const controller = new AbortController()
@@ -894,7 +906,7 @@ export function useCloudBackupCenter(
       acknowledgeStop = resolve
     })
     const operationId =
-      !nativeTransport && (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot')
+      item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot'
         ? taskCenter.start({
             name: '从云端导入本机',
             keepAlive: true,
@@ -907,8 +919,27 @@ export function useCloudBackupCenter(
           })
         : ''
     restoreOperation.value = operationId
+    let changes: import('../types/Backup').RestoreReport | undefined
+    const refreshIds = new Set<string>()
+    const reportedIds = new Set<string>()
+    let refreshCategories = false
+    let lastRefreshAt = 0
+    let refreshTimer: number | undefined
+    const refreshInterval = 1_000
+    const flushRefresh = () => {
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+      refreshTimer = undefined
+      if (!changes || disposed || (!refreshIds.size && !refreshCategories)) return
+      emit('library-changed', {
+        ...changes,
+        resourceIds: [...refreshIds],
+        categoriesChanged: refreshCategories,
+      })
+      refreshIds.clear()
+      refreshCategories = false
+      lastRefreshAt = Date.now()
+    }
     try {
-      let changes: import('../types/Backup').RestoreReport | undefined
       const count = await cloudBackupService.restoreBackup(
         item,
         confirmPortableCredentialImport,
@@ -917,8 +948,20 @@ export function useCloudBackupCenter(
         [...selectedRestoreScopes.value],
         (report) => {
           changes = report
+          for (const id of report.resourceIds ?? []) {
+            if (reportedIds.has(id)) continue
+            reportedIds.add(id)
+            refreshIds.add(id)
+          }
+          refreshCategories ||= report.categoriesChanged === true
+          if (!refreshIds.size && !refreshCategories) return
+          const elapsed = Date.now() - lastRefreshAt
+          if (elapsed >= refreshInterval) flushRefresh()
+          else if (refreshTimer === undefined)
+            refreshTimer = window.setTimeout(flushRefresh, refreshInterval - elapsed)
         },
         {
+          retryFailures,
           signal: controller.signal,
           onPhase: (phase) => {
             if (disposed) return
@@ -944,7 +987,7 @@ export function useCloudBackupCenter(
                 phase,
                 progress: progress.total ? progress.completed / progress.total : undefined,
                 itemProgress: { completed: progress.completed, total: progress.total },
-                cancelable: progress.phase === 'prepare',
+                cancelable: true,
               })
               if (progress.transferredBytes !== undefined)
                 taskCenter.updateTransfer(operationId, {
@@ -960,31 +1003,55 @@ export function useCloudBackupCenter(
         },
       )
       if (operationId) taskCenter.complete(operationId)
-      message.value = count
-        ? `所选内容已导入，加入 ${count} 项新资源`
-        : '所选内容已导入，没有新增资源'
+      restoreFailures.value = changes?.failures ?? []
+      message.value = restoreFailures.value.length
+        ? `本轮已保存 ${count} 项新资源`
+        : count
+          ? `所选内容已导入，加入 ${count} 项新资源`
+          : '所选内容已导入，没有新增资源'
       if (changes?.restoredCommunitySources !== undefined)
         message.value += `；Discord 帖子 ${changes.restoredCommunitySources} 个，消息 ${changes.restoredCommunityMessages ?? 0} 条`
-      if (changes?.resourceIds) {
-        if (changes.resourceIds.length || changes.categoriesChanged)
-          emit('library-changed', changes)
-      } else if (selectedKeys.length) emit('library-changed')
-      restorePicker.value = undefined
-      selectedRestoreKeys.value = new Set()
+      restoreFailures.value = changes?.failures ?? []
+      if (restoreFailures.value.length)
+        message.value += `；${restoreFailures.value.length} 项未完成，可在下方手动重试`
+      if (!changes?.resourceIds && selectedKeys.length) emit('library-changed')
+      if (!restoreFailures.value.length) {
+        restorePicker.value = undefined
+        selectedRestoreKeys.value = new Set()
+      }
     } catch (error) {
       if (controller.signal.aborted) {
         if (operationId) taskCenter.cancelled(operationId)
-        message.value = '已停止本次导入；本次未提交的资源已回滚，原有资源保留。'
+        restoreFailures.value = []
+        message.value = '已停止本次导入；已经保存的内容保留，不会自动重试。'
       } else {
         if (operationId) taskCenter.fail(operationId, error)
         message.value = error instanceof Error ? error.message : '云端导入失败'
       }
     } finally {
+      flushRefresh()
       acknowledgeStop()
       restoreOperation.value = ''
       if (restoreController === controller) restoreController = undefined
       busyAction.value = ''
     }
+  }
+
+  async function dismissRestoreFailures(): Promise<void> {
+    const id = await cloudBackupService.discardRestoreFailures()
+    if (id) {
+      noticeCenter.dismiss('cloud-restore:' + id)
+      pendingRestores.value = pendingRestores.value.filter((record) => record.id !== id)
+    }
+    restoreFailures.value = []
+    nativeStateGeneration++
+    await closeRestorePicker()
+    message.value = '本轮导入已结束；成功内容已保留，不会自动重试。'
+  }
+  async function retryRestoreFailures(): Promise<void> {
+    const item = restorePicker.value?.item
+    if (!item || !restoreFailures.value.length) return
+    await runCloudAction('restore:' + item.id, () => restore(item, true))
   }
 
   async function closeRestorePicker(): Promise<void> {
@@ -1021,14 +1088,53 @@ export function useCloudBackupCenter(
     if (!(await saveConfig(true))) return
     busyAction.value = `download:${item.id}`
     message.value = '正在读取、下载并生成备份归档…'
+    const controller = new AbortController()
+    downloadController = controller
+    downloadProgress.value = {
+      phase: 'manifest',
+      completed: 0,
+      total: 0,
+      receivedBytes: 0,
+      writtenBytes: 0,
+    }
+    let acknowledgeStop!: () => void
+    const stopped = new Promise<void>((resolve) => {
+      acknowledgeStop = resolve
+    })
     const operationId = taskCenter.start({
       name: '下载云备份',
       phase: '读取、下载并生成归档',
       keepAlive: true,
+      cancelable: true,
+      cancel: () => {
+        controller.abort(new DOMException('已停止云备份下载', 'AbortError'))
+        taskCenter.update(operationId, { phase: '正在停止下载…' })
+        return stopped
+      },
     })
+    downloadOperation.value = operationId
     try {
-      const blob = await cloudBackupService.downloadBackup(item)
-      taskCenter.update(operationId, { phase: '等待保存或系统分享' })
+      const blob = await cloudBackupService.downloadBackup(item, undefined, undefined, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (disposed || controller.signal.aborted || downloadController !== controller) return
+          downloadProgress.value = progress
+          taskCenter.update(operationId, {
+            phase: progress.phase === 'manifest' ? '正在读取备份清单' : '正在下载、校验并生成 ZIP',
+            itemProgress: progress.total
+              ? { completed: progress.completed, total: progress.total }
+              : undefined,
+          })
+          taskCenter.updateTransfer(operationId, { transferredBytes: progress.receivedBytes })
+          taskCenter.update(operationId, {
+            progress: progress.total ? progress.completed / progress.total : undefined,
+          })
+        },
+      })
+      controller.signal.throwIfAborted()
+      taskCenter.update(operationId, { phase: '等待保存或系统分享', cancelable: false })
+      downloadOperation.value = ''
+      downloadController = undefined
       message.value = '归档已生成，正在交给系统保存或分享…'
       await downloadBlob(blob, item.archiveName ?? item.objectKey)
       taskCenter.complete(operationId)
@@ -1036,11 +1142,24 @@ export function useCloudBackupCenter(
         ? '已交给系统分享；请在目标应用中确认保存'
         : '已交给浏览器下载；保存结果请查看浏览器下载列表'
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') taskCenter.cancelled(operationId)
+      const cancelled =
+        controller.signal.aborted ||
+        (typeof error === 'object' &&
+          error !== null &&
+          'name' in error &&
+          error.name === 'AbortError')
+      if (cancelled) taskCenter.cancelled(operationId)
       else taskCenter.fail(operationId, error)
-      message.value = error instanceof Error ? error.message : '下载失败'
+      message.value = cancelled
+        ? '已取消下载或保存'
+        : error instanceof Error
+          ? error.message
+          : '下载失败'
     } finally {
+      acknowledgeStop()
       busyAction.value = ''
+      downloadOperation.value = ''
+      if (downloadController === controller) downloadController = undefined
     }
   }
 
@@ -1140,11 +1259,12 @@ export function useCloudBackupCenter(
       refreshSnapshot()
       editingCredential.value.github = snapshot.value.credentials.github !== 'valid'
       editingCredential.value.webdav = snapshot.value.credentials.webdav !== 'valid'
-      if (nativeTransport)
+      if (nativeTransport) {
+        const restoreGeneration = nativeStateGeneration
         void cloudBackupService
           .pendingNativeRestores()
           .then((records) => {
-            if (disposed) return
+            if (disposed || restoreGeneration !== nativeStateGeneration) return
             pendingRestores.value = records.filter((record) => record.restore)
             for (const record of records) {
               if (!record.restore) continue
@@ -1164,14 +1284,17 @@ export function useCloudBackupCenter(
             }
           })
           .catch(() => {
-            if (!disposed) message.value = '暂时无法读取云恢复检查点，请保留原备份后重试'
+            if (!disposed && restoreGeneration === nativeStateGeneration)
+              message.value = '暂时无法读取云恢复检查点，请保留原备份后重试'
           })
+      }
     })
   })
 
   onUnmounted(() => {
     disposed = true
-    if (restoreProgress.value?.phase !== 'commit')
+    downloadController?.abort(new DOMException('已离开云备份下载页面', 'AbortError'))
+    if (restorePhase.value !== 'extras')
       restoreController?.abort(new DOMException('已离开云恢复页面', 'AbortError'))
     removeWebBackupListener?.()
     void cloudBackupService.clearRestorePreview()
@@ -1198,6 +1321,12 @@ export function useCloudBackupCenter(
     loadBackups: () => runCloudAction('list', loadBackups),
     message,
     restoreProgress,
+    restoreFailures,
+    retryRestoreFailures,
+    dismissRestoreFailures,
+    downloadProgress,
+    downloadOperation,
+    stopDownload,
     restorePhase,
     restoreOperation,
     stopRestore,

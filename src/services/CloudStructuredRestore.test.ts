@@ -429,7 +429,7 @@ describe('structured cloud restore', () => {
   })
 
   it.each([1, 3, 'byte-budget'] as const)(
-    'prepares cloud resources with bounded concurrency %s and ordered staging progress',
+    'commits independent cloud groups with bounded concurrency %s and real saved counters',
     async (mode) => {
       const concurrency = mode === 'byte-budget' ? 1 : mode
       const records = await Promise.all(
@@ -475,9 +475,11 @@ describe('structured cloud restore', () => {
       await operation
       expect(peak).toBe(concurrency)
       expect(reader).toHaveBeenCalledTimes(6)
-      expect(bodies).toEqual(await Promise.all(records.map((r) => r.originalBlob.text())))
+      expect(bodies.sort()).toEqual(
+        (await Promise.all(records.map((r) => r.originalBlob.text()))).sort(),
+      )
       expect(progress).toHaveBeenCalledWith(
-        expect.objectContaining({ phase: 'prepare', completed: 6, total: 6 }),
+        expect.objectContaining({ phase: 'prepare', completed: 0, total: 6 }),
       )
       expect(progress).toHaveBeenLastCalledWith(
         expect.objectContaining({ phase: 'commit', completed: 6, total: 6 }),
@@ -485,33 +487,164 @@ describe('structured cloud restore', () => {
     },
   )
 
-  it('stops scheduling on the first preparation failure, aborts peers and preserves the original cause', async () => {
-    const records = await Promise.all(Array.from({ length: 6 }, (_, i) => resource(`stop-${i}`)))
+  it('lets later independent groups commit while the head waits, records a failed file, and retries without downloading successes', async () => {
+    const records = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => resource(`continue-${i}`)),
+    )
+    const snapshot = (await createStructuredSnapshot(records, [], [], { version: 1 })).snapshot
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const saved: Resource[] = []
+    const storage = {
+      replace: vi.fn(),
+      restore: async (
+        _categories: unknown,
+        rows: Resource[],
+        _versions: unknown,
+        hydrate?: (record: Resource) => Promise<Resource>,
+      ) => {
+        const ready: Resource[] = []
+        for (const row of rows) ready.push(hydrate ? await hydrate(row) : row)
+        saved.push(...ready)
+      },
+    }
+    const service = new RestoreService(storage)
+    const reader = vi.fn(async (object: GitHubBundleManifest) => {
+      if (object.fileName === records[0]!.fileName) await barrier
+      if (object.fileName === records[1]!.fileName) throw new Error('one missing object')
+      return records.find((record) => record.fileName === object.fileName)!.originalBlob
+    })
+    const operation = service.restoreStructured(snapshot, reader, [], [], 'continue')
+    await vi.waitFor(() => expect(saved).toHaveLength(4))
+    expect(saved.some((record) => record.id === records[0]!.id)).toBe(false)
+    release()
+    const report = await operation
+    expect(report.restoredResources).toBe(5)
+    expect(report.failures).toEqual([
+      expect.objectContaining({ id: records[1]!.id, error: 'one missing object' }),
+    ])
+    reader.mockClear()
+    reader.mockImplementation(
+      async (object) => records.find((record) => record.fileName === object.fileName)!.originalBlob,
+    )
+    const retried = await service.restoreStructured(snapshot, reader, saved, [], 'retry')
+    expect(retried.restoredResources).toBe(1)
+    expect(retried.failures).toEqual([])
+    expect(reader).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ fileName: records[1]!.fileName }),
+    )
+  })
+
+  it('keeps committed IndexedDB groups after cancellation and a reopened import downloads only unfinished originals', async () => {
+    const name = `structured-resume-${crypto.randomUUID()}`
+    let database = new AppDatabase(name)
+    const records = await Promise.all(['saved', 'pending', 'later'].map(resource))
     const snapshot = (await createStructuredSnapshot(records, [], [], { version: 1 })).snapshot
     const controller = new AbortController()
-    const failure = new Error('fixture download interrupted')
-    const reader = vi.fn(async (object: GitHubBundleManifest) => {
-      if (object.fileName === records[1]!.fileName) throw failure
-      return new Promise<Blob>((_resolve, reject) => {
-        controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {
-          once: true,
-        })
-      })
-    })
-    const service = new RestoreService({
+    const stopped = new DOMException('user stopped', 'AbortError')
+    const reader = vi.fn(
+      async (object: GitHubBundleManifest) =>
+        records.find((r) => r.fileName === object.fileName)!.originalBlob,
+    )
+    try {
+      const service = new RestoreService(new IndexedDbArchiveStorage(database))
+      await expect(
+        service.restoreStructured(snapshot, reader, [], [], 'cancel', {
+          concurrency: 1,
+          signal: controller.signal,
+          onCommitted: () => controller.abort(stopped),
+        }),
+      ).rejects.toBe(stopped)
+      expect(reader).toHaveBeenCalledOnce()
+      expect(await database.resources.count()).toBe(1)
+      database.close()
+      database = new AppDatabase(name)
+      const saved = await database.resources.toArray()
+      reader.mockClear()
+      const report = await new RestoreService(
+        new IndexedDbArchiveStorage(database),
+      ).restoreStructured(snapshot, reader, saved as Resource[], [], 'resume')
+      expect(report.restoredResources).toBe(2)
+      expect(reader).toHaveBeenCalledTimes(2)
+      expect(await database.resources.count()).toBe(3)
+      expect(await database.restoreStaging.count()).toBe(0)
+    } finally {
+      database.close()
+      await database.delete()
+    }
+  })
+
+  it('keeps a connected resource group atomic when an attachment fails while unrelated resources commit', async () => {
+    const database = new AppDatabase(`structured-dependency-${crypto.randomUUID()}`)
+    const owner = await resource('owner')
+    const attachment = await resource('attachment')
+    owner.relatedResourceIds = [attachment.id]
+    const unrelated = await resource('unrelated')
+    const records = [owner, attachment, unrelated]
+    const snapshot = (await createStructuredSnapshot(records, [], [], { version: 1 })).snapshot
+    try {
+      const report = await new RestoreService(
+        new IndexedDbArchiveStorage(database),
+      ).restoreStructured(
+        snapshot,
+        async (object) => {
+          if (object.fileName === attachment.fileName) throw new Error('attachment unavailable')
+          return records.find((r) => r.fileName === object.fileName)!.originalBlob
+        },
+        [],
+        [],
+        'dependency',
+      )
+      expect(report.restoredResources).toBe(1)
+      expect(report.failures).toHaveLength(2)
+      expect((await database.resources.toArray()).map((r) => r.id)).toEqual([unrelated.id])
+      expect(await database.restoreStaging.count()).toBe(0)
+    } finally {
+      database.close()
+      await database.delete()
+    }
+  })
+
+  it('commits progressive native references through the same planner without reading binary bodies into JS', async () => {
+    const records = await Promise.all(['native-saved', 'native-failed'].map(resource))
+    for (const record of records) record.type = RESOURCE_TYPE.OTHER
+    const snapshot = (await createStructuredSnapshot(records, [], [], { version: 1 })).snapshot
+    const saved: import('../types/Vault').NativeBackedResourceRecord[] = []
+    const storage = {
       replace: vi.fn(),
-      restore: async (_categories, resources, _versions, hydrate) => {
-        await hydrate!(resources[0]!)
-      },
+      restore: vi.fn(),
+      canRestoreNative: () => true,
+      restoreNative: vi.fn(async (_categories, rows, _versions, hydrate) => {
+        for (const row of rows) saved.push(await hydrate(row))
+      }) as import('../storage/ArchiveStorageAdapter').ArchiveStorageAdapter['restoreNative'],
+    }
+    const reader = vi.fn(async () => {
+      throw new Error('binary bridge forbidden')
     })
-    await expect(
-      service.restoreStructured(snapshot, reader, [], [], 'stop', {
-        signal: controller.signal,
-        onFailure: (error) => controller.abort(error),
-      }),
-    ).rejects.toBe(failure)
-    expect(controller.signal.aborted).toBe(true)
-    expect(reader).toHaveBeenCalledTimes(3)
+    const ready = vi.fn(async (record: Resource) => {
+      if (record.id === records[1]!.id) throw new Error('native missing file')
+    })
+    const report = await new RestoreService(storage).restoreStructured(
+      snapshot,
+      reader,
+      [],
+      [],
+      'native',
+      { nativePrepare: ready },
+    )
+    expect(report.restoredResources).toBe(1)
+    expect(report.failures).toEqual([
+      expect.objectContaining({ id: records[1]!.id, error: 'native missing file' }),
+    ])
+    expect(saved).toHaveLength(1)
+    expect(saved[0]).toMatchObject({
+      nativeOriginal: { contentHash: records[0]!.contentHash, size: records[0]!.fileSize },
+    })
+    expect(saved[0]).not.toHaveProperty('originalBlob')
+    expect(reader).not.toHaveBeenCalled()
+    expect(storage.restore).not.toHaveBeenCalled()
   })
 
   it('does not scan local history when restoring settings or resources without versions', async () => {
@@ -726,17 +859,17 @@ describe('structured cloud restore', () => {
     await storage.restore([], [existing])
     const snapshot = (await createStructuredSnapshot([source], [], [], { version: 1 })).snapshot
     try {
-      await expect(
-        service.restoreStructured(
-          snapshot,
-          async () => {
-            throw new Error('download interrupted')
-          },
-          [existing],
-          [],
-          'snapshot',
-        ),
-      ).rejects.toThrow('download interrupted')
+      const report = await service.restoreStructured(
+        snapshot,
+        async () => {
+          throw new Error('download interrupted')
+        },
+        [existing],
+        [],
+        'snapshot',
+      )
+      expect(report.restoredResources).toBe(0)
+      expect(report.failures).toEqual([expect.objectContaining({ error: 'download interrupted' })])
       expect(await database.resources.count()).toBe(1)
       expect(await database.resources.get(source.id)).toBeUndefined()
       const retained = (await database.resources.get(existing.id))!

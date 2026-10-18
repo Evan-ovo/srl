@@ -10,6 +10,8 @@ import type {
 import type { CloudObjectSource } from './CloudStructuredSnapshot'
 
 interface NativeCloudJobStatus {
+  requestId?: string
+  resourceResults?: Array<{ hash: string; error?: string }>
   id: string
   kind?: 'upload' | 'restore'
   provider: CloudBackupProvider
@@ -111,11 +113,14 @@ interface NativeCloudTransferPlugin {
     kind?: 'upload' | 'restore'
   }): Promise<(NativeCloudJobStatus & { present: true }) | { present: false }>
   cancelJob(options: { jobId: string }): Promise<{ cancelled: boolean; status: string }>
+  cancelRestore(options: { requestId: string }): Promise<void>
   restoreStructuredFiles(options: {
     config: Record<string, unknown>
     secret: string
     objects: NativeRestoreObject[]
     resources: NativeRestoreResource[]
+    requestId?: string
+    progressive?: boolean
   }): Promise<NativeRestoreResult>
   readRestoredCardMetadata(options: {
     hash: string
@@ -171,6 +176,7 @@ export interface NativeRestoreResult {
   downloaded: number
   reused: number
   assembled: number
+  failures?: Array<{ hash: string; error: string }>
 }
 
 function monotonicNow(): number {
@@ -625,23 +631,55 @@ export async function restoreNativeStructuredObjects(options: {
   secret: string
   objects: NativeRestoreObject[]
   resources: NativeRestoreResource[]
+  signal?: AbortSignal
+  onResource?: (hash: string, error?: string) => void
 }): Promise<NativeRestoreResult> {
   if (!isNativeCloudTransferAvailable()) throw new Error('当前不是 Android 原生恢复环境')
   if (!options.secret) throw new Error('Android 原生恢复缺少云端凭据')
+  options.signal?.throwIfAborted()
+  const requestId = crypto.randomUUID()
+  const delivered = new Set<string>()
+  const dispatch = (hash: string, error?: string) => {
+    if (options.signal?.aborted || delivered.has(hash)) return
+    delivered.add(hash)
+    options.onResource?.(hash, error)
+  }
+  let cancel: Promise<void> | undefined
+  const abort = () => {
+    cancel ??= nativeTransfer.cancelRestore({ requestId }).catch(() => undefined)
+  }
+  const listener = options.onResource
+    ? await nativeTransfer.addListener('jobProgress', (state) => {
+        if (state.requestId !== requestId) return
+        for (const result of state.resourceResults ?? []) dispatch(result.hash, result.error)
+      })
+    : undefined
+  options.signal?.addEventListener('abort', abort, { once: true })
   try {
-    return await nativeTransfer.restoreStructuredFiles({
+    options.signal?.throwIfAborted()
+    const result = await nativeTransfer.restoreStructuredFiles({
       config: options.config as unknown as Record<string, unknown>,
       secret: options.secret,
       objects: options.objects,
       resources: options.resources,
+      ...(options.onResource || options.signal ? { requestId, progressive: true } : {}),
     })
+    options.signal?.throwIfAborted()
+    const failures = new Map(result.failures?.map((failure) => [failure.hash, failure.error]))
+    for (const resource of options.resources) dispatch(resource.hash, failures.get(resource.hash))
+    return result
   } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason
     if (error instanceof Error && 'code' in error && error.code === 'UNIMPLEMENTED') {
       throw new Error('请更新 Android APK 后再从云端导入；当前版本不支持逐项恢复。', {
         cause: error,
       })
     }
     throw error
+  } finally {
+    options.signal?.removeEventListener('abort', abort)
+    await cancel
+    await listener?.remove()
   }
 }
 

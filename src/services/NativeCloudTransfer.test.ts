@@ -25,6 +25,8 @@ const transfer = vi.hoisted(() => ({
   cancelJob: vi.fn(),
   restoreStructuredFiles: vi.fn(),
   readRestoredCardMetadata: vi.fn(),
+  addListener: vi.fn(),
+  cancelRestore: vi.fn(),
 }))
 const security = vi.hoisted(() => ({ requestNotifications: vi.fn() }))
 
@@ -126,6 +128,55 @@ describe('NativeCloudTransfer', () => {
     })
     expect(transfer.appendObject).not.toHaveBeenCalled()
     expect(transfer.readRestoredCardMetadata).not.toHaveBeenCalled()
+  })
+
+  it('delivers verified originals before the final reply, isolates request IDs, and cancels without late resurrection', async () => {
+    const controller = new AbortController()
+    const remove = vi.fn(async () => undefined)
+    let listener!: (state: Record<string, unknown>) => void
+    transfer.addListener.mockImplementation(async (_event, callback) => {
+      listener = callback
+      return { remove }
+    })
+    transfer.cancelRestore.mockResolvedValue(undefined)
+    let finish!: (result: { downloaded: number; reused: number; assembled: number }) => void
+    transfer.restoreStructuredFiles.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const onResource = vi.fn()
+    const hash = 'a'.repeat(64)
+    const operation = restoreNativeStructuredObjects({
+      config: {
+        provider: 'github',
+        owner: 'owner',
+        repository: 'repo',
+        retention: 1,
+        autoBackup: false,
+      },
+      secret: 'fixture',
+      objects: [],
+      resources: [{ hash, size: 1, type: 'other', fileName: 'a.bin', segments: [] }],
+      signal: controller.signal,
+      onResource,
+    })
+    await vi.waitFor(() => expect(transfer.restoreStructuredFiles).toHaveBeenCalledOnce())
+    const { requestId } = transfer.restoreStructuredFiles.mock.calls[0]![0]
+    listener({ requestId: 'another-request', resourceResults: [{ hash }] })
+    expect(onResource).not.toHaveBeenCalled()
+    listener({ requestId, resourceResults: [{ hash }] })
+    expect(onResource).toHaveBeenCalledExactlyOnceWith(hash, undefined)
+    const stopped = new DOMException('stopped', 'AbortError')
+    const rejected = expect(operation).rejects.toBe(stopped)
+    controller.abort(stopped)
+    listener({ requestId, resourceResults: [{ hash: 'b'.repeat(64) }] })
+    finish({ downloaded: 2, reused: 0, assembled: 2 })
+    await rejected
+    expect(transfer.cancelRestore).toHaveBeenCalledExactlyOnceWith({ requestId })
+    expect(onResource).toHaveBeenCalledOnce()
+    expect(remove).toHaveBeenCalledOnce()
   })
 
   it('queries restore jobs separately so a download never becomes an upload or backup-success record', async () => {

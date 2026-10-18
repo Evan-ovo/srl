@@ -291,7 +291,7 @@ describe('bounded GitHub chunk read ahead', () => {
     expect(test.started.filter((id) => id === 2)).toHaveLength(1)
   })
 
-  it('fails fast on out-of-order corruption, aborts and drains all active resource reads, then allows a clean explicit retry', async () => {
+  it('isolates corruption to its resource, drains its reads and leaves other resources running', async () => {
     const test = await fixture([['head', 'next', 'tail', 'more'], ['else']])
     test.delayAborts()
     const reader = await createGitHubObjectReader(test.context, config, 'fixture')
@@ -301,18 +301,19 @@ describe('bounded GitHub chunk read ahead', () => {
       return result
     })
     await until(() => test.started.length === 3)
-    const activeBatch = [...test.started]
-    expect(activeBatch).toContain(2)
+    expect(test.started).toContain(2)
     test.finish(2, new Blob(['BAD!']))
-    await until(() => test.aborted.length === 2)
+    await until(() => test.aborted.length >= 1)
+    expect(test.aborted).not.toContain(5)
     expect(settled).toBe(false)
-    expect(test.started).toEqual(activeBatch)
     test.releaseAborts()
+    await until(() => test.started.includes(5))
+    test.finish(5)
     const failures = await results
-    for (const failure of failures) {
-      expect(failure.status).toBe('rejected')
-      if (failure.status === 'rejected') expect(failure.reason.message).toContain('分块校验失败')
-    }
+    expect(failures[0]!.status).toBe('rejected')
+    expect(failures[1]!.status).toBe('fulfilled')
+    if (failures[0]!.status === 'rejected')
+      expect(failures[0]!.reason.message).toContain('分块校验失败')
     expect(test.active()).toBe(0)
     test.finishAll()
     expect(await (await reader(test.objects[0]!)).text()).toBe('headnexttailmore')
@@ -619,7 +620,7 @@ describe('bounded GitHub chunk read ahead', () => {
 
 describe('GitHub incomplete-asset guard consistency', () => {
   it.each(['starter', 'new'])(
-    'hides %s references from lists and reuse, and rejects native plans before handoff',
+    'hides %s references from lists and reuse, and isolates native preflight failures',
     async (state) => {
       const test = await fixture([['body']])
       test.assets[0]!.state = state
@@ -652,14 +653,16 @@ describe('GitHub incomplete-asset guard consistency', () => {
       expect(
         await listGitHub(context as unknown as CloudBackupTransportContext, config, 'fixture'),
       ).toEqual([])
-      await expect(
-        buildNativeRestorePlan(
-          context as unknown as CloudBackupSnapshotOperationsContext,
-          saved,
-          config,
-          'fixture',
-        ),
-      ).rejects.toThrow(/上传未完成.*附件 1/u)
+      const plan = await buildNativeRestorePlan(
+        context as unknown as CloudBackupSnapshotOperationsContext,
+        saved,
+        config,
+        'fixture',
+      )
+      expect(plan.resources).toEqual([])
+      expect(plan.resourceFailures).toEqual([
+        expect.objectContaining({ error: expect.stringMatching(/上传未完成.*附件 1/u) }),
+      ])
       expect(
         await reuseUnchangedStructuredBackup(
           context as unknown as CloudBackupSnapshotOperationsContext,

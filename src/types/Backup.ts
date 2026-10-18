@@ -219,6 +219,7 @@ export interface PreparedRestore {
 }
 
 export interface RestoreReport {
+  failures?: StructuredRestoreFailure[]
   /** Actual current rows affected by the commit, including owners of restored history. */
   resourceIds?: string[]
   categoriesChanged?: boolean
@@ -231,4 +232,11 @@ export interface RestoreReport {
   restoredCommunitySources?: number
   restoredCommunityMessages?: number
   restoredCommunityAttachments?: number
+}
+
+export interface StructuredRestoreFailure {
+  kind: 'resource' | 'version' | 'album' | 'communityAttachment' | 'portableData'
+  id: string
+  fileName: string
+  error: string
 }

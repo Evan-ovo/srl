@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import type { CloudBackupConfig } from '../types/CloudBackup'
 import type { StructuredResource, StructuredSnapshot } from './CloudStructuredSnapshot'
-import type { ArchiveSource, ExportService } from './ExportService'
+import { ExportService, type ArchiveSource } from './ExportService'
+import { unzipSync } from 'fflate'
 import {
   materializeStructuredArchive,
   type CloudBackupSnapshotOperationsContext,
@@ -127,6 +128,34 @@ function target(github: boolean): CloudBackupConfig {
 }
 
 describe('structured cloud archive descriptor lookup', () => {
+  it.each([true, false])(
+    'reports real reads and ZIP output and keeps every current/history byte (github=%s)',
+    async (github) => {
+      const test = fixture(8)
+      test.context.exportService = new ExportService()
+      const reports: Array<{ completed: number; total: number; writtenBytes: number }> = []
+      const archive = await materializeStructuredArchive(
+        test.context,
+        item,
+        target(github),
+        'synthetic',
+        { onProgress: (progress) => reports.push(progress) },
+      )
+      expect(reports[0]).toEqual({ completed: 0, total: 16, writtenBytes: 0 })
+      expect(reports.at(-1)).toEqual({ completed: 16, total: 16, writtenBytes: archive.blob.size })
+      expect(test.reader).toHaveBeenCalledTimes(16)
+      const files = unzipSync(new Uint8Array(await archive.blob.arrayBuffer()))
+      const originals = Object.entries(files)
+        .filter(([name]) => name !== 'manifest.json')
+        .map(([, bytes]) => JSON.parse(new TextDecoder().decode(bytes)))
+      expect(originals).toHaveLength(16)
+      expect(originals.filter((record) => record.historical)).toHaveLength(8)
+      for (let index = 0; index < 8; index++) {
+        expect(originals).toContainEqual({ id: `resource-${index}`, historical: false })
+        expect(originals).toContainEqual({ id: `resource-${index}`, historical: true })
+      }
+    },
+  )
   it.each([true, false])('indexes current/history descriptors once (github=%s)', async (github) => {
     const test = fixture(501)
     expect(
@@ -156,7 +185,8 @@ describe('structured cloud archive descriptor lookup', () => {
       undefined,
       {
         signal: expect.any(AbortSignal),
-        ...(github ? { readAhead: { onFailure: expect.any(Function) } } : {}),
+        readAhead: { onFailure: expect.any(Function) },
+        onProgress: expect.any(Function),
       },
     )
     expect(test.readGitHub).toHaveBeenCalledTimes(github ? 1 : 0)
@@ -199,14 +229,9 @@ describe('structured cloud archive descriptor lookup', () => {
           readerSignal = (github ? test.createGitHub : test.createWebDav).mock.calls[0]?.[2]?.signal
           expect(readerSignal).toBe(options?.signal)
           expect(readerSignal?.aborted).toBe(false)
-          if (github) {
-            options?.readAhead?.onFailure(failure)
-            expect(readerSignal?.aborted).toBe(true)
-            expect(readerSignal?.reason).toBe(failure)
-          } else {
-            // Shared legacy packs use the existing serial WebDAV export path.
-            expect(options?.readAhead).toBeUndefined()
-          }
+          options?.readAhead?.onFailure(failure)
+          expect(readerSignal?.aborted).toBe(true)
+          expect(readerSignal?.reason).toBe(failure)
           throw failure
         },
       )

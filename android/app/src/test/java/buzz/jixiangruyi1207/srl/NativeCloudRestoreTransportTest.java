@@ -10,6 +10,8 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
@@ -214,6 +216,138 @@ public class NativeCloudRestoreTransportTest {
             assertArrayEquals(bytes("aaabbbcccddd"), Files.readAllBytes(file(root, plan.hash).toPath()));
             assertFalse(new File(root, "pending").exists());
         } finally { releaseFirst.countDown(); owner.shutdownNow(); assertTrue(owner.awaitTermination(5, TimeUnit.SECONDS)); }
+    }
+
+    @Test public void prefetchSpansSmallFilesButSkipsVerifiedLocalOriginals() throws Exception {
+        File root = temporary.newFolder();
+        byte[][] contents = { bytes("one"), bytes("local"), bytes("two"), bytes("three"), bytes("four") };
+        List<RestoreObject> objects = new java.util.ArrayList<>();
+        List<RestoreResource> plans = new java.util.ArrayList<>();
+        for (byte[] data : contents) {
+            RestoreObject object = object(data); objects.add(object);
+            plans.add(resource(data, new RestoreSegment(object.hash, 0, object.size)));
+        }
+        Files.write(file(root, plans.get(1).hash).toPath(), contents[1]);
+        CountDownLatch window = new CountDownLatch(3), release = new CountDownLatch(1);
+        AtomicInteger downloads = new AtomicInteger();
+        ExecutorService owner = Executors.newSingleThreadExecutor();
+        try {
+            Future<RestoreCounts> result = owner.submit(() -> restoreFiles(new File(root, "pending"), objects, plans,
+                h -> file(root, h), (o, target) -> {
+                    assertNotEquals(objects.get(1).hash, o.hash);
+                    downloads.incrementAndGet(); window.countDown();
+                    assertTrue(release.await(5, TimeUnit.SECONDS));
+                    Files.write(target.toPath(), contents[objects.indexOf(o)]);
+                }));
+            assertTrue("small files must fill the existing three-slot window", window.await(5, TimeUnit.SECONDS));
+            assertEquals(3, downloads.get());
+            release.countDown();
+            RestoreCounts counts = result.get(5, TimeUnit.SECONDS);
+            assertEquals(4, counts.downloaded); assertEquals(1, counts.reused);
+            for (int index = 0; index < contents.length; index++)
+                assertArrayEquals(contents[index], Files.readAllBytes(file(root, plans.get(index).hash).toPath()));
+        } finally { release.countDown(); owner.shutdownNow(); assertTrue(owner.awaitTermination(5, TimeUnit.SECONDS)); }
+    }
+
+    @Test public void thousandFileDefaultAndSerialWindowsPreserveAllBytesAndRequestCounts() throws Exception {
+        final int count = 1000, size = 64 * 1024;
+        List<RestoreObject> objects = new java.util.ArrayList<>();
+        List<RestoreResource> plans = new java.util.ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            byte[] data = new byte[size]; java.nio.ByteBuffer.wrap(data).putInt(index);
+            RestoreObject object = object(data); objects.add(object);
+            plans.add(resource(data, new RestoreSegment(object.hash, 0, size)));
+        }
+        for (int concurrency : new int[] { 1, RESTORE_PREFETCH_CONCURRENCY, 0 }) {
+            File root = temporary.newFolder();
+            AtomicInteger requests = new AtomicInteger(), active = new AtomicInteger(), peak = new AtomicInteger();
+            java.util.concurrent.atomic.AtomicLong heap = new java.util.concurrent.atomic.AtomicLong();
+            Map<String, Integer> indexes = new java.util.HashMap<>();
+            for (int index = 0; index < count; index++) indexes.put(objects.get(index).hash, index);
+            long start = System.nanoTime();
+            ObjectDownloader download = (o, target) -> {
+                requests.incrementAndGet(); peak.accumulateAndGet(active.incrementAndGet(), Math::max);
+                try {
+                    // Controlled network-latency fixture; this is not a real provider speed claim.
+                    Thread.sleep(2);
+                    byte[] data = new byte[size]; java.nio.ByteBuffer.wrap(data).putInt(indexes.get(o.hash));
+                    Files.write(target.toPath(), data);
+                    Runtime runtime = Runtime.getRuntime(); heap.accumulateAndGet(runtime.totalMemory() - runtime.freeMemory(), Math::max);
+                } finally { active.decrementAndGet(); }
+            };
+            RestoreCounts result = concurrency == 0
+                ? restoreIncrementally(new File(root, "pending"), objects, plans, h -> file(root, h), () -> download,
+                    (completed, total) -> {}, (hash, error) -> {})
+                : restoreFiles(new File(root, "pending"), objects, plans, h -> file(root, h), download,
+                    false, (completed, total) -> {}, concurrency, RESTORE_PREFETCH_BYTES);
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertEquals(count, requests.get()); assertEquals(count, result.downloaded); assertEquals(count, result.assembled);
+            assertTrue(peak.get() <= (concurrency == 0 ? 3 : concurrency)); assertEquals(0, active.get());
+            for (RestoreResource resource : plans) assertTrue(verifyFile(file(root, resource.hash), resource.hash, resource.size));
+            RestoreCounts reused = restoreFiles(new File(root, "pending"), objects, plans, h -> file(root, h), (o, target) -> { throw new AssertionError("repeated download"); });
+            assertEquals(count, reused.reused);
+            System.out.println("SRL synthetic native restore: files=" + count + " bytes=" + ((long)count * size)
+                + " concurrency=" + (concurrency == 0 ? "incremental-3" : concurrency) + " requests=" + requests.get() + " elapsedMs=" + elapsedMs
+                + " peakActive=" + peak.get() + " sampledJvmHeapBytes=" + heap.get());
+        }
+    }
+
+    @Test public void incrementalFailuresDoNotBlockLaterFilesAndExplicitRetryReusesInstalledOriginals() throws Exception {
+        File root = temporary.newFolder();
+        List<RestoreObject> objects = new java.util.ArrayList<>();
+        List<RestoreResource> plans = new java.util.ArrayList<>();
+        Map<String, byte[]> bodies = new HashMap<>();
+        for (int index = 0; index < 6; index++) {
+            byte[] body = bytes("incremental-" + index); RestoreObject object = object(body);
+            objects.add(object); bodies.put(object.hash, body);
+            plans.add(resource(body, new RestoreSegment(object.hash, 0, body.length)));
+        }
+        CountDownLatch release = new CountDownLatch(1), later = new CountDownLatch(4);
+        ExecutorService owner = Executors.newSingleThreadExecutor();
+        try {
+            Future<RestoreCounts> operation = owner.submit(() -> restoreIncrementally(new File(root, "pending"), objects, plans,
+                h -> file(root, h), () -> (object, target) -> {
+                    if (object.hash.equals(objects.get(0).hash)) assertTrue(release.await(5, TimeUnit.SECONDS));
+                    if (object.hash.equals(objects.get(1).hash)) throw new IOException("missing original");
+                    Files.write(target.toPath(), bodies.get(object.hash));
+                }, (done, total) -> {}, (hash, error) -> {
+                    if (!hash.equals(objects.get(0).hash) && error == null) later.countDown();
+                }));
+            assertTrue("later files must finish while head is blocked", later.await(5, TimeUnit.SECONDS));
+            assertFalse(operation.isDone()); release.countDown();
+            RestoreCounts result = operation.get(5, TimeUnit.SECONDS);
+            assertEquals(5, result.assembled); assertEquals(1, result.failures.size());
+            AtomicInteger reads = new AtomicInteger();
+            RestoreCounts retry = restoreIncrementally(new File(root, "pending"), objects, plans, h -> file(root, h),
+                () -> (object, target) -> { reads.incrementAndGet(); Files.write(target.toPath(), bodies.get(object.hash)); },
+                (done, total) -> {}, (hash, error) -> {});
+            assertEquals(1, reads.get()); assertEquals(1, retry.assembled); assertTrue(retry.failures.isEmpty());
+        } finally { release.countDown(); owner.shutdownNow(); }
+    }
+
+    @Test public void cancellingIncrementalQueueDrainsActiveDownloadsAndDoesNotClaimQueuedFiles() throws Exception {
+        File root = temporary.newFolder();
+        List<RestoreObject> objects = new java.util.ArrayList<>(); List<RestoreResource> plans = new java.util.ArrayList<>();
+        for (int index = 0; index < 6; index++) {
+            byte[] body = bytes("cancel-incremental-" + index); RestoreObject object = object(body); objects.add(object);
+            plans.add(resource(body, new RestoreSegment(object.hash, 0, body.length)));
+        }
+        CountDownLatch started = new CountDownLatch(3), drained = new CountDownLatch(1);
+        AtomicInteger active = new AtomicInteger(), reads = new AtomicInteger(), delivered = new AtomicInteger();
+        ExecutorService owner = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> operation = owner.submit(() -> {
+                try { restoreIncrementally(new File(root, "pending"), objects, plans, h -> file(root, h), () -> (object, target) -> {
+                    reads.incrementAndGet(); active.incrementAndGet(); started.countDown();
+                    try { new CountDownLatch(1).await(); } finally { active.decrementAndGet(); }
+                }, (done, total) -> {}, (hash, error) -> delivered.incrementAndGet()); }
+                catch (Exception expected) { assertTrue(expected instanceof InterruptedException); }
+                finally { drained.countDown(); }
+            });
+            assertTrue(started.await(5, TimeUnit.SECONDS)); operation.cancel(true);
+            assertTrue(drained.await(5, TimeUnit.SECONDS)); assertEquals(0, active.get());
+            assertEquals(3, reads.get()); assertEquals(0, delivered.get());
+        } finally { owner.shutdownNow(); }
     }
 
     @Test public void byteBudgetBoundsPendingChunksAndOversizedLegacyChunkRunsAlone() throws Exception {

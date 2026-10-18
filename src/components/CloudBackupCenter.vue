@@ -32,6 +32,12 @@ const {
   loadBackups,
   message,
   restoreProgress,
+  restoreFailures,
+  retryRestoreFailures,
+  dismissRestoreFailures,
+  downloadProgress,
+  downloadOperation,
+  stopDownload,
   restorePhase,
   restoreOperation,
   stopRestore,
@@ -85,6 +91,12 @@ const {
 const scopeDialog = ref<HTMLDialogElement>()
 const scopeDialogOpen = ref(false)
 const scopeDraft = ref({ ...cloudScopeModel.value })
+const failureListOpen = ref(false)
+const visibleFailureCount = ref(50)
+
+function toggleFailureList(event: Event): void {
+  failureListOpen.value = (event.currentTarget as HTMLDetailsElement).open
+}
 
 async function openBackupScope(): Promise<void> {
   scopeDraft.value = {
@@ -117,7 +129,11 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
   <section class="cloud-center">
     <FeatureAppHeader title="云备份" @back="emit('back')" />
 
-    <section class="cloud-status" :class="{ 'cloud-status--error': status.lastError }">
+    <section
+      v-if="!restorePicker"
+      class="cloud-status"
+      :class="{ 'cloud-status--error': status.lastError }"
+    >
       <i aria-hidden="true"></i>
       <div>
         <strong>{{ status.lastError ? '上次备份失败' : formatTime(status.lastSuccessAt) }}</strong>
@@ -143,6 +159,7 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
     </section>
 
     <nav
+      v-if="!restorePicker"
       class="cloud-provider-tabs"
       aria-label="选择云端备份方式"
       data-assistant-focus="backup-provider"
@@ -324,6 +341,31 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
             }}
           </button>
         </div>
+        <div
+          v-if="downloadProgress && busyAction.startsWith('download:')"
+          class="cloud-restore-progress"
+          role="status"
+          aria-live="polite"
+        >
+          <div class="cloud-restore-progress__heading">
+            <strong>{{
+              downloadProgress.phase === 'manifest' ? '读取备份清单' : '下载并生成 ZIP'
+            }}</strong>
+            <span v-if="downloadProgress.total"
+              >已读取 {{ downloadProgress.completed }} / {{ downloadProgress.total }} 项</span
+            >
+          </div>
+          <progress
+            :value="downloadProgress.total ? downloadProgress.completed : undefined"
+            :max="Math.max(1, downloadProgress.total)"
+            aria-label="云备份下载进度"
+          />
+          <small
+            >已接收 {{ formatMetricBytes(downloadProgress.receivedBytes) }} · 已生成 ZIP
+            {{ formatMetricBytes(downloadProgress.writtenBytes) }}</small
+          >
+          <button v-if="downloadOperation" type="button" @click="stopDownload">停止下载</button>
+        </div>
         <div v-if="backups.length && !restorePicker" class="cloud-backup-list">
           <article v-for="item in backups" :key="item.id">
             <div>
@@ -365,10 +407,10 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
               <strong id="cloud-restore-selection-title">{{
                 new Date(restorePicker.item.createdAt).toLocaleString('zh-CN')
               }}</strong>
-              <span :title="restorePicker.item.objectKey">恢复时合并现有资源</span>
+              <span :title="restorePicker.item.objectKey">合并导入 · 保留本机已有内容</span>
             </div>
           </header>
-          <details class="cloud-restore-scope" :open="!busyAction">
+          <details v-if="!restoreFailures.length" class="cloud-restore-scope" :open="!busyAction">
             <summary>
               选择要导入的内容
               <span>{{ selectedRestoreKeys.size }} / {{ restoreResourceCount }} 项已选</span>
@@ -387,7 +429,7 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
               >。历史另行合并，实际以导入结果为准。
             </p>
           </details>
-          <div class="cloud-restore-selection__tools">
+          <div v-if="!restoreFailures.length" class="cloud-restore-selection__tools">
             <button
               class="button--primary"
               type="button"
@@ -407,13 +449,18 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
             <button
               v-if="restoreOperation"
               type="button"
-              :disabled="restorePhase === 'commit' || restorePhase === 'extras'"
+              :disabled="restorePhase === 'extras'"
               @click="stopRestore"
             >
               停止本次导入
             </button>
           </div>
-          <div v-if="message" class="cloud-restore-progress" role="status" aria-live="polite">
+          <div
+            v-if="message && !restoreFailures.length"
+            class="cloud-restore-progress"
+            role="status"
+            aria-live="polite"
+          >
             <template
               v-if="
                 restoreProgress &&
@@ -422,7 +469,7 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
               "
             >
               <div class="cloud-restore-progress__heading">
-                <strong>{{ restoreProgress.phase === 'prepare' ? '已准备' : '正在写入' }}</strong>
+                <strong>已保存</strong>
                 <span>{{ restoreProgress.completed }} / {{ restoreProgress.total }} 项</span>
               </div>
               <progress
@@ -432,14 +479,68 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
               />
               <small
                 >按所选内容统计，包含历史版本、相册和附件 ·
-                {{
-                  restoreProgress.phase === 'prepare'
-                    ? '下载、校验与暂存'
-                    : '当前批次写入完成后生效'
-                }}</small
+                下载和校验后逐组保存；停止会保留已经保存的内容。</small
               >
             </template>
             <p v-if="message">{{ message }}</p>
+          </div>
+          <div
+            v-if="restoreFailures.length"
+            class="cloud-restore-result"
+            aria-label="本轮导入失败项"
+          >
+            <div class="cloud-restore-result__heading" role="status">
+              <span aria-hidden="true">!</span>
+              <div>
+                <h3>{{ restoreFailures.length }} 项未完成</h3>
+                <p>已保存内容保留，可只重试失败项。</p>
+              </div>
+            </div>
+            <details class="cloud-restore-failures" @toggle="toggleFailureList">
+              <summary>
+                <span>查看失败清单</span><span>{{ restoreFailures.length }} 项</span>
+              </summary>
+              <ul v-if="failureListOpen">
+                <li
+                  v-for="(failure, index) in restoreFailures.slice(0, visibleFailureCount)"
+                  :key="index"
+                >
+                  <details>
+                    <summary>
+                      <strong>{{ failure.fileName }}</strong
+                      ><span>查看原因</span>
+                    </summary>
+                    <p>{{ failure.error }}</p>
+                  </details>
+                </li>
+              </ul>
+              <button
+                v-if="failureListOpen && visibleFailureCount < restoreFailures.length"
+                class="cloud-restore-failures__more"
+                type="button"
+                @click="visibleFailureCount += 50"
+              >
+                继续显示失败项（还有 {{ restoreFailures.length - visibleFailureCount }} 项）
+              </button>
+            </details>
+            <div class="cloud-primary-actions cloud-restore-result__actions">
+              <button
+                class="button--primary"
+                type="button"
+                :disabled="Boolean(busyAction)"
+                @click="retryRestoreFailures"
+              >
+                重试失败项
+              </button>
+              <button
+                type="button"
+                aria-label="结束本轮，不再重试"
+                :disabled="Boolean(busyAction)"
+                @click="dismissRestoreFailures"
+              >
+                结束本轮
+              </button>
+            </div>
           </div>
         </section>
       </section>

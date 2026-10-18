@@ -1,3 +1,4 @@
+import { createCloudObjectReader } from './CloudBackupObjectReader'
 import { waitForCloudRetry } from './CloudBackupHttp'
 import type { CloudBackupItem, WebDavBackupConfig } from '../types/CloudBackup'
 import { hashCloudBlob } from './CloudArchiveCodec'
@@ -548,59 +549,42 @@ export function createWebDavObjectReader(
   context: CloudBackupTransportContext,
   config: WebDavBackupConfig,
   secret: string,
+  options: { concurrency?: number; byteBudget?: number } = {},
 ): (object: GitHubBundleManifest) => Promise<Blob> {
-  const partCache = new Map<string, Promise<Blob>>()
-  return async (object) => {
-    const blobs: Blob[] = []
-    for (const part of object.parts) {
-      const storedSize = part.storedSize ?? part.size
-      const objectKey = structuredPartObjectKey(part)
-      const cacheKey = `${objectKey}\u0000${part.sha256}\u0000${storedSize}`
-      let stored = partCache.get(cacheKey)
-      if (!stored) {
-        // Keep at most one V3-sized part, never the entire downloaded library.
-        partCache.clear()
-        stored = context
-          .cloudFetch(
-            joinUrl(config.baseUrl, normalizeFolder(config.folder), objectKey),
-            { headers: { Authorization: basicAuthorization(config.username, secret) } },
-            'webdav',
-          )
-          .then(async (response) => {
-            if (!response.ok) throw new Error(`Koofr 对象缺少分块：${objectKey}`)
-            const blob = await context.readResponseBlob(response, storedSize, object.fileName)
-            if (blob.size !== storedSize || (await hashCloudBlob(blob)) !== part.sha256)
-              throw new Error(`Koofr 对象分块校验失败：${objectKey}`)
-            return blob
-          })
-        if (storedSize <= 32 * 1024 * 1024) partCache.set(cacheKey, stored)
-      }
-      let storedBlob: Blob
-      try {
-        storedBlob = await stored
-      } catch (error) {
-        partCache.delete(cacheKey)
-        throw error
-      }
-      const blob = storedBlob.slice(part.offset ?? 0, (part.offset ?? 0) + part.size)
-      if (blob.size !== part.size) throw new Error(`Koofr 对象分块校验失败：${part.name}`)
-      blobs.push(blob)
-    }
-    const result = new Blob(blobs, { type: 'application/octet-stream' })
-    const wholePart = object.parts.length === 1 && object.parts[0]!
-    const alreadyVerified =
-      wholePart &&
-      (wholePart.offset ?? 0) === 0 &&
-      (wholePart.storedSize ?? wholePart.size) === object.totalSize &&
-      wholePart.size === object.totalSize &&
-      wholePart.sha256 === object.totalSha256
-    if (
-      result.size !== object.totalSize ||
-      (!alreadyVerified && (await hashCloudBlob(result)) !== object.totalSha256)
-    )
-      throw new Error(`Koofr 对象完整性校验失败：${object.fileName}`)
-    return result
-  }
+  const concurrency = Math.max(1, Math.min(2, Math.floor(options.concurrency ?? 2)))
+  const byteBudget = Math.max(1, options.byteBudget ?? 32 * 1024 * 1024)
+  return createCloudObjectReader(
+    context,
+    'Koofr',
+    async (object) =>
+      object.parts.map((part) => {
+        const objectKey = structuredPartObjectKey(part)
+        const size = part.storedSize ?? part.size
+        return {
+          key: `${objectKey}\u0000${part.sha256}\u0000${size}`,
+          size,
+          sha256: part.sha256,
+          download: async (signal: AbortSignal) => {
+            const response = await context.cloudFetch(
+              joinUrl(config.baseUrl, normalizeFolder(config.folder), objectKey),
+              {
+                headers: { Authorization: basicAuthorization(config.username, secret) },
+                signal,
+              },
+              'webdav',
+            )
+            if (!response.ok)
+              throw cloudHttpError(
+                `Koofr 对象缺少分块：${objectKey}（${response.status}）`,
+                response.status,
+              )
+            return response
+          },
+        }
+      }),
+    concurrency,
+    byteBudget,
+  )
 }
 
 export async function downloadWebDavBundle(

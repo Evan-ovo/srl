@@ -93,6 +93,31 @@ describe('CloudBackupJobStore orphan grace', () => {
     }
   })
 
+  it('seals an explicitly cancelled restore across reopening until a new explicit begin', async () => {
+    const store = new CloudBackupJobStore({ isAndroid: false })
+    const selection = {
+      item: { id: 'snapshot', objectKey: 'snapshot.json', size: 1, createdAt: 1 },
+      target: {
+        provider: 'github' as const,
+        owner: 'owner',
+        repository: 'repo',
+        retention: 1,
+        autoBackup: false,
+      },
+      resourceKeys: ['chosen'],
+      includeGallery: false,
+    }
+    const job = await store.beginRestore('cancel-plan', selection)
+    await store.cancel(job)
+    const reopened = new CloudBackupJobStore({ isAndroid: false })
+    expect(await reopened.pendingRestores()).toEqual([])
+    expect(await reopened.read('github', 'restore:cancel-plan')).toMatchObject({
+      status: 'cancelled',
+    })
+    await reopened.beginRestore('cancel-plan', selection)
+    expect(await reopened.pendingRestores()).toHaveLength(1)
+  })
+
   it('starts grace when an object first becomes orphan and forgets it when referenced again', async () => {
     const store = new CloudBackupJobStore()
     const day = 24 * 60 * 60 * 1000

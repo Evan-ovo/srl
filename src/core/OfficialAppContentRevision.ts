@@ -18,7 +18,7 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   userPersona: 7,
   tavernBridge: 9,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-content-revision
-  assistant: 48,
+  assistant: 49,
   // SRL-PUBLIC-SYNC: END REPLACE id=assistant-content-revision
 }
 

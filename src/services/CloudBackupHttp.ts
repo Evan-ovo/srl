@@ -343,3 +343,58 @@ export function waitForCloudRetry(ms: number, signal?: AbortSignal): Promise<voi
     signal?.addEventListener('abort', abort, { once: true })
   })
 }
+
+/** Shared by every resource read through this reader, including already-ready lookahead. */
+export function createCloudReadBudget(concurrency: number, byteBudget: number) {
+  let count = 0
+  let bytes = 0
+  const queue: Array<{
+    size: number
+    signal: AbortSignal
+    grant: (release: () => void) => void
+    reject: (error: unknown) => void
+    abort: () => void
+  }> = []
+  const advance = () => {
+    while (queue.length && count < concurrency) {
+      const next = queue[0]!
+      // A legacy oversized part runs alone. FIFO avoids starving an ordered head.
+      if (count && bytes + next.size > byteBudget) return
+      queue.shift()
+      next.signal.removeEventListener('abort', next.abort)
+      if (next.signal.aborted) {
+        next.reject(next.signal.reason)
+        continue
+      }
+      count += 1
+      bytes += next.size
+      let released = false
+      next.grant(() => {
+        if (released) return
+        released = true
+        count -= 1
+        bytes -= next.size
+        advance()
+      })
+    }
+  }
+  return (size: number, signal: AbortSignal): Promise<() => void> =>
+    new Promise((grant, reject) => {
+      signal.throwIfAborted()
+      const entry = {
+        size,
+        signal,
+        grant,
+        reject,
+        abort: () => {
+          const index = queue.indexOf(entry)
+          if (index !== -1) queue.splice(index, 1)
+          reject(signal.reason)
+          advance()
+        },
+      }
+      queue.push(entry)
+      signal.addEventListener('abort', entry.abort, { once: true })
+      advance()
+    })
+}

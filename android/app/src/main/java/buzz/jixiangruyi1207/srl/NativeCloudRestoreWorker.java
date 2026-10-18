@@ -23,6 +23,11 @@ import org.json.JSONObject;
 
 /** Durable download owner; uses the existing cloud job journal and restore transport. */
 public final class NativeCloudRestoreWorker extends Worker {
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CountDownLatch> ACTIVE = new java.util.concurrent.ConcurrentHashMap<>();
+    static void awaitStopped(String id) throws InterruptedException {
+        java.util.concurrent.CountDownLatch stopped = ACTIVE.get(id);
+        if (stopped != null) stopped.await();
+    }
     static final String WORK_PREFIX = "srl-cloud-restore-";
     private static final int NOTIFICATION_ID = 2114;
     private static final String CHANNEL = "srl_cloud_restore";
@@ -42,7 +47,7 @@ public final class NativeCloudRestoreWorker extends Worker {
     }
 
     static synchronized Handle enqueue(Context context, JSONObject config, String secret,
-        JSONArray objects, JSONArray resources) throws Exception {
+        JSONArray objects, JSONArray resources, boolean progressive) throws Exception {
         JSONObject target = new JSONObject().put("provider", config.getString("provider"));
         if ("github".equals(config.getString("provider"))) {
             target.put("owner", config.getString("owner").toLowerCase(java.util.Locale.ROOT));
@@ -52,6 +57,7 @@ public final class NativeCloudRestoreWorker extends Worker {
             target.put("username", config.getString("username"));
         }
         JSONObject plan = new JSONObject().put("config", target).put("objects", objects).put("resources", resources);
+        if (progressive) plan.put("progressive", true);
         byte[] encoded = plan.toString().getBytes(StandardCharsets.UTF_8);
         if (encoded.length > 16 * 1024 * 1024) throw new IllegalArgumentException("原生恢复计划超过 16 MiB 上限");
         String planHash = NativeCloudRestoreTransport.hex(MessageDigest.getInstance("SHA-256").digest(encoded));
@@ -75,6 +81,7 @@ public final class NativeCloudRestoreWorker extends Worker {
         File planRoot = new File(root, "restore-plan");
         if (!planRoot.isDirectory() && !planRoot.mkdirs()) throw new IllegalStateException("无法创建恢复计划目录");
         NativeCloudTransferPlugin.writeJob(planRoot, plan);
+        if (progressive) try (java.io.FileOutputStream reset = new java.io.FileOutputStream(new File(root, "restore-results.ndjson"))) {}
         new NativeSecretStore(context).save("cloud-job-" + id, secret);
         OneTimeWorkRequest request = new OneTimeWorkRequest.Builder(NativeCloudRestoreWorker.class)
             .setInputData(new Data.Builder().putString("jobId", id).build())
@@ -103,9 +110,13 @@ public final class NativeCloudRestoreWorker extends Worker {
         if (id == null || !id.matches("[a-f0-9-]{36}")) return Result.failure();
         File root = new File(NativeCloudTransferPlugin.jobsRoot(getApplicationContext()), id);
         boolean retainSecret = false;
+        boolean progressive = false;
+        java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
+        ACTIVE.put(id, stopped);
         activeThread = Thread.currentThread();
         try {
             JSONObject plan = NativeCloudTransferPlugin.readJob(new File(root, "restore-plan"));
+            progressive = plan.optBoolean("progressive", false);
             JSONObject config = plan.getJSONObject("config");
             String provider = config.getString("provider");
             String secret = new NativeSecretStore(getApplicationContext()).read("cloud-job-" + id);
@@ -131,44 +142,68 @@ public final class NativeCloudRestoreWorker extends Worker {
                 }
                 resources.add(new NativeCloudRestoreTransport.RestoreResource(entry.getString("hash"), entry.getLong("size"), segments));
             }
-            NativeCloudTransferPlugin.mutateJob(root, job -> job.put("status", "running"));
+            NativeCloudTransferPlugin.mutateJob(root, job -> {
+                if ("cancelled".equals(job.optString("status"))) throw new InterruptedException("云恢复已取消");
+                job.put("status", "running");
+            });
             setForegroundAsync(foreground("正在从云端恢复；切到后台也会继续", 0, resources.size())).get();
-            NativeCloudRestoreTransport.RestoreCounts counts = NativeCloudRestoreTransport.restoreFiles(
-                new File(root, "restore-pending"), objects, resources,
-                hash -> NativeLibraryPlugin.objectFile(getApplicationContext(), hash),
-                NativeCloudRestoreTransport.nativeDownloader(provider, secret, username, call -> {
-                        activeCall = call;
-                        if (isStopped()) call.cancel();
-                    }), true,
-                (completed, total) -> {
+            NativeCloudRestoreTransport.RestoreProgress progress = (completed, total) -> {
                     if (isStopped() || Thread.currentThread().isInterrupted()) throw new InterruptedException("云恢复已暂停");
                     long now = System.currentTimeMillis();
                     if (completed < total && now - lastProgressAt < 350
                         && completed - lastProgressCompleted < Math.max(1, (int)Math.ceil(total / 100.0))) return;
                     lastProgressAt = now;
                     lastProgressCompleted = completed;
-                    NativeCloudTransferPlugin.mutateJob(root, job -> job.put("completed", completed));
+                    NativeCloudTransferPlugin.mutateJob(root, job -> job.put("completed", completed).put("total", total));
                     setProgressAsync(new Data.Builder().putInt("completed", completed).putInt("total", total).build());
                     setForegroundAsync(foreground("正在恢复 " + completed + "/" + total, completed, total));
-                });
-            NativeCloudTransferPlugin.mutateJob(root, job -> job.put("status", "completed")
-                .put("downloaded", counts.downloaded).put("reused", counts.reused).put("assembled", counts.assembled));
-            notifyFinished("云端文件已恢复", "返回 SRL 完成本机资料导入；已下载的原件会复用。", true);
+                };
+            NativeCloudRestoreTransport.RestoreCounts counts;
+            if (progressive) {
+                counts = NativeCloudRestoreTransport.restoreIncrementally(new File(root, "restore-pending"), objects, resources,
+                    hash -> NativeLibraryPlugin.objectFile(getApplicationContext(), hash),
+                    () -> NativeCloudRestoreTransport.nativeDownloader(provider, secret, username, call -> { if (isStopped()) call.cancel(); }), progress,
+                    (hash, error) -> {
+                        if (isStopped()) throw new InterruptedException("云恢复已取消");
+                        JSONObject receipt = new JSONObject().put("hash", hash);
+                        if (error != null) receipt.put("error", error.length() > 1024 ? error.substring(0, 1024) : error);
+                        try (java.io.FileOutputStream output = new java.io.FileOutputStream(new File(root, "restore-results.ndjson"), true)) {
+                            output.write((receipt.toString() + "\n").getBytes(StandardCharsets.UTF_8));
+                        }
+                    });
+            } else {
+                counts = NativeCloudRestoreTransport.restoreFiles(new File(root, "restore-pending"), objects, resources,
+                    hash -> NativeLibraryPlugin.objectFile(getApplicationContext(), hash),
+                    NativeCloudRestoreTransport.nativeDownloader(provider, secret, username, call -> { activeCall = call; if (isStopped()) call.cancel(); }), true, progress);
+            }
+            if (isStopped() || "cancelled".equals(NativeCloudTransferPlugin.readJob(root).optString("status"))) throw new InterruptedException("云恢复已取消");
+            JSONArray failures = new JSONArray();
+            for (java.util.Map.Entry<String, String> failure : counts.failures.entrySet()) failures.put(new JSONObject().put("hash", failure.getKey()).put("error", failure.getValue()));
+            NativeCloudTransferPlugin.mutateJob(root, job -> {
+                if ("cancelled".equals(job.optString("status")) || isStopped()) throw new InterruptedException("云恢复已取消");
+                job.put("status", "completed").put("downloaded", counts.downloaded).put("reused", counts.reused).put("assembled", counts.assembled).put("failures", failures);
+            });
+            notifyFinished(counts.failures.isEmpty() ? "云端文件已恢复" : "云恢复部分完成", counts.failures.isEmpty() ? "返回 SRL 查看本机导入结果。" : "失败项已留在清单，仅手动选择后重试。", true);
             return Result.success();
         } catch (Exception error) {
-            boolean retry = isStopped() || (error instanceof java.io.IOException
+            boolean cancelled = isStopped() || error instanceof InterruptedException;
+            try { cancelled |= "cancelled".equals(NativeCloudTransferPlugin.readJob(root).optString("status")); } catch (Exception ignored) {}
+            boolean retry = !cancelled && !progressive && error instanceof java.io.IOException
                 && !(error instanceof NativeCloudRestoreTransport.IntegrityException)
-                && !(error instanceof NativeCloudRestoreTransport.CloudHttpStatusException) && getRunAttemptCount() < 2);
+                && !(error instanceof NativeCloudRestoreTransport.CloudHttpStatusException) && getRunAttemptCount() < 2;
+            final boolean cancelledResult = cancelled;
             retainSecret = retry;
             try {
-                NativeCloudTransferPlugin.mutateJob(root, job -> job.put("status", retry ? "queued" : "failed")
+                NativeCloudTransferPlugin.mutateJob(root, job -> job.put("status", cancelledResult ? "cancelled" : retry ? "queued" : "failed")
                     .put("error", error.getMessage() == null ? "原生云恢复失败" : error.getMessage())
                     .put("errorCode", error instanceof NativeCloudRestoreTransport.CloudHttpStatusException
                         ? "HTTP_" + ((NativeCloudRestoreTransport.CloudHttpStatusException) error).status : JSONObject.NULL));
             } catch (Exception ignored) {}
-            if (!isStopped()) notifyFinished(retry ? "云恢复等待重试" : "云恢复未完成", "已保留恢复断点，请返回 SRL 查看。", false);
+            if (!cancelled) notifyFinished(retry ? "云恢复等待重试" : "云恢复未完成", "已保留恢复断点，请返回 SRL 查看。", false);
             return retry ? Result.retry() : Result.failure();
         } finally {
+            stopped.countDown();
+            ACTIVE.remove(id, stopped);
             activeThread = null;
             activeCall = null;
             if (!retainSecret) new NativeSecretStore(getApplicationContext()).clear("cloud-job-" + id);

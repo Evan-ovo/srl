@@ -149,7 +149,11 @@ export async function buildNativeRestorePlan(
   snapshot: StructuredSnapshot,
   config: CloudBackupConfig,
   secret: string,
-): Promise<{ objects: NativeRestoreObject[]; resources: NativeRestoreResource[] }> {
+): Promise<{
+  objects: NativeRestoreObject[]
+  resources: NativeRestoreResource[]
+  resourceFailures?: Array<{ hash: string; error: string }>
+}> {
   const objectUrls = new Map<string, NativeRestoreObject>()
   const githubInventories = new Map<string, Promise<Map<string, GitHubAsset>>>()
   const githubInventory = (container: string): Promise<Map<string, GitHubAsset>> => {
@@ -184,41 +188,58 @@ export async function buildNativeRestorePlan(
       fileName: entry.assetId,
     })) ?? []),
   ]
+  const resourceFailures: Array<{ hash: string; error: string }> = []
   for (const resource of records) {
-    const segments: NativeRestoreResource['segments'] = []
-    for (const part of resource.object.parts) {
-      const hash = part.sha256.toLowerCase()
-      const storedSize = part.storedSize ?? part.size
-      let url: string
-      if (config.provider === 'github') {
-        const container = structuredPartContainer(part)
-        const objectKey = structuredPartObjectKey(part)
-        const asset = (await githubInventory(container)).get(objectKey)
-        assertGitHubDownloadableAsset(
-          asset,
-          storedSize,
-          `资源 ${resource.fileName} 的分块 ${container}/${objectKey}`,
-        )
-        url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repository)}/releases/assets/${asset.id}`
-      } else {
-        url = joinUrl(config.baseUrl, normalizeFolder(config.folder), structuredPartObjectKey(part))
+    try {
+      const segments: NativeRestoreResource['segments'] = []
+      for (const part of resource.object.parts) {
+        const hash = part.sha256.toLowerCase()
+        const storedSize = part.storedSize ?? part.size
+        let url: string
+        if (config.provider === 'github') {
+          const container = structuredPartContainer(part)
+          const objectKey = structuredPartObjectKey(part)
+          const asset = (await githubInventory(container)).get(objectKey)
+          assertGitHubDownloadableAsset(
+            asset,
+            storedSize,
+            `资源 ${resource.fileName} 的分块 ${container}/${objectKey}`,
+          )
+          url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repository)}/releases/assets/${asset.id}`
+        } else {
+          url = joinUrl(
+            config.baseUrl,
+            normalizeFolder(config.folder),
+            structuredPartObjectKey(part),
+          )
+        }
+        const existing = objectUrls.get(hash)
+        if (existing && existing.size !== storedSize) {
+          throw new Error(`云对象哈希对应了不同大小：${hash}`)
+        }
+        if (!existing) objectUrls.set(hash, { url, hash, size: storedSize })
+        segments.push({ hash, offset: part.offset ?? 0, size: part.size })
       }
-      const existing = objectUrls.get(hash)
-      if (existing && existing.size !== storedSize) {
-        throw new Error(`云对象哈希对应了不同大小：${hash}`)
-      }
-      if (!existing) objectUrls.set(hash, { url, hash, size: storedSize })
-      segments.push({ hash, offset: part.offset ?? 0, size: part.size })
+      resources.push({
+        hash: resource.object.totalSha256.toLowerCase(),
+        size: resource.object.totalSize,
+        type: resource.type,
+        fileName: resource.fileName,
+        segments,
+      })
+    } catch (error) {
+      context.signal?.throwIfAborted()
+      resourceFailures.push({
+        hash: resource.object.totalSha256.toLowerCase(),
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
-    resources.push({
-      hash: resource.object.totalSha256.toLowerCase(),
-      size: resource.object.totalSize,
-      type: resource.type,
-      fileName: resource.fileName,
-      segments,
-    })
   }
-  return { objects: [...objectUrls.values()], resources }
+  return {
+    objects: [...objectUrls.values()],
+    resources,
+    ...(resourceFailures.length ? { resourceFailures } : {}),
+  }
 }
 
 export async function materializeStructuredArchive(
@@ -226,6 +247,10 @@ export async function materializeStructuredArchive(
   item: CloudBackupItem,
   config: CloudBackupConfig,
   secret: string,
+  options?: {
+    onReceivedBytes?: RestoreTransferOptions['onReceivedBytes']
+    onProgress?: (progress: { completed: number; total: number; writtenBytes: number }) => void
+  },
 ) {
   const controller = new AbortController()
   const abort = () => controller.abort(context.signal?.reason)
@@ -238,7 +263,7 @@ export async function materializeStructuredArchive(
         ? await context.readGitHubStructuredSnapshot(config, secret, item)
         : await context.readWebDavStructuredSnapshot(config, secret, item.objectKey)
     controller.signal.throwIfAborted()
-    const transfer = { signal: controller.signal }
+    const transfer = { signal: controller.signal, onReceivedBytes: options?.onReceivedBytes }
     const providerReader =
       config.provider === 'github'
         ? await context.createGitHubObjectReader(config, secret, transfer)
@@ -253,11 +278,27 @@ export async function materializeStructuredArchive(
     const album = new Map(
       snapshot.portableData.generatedImageAlbum?.map((entry) => [entry.item.id, entry]),
     )
+    let completed = 0
+    let writtenBytes = 0
+    const total =
+      snapshot.resources.length +
+      snapshot.versions.length +
+      album.size +
+      (snapshot.portableData.communitySources?.attachments.length ?? 0)
+    const report = () => options?.onProgress?.({ completed, total, writtenBytes })
+    const read = async (object: import('./GitHubBackupBundle').GitHubBundleManifest) => {
+      const blob = await providerReader(object)
+      controller.signal.throwIfAborted()
+      completed++
+      report()
+      return blob
+    }
+    report()
     const { communitySources, ...portableData } = snapshot.portableData
     const communitySourceAttachments = []
     for (const entry of communitySources?.attachments ?? []) {
       controller.signal.throwIfAborted()
-      const blob = await providerReader(entry.object)
+      const blob = await read(entry.object)
       communitySourceAttachments.push({
         assetId: entry.assetId,
         blob: new Blob([blob], { type: entry.mimeType }),
@@ -272,7 +313,7 @@ export async function materializeStructuredArchive(
             controller.signal.throwIfAborted()
             const record = (historical ? versions : resources).get(planned.id)
             if (!record) throw new Error(`备份缺少资源描述：${planned.fileName}`)
-            return materializeStructuredResource(record, providerReader)
+            return materializeStructuredResource(record, read)
           },
         },
         snapshot.categories,
@@ -282,7 +323,7 @@ export async function materializeStructuredArchive(
           readAlbumFile: async (id) => {
             const entry = album.get(id)
             if (!entry?.object) throw new Error('云备份缺少相册原图描述')
-            return providerReader(entry.object)
+            return read(entry.object)
           },
           ...(communitySources
             ? {
@@ -297,9 +338,11 @@ export async function materializeStructuredArchive(
         undefined,
         {
           signal: controller.signal,
-          ...(config.provider === 'github'
-            ? { readAhead: { onFailure: (error: unknown) => controller.abort(error) } }
-            : {}),
+          readAhead: { onFailure: (error: unknown) => controller.abort(error) },
+          onProgress: (progress) => {
+            writtenBytes = progress.writtenBytes
+            report()
+          },
         },
       )
     )[0]!

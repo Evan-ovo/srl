@@ -1180,6 +1180,103 @@
   margin-top: 0.5rem;
 }
 
+.cloud-restore-result {
+  display: grid;
+  gap: 1rem;
+  padding-top: 1.25rem;
+}
+
+.cloud-restore-result__heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.cloud-restore-result__heading > span {
+  display: grid;
+  flex: 0 0 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 50%;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.cloud-restore-result h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.cloud-restore-result__heading p {
+  margin: 0.3rem 0 0;
+  color: var(--color-ink-soft);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.cloud-restore-failures {
+  border-block: 1px solid var(--color-line);
+}
+
+.cloud-restore-failures summary {
+  display: flex;
+  min-height: var(--size-touch);
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.cloud-restore-failures summary > span:last-child {
+  flex-shrink: 0;
+  color: var(--color-ink-soft);
+  font-size: 0.75rem;
+}
+
+.cloud-restore-failures ul {
+  max-height: min(40vh, 22rem);
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.cloud-restore-failures li {
+  border-top: 1px solid var(--color-line);
+}
+
+.cloud-restore-failures strong {
+  overflow: hidden;
+  font-size: 0.8125rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloud-restore-failures li p {
+  margin: 0 0 0.75rem;
+  color: var(--color-ink-soft);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.cloud-restore-failures__more {
+  width: 100%;
+  min-height: var(--size-touch);
+  margin-bottom: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.cloud-restore-result__actions {
+  margin-top: 0;
+}
+
+.cloud-restore-result__actions button {
+  flex: 1 1 auto;
+}
+
 .cloud-restore-selection > header {
   display: flex;
   align-items: flex-end;

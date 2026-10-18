@@ -6,7 +6,7 @@ import { CloudBackupService } from './CloudBackupService'
 import type { CreatedStructuredSnapshot, StructuredSnapshot } from './CloudStructuredSnapshot'
 import type { ExportService } from './ExportService'
 import type { ResourceService } from './ResourceService'
-import type { RestoreService } from './RestoreService'
+import { RestoreService } from './RestoreService'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import type { GitHubBackupConfig, WebDavBackupConfig } from '../types/CloudBackup'
 import type { ArchivePortableData, PreparedRestore } from '../types/Backup'
@@ -14,7 +14,13 @@ import { noticeCenter } from '../core/NoticeCenter'
 import { taskCenter } from '../core/TaskCenter'
 import { waitForCloudRetry } from './CloudBackupHttp'
 import { hashCloudBlob } from './CloudArchiveCodec'
-import { decodeStructuredSnapshot } from './CloudStructuredSnapshot'
+import {
+  decodeStructuredSnapshot,
+  createStructuredSnapshot,
+  encodeStructuredSnapshot,
+} from './CloudStructuredSnapshot'
+import { ExportService as ArchiveExporter } from './ExportService'
+import type { CloudDownloadProgress } from './CloudBackupTransport'
 import { CloudBackupMaintenanceError } from './CloudBackupRetentionOperations'
 
 class MemoryStorage implements Storage {
@@ -229,6 +235,82 @@ describe('CloudBackupService V3', () => {
     vi.stubGlobal('sessionStorage', new MemoryStorage())
     vi.stubGlobal('indexedDB', new IDBFactory())
   })
+
+  it.each([false, true])(
+    'streams actual download byte deltas through the scoped transport and respects caller cancellation (stop=%s)',
+    async (stop) => {
+      const blob = new Blob([new Uint8Array(512 * 1024).fill(42)])
+      const resource = {
+        ...cloudResource(await hashCloudBlob(blob)),
+        originalBlob: blob,
+        fileSize: blob.size,
+      }
+      const created = await createStructuredSnapshot([resource], [], [], { version: 1 })
+      const key = 'snapshots/download.srlmanifest.v3.json.gz'
+      const manifest = await encodeStructuredSnapshot(created.snapshot)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          const target = new URL(String(url), 'https://srl.example')
+          const upstream = target.searchParams.get('url') ?? target.toString()
+          if (upstream.endsWith(key))
+            return new Response(manifest, { headers: { 'x-srl-cloud-proxy': '1' } })
+          const name = upstream.split('/').at(-1)!
+          const part = created.chunks.get(name)
+          if (!part) throw new Error('Unexpected fixture request')
+          if (!stop) return new Response(part.stream(), { headers: { 'x-srl-cloud-proxy': '1' } })
+          const data = new Uint8Array(await part.arrayBuffer())
+          return new Response(
+            new ReadableStream({
+              async start(controller) {
+                controller.enqueue(data.subarray(0, 64 * 1024))
+                await gate
+                controller.enqueue(data.subarray(64 * 1024))
+                controller.close()
+              },
+            }),
+            { headers: { 'x-srl-cloud-proxy': '1' } },
+          )
+        }),
+      )
+      const service = createService(undefined, undefined, new ArchiveExporter())
+      await service.importPortableCredentials({ webdav: 'fixture-password' })
+      await service.saveConfig(webDavConfig, '')
+      const controller = new AbortController()
+      const reports: CloudDownloadProgress[] = []
+      const pending = service.downloadBackup(
+        { id: 'download', kind: 'webdavSnapshot', objectKey: key, size: blob.size, createdAt: 1 },
+        undefined,
+        undefined,
+        { signal: controller.signal, onProgress: (state) => reports.push(state) },
+      )
+      if (stop) {
+        const reason = new DOMException('stopped', 'AbortError')
+        const rejected = expect(pending).rejects.toBe(reason)
+        await vi.waitFor(() =>
+          expect(reports.some((state) => state.receivedBytes === 64 * 1024)).toBe(true),
+        )
+        controller.abort(reason)
+        await rejected
+        release()
+        expect(reports.every((state) => state.completed === 0)).toBe(true)
+      } else {
+        const archive = await pending
+        expect(reports.at(-1)).toMatchObject({
+          phase: 'archive',
+          completed: 1,
+          total: 1,
+          receivedBytes: blob.size,
+          writtenBytes: archive.size,
+        })
+        expect(archive.size).toBeGreaterThan(0)
+      }
+    },
+  )
 
   it('passes the normalized selected resource IDs to plaintext companion preparation', async () => {
     const personal = await import('./PersonalResourceBackup')
@@ -1358,6 +1440,92 @@ describe('cloud restore selection session', () => {
     )
   })
 
+  it('retains successful resource descriptors for ID remapping and album ancestors during failed-item retry', async () => {
+    vi.stubGlobal('localStorage', new MemoryStorage())
+    vi.stubGlobal('sessionStorage', new MemoryStorage())
+    const { service, snapshot, restore, item } = session()
+    const original = createdSnapshot(['a'.repeat(64), 'b'.repeat(64)]).snapshot
+    original.version = 5
+    original.portableData.generatedImageAlbum = [
+      { item: { id: 'grandparent' } },
+      { item: { id: 'parent', generationManifest: { parentImageId: 'grandparent' } } },
+      { item: { id: 'child', generationManifest: { parentImageId: 'parent' } } },
+      { item: { id: 'unrelated' } },
+    ] as unknown as NonNullable<ArchivePortableData['generatedImageAlbum']>
+    snapshot.mockResolvedValue(original)
+    await service.restoreBackup(item, undefined, undefined, true, undefined, undefined, {
+      retryFailures: [
+        {
+          kind: 'resource',
+          id: original.resources[0]!.id,
+          fileName: 'failed.bin',
+          error: 'offline',
+        },
+        { kind: 'album', id: 'child', fileName: 'child.png', error: 'offline' },
+      ],
+    })
+    const selected = (restore.restoreStructured.mock.calls[0] as unknown as [StructuredSnapshot])[0]
+    expect(selected.resources.map((row) => row.id)).toEqual(original.resources.map((row) => row.id))
+    expect(selected.portableData.generatedImageAlbum?.map((entry) => entry.item.id)).toEqual([
+      'grandparent',
+      'parent',
+      'child',
+    ])
+  })
+
+  it('retries a failed original through the real shared planner without rereading successful originals', async () => {
+    vi.stubGlobal('localStorage', new MemoryStorage())
+    vi.stubGlobal('sessionStorage', new MemoryStorage())
+    const { service, snapshot, resources, item } = session()
+    const originals = await Promise.all(
+      ['failed', 'saved'].map(async (id) => {
+        const originalBlob = new Blob([id])
+        return {
+          ...cloudResource(await hashCloudBlob(originalBlob), id),
+          originalBlob,
+          fileSize: originalBlob.size,
+        }
+      }),
+    )
+    snapshot.mockResolvedValue(
+      (await createStructuredSnapshot(originals, [], [], { version: 1 })).snapshot,
+    )
+    const saved: Resource[] = []
+    resources.mockImplementation(async () => saved)
+    let fail = true
+    const read = vi.fn(async (object: import('./GitHubBackupBundle').GitHubBundleManifest) => {
+      if (fail && object.fileName === originals[0]!.fileName) throw new Error('offline')
+      return originals.find((row) => row.fileName === object.fileName)!.originalBlob
+    })
+    Object.assign(service, {
+      createGitHubObjectReader: async () => read,
+      restoreService: new RestoreService({
+        replace: vi.fn(),
+        restore: async (_categories, rows, _versions, hydrate) => {
+          const ready = await Promise.all(rows.map((row) => (hydrate ? hydrate(row) : row)))
+          saved.push(...ready)
+        },
+      }),
+    })
+    const committed = vi.fn()
+    expect(
+      await service.restoreBackup(item, undefined, undefined, true, undefined, committed),
+    ).toBe(1)
+    const failures = committed.mock.calls.at(-1)![0].failures
+    expect(failures).toHaveLength(1)
+    fail = false
+    read.mockClear()
+    expect(
+      await service.restoreBackup(item, undefined, undefined, true, undefined, undefined, {
+        retryFailures: failures,
+      }),
+    ).toBe(1)
+    expect(read).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ fileName: originals[0]!.fileName }),
+    )
+    expect(saved).toHaveLength(2)
+  })
+
   it('releases retained ZIP staging when closing the selection', async () => {
     const { service, restore, item } = session()
     const dispose = vi.fn()
@@ -1374,7 +1542,15 @@ describe('cloud restore selection session', () => {
       .mockResolvedValue(undefined)
     const { service, snapshot, restore, item } = session(importer)
     await service.listBackupRestoreContents(item)
-    await expect(service.restoreBackup(item)).rejects.toThrow('settings failed')
+    const committed = vi.fn()
+    await expect(
+      service.restoreBackup(item, undefined, undefined, true, undefined, committed),
+    ).resolves.toBe(1)
+    expect(committed).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        failures: [expect.objectContaining({ kind: 'portableData', error: 'settings failed' })],
+      }),
+    )
     await expect(service.restoreBackup(item, undefined, [])).rejects.toThrow('保持原选择')
     await expect(service.restoreBackup(item)).resolves.toBe(1)
     expect(snapshot).toHaveBeenCalledOnce()

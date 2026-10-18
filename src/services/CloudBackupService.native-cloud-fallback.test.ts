@@ -107,10 +107,9 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
       const credential = nativeCredentials.get(provider)
       if (credential) nativeCredentials.set(provider, { ...credential, state: 'invalid' })
     })
-    nativeCloud.restoreNativeStructuredObjects.mockResolvedValue({
-      downloaded: 1,
-      reused: 0,
-      assembled: 1,
+    nativeCloud.restoreNativeStructuredObjects.mockImplementation(async (options) => {
+      for (const resource of options.resources) options.onResource?.(resource.hash)
+      return { downloaded: 1, reused: 0, assembled: 1 }
     })
   })
 
@@ -202,13 +201,21 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
       kind: 'githubSnapshot' as const,
     }
     const summaries = vi.fn().mockResolvedValue([{ id: 'fresh-local-summary' }])
-    const prepare = vi.fn().mockResolvedValue({
-      portableData: {
-        version: 1,
-        assistantData: [],
-        credentials: { version: 1, cloudBackup: { github: 'fixture-secret' } },
+    const portableData = {
+      version: 1,
+      assistantData: [],
+      credentials: { version: 1, cloudBackup: { github: 'fixture-secret' } },
+    }
+    const prepare = vi.fn(
+      async (
+        ...[snapshot, _read, _existing, _categories, _name, options]: Parameters<
+          RestoreService['restoreStructured']
+        >
+      ) => {
+        await options!.nativePrepare!({ ...snapshot.resources[0]!, originalBlob: new Blob() })
+        return { restoredResources: 1, portableData }
       },
-    })
+    )
     const imported = vi
       .fn()
       .mockRejectedValueOnce(new Error('portable import failed'))
@@ -221,7 +228,7 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
         {} as ExportService,
         {
           canRestoreStructuredNative: () => true,
-          prepareStructuredNative: prepare,
+          restoreStructured: prepare,
           restoreNative: restore,
         } as unknown as RestoreService,
         undefined,
@@ -234,11 +241,13 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
       internals.readGitHubStructuredSnapshot = vi.fn().mockResolvedValue({
         ...createSnapshot(new Blob()).snapshot,
         resources: [
-          { id: 'selected', type: 'other', metadata: {} },
+          { id: 'selected', type: 'other', metadata: {}, contentHash: 'a'.repeat(64) },
           { id: 'excluded', type: 'other', metadata: {} },
         ],
       })
-      internals.buildNativeRestorePlan = vi.fn().mockResolvedValue({ objects: [], resources: [] })
+      internals.buildNativeRestorePlan = vi
+        .fn()
+        .mockResolvedValue({ objects: [], resources: [{ hash: 'a'.repeat(64) }] })
       return service
     }
     const first = fixture()
@@ -250,7 +259,7 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
     await expect(
       first.restoreBackup(item, undefined, ['selected'], false, ['extra.assistantData']),
     ).rejects.toThrow('WebView interrupted')
-    expect(summaries).not.toHaveBeenCalled()
+    expect(summaries).toHaveBeenCalledOnce()
     const records = await first.pendingNativeRestores()
     expect(records).toHaveLength(1)
     expect(records[0]?.restore?.resourceKeys).toEqual(['selected'])
@@ -258,17 +267,17 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
     expect(JSON.stringify(records)).not.toContain('token')
     nativeCloud.readNativeCloudCredential.mockResolvedValue({ state: 'valid', secret: 'token' })
     const reopened = fixture()
-    await expect(reopened.resumeNativeRestore(records[0]!)).rejects.toThrow(
-      'portable import failed',
-    )
+    await expect(reopened.resumeNativeRestore(records[0]!)).resolves.toBe(1)
     expect(await reopened.pendingNativeRestores()).toHaveLength(1)
     expect(await reopened.resumeNativeRestore(records[0]!)).toBe(1)
     expect(imported.mock.calls.map(([data]) => data)).toEqual([
       { version: 1, assistantData: [] },
       { version: 1, assistantData: [] },
     ])
-    expect(prepare.mock.calls[0]?.[0]).toEqual([expect.objectContaining({ id: 'selected' })])
-    expect(summaries).toHaveBeenCalledTimes(2)
+    expect(prepare.mock.calls[0]?.[0].resources).toEqual([
+      expect.objectContaining({ id: 'selected' }),
+    ])
+    expect(summaries).toHaveBeenCalledTimes(3)
     expect(await reopened.pendingNativeRestores()).toEqual([])
   })
 
@@ -689,13 +698,16 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
       }
       const restore = {
         canRestoreStructuredNative: vi.fn(() => true),
-        prepareStructuredNative: vi.fn(async () => ({
-          preview: { duplicatesToSkip: 0, categoriesToReuse: 0 },
-          resources: [{ id: 'resource-1' }],
-          versions: [],
-          categories: [],
-          portableData: { version: 1 },
-        })),
+        restoreStructured: vi.fn(
+          async (
+            ...[selected, _reader, _existing, _categories, _name, options]: Parameters<
+              RestoreService['restoreStructured']
+            >
+          ) => {
+            await options!.nativePrepare!({ ...selected.resources[0]!, originalBlob: new Blob() })
+            return { restoredResources: 1, portableData: { version: 1 } }
+          },
+        ),
         restoreNative: vi.fn(async () => ({ restoredResources: 1 })),
         prepareStructured: vi.fn(),
         restore: vi.fn(),
@@ -772,10 +784,18 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
             segments: [{ hash, offset: 0, size: 32 }],
           },
         ],
+        signal: expect.any(AbortSignal),
+        onResource: expect.any(Function),
       })
-      expect(restore.prepareStructuredNative).toHaveBeenCalledOnce()
-      expect(restore.restoreNative).toHaveBeenCalledOnce()
-      expect(restore.restoreNative).toHaveBeenCalledWith(expect.any(Object))
+      expect(restore.restoreStructured).toHaveBeenCalledOnce()
+      expect(restore.restoreStructured).toHaveBeenCalledWith(
+        snapshot,
+        expect.any(Function),
+        [],
+        [],
+        expect.any(String),
+        expect.objectContaining({ nativePrepare: expect.any(Function) }),
+      )
       expect(service.createGitHubObjectReader).not.toHaveBeenCalled()
       expect(restore.prepareStructured).not.toHaveBeenCalled()
       expect(resources.listResourceListSummaries).toHaveBeenCalledOnce()

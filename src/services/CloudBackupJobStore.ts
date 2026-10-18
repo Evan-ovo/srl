@@ -34,7 +34,7 @@ export interface CloudBackupJobRecord {
   id: string
   provider: CloudBackupProvider
   planHash: string
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'failed' | 'cancelled'
   objects: Record<string, CloudBackupObjectJobState>
   manifestName?: string
   error?: string
@@ -259,7 +259,9 @@ export class CloudBackupJobStore {
     const native = await this.getNative()
     if (native) {
       return (await this.nativeRecords<CloudBackupJobRecord>(native, 'cloudBackupJobs'))
-        .filter((record) => record.kind === 'restore' && record.status !== 'completed')
+        .filter(
+          (record) => record.kind === 'restore' && ['running', 'failed'].includes(record.status),
+        )
         .sort((a, b) => b.updatedAt - a.updatedAt)
     }
     const database = await this.open()
@@ -330,6 +332,13 @@ export class CloudBackupJobStore {
   async complete(job: CloudBackupJobRecord, manifestName: string): Promise<void> {
     job.status = 'completed'
     job.manifestName = manifestName
+    job.error = undefined
+    job.updatedAt = Date.now()
+    await this.put(job)
+  }
+
+  async cancel(job: CloudBackupJobRecord): Promise<void> {
+    job.status = 'cancelled'
     job.error = undefined
     job.updatedAt = Date.now()
     await this.put(job)

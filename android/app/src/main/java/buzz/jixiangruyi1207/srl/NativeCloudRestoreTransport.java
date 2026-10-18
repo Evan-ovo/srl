@@ -74,6 +74,66 @@ final class NativeCloudRestoreTransport {
         int downloaded;
         int reused;
         int assembled;
+        final Map<String, String> failures = new java.util.LinkedHashMap<>();
+    }
+
+    interface ResourceCompletion { void complete(String hash, String error) throws Exception; }
+    private static final java.util.concurrent.Semaphore DOWNLOAD_SLOTS = new java.util.concurrent.Semaphore(3, true);
+
+    /** Independent files finish fairly; each file still uses the existing verified/resumable assembler. */
+    static RestoreCounts restoreIncrementally(File root, List<RestoreObject> objects, List<RestoreResource> resources,
+        ObjectLocator locator, java.util.function.Supplier<ObjectDownloader> downloader, RestoreProgress progress,
+        ResourceCompletion completion) throws Exception {
+        Map<String, RestoreObject> objectIndex = validatePlan(objects, resources);
+        Map<String, RestoreResource> unique = new java.util.LinkedHashMap<>();
+        for (RestoreResource resource : resources) unique.putIfAbsent(resource.hash, resource);
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        ExecutorCompletionService<RestoreCounts> ready = new ExecutorCompletionService<>(executor);
+        Map<Future<RestoreCounts>, RestoreResource> pending = new HashMap<>();
+        java.util.Iterator<RestoreResource> queue = unique.values().iterator();
+        RestoreCounts total = new RestoreCounts();
+        int processed = 0;
+        try {
+            while (queue.hasNext() || !pending.isEmpty()) {
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedException("云恢复已取消");
+                while (queue.hasNext() && pending.size() < 3) {
+                    RestoreResource resource = queue.next();
+                    pending.put(ready.submit(() -> {
+                        Map<String, RestoreObject> needed = new java.util.LinkedHashMap<>();
+                        for (RestoreSegment segment : resource.segments) needed.put(segment.hash, objectIndex.get(segment.hash));
+                        return restoreFiles(new File(root, resource.hash), new java.util.ArrayList<>(needed.values()),
+                            java.util.Collections.singletonList(resource), locator, downloader.get(), true, (done, count) -> {});
+                    }), resource);
+                }
+                Future<RestoreCounts> future = ready.take();
+                RestoreResource resource = pending.remove(future);
+                String failure = null;
+                try {
+                    RestoreCounts result = future.get();
+                    total.downloaded += result.downloaded; total.reused += result.reused; total.assembled += result.assembled;
+                } catch (ExecutionException error) {
+                    Throwable cause = error.getCause();
+                    if (cause instanceof InterruptedException || cause instanceof java.io.InterruptedIOException) {
+                        // Socket timeouts are a file failure; explicit owner interruption stops the queue.
+                        if (Thread.currentThread().isInterrupted() || cause instanceof InterruptedException) throw new InterruptedException("云恢复已取消");
+                    }
+                    failure = cause.getMessage() == null ? "原件恢复失败" : cause.getMessage();
+                    total.failures.put(resource.hash, failure);
+                }
+                completion.complete(resource.hash, failure);
+                progress.update(++processed, unique.size());
+            }
+            return total;
+        } finally {
+            for (Future<RestoreCounts> future : pending.keySet()) future.cancel(true);
+            executor.shutdownNow();
+            boolean interrupted = false;
+            while (!executor.isTerminated()) {
+                try { executor.awaitTermination(1, TimeUnit.DAYS); }
+                catch (InterruptedException stopped) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+        }
     }
 
     /** Transport chunks belong to this invocation, never to the formal resource object store.
@@ -124,12 +184,12 @@ final class NativeCloudRestoreTransport {
         int completed = 0;
         // Close/drain the workers before deleting any file they may still be writing.
         try (ChunkPrefetch prefetch = new ChunkPrefetch(taskRoot, byHash, locator, downloader,
-                verified, ownedFiles, concurrency, prefetchBytes)) {
+                verified, ownedFiles, concurrency, prefetchBytes, resources)) {
             for (RestoreResource resource : resources) {
                 prefetch.checkRunning();
                 progress.update(completed, resources.size());
                 File destination = locator.locate(resource.hash);
-                if (verifyFile(destination, resource.hash, resource.size)) {
+                if (prefetch.isInstalled(resource)) {
                     counts.reused++;
                     releaseCompletedChunks(resource, remainingUses, verified, ownedFiles);
                     progress.update(++completed, resources.size());
@@ -139,7 +199,6 @@ final class NativeCloudRestoreTransport {
                 ownedFiles.add(temporary);
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 long written = 0;
-                prefetch.begin(resource.segments);
                 try (FileOutputStream output = new FileOutputStream(temporary)) {
                     byte[] buffer = new byte[RESTORE_BUFFER_BYTES];
                     for (RestoreSegment segment : resource.segments) {
@@ -161,6 +220,7 @@ final class NativeCloudRestoreTransport {
                     throw new IntegrityException("原生恢复资源大小或 SHA-256 校验失败");
                 }
                 installRestoredObject(temporary, destination, resource.size);
+                prefetch.installed.put(resource.hash, true);
                 counts.assembled++;
                 // Keep all chunks of an unfinished resource for resume. Only release task-owned
                 // chunks after the original is installed and no later resource needs them.
@@ -195,7 +255,7 @@ final class NativeCloudRestoreTransport {
         PreparedChunk(File file, boolean downloaded) { this.file = file; this.downloaded = downloaded; }
     }
 
-    /** Only chunks of the current missing original are prepared; existing originals never trigger
+    /** Missing originals share a bounded look-ahead window; existing originals never trigger
      * speculative downloads. Results are consumed in descriptor order, regardless of completion order.
      * Each stream hashes/copies with a fixed buffer. An oversized legacy chunk is admitted alone.
      */
@@ -212,20 +272,30 @@ final class NativeCloudRestoreTransport {
         final ExecutorCompletionService<PreparedChunk> completions;
         final Map<String, Future<PreparedChunk>> pending = new HashMap<>();
         final AtomicReference<Throwable> failure = new AtomicReference<>();
-        List<RestoreSegment> segments;
+        final List<RestoreResource> resources;
+        final Map<String, Boolean> installed = new HashMap<>();
+        int nextResource;
         int next;
         long reserved;
 
         ChunkPrefetch(File root, Map<String, RestoreObject> objects, ObjectLocator locator,
             ObjectDownloader downloader, Map<String, File> verified, Set<File> owned,
-            int concurrency, long budget) {
+            int concurrency, long budget, List<RestoreResource> resources) {
             this.root = root; this.objects = objects; this.locator = locator; this.downloader = downloader;
             this.verified = verified; this.owned = owned; this.concurrency = concurrency; this.budget = budget;
+            this.resources = resources;
             executor = Executors.newFixedThreadPool(concurrency);
             completions = new ExecutorCompletionService<>(executor);
         }
 
-        void begin(List<RestoreSegment> segments) { this.segments = segments; next = 0; }
+        boolean isInstalled(RestoreResource resource) throws Exception {
+            Boolean ready = installed.get(resource.hash);
+            if (ready == null) {
+                ready = verifyFile(locator.locate(resource.hash), resource.hash, resource.size);
+                installed.put(resource.hash, ready);
+            }
+            return ready;
+        }
 
         void checkRunning() throws Exception {
             Throwable error = failure.get();
@@ -236,7 +306,13 @@ final class NativeCloudRestoreTransport {
 
         void fill() throws Exception {
             checkRunning();
-            while (next < segments.size()) {
+            while (nextResource < resources.size()) {
+                // One bounded window spans selected files, including one-chunk small files.
+                if (pending.size() >= concurrency || (!pending.isEmpty() && reserved >= budget)) break;
+                RestoreResource resource = resources.get(nextResource);
+                if (next == 0 && isInstalled(resource)) { nextResource++; continue; }
+                List<RestoreSegment> segments = resource.segments;
+                if (next >= segments.size()) { nextResource++; next = 0; continue; }
                 RestoreObject object = objects.get(segments.get(next).hash);
                 if (verified.containsKey(object.hash) || pending.containsKey(object.hash)) { next++; continue; }
                 if (pending.size() >= concurrency || (!pending.isEmpty() && object.size > budget - reserved)) break;
@@ -336,6 +412,7 @@ final class NativeCloudRestoreTransport {
         }
         @Override public void download(RestoreObject object, File target) throws Exception {
             AtomicReference<okhttp3.Call> active = new AtomicReference<>();
+            DOWNLOAD_SLOTS.acquire();
             try {
                 downloadRestoreObject(provider, object.url, secret, username, object.hash, object.size, target, call -> {
                     active.set(call);
@@ -345,6 +422,7 @@ final class NativeCloudRestoreTransport {
                     onCall.accept(call);
                 });
             } finally {
+                DOWNLOAD_SLOTS.release();
                 synchronized (this) { calls.remove(active.get()); }
             }
         }

@@ -43,6 +43,20 @@ import { isNativeCloudTransferAvailable, nativeWebDavFetch } from './NativeCloud
 export interface RestoreTransferOptions {
   signal: AbortSignal
   onTransfer?: (received: number, total: number | undefined, fileName?: string) => void
+  onReceivedBytes?: (delta: number) => void
+}
+
+export interface CloudDownloadProgress {
+  phase: 'manifest' | 'archive'
+  completed: number
+  total: number
+  receivedBytes: number
+  writtenBytes: number
+}
+
+export interface CloudDownloadOptions {
+  signal?: AbortSignal
+  onProgress?: (progress: CloudDownloadProgress) => void
 }
 
 export class CloudBackupTransport {
@@ -545,17 +559,24 @@ export class CloudBackupTransport {
     )
   }
 
-  private getRestoreReaderContext(options?: RestoreTransferOptions): CloudBackupTransportContext {
+  protected getRestoreReaderContext(options?: RestoreTransferOptions): CloudBackupTransportContext {
     if (!options) return this.getTransportContext()
     const context = this.getTransportContext(options.signal)
-    context.readResponseBlob = (response, total, fileName) =>
-      readCloudResponseBlob(
+    context.readResponseBlob = (response, total, fileName) => {
+      let previous = 0
+      return readCloudResponseBlob(
         response,
         total,
-        options.onTransfer
-          ? (received, expected) => options.onTransfer!(received, expected, fileName)
+        options.onTransfer || options.onReceivedBytes
+          ? (received, expected) => {
+              options.signal.throwIfAborted()
+              options.onReceivedBytes?.(received - previous)
+              previous = received
+              options.onTransfer?.(received, expected, fileName)
+            }
           : undefined,
       )
+    }
     return context
   }
 
@@ -563,9 +584,10 @@ export class CloudBackupTransport {
     config: GitHubBackupConfig,
     secret: string,
     item: CloudBackupItem,
+    options?: RestoreTransferOptions,
   ): Promise<Blob> {
     return CloudBackupGitHubTransport.downloadGitHubBundle(
-      this.getTransportContext(),
+      this.getRestoreReaderContext(options),
       config,
       secret,
       item,
@@ -722,9 +744,10 @@ export class CloudBackupTransport {
     config: WebDavBackupConfig,
     secret: string,
     item: CloudBackupItem,
+    options?: RestoreTransferOptions,
   ): Promise<Blob> {
     return CloudBackupWebDavTransport.downloadWebDavBundle(
-      this.getTransportContext(),
+      this.getRestoreReaderContext(options),
       config,
       secret,
       item,

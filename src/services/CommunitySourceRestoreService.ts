@@ -102,21 +102,33 @@ export class CommunitySourceRestoreService extends RestoreService {
     readObject: (object: GitHubBundleManifest) => Promise<Blob>,
     signal?: AbortSignal,
     onPrepared?: (fileName: string) => void,
+    onFailure?: (
+      entry: NonNullable<ArchivePortableData['communitySources']>['attachments'][number],
+      error: unknown,
+    ) => void,
   ): Promise<void> {
     for (const entry of data?.communitySources?.attachments ?? []) {
-      signal?.throwIfAborted()
-      if (!this.attachmentRestore) throw new Error('当前恢复服务没有接入 Discord 附件存储')
-      const original = await readObject(entry.object)
-      signal?.throwIfAborted()
-      if (original.size !== entry.object.totalSize)
-        throw new Error(`Discord 本地附件完整性校验失败：${entry.assetId}`)
-      const uri = nativeFileSource(original)
-      const blob =
-        original.type === entry.mimeType ? original : new Blob([original], { type: entry.mimeType })
-      await this.attachmentRestore([
-        { assetId: entry.assetId, blob: uri ? rememberNativeFile(blob, uri) : blob },
-      ])
-      onPrepared?.(entry.object.fileName)
+      try {
+        signal?.throwIfAborted()
+        if (!this.attachmentRestore) throw new Error('当前恢复服务没有接入 Discord 附件存储')
+        const original = await readObject(entry.object)
+        signal?.throwIfAborted()
+        if (original.size !== entry.object.totalSize)
+          throw new Error(`Discord 本地附件完整性校验失败：${entry.assetId}`)
+        const uri = nativeFileSource(original)
+        const blob =
+          original.type === entry.mimeType
+            ? original
+            : new Blob([original], { type: entry.mimeType })
+        await this.attachmentRestore([
+          { assetId: entry.assetId, blob: uri ? rememberNativeFile(blob, uri) : blob },
+        ])
+        onPrepared?.(entry.object.fileName)
+      } catch (error) {
+        signal?.throwIfAborted()
+        if (!onFailure) throw error
+        onFailure(entry, error)
+      }
     }
   }
 

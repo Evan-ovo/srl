@@ -169,6 +169,24 @@ public class NativeCloudTransferPlugin extends Plugin {
      * Cloud Backup V3 原生恢复：远端对象经 OkHttp 流式写入 NativeLibrary，随后按
      * manifest 的分段顺序拼成资源对象。JS 只传计划和最终元数据，不承载二进制。
      */
+    private final java.util.concurrent.ConcurrentHashMap<String, NativeCloudRestoreWorker.Handle> restoreRequests = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Set<String> cancelledRestoreRequests = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    @PluginMethod public void cancelRestore(PluginCall call) {
+        runIo(call, () -> {
+            String id = safeId(call.getString("requestId"));
+            cancelledRestoreRequests.add(id);
+            NativeCloudRestoreWorker.Handle handle = restoreRequests.get(id);
+            if (handle != null) {
+                requestCancellation(handle.root);
+                WorkManager.getInstance(getContext()).cancelUniqueWork(NativeCloudRestoreWorker.WORK_PREFIX + handle.root.getName()).getResult().get();
+                NativeCloudRestoreWorker.awaitStopped(handle.root.getName());
+                new NativeSecretStore(getContext()).clear("cloud-job-" + handle.root.getName());
+            }
+            call.resolve();
+        });
+    }
+
     @PluginMethod
     public void restoreStructuredFiles(PluginCall call) {
         runIo(call, () -> {
@@ -226,31 +244,73 @@ public class NativeCloudTransferPlugin extends Plugin {
                 resourcePlan.add(new NativeCloudRestoreTransport.RestoreResource(hash, size, ranges));
             }
             NativeCloudRestoreTransport.validatePlan(objectPlan, resourcePlan);
-            NativeCloudRestoreWorker.Handle handle = NativeCloudRestoreWorker.enqueue(getContext(), config, secret, objects, resources);
+            NativeCloudRestoreWorker.Handle handle = NativeCloudRestoreWorker.enqueue(getContext(), config, secret, objects, resources, Boolean.TRUE.equals(call.getBoolean("progressive", false)));
             new NativeSecretStore(getContext()).saveCredential(
                 "cloud-" + provider, "cloud-" + provider + "-invalid", secret
             );
-            observeRestore(call, handle);
+            String requestId = call.getString("requestId");
+            if (requestId != null) {
+                requestId = safeId(requestId);
+                restoreRequests.put(requestId, handle);
+                if (cancelledRestoreRequests.contains(requestId)) {
+                    requestCancellation(handle.root);
+                    WorkManager.getInstance(getContext()).cancelUniqueWork(NativeCloudRestoreWorker.WORK_PREFIX + handle.root.getName());
+                }
+            }
+            observeRestore(call, handle, requestId);
         });
     }
 
-    private void observeRestore(PluginCall call, NativeCloudRestoreWorker.Handle handle) {
+    private void observeRestore(PluginCall call, NativeCloudRestoreWorker.Handle handle, String requestId) {
         LiveData<WorkInfo> liveData = WorkManager.getInstance(getContext()).getWorkInfoByIdLiveData(handle.workId);
         final Observer<WorkInfo>[] holder = new Observer[1];
+        final long[] cursor = {0};
         holder[0] = info -> {
-            if (info == null || !info.getState().isFinished()) return;
-            liveData.removeObserver(holder[0]);
-            NativeExecutors.ioLimited().execute(() -> {
+            if (info == null) return;
+            if (info.getState().isFinished()) liveData.removeObserver(holder[0]);
+            NativeExecutors.ioSerial().execute(() -> {
                 try {
+                    if (info.getState().isFinished()) NativeCloudRestoreWorker.awaitStopped(handle.root.getName());
                     JSONObject job = readJob(handle.root);
+                    File receipts = new File(handle.root, "restore-results.ndjson");
+                    if (requestId != null && receipts.isFile()) try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(receipts, "r")) {
+                        input.seek(cursor[0]);
+                        while (input.getFilePointer() < input.length()) {
+                            JSArray entries = new JSArray();
+                            for (int count = 0; count < 64; count++) {
+                                long start = input.getFilePointer();
+                                String line = input.readLine();
+                                if (line == null) break;
+                                long end = input.getFilePointer();
+                                input.seek(end - 1);
+                                boolean complete = input.read() == 10;
+                                input.seek(end);
+                                if (!complete) { input.seek(start); break; }
+                                try { entries.put(new JSONObject(new String(line.getBytes(StandardCharsets.ISO_8859_1), StandardCharsets.UTF_8))); }
+                                catch (Exception incomplete) { input.seek(start); break; }
+                            }
+                            if (entries.length() == 0) break;
+                            cursor[0] = input.getFilePointer();
+                            JSObject status = jobSummary(job);
+                            status.put("requestId", requestId); status.put("resourceResults", entries);
+                            getActivity().runOnUiThread(() -> notifyListeners("jobProgress", status));
+                        }
+                    }
+                    if (!info.getState().isFinished()) return;
                     if (!"completed".equals(job.optString("status"))) {
-                        call.reject(job.optString("error", "原生云恢复未完成"), job.optString("errorCode", "RESTORE_FAILED"));
+                        call.reject(job.optString("error", "原生云恢复未完成"), "cancelled".equals(job.optString("status")) ? "RESTORE_CANCELLED" : job.optString("errorCode", "RESTORE_FAILED"));
                         return;
                     }
                     JSObject result = new JSObject();
                     for (String key : new String[]{"downloaded", "reused", "assembled"}) result.put(key, job.optInt(key, 0));
+                    result.put("failures", job.optJSONArray("failures"));
                     call.resolve(result);
                 } catch (Exception error) { call.reject("读取原生恢复结果失败", error); }
+                finally {
+                    if (info.getState().isFinished() && requestId != null) {
+                        restoreRequests.remove(requestId); cancelledRestoreRequests.remove(requestId);
+                    }
+                }
             });
         };
         getActivity().runOnUiThread(() -> liveData.observe(getActivity(), holder[0]));
@@ -715,7 +775,7 @@ public class NativeCloudTransferPlugin extends Plugin {
             // Persist cancellation before stopping WorkManager. Otherwise onStopped()
             // can abort an HTTP call first and the worker may misclassify that IOException
             // as a transient network failure and enqueue a retry.
-            WorkManager.getInstance(getContext()).cancelUniqueWork(JOB_WORK_PREFIX + jobId);
+            WorkManager.getInstance(getContext()).cancelUniqueWork(("restore".equals(readJob(root).optString("kind")) ? NativeCloudRestoreWorker.WORK_PREFIX : JOB_WORK_PREFIX) + jobId);
             new NativeSecretStore(getContext()).clear("cloud-job-" + jobId);
             call.resolve(response);
         });

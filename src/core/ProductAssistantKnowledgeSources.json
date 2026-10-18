@@ -1,5 +1,5 @@
 {
-  "knowledgeSha256": "effcf70caf21a668886349cca94e6ec217f1548532bac97d91161af7a8df9f19",
+  "knowledgeSha256": "735fddc92090874f44c36be51de87948f0a01545ead22f678143cfda9058cc2c",
   "sources": [
     {
       "path": "src/components/RecycleBinPanel.vue",
@@ -104,7 +104,7 @@
     {
       "path": "src/components/CloudBackupCenter.vue",
       "guides": ["backup"],
-      "sha256": "19b8e976ec79830ec476891cee8d61c44ec041fcd4f3bb09f692c6c633c16649"
+      "sha256": "11eda3702f5702ae75a5d0fb2c131b3234c880591a0d4a1eae700128412b59f8"
     },
     {
       "path": "src/services/PersonalResourceBackup.ts",
@@ -114,12 +114,12 @@
     {
       "path": "src/services/CloudBackupService.ts",
       "guides": ["backup"],
-      "sha256": "86d462d3741f6c4834edc5035556ba2994495ad93b54d2157cf176685e3a0df6"
+      "sha256": "c19c1e7ed7d77d2e3e592794ce5d205f4e9671415a110a4ec8197a84b7d84586"
     },
     {
       "path": "src/services/RestoreService.ts",
       "guides": ["backup"],
-      "sha256": "a3966ddc09df53bac5f3fa412643f593c1669bbb4f8797c0d08e576cb58fc77a"
+      "sha256": "056e797fddd1876c3352de7250dc98ee1f1e90609218d439ef0a1fbba04fd33d"
     },
     {
       "path": "src/components/TavernBridgeCenter.vue",
@@ -485,7 +485,7 @@
     {
       "path": "src/services/GeneratedImageAlbumService.ts",
       "guides": ["image-album"],
-      "sha256": "89fb003c051456fed432eb2181714e8d9f82afed133a29c866368c5efca69c63"
+      "sha256": "ed2df313b83f89fb8be8db345cafb5b8172a835f20542f4833cd1847c2317e88"
     },
     {
       "path": "src/storage/IndexedDbGeneratedImageAlbumStorage.ts",
@@ -630,7 +630,7 @@
     {
       "path": "src/services/CloudBackupSnapshotOperations.ts",
       "guides": ["backup"],
-      "sha256": "9b736c174106af8a3fd22c4eea26b2131a63873fab7fd25238fafab84a08fbf7"
+      "sha256": "014b7ea46949888a06c476992344f1ce52f24326540bf6546f518c46fd205e65"
     },
     {
       "path": "src/services/ResourceCardVersionOperations.ts",
@@ -901,7 +901,7 @@
     {
       "path": "src/services/CloudBackupJobStore.ts",
       "guides": ["backup"],
-      "sha256": "8a27723bd5f2abf196d016ab4d1aa5ee1b8b942c8b7ca824a85ed155e87d5a38"
+      "sha256": "89f525810e9dbb9f5af3c6bb1f43b98520352520d782231a56dc354b7713f7f4"
     },
     {
       "path": "src/storage/AndroidNativeDexieCore.ts",
@@ -1031,7 +1031,7 @@
     {
       "path": "src/services/CloudBackupTransport.ts",
       "guides": ["backup"],
-      "sha256": "1d4d23e36be70bda4a983eee9c8383a22320749cb46a270c052322eeede587ff"
+      "sha256": "05f11ee045a654ec1fbf9aa26e2ef00e218ed68c057b026d47d42dfb7964c1fc"
     },
     {
       "path": "src/components/AppearanceUiEditor.vue",
@@ -1311,7 +1311,7 @@
     {
       "path": "src/composables/UseCloudBackupCenter.ts",
       "guides": ["backup", "background-notifications"],
-      "sha256": "613ff2ff9f400af1cab119547b4b287f6d5f757c6de889ce79030f9b39c65eff"
+      "sha256": "a9874a68bf9e29f96b4127544b763259eebc336dc5a82564237b4244bf4124be"
     },
     {
       "path": "src/core/AndroidAppUpdate.ts",
@@ -1457,6 +1457,11 @@
       "path": "src/services/AttachmentWordEditing.ts",
       "guides": ["resource-attachments"],
       "sha256": "3655be70d24a71d1f0139d6ee1947fb746fa73e3800657afedd4985ba8df6ce1"
+    },
+    {
+      "path": "src/services/CloudBackupObjectReader.ts",
+      "guides": ["backup"],
+      "sha256": "96a04f6a55b846df732e5f2d8900c2befb37056d90de5bc0263b61b78a39d4e3"
     },
     {
       "path": "src/core/GitHubAndroidApkRelease.ts",

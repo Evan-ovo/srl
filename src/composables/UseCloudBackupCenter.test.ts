@@ -9,6 +9,7 @@ import type { CloudRestoreOptions } from '../services/CloudBackupService'
 import type { ResourceSummary } from '../types/Resource'
 import type { WebCloudBackupState } from '../types/CloudBackup'
 import type { RestoreReport } from '../types/Backup'
+import type { CloudDownloadOptions } from '../services/CloudBackupTransport'
 
 const runtime = vi.hoisted(() => ({
   native: true,
@@ -32,6 +33,9 @@ const runtime = vi.hoisted(() => ({
   reconcile: vi.fn(),
   restore: vi.fn(),
   contents: vi.fn(),
+  download: vi.fn(),
+  saveFile: vi.fn(),
+  discard: vi.fn(),
 }))
 vi.mock('@capacitor/core', () => ({
   Capacitor: {
@@ -62,11 +66,17 @@ vi.mock('../core/AppContainer', () => ({
     getNativeRestoreProgress: runtime.restoreProgress,
     reconcileNativeJob: runtime.reconcile,
     restoreBackup: runtime.restore,
+    downloadBackup: runtime.download,
     listBackupRestoreContents: runtime.contents,
     clearRestorePreview: vi.fn(async () => undefined),
+    discardRestoreFailures: runtime.discard,
   },
 }))
 vi.mock('./UseConfirmDialog', () => ({ confirmAction: runtime.confirm }))
+vi.mock('../utils/LibraryFormatting', async (load) => ({
+  ...(await load<typeof import('../utils/LibraryFormatting')>()),
+  downloadBlob: runtime.saveFile,
+}))
 vi.mock('../services/PersonalResourceBackup', () => ({
   clearPlainSecretExportGrant: async () => undefined,
 }))
@@ -103,6 +113,8 @@ beforeEach(() => {
   runtime.restoreProgress.mockResolvedValue(null)
   runtime.reconcile.mockResolvedValue(undefined)
   runtime.restore.mockResolvedValue(0)
+  runtime.download.mockResolvedValue(new Blob(['zip']))
+  runtime.saveFile.mockResolvedValue(undefined)
   runtime.contents.mockResolvedValue({
     resources: [],
     portableScopeIds: ['extra.chatReader', 'extra.assistantData', 'extra.credentials'],
@@ -125,6 +137,111 @@ function mountCenter(resources = ref<ResourceSummary[]>([])) {
   center.github.value.repository = 'private-backup'
   return { center, wrapper, emit, resources }
 }
+
+it('publishes actual cloud download item/byte/ZIP progress and only then hands it to saving', async () => {
+  let resolve!: (blob: Blob) => void
+  let options!: CloudDownloadOptions
+  runtime.download.mockImplementationOnce(
+    (_item, _config, _secret, value: CloudDownloadOptions) => {
+      options = value
+      return new Promise<Blob>((done) => {
+        resolve = done
+      })
+    },
+  )
+  const { center, wrapper } = mountCenter()
+  const pending = center.download(item)
+  await flushPromises()
+  const id = center.downloadOperation.value
+  options.onProgress!({
+    phase: 'archive',
+    completed: 2,
+    total: 8,
+    receivedBytes: 1000,
+    writtenBytes: 500,
+  })
+  expect(center.downloadProgress.value).toMatchObject({
+    completed: 2,
+    total: 8,
+    receivedBytes: 1000,
+    writtenBytes: 500,
+  })
+  expect(taskCenter.list().find((task) => task.operationId === id)).toMatchObject({
+    progress: 0.25,
+    itemProgress: { completed: 2, total: 8 },
+    transfer: { transferredBytes: 1000 },
+  })
+  expect(runtime.saveFile).not.toHaveBeenCalled()
+  const zip = new Blob(['complete'])
+  resolve(zip)
+  await pending
+  expect(runtime.saveFile).toHaveBeenCalledExactlyOnceWith(zip, item.objectKey)
+  expect(taskCenter.list().find((task) => task.operationId === id)?.status).toBe('completed')
+  taskCenter.dismiss(id)
+  wrapper.unmount()
+})
+
+it('acknowledges a download stop only after it drains and ignores late progress/results', async () => {
+  let resolve!: (blob: Blob) => void
+  let options!: CloudDownloadOptions
+  runtime.download.mockImplementationOnce(
+    (_item, _config, _secret, value: CloudDownloadOptions) => {
+      options = value
+      return new Promise<Blob>((done) => {
+        resolve = done
+      })
+    },
+  )
+  const { center, wrapper } = mountCenter()
+  const pending = center.download(item)
+  await flushPromises()
+  const id = center.downloadOperation.value
+  center.stopDownload()
+  expect(options.signal?.aborted).toBe(true)
+  expect(taskCenter.list().find((task) => task.operationId === id)?.status).toBe('running')
+  options.onProgress!({
+    phase: 'archive',
+    completed: 9,
+    total: 9,
+    receivedBytes: 9999,
+    writtenBytes: 9999,
+  })
+  expect(center.downloadProgress.value?.receivedBytes).toBe(0)
+  resolve(new Blob(['late']))
+  await pending
+  expect(runtime.saveFile).not.toHaveBeenCalled()
+  expect(taskCenter.list().find((task) => task.operationId === id)?.status).toBe('cancelled')
+  taskCenter.dismiss(id)
+  wrapper.unmount()
+})
+
+it('cancels download on leaving and reopening does not start it again', async () => {
+  let options!: CloudDownloadOptions
+  runtime.download.mockImplementationOnce(
+    (_item, _config, _secret, value: CloudDownloadOptions) => {
+      options = value
+      return new Promise<Blob>((_resolve, reject) =>
+        options.signal!.addEventListener('abort', () => reject(options.signal!.reason), {
+          once: true,
+        }),
+      )
+    },
+  )
+  const { center, wrapper } = mountCenter()
+  const pending = center.download(item)
+  await flushPromises()
+  const id = center.downloadOperation.value
+  wrapper.unmount()
+  await pending
+  expect(options.signal?.aborted).toBe(true)
+  const reopened = mountCenter()
+  await flushPromises()
+  expect(runtime.download).toHaveBeenCalledOnce()
+  expect(reopened.center.downloadOperation.value).toBe('')
+  expect(runtime.saveFile).not.toHaveBeenCalled()
+  reopened.wrapper.unmount()
+  taskCenter.dismiss(id)
+})
 
 it('shows real preparation/write counters and current download bytes, and acknowledges a stop', async () => {
   runtime.native = false
@@ -168,7 +285,7 @@ it('shows real preparation/write counters and current download bytes, and acknow
   }
 })
 
-it('distinguishes final writing from extra-data import and disables stopping once commit starts', async () => {
+it('distinguishes group writing from extra-data import and waits for extra-data safe completion', async () => {
   runtime.native = false
   runtime.confirm.mockResolvedValue(true)
   let finish!: () => void
@@ -378,6 +495,102 @@ it('forwards committed resource IDs for targeted refresh and skips refresh for a
     expect(emit).not.toHaveBeenCalled()
   } finally {
     wrapper.unmount()
+  }
+})
+
+it('publishes a fast committed group within the refresh window while a later download is still waiting', async () => {
+  runtime.native = false
+  runtime.confirm.mockResolvedValue(true)
+  let finish!: () => void
+  runtime.restore.mockImplementationOnce(
+    async (_item, _filter, _keys, _gallery, _scopes, committed) => {
+      committed({ restoredResources: 1, resourceIds: ['first'], categoriesChanged: false })
+      committed({ restoredResources: 1, resourceIds: ['second'], categoriesChanged: false })
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      committed({
+        restoredResources: 2,
+        resourceIds: ['first', 'second'],
+        categoriesChanged: false,
+      })
+      return 2
+    },
+  )
+  const { center, wrapper, emit } = mountCenter()
+  let importing: Promise<void> | undefined
+  try {
+    await flushPromises()
+    center.restorePicker.value = { item, resources: [resource('one')] }
+    center.selectedRestoreKeys.value = new Set(['one'])
+    importing = center.restore(item)
+    await flushPromises()
+    expect(emit).toHaveBeenCalledExactlyOnceWith(
+      'library-changed',
+      expect.objectContaining({ resourceIds: ['first'] }),
+    )
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledTimes(2), { timeout: 1_500 })
+    expect(emit).toHaveBeenLastCalledWith(
+      'library-changed',
+      expect.objectContaining({ resourceIds: ['second'] }),
+    )
+    expect(center.busyAction.value).toBe('restore:backup-1')
+  } finally {
+    finish?.()
+    await importing
+    expect(emit).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  }
+})
+
+it('offers failed items for explicit retry only and ending the round seals the offer across reopening', async () => {
+  runtime.native = false
+  runtime.confirm.mockResolvedValue(true)
+  runtime.discard.mockResolvedValue(undefined)
+  const failure = {
+    kind: 'resource' as const,
+    id: 'failed',
+    fileName: 'failed.json',
+    error: 'HTTP 404',
+  }
+  const { center, wrapper } = mountCenter()
+  try {
+    await flushPromises()
+    center.restorePicker.value = { item, resources: [resource('saved'), resource('failed')] }
+    center.selectedRestoreKeys.value = new Set(['saved', 'failed'])
+    runtime.restore.mockImplementation(
+      async (_item, _filter, _keys, _gallery, _scopes, committed) => {
+        committed({ restoredResources: 1, resourceIds: ['saved'], failures: [failure] })
+        return 1
+      },
+    )
+    await center.restore(item)
+    expect(center.restoreFailures.value).toEqual([failure])
+    expect(runtime.restore).toHaveBeenCalledOnce()
+    await flushPromises()
+    expect(runtime.restore).toHaveBeenCalledOnce()
+    await center.retryRestoreFailures()
+    expect(runtime.restore.mock.calls[1]![6]).toMatchObject({ retryFailures: [failure] })
+    expect(
+      runtime.confirm.mock.calls.filter(([options]) => options.title === '从云端导入'),
+    ).toHaveLength(1)
+    await center.dismissRestoreFailures()
+    expect(runtime.discard).toHaveBeenCalledOnce()
+    expect(center.restoreFailures.value).toEqual([])
+    expect(center.restorePicker.value).toBeUndefined()
+    expect(center.message.value).toContain('不会自动重试')
+    await center.retryRestoreFailures()
+    expect(runtime.restore).toHaveBeenCalledTimes(2)
+  } finally {
+    wrapper.unmount()
+  }
+  const reopened = mountCenter()
+  try {
+    await flushPromises()
+    expect(reopened.center.restoreFailures.value).toEqual([])
+    expect(runtime.restore).toHaveBeenCalledTimes(2)
+  } finally {
+    reopened.wrapper.unmount()
   }
 })
 

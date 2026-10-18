@@ -73,6 +73,10 @@ export class GeneratedImageAlbumService {
     read: (entry: import('./GeneratedImageAlbumBackup').AlbumBackup[number]) => Promise<Blob>,
     signal?: AbortSignal,
     onPrepared?: (fileName: string) => void,
+    onFailure?: (
+      entry: import('./GeneratedImageAlbumBackup').AlbumBackup[number],
+      error: unknown,
+    ) => void,
   ): Promise<void> {
     const { hashCloudBlob } = await import('./CloudArchiveCodec')
     const { hashBytes } = await import('./HashService')
@@ -134,56 +138,66 @@ export class GeneratedImageAlbumService {
         if (target) existing.set(id, target)
       }
     }
+    const failed = new Set<string>()
     for (const entry of entries) {
-      signal?.throwIfAborted()
-      const id = ids.get(entry.item.id)!
-      const item = structuredClone(entry.item)
-      item.id = id
-      if (item.generationManifest?.parentImageId)
-        item.generationManifest.parentImageId =
-          ids.get(item.generationManifest.parentImageId) ?? item.generationManifest.parentImageId
-      const local = existing.get(id)
-      if (local) {
+      try {
+        const parent = entry.item.generationManifest?.parentImageId
+        if (parent && failed.has(parent)) throw new Error('相册父图尚未恢复，请重试该组图片')
+        signal?.throwIfAborted()
+        const id = ids.get(entry.item.id)!
+        const item = structuredClone(entry.item)
+        item.id = id
+        if (item.generationManifest?.parentImageId)
+          item.generationManifest.parentImageId =
+            ids.get(item.generationManifest.parentImageId) ?? item.generationManifest.parentImageId
+        const local = existing.get(id)
+        if (local) {
+          if (
+            !equal(local, item) ||
+            (await hashCloudBlob(await this.getOriginalBlob(id))).toLowerCase() !==
+              entry.object!.totalSha256.toLowerCase()
+          )
+            throw new Error(`相册恢复身份冲突：${item.name}`)
+          onPrepared?.(item.name)
+          continue
+        }
+        const original = await read(entry)
+        signal?.throwIfAborted()
         if (
-          !equal(local, item) ||
+          original.size !== item.sizeBytes ||
+          (await hashCloudBlob(original)).toLowerCase() !== entry.object!.totalSha256.toLowerCase()
+        )
+          throw new Error(`相册原图完整性校验失败：${item.name}`)
+        signal?.throwIfAborted()
+        const uri = nativeFileSource(original)
+        const blob =
+          original.type === item.mimeType ? original : new Blob([original], { type: item.mimeType })
+        const preserved = uri ? rememberNativeFile(blob, uri) : blob
+        const thumbnail = await createImageThumbnail(preserved)
+        signal?.throwIfAborted()
+        // Recheck only this target after asynchronous preparation, never overwrite a concurrent save.
+        if (await this.storage.get(id)) throw new Error(`相册恢复期间目标发生变化：${item.name}`)
+        await this.storage.put(item, {
+          id,
+          originalBlob: preserved,
+          originalMimeType: item.mimeType,
+          thumbnailBlob: thumbnail ?? undefined,
+          thumbnailMimeType: thumbnail?.type,
+          updatedAt: item.updatedAt,
+        })
+        if (
+          !equal(await this.storage.get(id), item) ||
           (await hashCloudBlob(await this.getOriginalBlob(id))).toLowerCase() !==
             entry.object!.totalSha256.toLowerCase()
         )
-          throw new Error(`相册恢复身份冲突：${item.name}`)
+          throw new Error(`相册原图保存后读回失败：${item.name}`)
         onPrepared?.(item.name)
-        continue
+      } catch (error) {
+        signal?.throwIfAborted()
+        if (!onFailure) throw error
+        failed.add(entry.item.id)
+        onFailure(entry, error)
       }
-      const original = await read(entry)
-      signal?.throwIfAborted()
-      if (
-        original.size !== item.sizeBytes ||
-        (await hashCloudBlob(original)).toLowerCase() !== entry.object!.totalSha256.toLowerCase()
-      )
-        throw new Error(`相册原图完整性校验失败：${item.name}`)
-      signal?.throwIfAborted()
-      const uri = nativeFileSource(original)
-      const blob =
-        original.type === item.mimeType ? original : new Blob([original], { type: item.mimeType })
-      const preserved = uri ? rememberNativeFile(blob, uri) : blob
-      const thumbnail = await createImageThumbnail(preserved)
-      signal?.throwIfAborted()
-      // Recheck only this target after asynchronous preparation, never overwrite a concurrent save.
-      if (await this.storage.get(id)) throw new Error(`相册恢复期间目标发生变化：${item.name}`)
-      await this.storage.put(item, {
-        id,
-        originalBlob: preserved,
-        originalMimeType: item.mimeType,
-        thumbnailBlob: thumbnail ?? undefined,
-        thumbnailMimeType: thumbnail?.type,
-        updatedAt: item.updatedAt,
-      })
-      if (
-        !equal(await this.storage.get(id), item) ||
-        (await hashCloudBlob(await this.getOriginalBlob(id))).toLowerCase() !==
-          entry.object!.totalSha256.toLowerCase()
-      )
-        throw new Error(`相册原图保存后读回失败：${item.name}`)
-      onPrepared?.(item.name)
     }
   }
 

@@ -152,7 +152,7 @@ function reader(created: Awaited<ReturnType<typeof createStructuredSnapshot>>) {
 
 describe('cloud backup registered content round trips', () => {
   it.each(['complete', 'failed', 'cancelled'] as const)(
-    'reports whole preparation progress before album/Discord downloads and preserves it across resources: %s',
+    'reports committed resources and sidecars, preserving saved rows on failure or stop: %s',
     async (mode) => {
       const db = new AppDatabase(`cloud-whole-progress-${crypto.randomUUID()}`)
       const image = new Blob(['album image'], { type: 'image/png' })
@@ -207,9 +207,9 @@ describe('cloud backup registered content round trips', () => {
         [original.contentHash, original.originalBlob],
       ])
       const read = vi.fn(async (object: import('./GitHubBackupBundle').GitHubBundleManifest) => {
-        expect(events.at(-1)).toMatchObject({ phase: 'prepare', total: 3 })
+        expect(events.at(-1)).toMatchObject({ total: 3 })
         if (object.totalSha256 === (await hashCloudBlob(attachment))) {
-          expect(events.at(-1)?.completed).toBe(1)
+          expect(events.at(-1)?.completed).toBe(2)
           if (mode === 'failed') throw new Error('attachment download failed')
           if (mode === 'cancelled') controller.abort(new DOMException('stopped', 'AbortError'))
         }
@@ -222,18 +222,24 @@ describe('cloud backup registered content round trips', () => {
         })
         if (mode === 'complete') {
           await restoring
-          const counts = events.filter((e) => e.phase === 'prepare').map((e) => e.completed)
+          const counts = events.map((e) => e.completed)
           expect(counts).toEqual([...counts].sort((a, b) => a - b))
           expect(new Set(counts)).toEqual(new Set([0, 1, 2, 3]))
           expect(read).toHaveBeenCalledTimes(3)
           expect((await db.resources.get('remote'))?.contentHash).toBe(original.contentHash)
         } else {
-          await expect(restoring).rejects.toThrow(
-            mode === 'failed' ? 'attachment download failed' : 'stopped',
-          )
-          expect(events.every((e) => e.phase === 'prepare' && e.completed <= 1)).toBe(true)
-          expect(read).toHaveBeenCalledTimes(2)
-          expect(await db.resources.count()).toBe(0)
+          if (mode === 'failed') {
+            const report = await restoring
+            expect(report.failures).toEqual([
+              expect.objectContaining({
+                kind: 'communityAttachment',
+                error: 'attachment download failed',
+              }),
+            ])
+          } else await expect(restoring).rejects.toThrow('stopped')
+          expect(events.every((e) => e.completed <= 2)).toBe(true)
+          expect(read).toHaveBeenCalledTimes(3)
+          expect(await db.resources.count()).toBe(1)
         }
       } finally {
         db.close()
@@ -431,10 +437,24 @@ describe('cloud backup registered content round trips', () => {
           const part =
             created.snapshot.portableData.communitySources!.attachments[0]!.object.parts[0]!
           created.chunks.set(part.name, new Blob(['wrong bytes']))
-          await expect(
-            service.restoreStructured(created.snapshot, reader(created), [], [], 'cloud'),
-          ).rejects.toThrow('integrity')
-          expect(await db.resources.count()).toBe(0)
+          const report = await service.restoreStructured(
+            created.snapshot,
+            reader(created),
+            [],
+            [],
+            'cloud',
+          )
+          expect(report.failures).toEqual([
+            expect.objectContaining({
+              kind: 'communityAttachment',
+              error: 'fixture object integrity failed',
+            }),
+          ])
+          expect(await db.resources.count()).toBe(1)
+          expect(sourceRestore).toHaveBeenCalledOnce()
+          expect(
+            sourceRestore.mock.calls[0]![0].messages[0]!.attachments[0]!.localAssetId,
+          ).toBeUndefined()
         } else {
           const selected = {
             ...created.snapshot,
@@ -445,7 +465,7 @@ describe('cloud backup registered content round trips', () => {
           expect(read).toHaveBeenCalledOnce()
           expect(await db.resources.count()).toBe(1)
         }
-        expect(sourceRestore).not.toHaveBeenCalled()
+        if (mode !== 'corrupt') expect(sourceRestore).not.toHaveBeenCalled()
         expect(await db.assets.count()).toBe(0)
         expect(await db.restoreStaging.count()).toBe(0)
       } finally {

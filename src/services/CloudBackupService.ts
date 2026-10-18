@@ -58,7 +58,12 @@ import {
   normalizeSchedule,
 } from './CloudBackupPolicy'
 
-import { CloudBackupTransport, type RestoreTransferOptions } from './CloudBackupTransport'
+import {
+  CloudBackupTransport,
+  type RestoreTransferOptions,
+  type CloudDownloadOptions,
+  type CloudDownloadProgress,
+} from './CloudBackupTransport'
 
 import { type CloudBackupProgressCallback } from './CloudBackupTransportContext'
 
@@ -93,6 +98,7 @@ import {
 import type { RestoreService, StructuredRestoreOptions } from './RestoreService'
 
 export interface CloudRestoreOptions extends Omit<StructuredRestoreOptions, 'onFailure'> {
+  retryFailures?: import('../types/Backup').StructuredRestoreFailure[]
   onTransfer?: RestoreTransferOptions['onTransfer']
   onPhase?: (phase: 'manifest' | 'extras') => void
 }
@@ -300,6 +306,7 @@ export class CloudBackupService extends CloudBackupTransport {
   private readonly readCommunityAttachment?: (assetId: string) => Promise<Blob | undefined>
   private readonly readAlbumFile?: (id: string) => Promise<Blob>
   private nativeRestoreInFlight = false
+  private lastRestoreRecovery?: CloudBackupJobRecord
 
   constructor(
     resourceService: ResourceService,
@@ -390,6 +397,14 @@ export class CloudBackupService extends CloudBackupTransport {
       record.restore.includeGallery,
       record.restore.portableScopeIds,
     )
+  }
+
+  async discardRestoreFailures(): Promise<string | undefined> {
+    const record = this.lastRestoreRecovery
+    if (!record) return
+    await this.transportState.jobStore.cancel(record)
+    this.lastRestoreRecovery = undefined
+    return record.id
   }
 
   private restoreTarget(config: CloudBackupConfig): CloudBackupConfig {
@@ -984,7 +999,38 @@ export class CloudBackupService extends CloudBackupTransport {
     item: CloudBackupItem,
     config?: CloudBackupConfig,
     secret?: string,
+    options: CloudDownloadOptions = {},
   ): Promise<Blob> {
+    const controller = new AbortController()
+    const signal = options.signal ?? controller.signal
+    const progress: CloudDownloadProgress = {
+      phase: 'manifest',
+      completed: 0,
+      total: 0,
+      receivedBytes: 0,
+      writtenBytes: 0,
+    }
+    let lastReportAt = 0
+    const report = (changes: Partial<CloudDownloadProgress>, force = false) => {
+      signal.throwIfAborted()
+      const changedItem =
+        changes.completed !== undefined && changes.completed !== progress.completed
+      const changedPlan =
+        (changes.phase !== undefined && changes.phase !== progress.phase) ||
+        (changes.total !== undefined && changes.total !== progress.total)
+      const firstBytes = progress.receivedBytes === 0 && (changes.receivedBytes ?? 0) > 0
+      Object.assign(progress, changes)
+      const now = Date.now()
+      if (force || changedItem || changedPlan || firstBytes || now - lastReportAt >= 250) {
+        lastReportAt = now
+        options.onProgress?.({ ...progress })
+      }
+    }
+    const transfer: RestoreTransferOptions = {
+      signal,
+      onReceivedBytes: (delta) => report({ receivedBytes: progress.receivedBytes + delta }),
+    }
+    report({}, true)
     return this.withRelayWorkerTarget(
       config?.provider ?? this.getActiveConfig().provider,
       async () => {
@@ -993,13 +1039,30 @@ export class CloudBackupService extends CloudBackupTransport {
         const credential = secret || this.requireSecret(resolved.provider)
         try {
           if (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot') {
-            return (await this.materializeStructuredArchive(item, resolved, credential)).blob
+            const archive = await materializeStructuredArchive(
+              this.snapshotContext(signal),
+              item,
+              resolved,
+              credential,
+              {
+                onReceivedBytes: transfer.onReceivedBytes,
+                onProgress: (state) => report({ ...state, phase: 'archive' }),
+              },
+            )
+            report({}, true)
+            return archive.blob
+          }
+          const context = this.getRestoreReaderContext(transfer)
+          const finish = async (download: Promise<Blob>) => {
+            const blob = await download
+            report({ phase: 'archive', completed: 1, total: 1, writtenBytes: blob.size }, true)
+            return blob
           }
           if (resolved.provider === 'github') {
             if (item.kind === 'githubBundle' || item.objectKey.endsWith('.srlbundle.json')) {
-              return this.downloadGitHubBundle(resolved, credential, item)
+              return await finish(this.downloadGitHubBundle(resolved, credential, item, transfer))
             }
-            const response = await this.githubFetch(
+            const response = await context.githubFetch(
               resolved,
               credential,
               `/releases/assets/${item.id}`,
@@ -1007,12 +1070,14 @@ export class CloudBackupService extends CloudBackupTransport {
                 headers: { Accept: 'application/octet-stream' },
               },
             )
-            return this.verifyDownloadedBlob(item, await response.blob())
+            return await finish(
+              this.verifyDownloadedBlob(item, await context.readResponseBlob(response, item.size)),
+            )
           }
           if (item.kind === 'webdavBundle' || item.objectKey.endsWith('.srlbundle.json')) {
-            return this.downloadWebDavBundle(resolved, credential, item)
+            return await finish(this.downloadWebDavBundle(resolved, credential, item, transfer))
           }
-          const response = await this.cloudFetch(
+          const response = await context.cloudFetch(
             joinUrl(resolved.baseUrl, normalizeFolder(resolved.folder), item.objectKey),
             {
               headers: { Authorization: basicAuthorization(resolved.username, credential) },
@@ -1021,8 +1086,11 @@ export class CloudBackupService extends CloudBackupTransport {
           )
           if (!response.ok)
             throw cloudHttpError(`WebDAV 下载失败（${response.status}）`, response.status)
-          return this.verifyDownloadedBlob(item, await response.blob())
+          return await finish(
+            this.verifyDownloadedBlob(item, await context.readResponseBlob(response, item.size)),
+          )
         } catch (error) {
+          signal.throwIfAborted()
           await this.invalidateCredentialOnConfirmed401(resolved.provider, error)
           throw friendlyNetworkError(error, resolved.provider)
         }
@@ -1220,7 +1288,7 @@ export class CloudBackupService extends CloudBackupTransport {
       (config.provider === 'github'
         ? await this.readGitHubStructuredSnapshot(config, secret, item)
         : await this.readWebDavStructuredSnapshot(config, secret, item.objectKey))
-    const snapshot = selectStructuredSnapshot(
+    let snapshot = selectStructuredSnapshot(
       {
         ...loadedSnapshot,
         portableData: selectRestorePortableData(loadedSnapshot.portableData, portableScopeIds) ?? {
@@ -1231,112 +1299,194 @@ export class CloudBackupService extends CloudBackupTransport {
       includeGallery,
       portableScopeIds === undefined || portableScopeIds.includes('extra.resourceAttachments'),
     )
-    const nativeRestore = isNativeCloudTransferAvailable() && snapshot.version >= 3
-    if (nativeRestore) {
-      if (!this.restoreService.canRestoreStructuredNative()) {
-        throw new Error('本地保险箱开启时不能从云端导入，请先通过保险箱设置切回普通存储。')
+    if (options.retryFailures) {
+      const failures = options.retryFailures
+      // Retain lightweight identities for successful ID-conflict mappings. The
+      // common planner skips their committed originals without downloading again.
+      const albums = new Set(failures.filter((f) => f.kind === 'album').map((f) => f.id))
+      const attachments = new Set(
+        failures.filter((f) => f.kind === 'communityAttachment').map((f) => f.id),
+      )
+      const portable = snapshot.portableData
+      const albumEntries = new Map(
+        portable.generatedImageAlbum?.map((entry) => [entry.item.id, entry]),
+      )
+      for (const id of albums) {
+        const parent = albumEntries.get(id)?.item.generationManifest?.parentImageId
+        if (parent) albums.add(parent)
       }
-      const plan = await this.buildNativeRestorePlan(snapshot, config, secret)
-      if (this.nativeRestoreInFlight) throw new Error('已有云恢复正在导入，请等待当前任务完成')
-      this.nativeRestoreInFlight = true
-      let recovery: CloudBackupJobRecord | undefined
-      try {
-        const selection = {
-          item,
-          target: this.restoreTarget(config),
-          resourceKeys: snapshot.resources.map((resource) => resource.id),
-          includeGallery,
-          ...(portableScopeIds === undefined ? {} : { portableScopeIds: [...portableScopeIds] }),
-        }
-        const planHash = await hashCloudBlob(new Blob([JSON.stringify(selection)]))
-        recovery = await this.transportState.jobStore.beginRestore(planHash, selection)
-        await restoreNativeStructuredObjects({ config, secret, ...plan })
-        const [existingResources, existingCategories] = await Promise.all([
-          this.resourceService.listResourceListSummaries(),
-          this.categoryService.list(),
-        ])
-        const prepared = await this.restoreService.prepareStructuredNative(
-          snapshot.resources,
-          snapshot.versions,
-          snapshot.categories,
-          snapshot.portableData,
-          existingResources,
-          existingCategories,
-          structuredSnapshotArchiveName(item.objectKey.split('/').at(-1) ?? item.objectKey),
-        )
-        if (prepared.portableData?.generatedImageAlbum?.length)
-          await this.restoreService.restoreStructuredAlbum(
-            prepared.portableData,
-            (object) =>
-              readNativeResourceObject(
-                object.totalSha256,
-                object.totalSize,
-                'application/octet-stream',
-              ),
-            options.signal,
-          )
-        if (prepared.portableData?.communitySources?.attachments.length)
-          await this.restoreService.restoreStructuredCommunityAttachments(
-            prepared.portableData,
-            (object) =>
-              readNativeResourceObject(
-                object.totalSha256,
-                object.totalSize,
-                'application/octet-stream',
-              ),
-            options.signal,
-          )
-        const report = await this.restoreService.restoreNative(prepared)
-        options.onPhase?.('extras')
-        await this.finishRestore(
-          report,
-          selectRestorePortableData(prepared.portableData, portableScopeIds),
-          filterPortableData,
-          onCommitted,
-        )
-        await this.transportState.jobStore.complete(recovery, item.objectKey)
-        return report.restoredResources
-      } catch (error) {
-        if (recovery) await this.transportState.jobStore.fail(recovery, error)
-        throw error
-      } finally {
-        this.nativeRestoreInFlight = false
+      snapshot = {
+        ...snapshot,
+        portableData: {
+          ...(failures.some((failure) => failure.kind === 'portableData')
+            ? portable
+            : { version: 1 as const }),
+          generatedImageAlbum: portable.generatedImageAlbum?.filter((entry) =>
+            albums.has(entry.item.id),
+          ),
+          ...(portable.communitySources
+            ? {
+                communitySources: {
+                  ...portable.communitySources,
+                  attachments: portable.communitySources.attachments.filter((entry) =>
+                    attachments.has(entry.assetId),
+                  ),
+                },
+              }
+            : {}),
+        },
       }
     }
+    const nativeRestore = isNativeCloudTransferAvailable() && snapshot.version >= 3
+    if (nativeRestore && !this.restoreService.canRestoreStructuredNative())
+      throw new Error('本地保险箱开启时不能从云端导入，请先通过保险箱设置切回普通存储。')
+    if (nativeRestore && this.nativeRestoreInFlight)
+      throw new Error('已有云恢复正在导入，请等待当前任务完成')
     const [existingResources, existingCategories] = await Promise.all([
       this.resourceService.listResourceListSummaries(),
       this.categoryService.list(),
     ])
     const controller = new AbortController()
-    const signal = options.signal
-      ? AbortSignal.any([options.signal, controller.signal])
-      : controller.signal
-    const transfer = { signal, onTransfer: options.onTransfer }
-    const providerReader =
-      config.provider === 'github'
-        ? await this.createGitHubObjectReader(config, secret, transfer)
-        : this.createWebDavObjectReader(config, secret, transfer)
-    let report: RestoreReport & { portableData?: ArchivePortableData }
+    const signal = controller.signal
+    const stop = () => controller.abort(options.signal?.reason)
+    options.signal?.addEventListener('abort', stop, { once: true })
+    if (options.signal?.aborted) stop()
+    let recovery: CloudBackupJobRecord | undefined
+    let nativeJob: Promise<unknown> | undefined
+    let reader: (object: import('./GitHubBackupBundle').GitHubBundleManifest) => Promise<Blob>
+    let nativePrepare:
+      ((resource: import('../types/Resource').Resource) => Promise<void>) | undefined
+    if (nativeRestore) this.nativeRestoreInFlight = true
     try {
-      report = await this.restoreService.restoreStructured(
+      if (nativeRestore) {
+        const plan = await this.buildNativeRestorePlan(snapshot, config, secret)
+        const selection = {
+          item,
+          target: this.restoreTarget(config),
+          resourceKeys: snapshot.resources.map((r) => r.id),
+          includeGallery,
+          ...(portableScopeIds === undefined ? {} : { portableScopeIds: [...portableScopeIds] }),
+        }
+        recovery = await this.transportState.jobStore.beginRestore(
+          await hashCloudBlob(new Blob([JSON.stringify(selection)])),
+          selection,
+        )
+        this.lastRestoreRecovery = recovery
+        const waiting = new Map<
+          string,
+          { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void }
+        >()
+        for (const resource of plan.resources)
+          if (!waiting.has(resource.hash)) {
+            let resolve!: () => void, reject!: (error: unknown) => void
+            const promise = new Promise<void>((yes, no) => {
+              resolve = yes
+              reject = no
+            })
+            void promise.catch(() => undefined)
+            waiting.set(resource.hash, { promise, resolve, reject })
+          }
+        for (const failure of plan.resourceFailures ?? []) {
+          const promise = Promise.reject<void>(new Error(failure.error))
+          void promise.catch(() => undefined)
+          waiting.set(failure.hash, { promise, resolve: () => undefined, reject: () => undefined })
+        }
+        const rejectPending = (error: unknown) => {
+          for (const entry of waiting.values()) entry.reject(error)
+        }
+        signal.addEventListener('abort', () => rejectPending(signal.reason), { once: true })
+        nativeJob = restoreNativeStructuredObjects({
+          config,
+          secret,
+          ...plan,
+          signal,
+          onResource: (hash, error) => {
+            const entry = waiting.get(hash)
+            if (error) entry?.reject(new Error(error))
+            else entry?.resolve()
+          },
+        }).catch((error: unknown) => {
+          rejectPending(error)
+          throw error
+        })
+        void nativeJob.catch(() => undefined)
+        const ready = async (hash: string) => {
+          signal.throwIfAborted()
+          const entry = waiting.get(hash.toLowerCase())
+          if (!entry) throw new Error('原生恢复计划缺少原件描述')
+          await entry.promise
+          signal.throwIfAborted()
+        }
+        nativePrepare = (resource) => ready(resource.contentHash)
+        reader = async (object) => {
+          await ready(object.totalSha256)
+          return readNativeResourceObject(
+            object.totalSha256,
+            object.totalSize,
+            'application/octet-stream',
+          )
+        }
+      } else {
+        const transfer = { signal, onTransfer: options.onTransfer }
+        reader =
+          config.provider === 'github'
+            ? await this.createGitHubObjectReader(config, secret, transfer)
+            : this.createWebDavObjectReader(config, secret, transfer)
+      }
+      const report = await this.restoreService.restoreStructured(
         snapshot,
-        providerReader,
+        reader,
         existingResources,
         existingCategories,
         structuredSnapshotArchiveName(item.objectKey.split('/').at(-1) ?? item.objectKey),
-        { ...options, signal, onFailure: (error) => controller.abort(error) },
+        {
+          ...options,
+          signal,
+          nativePrepare,
+          onCommitted,
+          onFailure: (error) => controller.abort(error),
+        },
       )
+      if (nativeJob) await nativeJob.catch(() => undefined)
+      signal.throwIfAborted()
+      options.onPhase?.('extras')
+      await this.finishRestore(
+        report,
+        selectRestorePortableData(report.portableData ?? snapshot.portableData, portableScopeIds),
+        filterPortableData,
+        onCommitted,
+      )
+      if (recovery) {
+        if (report.failures?.length)
+          await this.transportState.jobStore.fail(
+            recovery,
+            new Error(`${report.failures.length} 项未完成，等待显式重试`),
+          )
+        else {
+          await this.transportState.jobStore.complete(recovery, item.objectKey)
+          this.lastRestoreRecovery = undefined
+        }
+      }
+      return report.restoredResources
+    } catch (error) {
+      controller.abort(error)
+      if (recovery) {
+        if (
+          signal.aborted &&
+          (options.signal?.aborted ||
+            (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError'))
+        ) {
+          await this.transportState.jobStore.cancel(recovery)
+          this.lastRestoreRecovery = undefined
+        } else await this.transportState.jobStore.fail(recovery, error)
+      }
+      throw error
     } finally {
-      controller.abort(new DOMException('云恢复准备已结束', 'AbortError'))
+      options.signal?.removeEventListener('abort', stop)
+      controller.abort(new DOMException('云恢复本轮已结束', 'AbortError'))
+      await nativeJob?.catch(() => undefined)
+      if (nativeRestore) this.nativeRestoreInFlight = false
     }
-    options.onPhase?.('extras')
-    await this.finishRestore(
-      report,
-      selectRestorePortableData(report.portableData ?? snapshot.portableData, portableScopeIds),
-      filterPortableData,
-      onCommitted,
-    )
-    return report.restoredResources
   }
 
   private async finishRestore(
@@ -1346,8 +1496,41 @@ export class CloudBackupService extends CloudBackupTransport {
     onCommitted?: (report: RestoreReport) => void,
   ): Promise<void> {
     const preview = this.restorePreview
+    if (preview?.committed?.report === report)
+      report.failures = report.failures?.filter((failure) => failure.kind !== 'portableData')
+    const hasPortable =
+      portableData &&
+      Object.entries(portableData).some(
+        ([key, value]) =>
+          !['version', 'generatedImageAlbum', 'communitySources'].includes(key) &&
+          value !== undefined,
+      )
+    if (report.failures?.length) {
+      if (hasPortable && !report.failures.some((failure) => failure.kind === 'portableData'))
+        report.failures.push({
+          kind: 'portableData',
+          id: 'extras',
+          fileName: '附加设置与资料',
+          error: '关联内容尚未全部保存；重试完成后再写入，避免失效引用',
+        })
+      onCommitted?.(report)
+      return
+    }
     if (preview) preview.committed = { report, portableData }
-    await this.importPreparedPortableData(portableData, filter)
+    try {
+      await this.importPreparedPortableData(portableData, filter)
+    } catch (error) {
+      report.failures = [
+        {
+          kind: 'portableData',
+          id: 'extras',
+          fileName: '附加设置与资料',
+          error: error instanceof Error ? error.message : String(error),
+        },
+      ]
+      onCommitted?.(report)
+      return
+    }
     if (preview) preview.completed = true
     onCommitted?.(report)
   }
@@ -1364,16 +1547,12 @@ export class CloudBackupService extends CloudBackupTransport {
     snapshot: StructuredSnapshot,
     config: CloudBackupConfig,
     secret: string,
-  ): Promise<{ objects: NativeRestoreObject[]; resources: NativeRestoreResource[] }> {
+  ): Promise<{
+    objects: NativeRestoreObject[]
+    resources: NativeRestoreResource[]
+    resourceFailures?: Array<{ hash: string; error: string }>
+  }> {
     return buildNativeRestorePlan(this.snapshotContext(), snapshot, config, secret)
-  }
-
-  private async materializeStructuredArchive(
-    item: CloudBackupItem,
-    config: CloudBackupConfig,
-    secret: string,
-  ) {
-    return materializeStructuredArchive(this.snapshotContext(), item, config, secret)
   }
 
   async runDueBackup(): Promise<'disabled' | 'credential' | 'waiting' | 'success'> {

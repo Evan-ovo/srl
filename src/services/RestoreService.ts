@@ -1,3 +1,5 @@
+import { sanitizeCommunitySourceAttachmentRefs } from './CommunitySourceAttachmentArchive'
+import { createCloudReadBudget } from './CloudBackupHttp'
 import { isResourceOwnedFile, resourceOwnedFileOwnerId } from '../types/ResourceAttachment'
 import { RestoreDuplicateIndex, restoreVersionKey } from '../utils/RestoreIdentity'
 import { remapGalleryMetadata } from '../types/ResourceGallery'
@@ -28,6 +30,7 @@ import {
   type ArchivedResource,
   type PreparedRestore,
   type RestoreReport,
+  type StructuredRestoreFailure,
 } from '../types/Backup'
 import {
   isUserPersonaAvatarAttachment,
@@ -53,6 +56,8 @@ export interface StructuredRestoreOptions {
   concurrency?: number
   maxPreparedBytes?: number
   onFailure?: (error: unknown) => void
+  onCommitted?: (report: RestoreReport) => void
+  nativePrepare?: (resource: Resource) => Promise<void>
 }
 import { readNativeRestoredCardMetadata, type NativeRestoreMetadata } from './NativeCloudTransfer'
 import { remapCommunitySourceBackupBindings } from './CommunitySourceBackupService'
@@ -830,6 +835,7 @@ export class RestoreService {
         ].filter(Boolean),
       },
       resources: normalizedResources,
+      sourceResourceIds: [...resourceIdMap],
       galleryOwners: existingGalleryOwners(resources, normalizedResources, resourceIdMap),
       versions: versionsToRestore,
       categories: categoriesToCreate,
@@ -901,140 +907,256 @@ export class RestoreService {
         record.object,
       ]),
     )
-    const plannedById = new Map(prepared.resources.map((record) => [record.id, record]))
-    const materialize = async (resource: Resource): Promise<Resource> => {
+    const sourceIds = new Map(
+      prepared.sourceResourceIds?.map(([source, target]) => [target, source]),
+    )
+    const records = [...prepared.resources, ...prepared.versions]
+    const currentIds = new Set(prepared.resources.map((record) => record.id))
+    // Connected resource references share one atomic commit; independent groups may finish out of order.
+    const parents = new Map(records.map((record) => [record.id, record.id]))
+    const find = (id: string): string => {
+      let root = id
+      while (parents.get(root) !== root) root = parents.get(root)!
+      while (id !== root) {
+        const next = parents.get(id)!
+        parents.set(id, root)
+        id = next
+      }
+      return root
+    }
+    for (const record of records) {
+      const refs = [
+        record.versionGroupId,
+        ...(record.relatedResourceIds ?? []),
+        resourceOwnedFileOwnerId(record),
+        record.metadata.resourceCoverId,
+        record.metadata.defaultPersonaAvatarId,
+        record.metadata.chatReadingScriptId,
+        record.metadata.chatDisplayRegexId,
+        ...(Array.isArray(record.metadata.manuallyBoundResourceIds)
+          ? record.metadata.manuallyBoundResourceIds
+          : []),
+      ]
+      for (const ref of refs)
+        if (typeof ref === 'string' && parents.has(ref)) parents.set(find(record.id), find(ref))
+    }
+    const groups = new Map<string, Resource[]>()
+    for (const record of records) {
+      const root = find(record.id)
+      const group = groups.get(root) ?? []
+      group.push(record)
+      groups.set(root, group)
+    }
+    const failures: StructuredRestoreFailure[] = []
+    const result: RestoreReport = {
+      restoredResources: 0,
+      restoredVersions: 0,
+      resourceIds: [],
+      categoriesChanged: false,
+      skippedDuplicates: prepared.preview.duplicatesToSkip,
+      preservedConflicts: prepared.preview.conflictsToPreserve,
+      createdCategories: 0,
+      reusedCategories: prepared.preview.categoriesToReuse,
+      failures,
+    }
+    const affected = new Set<string>()
+    const restoredCategories = new Set<string>()
+    const categoriesById = new Map(prepared.categories.map((category) => [category.id, category]))
+    let completed = 0
+    let preparedExtras = 0
+    const total =
+      records.length +
+      (prepared.portableData?.generatedImageAlbum?.length ?? 0) +
+      (prepared.portableData?.communitySources?.attachments.length ?? 0)
+    const publish = (phase: 'prepare' | 'commit', name?: string) =>
+      options.onProgress?.({ phase, completed: completed + preparedExtras, total, fileName: name })
+    const fail = (
+      kind: StructuredRestoreFailure['kind'],
+      id: string,
+      name: string,
+      error: unknown,
+    ) => {
+      options.signal?.throwIfAborted()
+      if (
+        error &&
+        typeof error === 'object' &&
+        'name' in error &&
+        error.name === 'QuotaExceededError'
+      )
+        throw error
+      failures.push({
+        kind,
+        id,
+        fileName: name,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    const hydrate = async (resource: Resource) => {
+      options.signal?.throwIfAborted()
       const object = descriptors.get(resource.contentHash.toLowerCase())
       if (!object) throw new Error(`备份资源缺少对象描述：${resource.fileName}`)
-      const hydrated = await materializeStructuredResource({ ...resource, object }, readObject)
+      const ready = await materializeStructuredResource({ ...resource, object }, readObject)
       if (
         (resource.type === RESOURCE_TYPE.CHARACTER_CARD ||
           isUserPersonaAvatarAttachment(resource)) &&
         (resource.mimeType === 'image/png' || /\.png$/iu.test(resource.fileName))
-      ) {
-        hydrated.thumbnailBlob =
-          (await createImageThumbnail(hydrated.originalBlob)) ??
-          (isUserPersonaAvatarAttachment(resource) ? hydrated.originalBlob : undefined)
-      }
-      return hydrated
-    }
-    const queue = [...prepared.resources, ...prepared.versions]
-    const extraCount =
-      (prepared.portableData?.generatedImageAlbum?.length ?? 0) +
-      (prepared.portableData?.communitySources?.attachments.length ?? 0)
-    let preparedExtras = 0
-    const extraPrepared = (fileName: string) => {
-      options.onProgress?.({
-        phase: 'prepare',
-        completed: ++preparedExtras,
-        total: queue.length + extraCount,
-        fileName,
-      })
-    }
-    const queueIndexes = new Map(queue.map((record, index) => [record, index]))
-    const concurrency = Math.max(1, Math.min(3, Math.floor(options.concurrency ?? 3)))
-    const byteLimit = Math.max(1, options.maxPreparedBytes ?? 32 * 1024 * 1024)
-    const pending = new Map<
-      Resource,
-      { promise: Promise<Resource>; bytes: number; index: number }
-    >()
-    let next = 0
-    let retainedBytes = 0
-    let stopped = false
-    let firstFailure: unknown
-    const prepare = async (resource: Resource): Promise<Resource> => {
+      )
+        ready.thumbnailBlob =
+          (await createImageThumbnail(ready.originalBlob)) ??
+          (isUserPersonaAvatarAttachment(resource) ? ready.originalBlob : undefined)
       options.signal?.throwIfAborted()
-      if (firstFailure) throw firstFailure
-      const index = queueIndexes.get(resource)
-      if (index === undefined) throw new Error('云恢复准备项不在当前计划中')
-      // A new hydration request means the preceding body has been cloned to staging.
-      for (const [record, entry] of pending) {
-        if (entry.index < index) {
-          retainedBytes -= entry.bytes
-          pending.delete(record)
+      return ready
+    }
+    publish('prepare')
+    const queue = [...groups.values()]
+    const reserve = createCloudReadBudget(
+      Math.max(1, Math.min(3, Math.floor(options.concurrency ?? 3))),
+      Math.max(1, options.maxPreparedBytes ?? 32 * 1024 * 1024),
+    )
+    let next = 0
+    let fatal: unknown
+    const work = async () => {
+      while (next < queue.length && !fatal) {
+        options.signal?.throwIfAborted()
+        const group = queue[next++]!
+        const release = await reserve(
+          group.reduce((n, r) => n + Math.max(0, r.fileSize), 0),
+          options.signal ?? new AbortController().signal,
+        )
+        try {
+          options.signal?.throwIfAborted()
+          publish('prepare', group[0]!.fileName)
+          const categories = [
+            ...new Set(
+              group.flatMap((r) =>
+                r.categoryIds?.length ? r.categoryIds : r.categoryId ? [r.categoryId] : [],
+              ),
+            ),
+          ].flatMap((id) => categoriesById.get(id) ?? [])
+          const subset: PreparedRestore = {
+            ...prepared,
+            categories,
+            resources: group.filter((r) => currentIds.has(r.id)),
+            versions: group.filter((r) => !currentIds.has(r.id)),
+            portableData: undefined,
+            communitySourceData: undefined,
+          }
+          let committed: RestoreReport
+          if (options.nativePrepare) {
+            for (const record of group) await options.nativePrepare(record)
+            options.signal?.throwIfAborted()
+            const native = (r: Resource): NativeBackedResourceRecord => {
+              const { originalBlob: _originalBlob, ...metadata } = r
+              return {
+                ...metadata,
+                nativeOriginal: {
+                  version: 1,
+                  contentHash: r.contentHash.toLowerCase(),
+                  size: r.fileSize,
+                },
+              }
+            }
+            committed = await this.restoreNative({
+              ...subset,
+              resources: subset.resources.map(native),
+              versions: subset.versions.map(native),
+            })
+          } else
+            committed = await this.restore(subset, hydrate, (progress) => {
+              if (progress.phase === 'prepare') options.signal?.throwIfAborted()
+            })
+          completed += group.length
+          result.restoredResources += committed.restoredResources
+          result.restoredVersions! += committed.restoredVersions ?? 0
+          for (const id of committed.resourceIds ?? []) affected.add(id)
+          for (const category of categories) restoredCategories.add(category.id)
+          options.onCommitted?.(committed)
+          publish('commit', group[0]!.fileName)
+        } catch (error) {
+          try {
+            for (const record of group)
+              fail(
+                currentIds.has(record.id) ? 'resource' : 'version',
+                sourceIds.get(record.versionGroupId ?? record.id) ??
+                  record.versionGroupId ??
+                  record.id,
+                record.fileName,
+                error,
+              )
+          } catch (stopped) {
+            fatal ??= stopped
+            options.onFailure?.(stopped)
+          }
+        } finally {
+          release()
         }
       }
-      while (!stopped && next < queue.length && pending.size < concurrency) {
-        options.signal?.throwIfAborted()
-        const record = queue[next]!
-        const bytes = Math.max(0, record.fileSize)
-        // Persona cover preparation has a dependent avatar; keep that step alone.
-        if (
-          pending.size &&
-          (retainedBytes + bytes > byteLimit ||
-            record.type === RESOURCE_TYPE.USER_PERSONA ||
-            [...pending.keys()].some((r) => r.type === RESOURCE_TYPE.USER_PERSONA))
-        )
-          break
-        const promise = materialize(record).catch((error: unknown) => {
-          stopped = true
-          firstFailure ??= error
-          options.onFailure?.(error)
-          throw error
-        })
-        void promise.catch(() => undefined)
-        pending.set(record, { promise, bytes, index: next++ })
-        retainedBytes += bytes
-      }
-      const entry = pending.get(resource)
-      if (!entry) throw firstFailure ?? new Error('云恢复准备队列与写入顺序不一致')
-      const hydrated = await entry.promise
-      options.signal?.throwIfAborted()
-      if (firstFailure) throw firstFailure
-      if (resource.type === RESOURCE_TYPE.USER_PERSONA) {
-        const avatars = (resource.relatedResourceIds ?? []).flatMap((id) => {
-          const candidate = plannedById.get(id)
-          return candidate && isUserPersonaAvatarAttachment(candidate) ? [candidate] : []
-        })
-        const cover =
-          avatars.find(
-            (avatar) => avatar.metadata.avatarId === resource.metadata.defaultPersonaAvatarId,
-          ) ?? avatars[0]
-        if (cover) hydrated.thumbnailBlob = (await materialize(cover)).thumbnailBlob
-      }
-      return hydrated
     }
-    try {
-      options.signal?.throwIfAborted()
-      // Publish the known whole plan before the first sidecar download. Sidecars
-      // report completion only after their owner has verified or saved the item.
-      options.onProgress?.({ phase: 'prepare', completed: 0, total: queue.length + extraCount })
-      await this.restoreStructuredAlbum(
-        prepared.portableData,
-        readObject,
-        options.signal,
-        extraPrepared,
-      )
-      await this.restoreStructuredCommunityAttachments(
-        prepared.portableData,
-        readObject,
-        options.signal,
-        extraPrepared,
-      )
-      const report = await this.restore(prepared, prepare, (progress) => {
-        if (progress.phase === 'prepare') options.signal?.throwIfAborted()
-        options.onProgress?.({
-          ...progress,
-          completed: preparedExtras + progress.completed,
-          total: extraCount + progress.total,
-        })
+    // allSettled drains running atomic groups before cancellation is acknowledged.
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: Math.min(3, queue.length) }, work),
+    )
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected')
+    if (fatal) throw fatal
+    if (rejected?.status === 'rejected') throw rejected.reason
+    options.signal?.throwIfAborted()
+    const extraPrepared = (name: string) => {
+      preparedExtras++
+      publish('prepare', name)
+    }
+    await this.restoreStructuredAlbum(
+      prepared.portableData,
+      readObject,
+      options.signal,
+      extraPrepared,
+      (entry, error) => fail('album', entry.item.id, entry.item.name, error),
+    )
+    await this.restoreStructuredCommunityAttachments(
+      prepared.portableData,
+      readObject,
+      options.signal,
+      extraPrepared,
+      (entry, error) => fail('communityAttachment', entry.assetId, entry.object.fileName, error),
+    )
+    const remainingCategories = prepared.categories.filter(
+      (category) => !restoredCategories.has(category.id),
+    )
+    if (remainingCategories.length) {
+      await this.storage.restore(remainingCategories, [])
+      for (const category of remainingCategories) restoredCategories.add(category.id)
+      options.onCommitted?.({
+        restoredResources: 0,
+        resourceIds: [],
+        categoriesChanged: true,
+        skippedDuplicates: 0,
+        preservedConflicts: 0,
+        createdCategories: remainingCategories.length,
+        reusedCategories: 0,
       })
-      return {
-        ...report,
-        portableData: prepared.portableData,
-        restoredCommunityAttachments:
-          prepared.portableData?.communitySources?.attachments.length ??
-          report.restoredCommunityAttachments,
-      }
-    } catch (error) {
-      stopped = true
-      const failure = firstFailure ?? error
-      options.onFailure?.(failure)
-      throw failure
-    } finally {
-      stopped = true
-      await Promise.allSettled([...pending.values()].map((entry) => entry.promise))
-      pending.clear()
     }
+    if (prepared.communitySourceData && this.communitySources) {
+      const assets = new Set(
+        prepared.portableData?.communitySources?.attachments.map((entry) => entry.assetId),
+      )
+      for (const failure of failures)
+        if (failure.kind === 'communityAttachment') assets.delete(failure.id)
+      const sourceData = sanitizeCommunitySourceAttachmentRefs(prepared.communitySourceData, assets)
+      const available = new Set([...existingResources.map((r) => r.id), ...affected])
+      sourceData.bindings = sourceData.bindings.filter((binding) =>
+        available.has(binding.resourceId),
+      )
+      await this.communitySources.restoreBackup(sourceData, 'merge')
+    }
+    result.resourceIds = [...affected]
+    result.categoriesChanged = restoredCategories.size > 0
+    result.createdCategories = restoredCategories.size
+    result.restoredCommunitySources = prepared.communitySourceData?.sources.length
+    result.restoredCommunityMessages = prepared.communitySourceData?.messages.length
+    result.restoredCommunityAttachments =
+      (prepared.portableData?.communitySources?.attachments.length ?? 0) -
+      failures.filter((f) => f.kind === 'communityAttachment').length
+    publish('commit')
+    return { ...result, portableData: prepared.portableData }
   }
 
   async restoreStructuredAlbum(
@@ -1042,6 +1164,10 @@ export class RestoreService {
     readObject: (object: GitHubBundleManifest) => Promise<Blob>,
     signal?: AbortSignal,
     onPrepared?: (fileName: string) => void,
+    onFailure?: (
+      entry: import('./GeneratedImageAlbumBackup').AlbumBackup[number],
+      error: unknown,
+    ) => void,
   ): Promise<void> {
     if (!data?.generatedImageAlbum?.length) return
     if (!this.albumOwner) throw new Error('当前恢复服务没有接入生图相册')
@@ -1050,6 +1176,7 @@ export class RestoreService {
       (entry) => readObject(entry.object!),
       signal,
       onPrepared,
+      onFailure,
     )
   }
 
@@ -1070,6 +1197,10 @@ export class RestoreService {
     _readObject: (object: GitHubBundleManifest) => Promise<Blob>,
     _signal?: AbortSignal,
     _onPrepared?: (fileName: string) => void,
+    _onFailure?: (
+      entry: NonNullable<ArchivePortableData['communitySources']>['attachments'][number],
+      error: unknown,
+    ) => void,
   ): Promise<void> {
     if (data?.communitySources?.attachments.length)
       throw new Error('当前恢复服务没有接入 Discord 附件存储')
