@@ -484,3 +484,12 @@
 - run39150116152在Windows完整客户端6406通过/2超时/2跳过（307.66s）；超时仅为原5000ms的AppearanceReferenceCatalog双手册构建和ResourceAttachmentService一万条夹具，前一候选同类集合已通过。对照前次约195s，导入/环境/测试整体均约1.5倍，当前验证资源竞争假设，不能把它称产品功能失败或再原样碰运气重跑。
 - 只改Public独立发行workflow的测试编排：上述两个文件先用单worker独立运行，随后原pnpm test保持默认4 worker、显式排除刚执行的两个文件；所有用例各执行一次，断言、5000ms时限、万条规模、产品并发和本机默认测试脚本均保持。两文件本机26项通过（8.11s测试合计）；YAML解析和实际命令核对通过。此次与先前全套降2 worker的失败实验不同，隔离具体重夹具，其余595文件集合不漏测；最终云端总数回执验证覆盖。
 - 本轮公开增量基线8d4cdbd97ad06834d723a3b475d0a7cd99ca800c，仅workflow及既有记录；复核noreply/地址/二进制后推送，以新候选完成完整编译、签名、JVM/lint和三资产发布。当前旧线上/签名/CF配置保持，没有发布失败APK或要求用户同步Fork。
+
+## 2026-10-19：Public 多选下载同步、签名发行与小号 CF 上线完成（u4m7）
+
+- 最终产品提交1a08c9586be9bf4ba5d5d8a3177b3e4f18238c7d，发行run39151038433成功（13m6s）。两文件独立26项、其余6382通过/2既有跳过，合计6408通过/2跳过，2+593=595文件全覆盖且各执行一次；知识/功能合同/类型/生产网页、APK编译/原证书比较、JVM和lintRelease通过。没有放宽断言或超时，原默认4 worker与产品两包下载并发保持。
+- Release public-1a08c9586be9bf4ba5d5d8a3177b3e4f18238c7d已公开三资产；APK0.0.244/code1000046，14978200bytes，SHA256 9e0958c95ea6237f76303ec0fc1d5cd6b1a3b671f3d8ab18974005d7d105a622；网页ZIP89375677bytes，SHA256 6b480967978d5f2bdcbc4997d277d2648f38a11ca11733a4fda2cc96b458ba71。重新从Release下载，资产digest/机器清单/正文一致，apksigner与原签名指纹一致，aapt包名/版本、Packaged来源和原生素材来源匹配；289宿主文件逐项SHA通过，27可选文件未预装，0个.srlapp。交付APK与CF截图仅在聊天outputs，未操作实体手机。
+- 用现有小号CLI凭据将既有Fork从9d7a7dd快进至1a08c95，8个已审计上游提交、0新作者提交/0强制覆盖；同一对象复用已通过的增量隐私与noreply审计，无新登录/授权/新建Fork。小号原Worker自动构建850f4d97-397a-47bc-ae3a-b61aef843189成功，部署列表Ready/1m1s，100%流量；原账号、Worker、签名、Node24及部署命令保持。
+- 公网/api/version为public-sync-release-1000046-v1000046且no-store；official-app-assets及API2 catalog与APK内逐字节一致，9个当前APP包全部验证大小/SHA，首页/模块可读、缺失脚本404。Python urllib只读探测遇CF1010；默认curl正常200并完成上述核验，未调整安全策略或凭据。私有映射仅更新Public GitHub发行回执，不改官版或旧来源设置。
+- 普通check的3处既有行数门禁仍未放宽；Windows WebKit额外大包回归未完成，持久上下文尝试无改善已撤回，仅保留失败证据，不声明Safari/手机通过。已成功清理临时source/误装依赖/JVM探针、latest重复截图和校验APK副本（与交付件同SHA）；6个被自动审批拒绝的测试根502文件76161637bytes及350bytes成功结果保留，准确路径/原因/复核节点见前条，不重试旧拒绝范围。
+- 本次仅追加既有进度/日志，不改变已发布产品候选；Fork同步这些记录仍复用1a08c95同一Release。公开增量基线1a08c9586be9bf4ba5d5d8a3177b3e4f18238c7d，仅2文档；提交后复核新增内容和noreply，下一审计基线为本条所属提交，完整SHA回执记维护者既有日志。
