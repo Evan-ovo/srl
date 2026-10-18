@@ -2,7 +2,6 @@ import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core'
 
 import { transferNativeStream } from './NativeStreamTransfer'
 
-
 interface NativeHostedUploadResult {
   status: number
   headers?: Record<string, string>
@@ -21,7 +20,6 @@ interface NativeHostedUploadPlugin {
   commitImageUpload(options: { token: string }): Promise<NativeHostedUploadResult>
   abortImageUpload(options: { token: string }): Promise<void>
 }
-
 
 export interface SelfHostedImageUploadOptions {
   blob: Blob
@@ -80,7 +78,6 @@ async function browserMultipartUploadBlob(blob: Blob): Promise<Blob> {
   return materialized
 }
 
-
 function browserSafeNativeHeaders(headers: Record<string, string> | undefined): Headers {
   const safe = new Headers()
   for (const [name, value] of Object.entries(headers ?? {})) {
@@ -90,7 +87,6 @@ function browserSafeNativeHeaders(headers: Record<string, string> | undefined): 
   }
   return safe
 }
-
 
 function responseBody(data: unknown, status: number, headers: Headers): BodyInit | null {
   if ([204, 205, 304].includes(status) || data == null) return null
@@ -130,8 +126,6 @@ async function streamNativeUpload(
     throw error
   }
 }
-
-
 
 /**
  * 用户自建 ImgBed 的 Android 上传入口。

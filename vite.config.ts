@@ -161,15 +161,17 @@ function offlineAssetManifestPlugin(): Plugin {
 // https://vite.dev/config/
 const preinstalledOfficialAppIds =
   process.env.SRL_ANDROID_PREINSTALL_OFFICIAL_APP_IDS?.split(',').filter(Boolean) ?? null
+// SRL-PUBLIC-SYNC: BEGIN REPLACE id=preinstall-account-apps
 if (preinstalledOfficialAppIds?.some((id) => !isOfficialAppId(id) || id === 'assistant')) {
+  // SRL-PUBLIC-SYNC: END REPLACE id=preinstall-account-apps
   throw new Error('Selected APP preinstallation contains an unsupported APP ID.')
 }
 export default defineConfig({
   define: {
-    __SRL_PREINSTALL_OFFICIAL_APP_IDS__: JSON.stringify(preinstalledOfficialAppIds),
     __SRL_PREINSTALL_OFFICIAL_APPS__: JSON.stringify(
       process.env.SRL_ANDROID_PREINSTALL_OFFICIAL_APPS === '1',
     ),
+    __SRL_PREINSTALL_OFFICIAL_APP_IDS__: JSON.stringify(preinstalledOfficialAppIds),
   },
   plugins: [
     vue(),
@@ -240,7 +242,7 @@ export default defineConfig({
         ],
         globIgnores: ['**/downloads/**', '**/official-apps/**', '**/offline-assets.json'],
         navigateFallback: 'index.html',
-        // 互传中继必须实时访问 Worker，任何情况下都不能走缓存。
+        // 登录与互传中继必须实时访问服务器，任何情况下都不能走缓存。
         navigateFallbackDenylist: [/^\/api\//, /^\/force-refresh\.html$/],
         cleanupOutdatedCaches: true,
         runtimeCaching: [
@@ -296,6 +298,24 @@ export default defineConfig({
     // Keep production CSS compatible with older Android WebViews used by packaged APKs.
     // This prevents minification from emitting modern media-query range syntax that those runtimes may ignore.
     cssTarget: 'chrome61',
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: (id) => `appearance-reference-part-${id.split('-').at(-1)}`,
+              test: /virtual:srl-appearance-reference-part-\d+$/u,
+              includeDependenciesRecursively: false,
+            },
+            {
+              name: 'discord-setup-service',
+              test: /\/src\/services\/DiscordSetupService\.ts$/u,
+              includeDependenciesRecursively: false,
+            },
+          ],
+        },
+      },
+    },
   },
   server: {
     watch: { ignored: ['**/android/**'] },

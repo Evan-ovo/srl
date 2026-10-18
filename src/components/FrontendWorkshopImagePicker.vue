@@ -211,7 +211,8 @@ onUnmounted(() => {
       title="图片素材"
       back-label="返回前端了么"
       @back="$emit('close')"
-    />
+    >
+    </FeatureAppHeader>
 
     <nav class="frontend-image-picker__tabs">
       <button type="button" :class="{ 'is-active': tab === 'album' }" @click="tab = 'album'">

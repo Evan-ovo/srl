@@ -538,7 +538,9 @@ function applyPreset(preset: CustomCssPreset, css: string) {
   else emit('save-css', css)
 }
 async function savePreset(): Promise<void> {
-  if (await confirmViewScripts(draft.value.views)) persistPreset(draft.value)
+  if (!(await confirmViewScripts(draft.value.views))) return
+  if (hasUnsavedChanges.value) persistPreset(draft.value)
+  else applyPreset(draft.value, compilePreset(draft.value))
 }
 // SRL-PUBLIC-SYNC: END REPLACE id=appearance-preset-persistence
 function getAssistantContext(): AssistantContext {

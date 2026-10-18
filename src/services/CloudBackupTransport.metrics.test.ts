@@ -63,7 +63,9 @@ describe('cloud accepted upload metrics', () => {
         throw new Error('offline')
       }),
     )
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackuptransport-metrics-test-ts-1
     await expect(transport.send(new Blob(['data']))).rejects.toThrow('offline')
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackuptransport-metrics-test-ts-1
     expect(transport.metrics.snapshot().uploadedBytes).toBe(0)
     expect(transport.metrics.snapshot().httpRequestCount).toBe(2)
   })

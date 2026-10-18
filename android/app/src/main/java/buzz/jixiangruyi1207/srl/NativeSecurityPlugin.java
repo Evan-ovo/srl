@@ -90,7 +90,6 @@ public class NativeSecurityPlugin extends Plugin {
         requestPermissionForAlias("notifications", call, "notificationPermissionResult");
     }
 
-
     @PermissionCallback
     private void notificationPermissionResult(PluginCall call) {
         JSObject result = new JSObject(); result.put("granted", getPermissionState("notifications") == PermissionState.GRANTED); call.resolve(result);

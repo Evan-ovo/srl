@@ -92,20 +92,37 @@ button {
 }
 .provider-switch {
   display: flex;
-  gap: 6px;
-  background: var(--soft);
-  padding: 4px;
-  border-radius: 11px;
+  gap: 8px;
 }
 .provider-btn {
-  padding: 8px 12px;
-  font-weight: 750;
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 12px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 600;
   flex: 1;
 }
+.provider-btn::before {
+  content: '';
+  position: absolute;
+  inset: 4px 0;
+  z-index: -1;
+  pointer-events: none;
+  border: var(--button-border, 1px solid var(--line));
+  border-radius: var(--button-radius, var(--glass-radius-control));
+  background: var(--button-background, var(--raised));
+  box-shadow: var(--button-shadow, none);
+}
 .provider-btn.active {
-  background: var(--selection-background, var(--color-accent-soft));
   color: var(--selection-color, var(--color-accent));
-  box-shadow: var(--selection-shadow, var(--control-shadow));
+}
+.provider-btn.active::before {
+  background: var(--selection-background, var(--color-accent-soft));
+  border-color: var(--color-accent);
 }
 .select,
 .input,
@@ -155,13 +172,23 @@ button {
   margin-bottom: 0;
 }
 .image-generation-controls.is-prompt {
+  --image-generation-fold-row-height: 44px;
+  --image-generation-fold-gap: 8px;
   display: flex;
   flex-direction: column;
 }
 .prompt-main {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 0 0 auto;
+  /* Reserve only the closed rows; expanded content adds scroll space below the prompt. */
+  height: max(
+    240px,
+    calc(
+      100% - 12px - var(--image-generation-prompt-folds, 2) *
+        (var(--image-generation-fold-row-height) + 2px + var(--image-generation-fold-gap))
+    )
+  );
   min-height: 240px;
 }
 .prompt-main .textarea {
@@ -172,7 +199,10 @@ button {
 }
 details.section {
   padding-bottom: 0;
-  margin-bottom: 8px;
+  margin-bottom: var(--image-generation-fold-gap, 8px);
+}
+.image-generation-controls.is-prompt > details > summary {
+  min-height: var(--image-generation-fold-row-height);
 }
 .head {
   display: flex;

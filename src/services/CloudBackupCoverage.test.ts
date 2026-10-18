@@ -479,6 +479,7 @@ describe('cloud backup registered content round trips', () => {
     const snapshot = await decodeStructuredSnapshot(
       await encodeStructuredSnapshot(created.snapshot),
     )
+    // Resource attachments use resource descriptors/binaries, not portableData fields.
     const scopes = BACKUP_SCOPE_REGISTRY.filter(
       (entry) => entry.group === 'extraContent' && entry.id !== 'extra.resourceAttachments',
     ).map((entry) => entry.id)

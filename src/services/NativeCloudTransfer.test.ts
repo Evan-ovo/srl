@@ -289,43 +289,59 @@ describe('NativeCloudTransfer', () => {
     })
   })
 
-  it('snapshots local Discord asset ranges natively and does not bridge attachment bytes', async () => {
-    const object = {
-      name: `srl-chunk--sha256-${'c'.repeat(64)}`,
-      size: 12,
-      contentType: 'application/octet-stream',
-      nativeSource: { kind: 'file' as const, uri: 'file:///app/asset.bin', offset: 2, size: 12 },
-    }
-    await uploadNativeStructuredSnapshot({
-      config: {
-        provider: 'webdav',
-        baseUrl: 'https://example.test/dav',
-        folder: 'backup',
-        username: 'fixture',
-        retention: 1,
-        autoBackup: false,
-      },
-      secret: 'fixture',
-      objects: [object],
-      manifest: {
+  it.each([
+    {
+      provider: 'github' as const,
+      owner: 'fixture',
+      repository: 'backup',
+      retention: 1,
+      autoBackup: false,
+    },
+    {
+      provider: 'webdav' as const,
+      baseUrl: 'https://example.test/dav',
+      folder: 'backup',
+      username: 'fixture',
+      retention: 1,
+      autoBackup: false,
+    },
+  ])(
+    'hands album and Discord file ranges to $provider without bridging attachment bytes',
+    async (config) => {
+      const object = {
+        name: `srl-chunk--sha256-${'c'.repeat(64)}`,
+        size: 12,
+        contentType: 'application/octet-stream',
+        nativeSource: { kind: 'file' as const, uri: 'file:///app/asset.bin', offset: 2, size: 12 },
+      }
+      const manifest = {
         name: 'snapshot.srlmanifest.v3.json.gz',
         blob: new Blob(['manifest']),
         contentType: 'application/gzip',
-      },
-    })
-    expect(transfer.stageObjectFromFile).toHaveBeenCalledWith({
-      jobId: 'job-1',
-      name: object.name,
-      contentType: object.contentType,
-      uri: object.nativeSource.uri,
-      offset: 2,
-      size: 12,
-      existingId: undefined,
-      releaseId: undefined,
-    })
-    expect(transfer.beginObject.mock.calls.every(([value]) => value.manifest === true)).toBe(true)
-    expect(transfer.stageObjectFromLibrary).not.toHaveBeenCalled()
-  })
+      }
+      await expect(
+        canUseNativeStructuredSnapshotHandoff({ objects: [object], manifest }),
+      ).resolves.toBe(true)
+      await uploadNativeStructuredSnapshot({
+        config,
+        secret: 'fixture',
+        objects: [object],
+        manifest,
+      })
+      expect(transfer.stageObjectFromFile).toHaveBeenCalledWith({
+        jobId: 'job-1',
+        name: object.name,
+        contentType: object.contentType,
+        uri: object.nativeSource.uri,
+        offset: 2,
+        size: 12,
+        existingId: undefined,
+        releaseId: undefined,
+      })
+      expect(transfer.beginObject.mock.calls.every(([value]) => value.manifest === true)).toBe(true)
+      expect(transfer.stageObjectFromLibrary).not.toHaveBeenCalled()
+    },
+  )
 
   it('将超过旧 4 MiB 限制的清单按原生流分段暂存', async () => {
     const manifest = new Blob([new Uint8Array(4 * 1024 * 1024 + 1)])

@@ -8,6 +8,62 @@ import './StructuredResourceDetails.vue'
 import './CharacterCardDetails.vue'
 import ResourceOrganizer from './ResourceOrganizer.vue'
 
+it('hides detail while attachments are open and returns through the attachment back action', async () => {
+  const AttachmentEntry = defineComponent({
+    props: ['open'],
+    emits: ['update:open'],
+    setup(_props, { emit, expose }) {
+      expose({ requestBack: () => emit('update:open', false) })
+      return () =>
+        h(
+          'button',
+          { 'data-test': 'attachments', onClick: () => emit('update:open', true) },
+          '附件',
+        )
+    },
+  })
+  const resource = {
+    id: 'attachment-owner',
+    name: '资源',
+    type: RESOURCE_TYPE.OTHER,
+    description: '',
+    fileName: 'owner.json',
+    mimeType: 'application/json',
+    fileSize: 2,
+    contentHash: 'hash',
+    favorite: false,
+    categoryId: null,
+    tags: [],
+    metadata: {},
+    originalBlob: new Blob(['{}']),
+    createdAt: 1,
+    updatedAt: 1,
+  } as Resource
+  const wrapper = shallowMount(ResourceOrganizer, {
+    props: {
+      resource,
+      resources: [resource],
+      boundResources: [],
+      versions: [],
+      categories: [],
+      busy: false,
+    },
+    global: { stubs: { Teleport: true, ResourceAttachmentEntry: AttachmentEntry } },
+  })
+  try {
+    await flushPromises()
+    expect(wrapper.get('.resource-detail-overlay').isVisible()).toBe(true)
+    await wrapper.get('[data-test="attachments"]').trigger('click')
+    expect(wrapper.get('.resource-detail-overlay').isVisible()).toBe(false)
+    ;(wrapper.vm as unknown as { requestClose: () => void }).requestClose()
+    await flushPromises()
+    expect(wrapper.get('.resource-detail-overlay').isVisible()).toBe(true)
+    expect(wrapper.emitted('close')).toBeUndefined()
+  } finally {
+    wrapper.unmount()
+  }
+})
+
 it('prepares a tab before mounting its editor, preserves the draft, and offers explicit retry', async () => {
   const resource = {
     id: 'prepared',

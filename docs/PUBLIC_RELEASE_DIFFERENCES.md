@@ -6,6 +6,7 @@ Public 以维护者主库作为功能源码上游。除依赖维护者账号或�
 
 - 维护者账号登录、账号会话与账号恢复。
 - 依赖维护者账号的资源广场、作者管理后台和反馈服务。
+- 维护者发布的公告与账号依赖的公共图床；使用者自己的 ImgBed 仍可配置。
 - 依赖账号会话和作者托管 API 的在线组件发布、分享链接及撤销分享；本地组件编辑、导入和导出仍可用。
 - 维护者预签名 APK、官方 APK 更新提示与安装通道。
 
@@ -16,9 +17,10 @@ Public 以维护者主库作为功能源码上游。除依赖维护者账号或�
 ## Worker 地址与服务
 
 - 部署本仓库只提供网页静态资源。设备码中继和 Koofr 代理代码位于独立的 `SRL-Worker-Public` 仓库。
-- 使用者 fork 并部署 `SRL-Worker-Public` 后，在网页/PWA 或独立原生 APK 的应用设置中填写部署后的 HTTPS Worker 根地址。无需在 APK 构建参数中写入该地址。
-- 网页和 APK 的该设置只服务于设备码中继与 Koofr 代理。Discord Bridge 保持单独的 Worker、地址和凭据设置。
-- 不使用设备码中继时可不填写通用 Worker 地址；Koofr 中继功能在配置前不可用。
+- 使用者 fork 并部署 `SRL-Worker-Public` 后，在网页/PWA 和 Capacitor APK 的“设置 → 中继服务”中的“自部署 Worker”填写 HTTPS 根地址，保存后点“检查连接”；设备码中继需检测通过，酒馆端须填写相同地址。独立 Kotlin APK 在“设置 → SRL Worker 地址”填写。无需在 APK 构建参数中写入中继地址。
+- 该中继提供设备码、加密暂存、可选 GitHub 云备份中继和网页 Koofr 代理。Discord Bridge 保持单独的 Worker、地址和凭据设置。
+- 未配置中继时，网页 GitHub 备份直连；配置后仅走自己的 Worker，失败不自动回退。网页 Koofr 中继、设备码和加密暂存在配置前不可用；APK 原生云盘直连不依赖此中继。
+- APK 的 `SRL_PUBLIC_ORIGIN` / `SRL_PUBLIC_ASSET_ORIGIN` 配置的是网页/静态 APP 包站点，不是本节的独立中继地址。
 - 本地开发配置、Cloudflare 账号标识和使用者凭据不得加入公开提交。
 
 ## 使用者自行配置的服务

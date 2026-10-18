@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { mount, flushPromises } from '@vue/test-utils'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import TavernParcelExchange from './TavernParcelExchange.vue'
 import { resourceService } from '../core/AppContainer'
 import { createChatArchive, readChatArchive } from '../services/TavernChatArchiveCodec.mjs'
@@ -8,6 +8,13 @@ import { createParcel, readParcel, removeParcel } from '../services/BridgeParcel
 import { saveRelayWorkerBaseUrl } from '../services/RelayWorkerSettingsService'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import { PngResourceParser } from '../parser/PngResourceParser'
+// SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-parcel-worker-fixture
+import { beforeEach } from 'vitest'
+beforeEach(() => {
+  localStorage.removeItem('srl.publicWorker.baseUrl.v1')
+  saveRelayWorkerBaseUrl('https://worker.example')
+})
+// SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-parcel-worker-fixture
 vi.mock('../core/AppContainer', async () => ({
   exportService: new (await import('../services/ExportService')).ExportService(),
   resourceService: { get: vi.fn() },
@@ -19,14 +26,12 @@ vi.mock('../services/BridgeParcelCodec.mjs', () => ({
   removeParcel: vi.fn(),
 }))
 const wrappers: Array<{ unmount(): void }> = []
-beforeEach(() => {
-  localStorage.removeItem('srl.publicWorker.baseUrl.v1')
-  saveRelayWorkerBaseUrl('https://worker.example')
-})
 afterEach(() => {
   wrappers.splice(0).forEach((w) => w.unmount())
   vi.clearAllMocks()
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=parcel-worker-storage-cleanup
   localStorage.removeItem('srl.publicWorker.baseUrl.v1')
+  // SRL-PUBLIC-SYNC: END REPLACE id=parcel-worker-storage-cleanup
 })
 it.each(['original', 'modified'] as const)(
   'packages %s according to the shared setting',

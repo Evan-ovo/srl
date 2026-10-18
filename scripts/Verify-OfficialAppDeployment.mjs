@@ -13,6 +13,23 @@ const base = new URL(baseUrl)
 if (!['http:', 'https:'].includes(base.protocol))
   throw new Error('Deployment origin must use HTTP or HTTPS')
 const origin = base.origin
+async function verifyConcurrently(items, verify) {
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(4, items.length) }, async () => {
+      while (next < items.length) await verify(items[next++])
+    }),
+  )
+}
+const responseBytes = async (response, path) => {
+  try {
+    return Buffer.from(await response.arrayBuffer())
+  } catch (error) {
+    throw new Error(`${path}: response interrupted (${error.cause?.code ?? error.message})`, {
+      cause: error,
+    })
+  }
+}
 const json = async (path) => {
   const url = new URL(path, origin)
   const response = await fetch(url, { cache: 'no-store' })
@@ -35,7 +52,7 @@ const bytes = async (path) => {
     throw new Error(`Rejected non-local APP package URL: ${path}`)
   const response = await fetch(url, { cache: 'no-store' })
   if (!response.ok) throw new Error(`${url.pathname}: HTTP ${response.status}`)
-  return Buffer.from(await response.arrayBuffer())
+  return responseBytes(response, url.pathname)
 }
 const digest = (content) => createHash('sha256').update(content).digest('hex')
 const inventory = await json('/official-app-assets.json')
@@ -89,19 +106,38 @@ const packages = new Map()
 for (const [id, download] of Object.entries(currentCatalog.apps)) {
   packages.set(download.url, { id, candidates: [download] })
 }
-for (const [id, candidates] of Object.entries(compatibleCatalog.apps)) {
-  if (!Array.isArray(candidates) || candidates.length === 0)
-    throw new Error(`${id}: no compatible APP candidates`)
-  for (const candidate of candidates) {
-    if (candidate.hostApiVersion !== inventory.hostApiVersion)
-      throw new Error(`${id}: candidate has a mismatched host API version`)
-    const existing = packages.get(candidate.url)
-    if (existing) {
-      if (existing.id !== id)
-        throw new Error(`${candidate.url}: catalog URL is reused by different APPs`)
-      existing.candidates.push(candidate)
-    } else {
-      packages.set(candidate.url, { id, candidates: [candidate] })
+const compatibilityCatalogs = new Map([[inventory.hostApiVersion, compatibleCatalog]])
+for (const version of inventory.compatibleHostApiVersions ?? [inventory.hostApiVersion]) {
+  if (!Number.isSafeInteger(version) || version < 1 || version > inventory.hostApiVersion)
+    throw new Error('Invalid retained host API version')
+  if (compatibilityCatalogs.has(version)) continue
+  const legacy = await json(`/official-apps/api-${version}/catalog.json`)
+  if (
+    legacy.schemaVersion !== 1 ||
+    legacy.hostApiVersion !== version ||
+    JSON.stringify(Object.keys(legacy.apps ?? {}).sort()) !== JSON.stringify(ids)
+  )
+    throw new Error(`API ${version}: retained compatibility catalog is invalid`)
+  compatibilityCatalogs.set(version, legacy)
+}
+for (const [hostApiVersion, catalog] of compatibilityCatalogs) {
+  for (const [id, candidates] of Object.entries(catalog.apps)) {
+    if (
+      !Array.isArray(candidates) ||
+      (hostApiVersion === inventory.hostApiVersion && candidates.length === 0)
+    )
+      throw new Error(`${id}: no compatible APP candidates`)
+    for (const candidate of candidates) {
+      if (candidate.hostApiVersion !== hostApiVersion)
+        throw new Error(`${id}: candidate has a mismatched host API version`)
+      const existing = packages.get(candidate.url)
+      if (existing) {
+        if (existing.id !== id)
+          throw new Error(`${candidate.url}: catalog URL is reused by different APPs`)
+        existing.candidates.push(candidate)
+      } else {
+        packages.set(candidate.url, { id, candidates: [candidate] })
+      }
     }
   }
 }
@@ -157,7 +193,7 @@ for (const shellVersion of retainedBuilds) {
 }
 
 let packageCount = 0
-for (const [url, { id, candidates }] of packages) {
+await verifyConcurrently([...packages], async ([url, { id, candidates }]) => {
   const archiveBytes = await bytes(url)
   for (const candidate of candidates) {
     if (
@@ -167,6 +203,18 @@ for (const [url, { id, candidates }] of packages) {
       throw new Error(`${url}: download size or SHA-256 does not match ${id} catalog`)
   }
   const archive = unzipSync(archiveBytes)
+  let metadata
+  for (const candidate of candidates)
+    if (candidate.manifest) {
+      metadata ??= await bytes(candidate.manifest.url)
+      if (
+        candidate.manifest.url !== url.replace(/\.srlapp$/u, '.json') ||
+        metadata.length !== candidate.manifest.size ||
+        digest(metadata) !== candidate.manifest.sha256 ||
+        !Buffer.from(metadata).equals(Buffer.from(archive['manifest.json'] ?? []))
+      )
+        throw new Error(`${url}: incremental manifest does not match the verified archive`)
+    }
   if (!archive['manifest.json']) throw new Error(`${url}: missing manifest.json`)
   let manifest
   try {
@@ -234,19 +282,25 @@ for (const [url, { id, candidates }] of packages) {
       throw new Error(`${url}: host dependency list does not match its catalog`)
   }
   packageCount++
-}
+  if (packageCount % 11 === 0)
+    console.log(`APP package integrity: ${packageCount}/${packages.size}`)
+})
 
-for (const file of inventory.shellFiles) {
+let shellCount = 0
+await verifyConcurrently(inventory.shellFiles, async (file) => {
   const url = new URL(file.path, origin)
   if (url.origin !== origin || !url.pathname.startsWith('/assets/'))
     throw new Error(`Rejected non-local shell asset URL: ${file.path}`)
   const response = await fetch(url, { cache: 'no-store' })
   if (!response.ok) throw new Error(`${url.pathname}: HTTP ${response.status}`)
-  const content = Buffer.from(await response.arrayBuffer())
+  const content = await responseBytes(response, url.pathname)
   if (content.length !== file.size || digest(content) !== file.sha256)
     throw new Error(`${url.pathname}: deployed shell asset failed size/SHA-256 verification`)
-}
+  shellCount++
+  if (shellCount % 50 === 0)
+    console.log(`Shell asset integrity: ${shellCount}/${inventory.shellFiles.length}`)
+})
 
 console.log(
-  `Deployment verified at ${origin}: shell ${inventory.shellVersion}, host API ${inventory.hostApiVersion}, ${ids.length} APPs, ${packageCount} package URLs, ${inventory.shellFiles.length} shell assets.`,
+  `Deployment verified at ${origin}: shell ${inventory.shellVersion}, host API ${inventory.hostApiVersion}, ${ids.length} APPs, ${packageCount} package URLs across APIs ${[...compatibilityCatalogs.keys()].sort().join('/')}, ${inventory.shellFiles.length} shell assets.`,
 )

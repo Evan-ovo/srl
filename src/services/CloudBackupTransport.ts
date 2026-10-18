@@ -241,29 +241,37 @@ export class CloudBackupTransport {
         (target.hostname === 'uploads.github.com' || target.hostname === 'api.github.com') &&
         !isCapacitorApp()
       ) {
+        // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackuptransport-ts-1
         const relayTarget = this.relayWorkerScope?.target ?? resolveRelayWorkerTarget()
         if (!relayTarget.custom) return measuredFetch(url, init)
+        // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackuptransport-ts-1
         const headers = new Headers(init.headers)
         if (init.body instanceof Blob) {
           headers.set('X-SRL-Content-Length', String(init.body.size))
         }
+        // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackuptransport-ts-2
         const proxyUrl = relayWorkerEndpoint(
           `/api/cloud/proxy/github?url=${encodeURIComponent(url)}`,
           relayTarget,
         ).href
+        // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackuptransport-ts-2
         let response: Response
         try {
           response = await measuredFetch(proxyUrl, {
             ...init,
             headers,
+            // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackuptransport-ts-3
             credentials: 'omit',
+            // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackuptransport-ts-3
             redirect: 'error',
             cache: 'no-store',
           })
         } catch (error) {
           if (isCloudRequestTimeout(error)) throw error
           throw new Error(
+            // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackuptransport-ts-4
             '自部署 Worker 没有收到 GitHub 请求，请检查 Worker 地址、部署状态及 CORS 配置；不会自动切回其他中继。',
+            // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackuptransport-ts-4
             {
               cause: error,
             },
@@ -271,7 +279,9 @@ export class CloudBackupTransport {
         }
         if (response.status === 413) throw proxyPayloadTooLargeError(init.body)
         if (response.headers.get('x-srl-cloud-proxy') !== '1')
+          // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackuptransport-ts-5
           throw new Error('当前自部署 Worker 没有可用的 GitHub 中继')
+        // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackuptransport-ts-5
         return response
       }
       return measuredFetch(url, init)
@@ -323,7 +333,9 @@ export class CloudBackupTransport {
         throw error
       if (relayTarget.custom)
         throw new Error(
+          // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackuptransport-ts-6
           '自建中继未完成 Koofr 请求。请检查设置 → 自部署 Worker 中的地址、部署状态及 CORS 配置；不会自动切回官方中继。',
+          // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackuptransport-ts-6
           { cause: error },
         )
       throw cloudProxyUnavailableError(error)

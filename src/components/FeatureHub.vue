@@ -245,9 +245,7 @@ function forwardAssistantAppearance(
         @back="activePage = 'home'"
         @open-resource="emit('openResource', $event)"
       />
-      <!-- SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=official-app-manager-route -->
       <OfficialAppManager v-else-if="activePage === 'officialApps'" @back="activePage = 'home'" />
-      <!-- SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=official-app-manager-route -->
       <DrawApp
         v-else-if="activePage === 'draw'"
         v-bind="props"

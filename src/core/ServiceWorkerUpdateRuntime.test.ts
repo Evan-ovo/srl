@@ -1,7 +1,12 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const runtime = vi.hoisted(() => ({ native: false, registerSW: vi.fn(), relaunch: vi.fn() }))
+const runtime = vi.hoisted(() => ({
+  native: false,
+  registerSW: vi.fn(),
+  relaunch: vi.fn(),
+  fetchVersion: vi.fn(),
+}))
 
 vi.mock('virtual:pwa-register', () => ({
   registerSW: runtime.registerSW,
@@ -14,7 +19,7 @@ vi.mock('../utils/CapacitorDetection', () => ({
 vi.mock('./ServiceWorkerReload', () => ({ relaunchCurrentShell: runtime.relaunch }))
 
 vi.mock('./HostedApiTransport', () => ({
-  hostedApiFetch: vi.fn(),
+  hostedApiFetch: runtime.fetchVersion,
   hostedApiFetchBinary: vi.fn(),
 }))
 
@@ -153,6 +158,28 @@ describe('ServiceWorkerUpdate early PWA checks', () => {
     expect(getRegistration).toHaveBeenCalledOnce()
     expect(update).toHaveBeenCalledOnce()
     expect(clearCache).not.toHaveBeenCalled()
+  })
+
+  it('offers a working refresh when the version changes before the page registration callback', async () => {
+    localStorage.removeItem('srl.deploy.version')
+    const api = await updater({
+      getRegistration: vi.fn(async () => ({ update: vi.fn(async () => undefined) })),
+    })
+    const fetchVersion = vi.fn(
+      async () => new Response(JSON.stringify({ version: 'fixture-version' })),
+    )
+    vi.stubGlobal('fetch', fetchVersion)
+    runtime.fetchVersion.mockImplementation(fetchVersion)
+    try {
+      await expect(api.manualCheckForUpdate()).resolves.toContain('服务器有新版本')
+      const button = document.querySelector<HTMLButtonElement>('#srl-update-notice button')
+      expect(button).not.toBeNull()
+      button!.click()
+      expect(runtime.relaunch).toHaveBeenCalledOnce()
+    } finally {
+      localStorage.removeItem('srl.deploy.version')
+      runtime.fetchVersion.mockReset()
+    }
   })
 
   it('reports initialization without clearing caches and discovers a registration on a later check', async () => {

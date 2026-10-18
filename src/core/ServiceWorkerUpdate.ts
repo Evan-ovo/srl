@@ -149,7 +149,7 @@ function createUpdateState() {
           const storedVersion = localStorage.getItem('srl.deploy.version') ?? ''
           if (serverVersion && serverVersion !== storedVersion) {
             localStorage.setItem('srl.deploy.version', serverVersion)
-            if (applyUpdateRef) showUpdateBanner(applyUpdateAndRelaunch)
+            showUpdateBanner(applyUpdateAndRelaunch)
             return '服务器有新版本（' + serverVersion + '），点击上方"立即刷新"'
           }
           if (serverVersion) {

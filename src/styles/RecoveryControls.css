@@ -4,13 +4,15 @@
   color: var(--recovery-color, var(--color-ink, #173832));
 }
 .appearance-preview-controls {
+  --recovery-safe-top: env(safe-area-inset-top, 0px);
+  --recovery-safe-right: env(safe-area-inset-right, 0px);
   --preview-background: #f6fbfaee;
   --preview-border: #315e592e;
   --preview-color: #274b46;
   --preview-secondary: #57716b;
   --preview-hover: #315e5910;
   position: fixed;
-  inset: max(6px, var(--safe-top, 0px)) max(8px, env(safe-area-inset-right)) auto auto;
+  inset: max(6px, var(--recovery-safe-top)) max(8px, var(--recovery-safe-right)) auto auto;
   margin: 0;
   padding: 0;
   border: 0;

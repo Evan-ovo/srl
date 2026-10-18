@@ -122,7 +122,8 @@ final class NativeReplacedObjectCleanup {
         return new File(new File(new File(root.getCanonicalFile(), "objects"), normalized.substring(0, 2)), normalized + ".bin");
     }
 
-    private static JSONObject read(File file) throws Exception {
+    // Recovery deletion shares this bounded reader on all supported Android API levels.
+    static JSONObject read(File file) throws Exception {
         if (!file.isFile() || file.length() > 1024 * 1024)
             throw new IllegalStateException("原件引用无法完整核对，保留旧文件");
         byte[] bytes = new byte[(int) file.length()];

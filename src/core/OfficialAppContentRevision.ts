@@ -8,12 +8,18 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   chatReader: 14,
   draw: 1,
   stitch: 16,
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=frontend-workshop-content-revision
   frontendWorkshop: 7,
-  imageGeneration: 5,
+  // SRL-PUBLIC-SYNC: END REPLACE id=frontend-workshop-content-revision
+  imageGeneration: 8,
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-album-content-revision
   imageAlbum: 3,
+  // SRL-PUBLIC-SYNC: END REPLACE id=image-album-content-revision
   userPersona: 7,
   tavernBridge: 9,
-  assistant: 44,
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-content-revision
+  assistant: 47,
+  // SRL-PUBLIC-SYNC: END REPLACE id=assistant-content-revision
 }
 
 /** Existing installed records predate explicit revisions and start at the migration baseline. */

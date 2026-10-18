@@ -16,19 +16,29 @@ foreach ($relative in $manifest.files) {
     if ($relative -notmatch '^assets/[A-Za-z0-9_.-]+$' -or $relative.Contains('..')) { throw "Unsafe APP asset: $relative" }
     $candidates.Add((Join-Path $publicRoot $relative))
 }
+# Pet artwork remains available on the official site and is downloaded only after
+# the user opts in. Keep it out of the APK's bundled WebView assets.
+$petArtwork = Join-Path $publicRoot 'icons\assistant-pet*.png'
+foreach ($item in Get-ChildItem -Path $petArtwork -File -ErrorAction SilentlyContinue) {
+    $candidates.Add($item.FullName)
+}
 $packageRoot = Join-Path $publicRoot 'official-apps'
 $requiredCatalogs = @(
     "official-apps/$($manifest.shellVersion)/catalog.json",
     "official-apps/api-$($manifest.hostApiVersion)/catalog.json"
 )
 $preinstalledPackages = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$selectedAppIds = @()
+if ($env:SRL_ANDROID_PREINSTALL_OFFICIAL_APP_IDS) { $selectedAppIds = $env:SRL_ANDROID_PREINSTALL_OFFICIAL_APP_IDS -split ',' }
 if ($env:SRL_ANDROID_PREINSTALL_OFFICIAL_APPS -eq '1') {
     $catalogPath = Join-Path $publicRoot "official-apps\$($manifest.shellVersion)\catalog.json"
     if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf)) { throw 'Preinstalled APP catalog missing.' }
     $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
     foreach ($app in $catalog.apps.PSObject.Properties) {
+# SRL-PUBLIC-SYNC: BEGIN REPLACE id=optional-preinstall-apps
         if (($app.Name -in @('assistant', 'resourcePlaza') -and $env:SRL_ANDROID_BUNDLE_OPTIONAL_OFFICIAL_APPS -ne '1') -or
             ($selectedAppIds.Count -gt 0 -and $app.Name -notin $selectedAppIds)) { continue }
+# SRL-PUBLIC-SYNC: END REPLACE id=optional-preinstall-apps
         $relativePackage = ([string]$app.Value.url).TrimStart('/')
         if ($relativePackage -notmatch "^official-apps/$([regex]::Escape($manifest.shellVersion))/$([regex]::Escape($app.Name))-[a-f0-9]{16}\.srlapp$" -or $relativePackage.Contains('..')) {
             throw "Invalid preinstalled APP package URL: $($app.Value.url)"

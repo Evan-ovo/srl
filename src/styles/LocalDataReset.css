@@ -2,7 +2,7 @@
   box-sizing: border-box;
   max-width: 38rem;
   margin: 0 auto;
-  padding: max(1rem, var(--safe-top)) 1rem max(1rem, var(--safe-bottom));
+  padding: max(1rem, var(--safe-top, 0px)) 1rem max(1rem, var(--safe-bottom, 0px));
   overflow-wrap: anywhere;
 }
 .local-data-reset > :is(button, a):not([hidden]) {

@@ -470,15 +470,16 @@ class NativeTransactionFacade implements NativeTransaction {
     if (cached) {
       if (cached.deleted) return undefined
       if (cached.encoded) {
-        const decoded = await decodeAppDatabaseValue(
-          cached.value,
+        // Clone descriptors before hydration: cloning a hydrated Blob drops its
+        // NativeFileSource identity and makes APK cloud handoff reject the file.
+        // Keep only descriptors in the transaction cache, never hydrated attachments.
+        return decodeAppDatabaseValue(
+          cloneValue(cached.value),
           store as NativeAppDatabaseStore,
           token,
           this.native,
           loadBinary,
         )
-        // Retain only descriptors, never hydrated attachments for the lifetime of a scan.
-        return cloneValue(decoded)
       }
       return cloneValue(cached.value)
     }
@@ -486,8 +487,7 @@ class NativeTransactionFacade implements NativeTransaction {
     const nativeStore = store as NativeAppDatabaseStore
     const value = await this.native.getRecord(nativeStore, token)
     if (value === undefined) return undefined
-    const decoded = await decodeAppDatabaseValue(value, nativeStore, token, this.native, loadBinary)
-    return cloneValue(decoded)
+    return decodeAppDatabaseValue(cloneValue(value), nativeStore, token, this.native, loadBinary)
   }
 
   async queryIndex(

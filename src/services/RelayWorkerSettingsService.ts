@@ -1,7 +1,8 @@
 import { computed, ref } from 'vue'
-import { savePublicWorkerBaseUrl } from './PublicWorkerSettingsService'
 
-const PUBLIC_WORKER_BASE_URL_KEY = 'srl.publicWorker.baseUrl.v1'
+// SRL-PUBLIC-SYNC: BEGIN REPLACE id=relay-settings-key
+const RELAY_WORKER_KEY = 'srl.publicWorker.baseUrl.v1'
+// SRL-PUBLIC-SYNC: END REPLACE id=relay-settings-key
 const VERIFIED_DEVICE_RELAY_KEY = 'srl.relayWorker.verifiedDeviceOrigin.v1'
 const activeTargets = new Set<symbol>()
 const settingsRevision = ref(0)
@@ -32,21 +33,16 @@ export function normalizeRelayWorkerBaseUrl(value: string): string {
 }
 
 export function loadRelayWorkerBaseUrl(): string {
-  const raw = typeof localStorage === 'undefined' ? '' : (localStorage.getItem(PUBLIC_WORKER_BASE_URL_KEY) ?? '')
-  return normalizeRelayWorkerBaseUrl(raw)
+  // An unreadable or malformed saved setting must not silently select the official relay.
+  return typeof localStorage === 'undefined' ? '' : (localStorage.getItem(RELAY_WORKER_KEY) ?? '')
 }
 
 export function saveRelayWorkerBaseUrl(value: string): string {
   const normalized = normalizeRelayWorkerBaseUrl(value)
-  let previous = ''
-  try {
-    previous = loadRelayWorkerBaseUrl()
-  } catch {
-    // Allow a valid replacement for a malformed saved address.
-  }
-  if (normalized !== previous && activeTargets.size)
+  if (normalized !== loadRelayWorkerBaseUrl() && activeTargets.size)
     throw new Error('仍有中继连接或云盘操作，请先断开互传、结束或取消任务，再切换中继')
-  savePublicWorkerBaseUrl(normalized)
+  if (normalized) localStorage.setItem(RELAY_WORKER_KEY, normalized)
+  else localStorage.removeItem(RELAY_WORKER_KEY)
   if (localStorage.getItem(VERIFIED_DEVICE_RELAY_KEY) !== normalized)
     localStorage.removeItem(VERIFIED_DEVICE_RELAY_KEY)
   settingsRevision.value += 1
@@ -60,7 +56,7 @@ export function getDeviceRelayStatus(): { enabled: boolean; message: string } {
     if (localStorage.getItem(VERIFIED_DEVICE_RELAY_KEY) !== target.origin)
       return {
         enabled: false,
-        message: '请先在设置 → 自部署 Worker 检测自部署 Worker，检测通过后才能使用中继码',
+        message: '请先在设置 → 中继服务检测自部署 Worker，检测通过后才能使用中继码',
       }
     return { enabled: true, message: '' }
   } catch (error) {
@@ -91,6 +87,7 @@ export function resolveRelayWorkerTarget(value = loadRelayWorkerBaseUrl()): Rela
 
 export function relayWorkerEndpoint(path: string, target = resolveRelayWorkerTarget()): URL {
   if (!path.startsWith('/')) throw new Error('中继接口路径无效')
+  // SRL-PUBLIC-SYNC: PUBLIC-ONLY id=public-worker-endpoint-required
   if (!target.custom || !target.origin) throw new Error('请先配置自己的 SRL Worker 地址')
   const endpoint = new URL(path, target.origin)
   if (endpoint.origin !== target.origin) throw new Error('中继接口不能指向其他服务')
@@ -99,6 +96,7 @@ export function relayWorkerEndpoint(path: string, target = resolveRelayWorkerTar
 
 export function acquireRelayWorkerTarget() {
   const target = resolveRelayWorkerTarget()
+  // SRL-PUBLIC-SYNC: PUBLIC-ONLY id=public-worker-operation-required
   if (!target.custom) throw new Error('请先配置自己的 SRL Worker 地址')
   const id = Symbol('relay-target')
   activeTargets.add(id)
@@ -109,12 +107,7 @@ export async function checkRelayWorker(value: string, signal?: AbortSignal): Pro
   const target = resolveRelayWorkerTarget(value)
   if (!target.custom) throw new Error(DEVICE_RELAY_DISABLED_MESSAGE)
   const checkId = ++latestCheck
-  let savedAtStart = ''
-  try {
-    savedAtStart = loadRelayWorkerBaseUrl()
-  } catch {
-    // A draft can still be checked while replacing a malformed stored address.
-  }
+  const savedAtStart = loadRelayWorkerBaseUrl()
   if (localStorage.getItem(VERIFIED_DEVICE_RELAY_KEY) === target.origin) {
     localStorage.removeItem(VERIFIED_DEVICE_RELAY_KEY)
     settingsRevision.value += 1
@@ -147,13 +140,7 @@ export async function checkRelayWorker(value: string, signal?: AbortSignal): Pro
   )
     throw new Error('该 Worker 未提供可用的中继码接口，请检查自部署状态')
   signal?.throwIfAborted()
-  let savedAtEnd = ''
-  try {
-    savedAtEnd = loadRelayWorkerBaseUrl()
-  } catch {
-    // Keep malformed storage distinct from a newly saved valid address.
-  }
-  if (checkId !== latestCheck || savedAtStart !== savedAtEnd)
+  if (checkId !== latestCheck || savedAtStart !== loadRelayWorkerBaseUrl())
     throw new Error('中继地址或检测已变化，请重新检测当前 Worker')
   localStorage.setItem(VERIFIED_DEVICE_RELAY_KEY, target.origin)
   settingsRevision.value += 1

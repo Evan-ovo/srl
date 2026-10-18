@@ -638,7 +638,9 @@ const isBatchBarVisible = computed(
     <div v-if="isSystemFileDropActive" class="app-shell__system-file-drop" role="status">
       松开以导入角色卡、世界书或 SRL ZIP
     </div>
+    <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=library-sidebar-account-event -->
     <LibrarySidebar :model="panelModel" />
+    <!-- SRL-PUBLIC-SYNC: END REPLACE id=library-sidebar-account-event -->
 
     <main
       v-show="!isFeatureHubOpen"

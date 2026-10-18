@@ -45,6 +45,8 @@ export interface InstalledOfficialApp extends OfficialAppPackage {
   pendingCleanupFiles?: OfficialAppFile[]
 }
 export interface OfficialAppDownload {
+  /** Same immutable manifest as the ZIP, for verified file reuse on existing installations. */
+  manifest?: { url: string; size: number; sha256: string }
   runtimeEntry?: string
   shellVersion: string
   hostApiVersion: number

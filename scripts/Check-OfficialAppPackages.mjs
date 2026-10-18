@@ -66,6 +66,13 @@ for (const [id, candidates] of Object.entries(compatibleCatalog.apps)) {
     assert.equal(bytes.length, candidate.downloadBytes, `${id}: candidate size`)
     assert.equal(hash(bytes), candidate.sha256, `${id}: candidate hash`)
     const archive = unzipSync(bytes)
+    if (candidate.manifest) {
+      const metadata = read(candidate.manifest.url)
+      assert.equal(candidate.manifest.url, candidate.url.replace(/\.srlapp$/u, '.json'))
+      assert.equal(metadata.length, candidate.manifest.size)
+      assert.equal(hash(metadata), candidate.manifest.sha256)
+      assert.deepEqual(metadata, Buffer.from(archive['manifest.json']))
+    }
     const manifest = JSON.parse(new TextDecoder().decode(archive['manifest.json']))
     assert.equal(manifest.id, id)
     assert.equal(manifest.hostApiVersion ?? 1, candidate.hostApiVersion)

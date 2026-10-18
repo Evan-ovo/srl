@@ -56,7 +56,9 @@ it('retains the existing full-preinstallation scope when no selection is supplie
   const { ensurePreinstalledOfficialApps } = await import('./OfficialAppRuntime')
   await ensurePreinstalledOfficialApps()
   expect(state.install.mock.calls.map(([id]) => id)).toEqual(
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=optional-app-ids
     OFFICIAL_APP_IDS.filter((id) => id !== 'assistant'),
+    // SRL-PUBLIC-SYNC: END REPLACE id=optional-app-ids
   )
 })
 

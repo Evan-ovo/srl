@@ -8,7 +8,13 @@ const runtime = vi.hoisted(() => ({
   acquireOfficialAppUse: vi.fn(),
   loadOfficialApp: vi.fn(),
   release: vi.fn(),
-  officialAppService: { list: vi.fn(), getInstalled: vi.fn(), ready: vi.fn(), install: vi.fn() },
+  officialAppService: {
+    list: vi.fn(),
+    getInstalled: vi.fn(),
+    ready: vi.fn(),
+    install: vi.fn(),
+    repairCompatibility: vi.fn(),
+  },
 }))
 vi.mock('../core/OfficialAppRuntime', () => runtime)
 let wrapper: ReturnType<typeof mount>
@@ -20,10 +26,34 @@ beforeEach(() => {
   runtime.officialAppService.getInstalled.mockResolvedValue({ id: 'draw' })
   runtime.officialAppService.install.mockResolvedValue(undefined)
 })
-afterEach(() => wrapper?.unmount())
+afterEach(() => {
+  wrapper?.unmount()
+  vi.unstubAllEnvs()
+})
 function open() {
   wrapper = mount(OfficialAppGate, { props: { appId: 'draw', appName: '抽了么' } })
 }
+
+it('releases the use lease before same-content dependency repair and then opens without another install button', async () => {
+  vi.stubEnv('DEV', false)
+  runtime.loadOfficialApp.mockImplementationOnce(async (_id, onReady) => {
+    onReady(false)
+  })
+  runtime.officialAppService.repairCompatibility.mockImplementationOnce(async (_id, signal) => {
+    expect(runtime.release).toHaveBeenCalledOnce()
+    expect(signal.aborted).toBe(false)
+    return true
+  })
+  runtime.loadOfficialApp.mockImplementationOnce(async (_id, onReady) => {
+    onReady(true)
+    return { template: '<p>程序已就绪</p>' }
+  })
+  open()
+  await flushPromises()
+  expect(wrapper.text()).toContain('程序已就绪')
+  expect(runtime.officialAppService.install).not.toHaveBeenCalled()
+  expect(runtime.officialAppService.repairCompatibility).toHaveBeenCalledOnce()
+})
 
 it('loads through the single readiness owner while holding the APP use lease', async () => {
   runtime.loadOfficialApp.mockImplementation(async (_id, onReady) => {

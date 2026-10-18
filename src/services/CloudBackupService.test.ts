@@ -15,6 +15,7 @@ import { taskCenter } from '../core/TaskCenter'
 import { waitForCloudRetry } from './CloudBackupHttp'
 import { hashCloudBlob } from './CloudArchiveCodec'
 import { decodeStructuredSnapshot } from './CloudStructuredSnapshot'
+import { CloudBackupMaintenanceError } from './CloudBackupRetentionOperations'
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>()
@@ -650,7 +651,9 @@ describe('CloudBackupService V3', () => {
     vi.stubGlobal('fetch', fetchMock)
     const service = createService()
     await service.saveConfig(githubConfig, 'saved-token')
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupservice-test-ts-2
     for (const expected of [/403/, /404/, /没有收到 GitHub 请求/]) {
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupservice-test-ts-2
       await expect(service.testConnection(githubConfig)).rejects.toThrow(expected)
       expect(service.getSnapshot().credentials.github).toBe('valid')
     }
@@ -689,7 +692,9 @@ describe('CloudBackupService V3', () => {
     expect(service.getSnapshot().credentials.webdav).toBe('invalid')
   })
 
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupservice-test-ts-4
   it('routes Web GitHub API and release asset requests through the configured Worker', async () => {
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupservice-test-ts-4
     const fetchMock = vi.fn<typeof fetch>(() =>
       Promise.resolve(new Response('{}', { status: 201, headers: { 'x-srl-cloud-proxy': '1' } })),
     )
@@ -704,15 +709,18 @@ describe('CloudBackupService V3', () => {
       'github',
     )
     expect(fetchMock).toHaveBeenCalledOnce()
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupservice-test-ts-5
     expect(fetchMock.mock.calls[0]?.[0]).toContain(
       'https://worker.example/api/cloud/proxy/github?url=',
     )
     expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBe('omit')
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupservice-test-ts-5
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toBeInstanceOf(Headers)
     expect((fetchMock.mock.calls[0]?.[1]?.headers as Headers).get('X-SRL-Content-Length')).toBe('3')
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(body)
 
     await service.cloudFetch('https://api.github.com/repos/owner/repo', {}, 'github')
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupservice-test-ts-6
     expect(fetchMock.mock.calls[1]?.[0]).toContain(
       'https://worker.example/api/cloud/proxy/github?url=',
     )
@@ -734,6 +742,7 @@ describe('CloudBackupService V3', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.github.com/repos/owner/repo')
     expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBeUndefined()
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupservice-test-ts-6
   })
 
   it('deletes a same-name incomplete GitHub chunk only when the local SHA-256 matches', async () => {
@@ -959,6 +968,48 @@ describe('CloudBackupService V3', () => {
     expect(calls[0]).toMatch(/^objects\/srl-chunk--sha256-/)
     expect(calls.at(-1)).toMatch(/^snapshots\/.*\.srlmanifest\.v3\.json\.gz$/)
   })
+
+  it.each(['snapshots', 'objects'] as const)(
+    'preserves the committed backup and %s maintenance result',
+    async (stage) => {
+      const resource = cloudResource('a'.repeat(64))
+      const service = createService(
+        {
+          listSummaries: vi.fn(async () => [resource]),
+          listVersions: vi.fn(async () => []),
+          listVersionSummaries: vi.fn(async () => []),
+          get: vi.fn(async () => resource),
+        } as unknown as ResourceService,
+        { list: vi.fn(async () => []) } as unknown as CategoryService,
+      )
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(githubRepositoryResponse()))
+      await service.saveConfig(githubConfig, 'token')
+      const maintenance = new CloudBackupMaintenanceError(
+        stage,
+        1,
+        2,
+        'github',
+        new Error('Connection interrupted'),
+      )
+      Object.assign(service, {
+        buildStructuredBackup: vi.fn(async () => createdSnapshot()),
+        uploadGitHubStructuredBackup: vi.fn(async () => ({
+          id: 'committed',
+          objectKey: 'snapshot.srlmanifest.v3.json.gz',
+          size: 1,
+          createdAt: Date.now(),
+          kind: 'githubSnapshot',
+        })),
+        prune: vi.fn(async () => {
+          throw maintenance
+        }),
+      })
+      await expect(service.createBackup()).resolves.toMatchObject({
+        id: 'committed',
+        maintenanceWarning: `新对象快照已上传成功；${maintenance.message}`,
+      })
+    },
+  )
 
   it('uses the no-op reuse path when the local fingerprint is unchanged', async () => {
     const resource = cloudResource('a'.repeat(64))
@@ -1487,7 +1538,9 @@ describe('persistent web backup control', () => {
     vi.stubGlobal('localStorage', new MemoryStorage())
     vi.stubGlobal('sessionStorage', new MemoryStorage())
     vi.stubGlobal('indexedDB', new IDBFactory())
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupservice-test-ts-9
     localStorage.setItem('srl.publicWorker.baseUrl.v1', 'https://worker.example')
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupservice-test-ts-9
     noticeCenter.dismiss('web-cloud-backup')
   })
   function sessionService() {

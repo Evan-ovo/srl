@@ -44,6 +44,7 @@ import { CloudBackupConfiguration, STATUS_KEY } from './CloudBackupConfiguration
 import { cloudHttpError, friendlyNetworkError, readJson } from './CloudBackupHttp'
 
 import { CloudBackupMetricsTracker } from './CloudBackupMetrics'
+import { CloudBackupMaintenanceError } from './CloudBackupRetentionOperations'
 
 import {
   allowsAutomaticBackup,
@@ -838,7 +839,10 @@ export class CloudBackupService extends CloudBackupTransport {
                   maintenanceWarning = `已按保留份数自动清理 ${removed} 份旧云端快照。`
               }
             } catch (error) {
-              maintenanceWarning = `新对象快照已上传成功，但旧备份清理失败：${friendlyNetworkError(error, resolved.provider).message}`
+              maintenanceWarning =
+                error instanceof CloudBackupMaintenanceError
+                  ? `新对象快照已上传成功；${error.message}`
+                  : `新对象快照已上传成功，但旧备份维护未完成：${friendlyNetworkError(error, resolved.provider).message}`
             }
             const lastMetrics = metrics.snapshot(true)
             this.writeStatus({

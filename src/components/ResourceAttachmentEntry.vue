@@ -6,18 +6,17 @@ import type { Resource, ResourceSummary } from '../types/Resource'
 import '../styles/ResourceAttachments.css'
 
 const props = defineProps<{ resource: Resource; disabled?: boolean }>()
-const emit = defineEmits<{ changed: [ids: string[]]; 'open-change': [open: boolean] }>()
+const emit = defineEmits<{ changed: [ids: string[]] }>()
 const ResourceAttachmentPanel = createAsyncPanel(
   '资源附件',
   () => import('./ResourceAttachmentPanel.vue'),
 )
 const items = ref<ResourceSummary[]>([])
-const opened = ref(false)
+const opened = defineModel<boolean>('open', { default: false })
 const loading = ref(false)
 const error = ref('')
 const panel = ref<{ requestBack: () => Promise<void> }>()
 let generation = 0
-watch(opened, (open) => emit('open-change', open), { immediate: true })
 async function load() {
   const token = ++generation
   loading.value = true

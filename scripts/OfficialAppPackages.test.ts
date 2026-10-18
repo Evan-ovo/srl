@@ -265,6 +265,7 @@ describe('official APP renderer build identity', () => {
   }, 20000)
 
   it('keeps an API 1 catalog for released APKs when the current host moves to API 2', async () => {
+    mkdirSync(resolve('.codex-tmp'), { recursive: true })
     const temporary = mkdtempSync(resolve('.codex-tmp/official-app-legacy-'))
     const publicDirectory = resolve(temporary, 'public')
     const packages = resolve(publicDirectory, 'official-apps')

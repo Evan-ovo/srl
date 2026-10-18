@@ -77,7 +77,9 @@ export const officialAppService = new OfficialAppService(
 )
 
 let preinstalledApps: Promise<void> | undefined
+// SRL-PUBLIC-SYNC: BEGIN REPLACE id=optional-app-ids
 const OPTIONAL_DOWNLOAD_ONLY_APP_IDS = new Set<OfficialAppId>(['assistant'])
+// SRL-PUBLIC-SYNC: END REPLACE id=optional-app-ids
 export function ensurePreinstalledOfficialApps(): Promise<void> {
   if (!__SRL_PREINSTALL_OFFICIAL_APPS__ || !isCapacitorApp()) return Promise.resolve()
   const marker = `srl.officialApps.preinstalled.${BUILD_INFO.buildId}`

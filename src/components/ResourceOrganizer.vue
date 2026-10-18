@@ -28,10 +28,8 @@ const ResourceGalleryPanel = createAsyncPanel(
   () => import('./ResourceGalleryPanel.vue'),
 )
 const galleryCount = ref(0)
-const attachmentEntry = useTemplateRef<{ open: boolean; requestBack: () => void }>(
-  'attachmentEntry',
-)
-const attachmentPanelOpen = ref(false)
+const attachmentsOpen = ref(false)
+const attachmentEntry = useTemplateRef<{ requestBack: () => void }>('attachmentEntry')
 const props = defineProps<ResourceOrganizerProps>()
 const emit = defineEmits<ResourceOrganizerEvents>()
 const controller = useResourceOrganizer(props, emit)
@@ -61,8 +59,8 @@ const personalContent = useTemplateRef<{ editing: boolean; requestBack: () => vo
   'personalContent',
 )
 function requestClose() {
-  if (attachmentEntry.value?.open) {
-    attachmentEntry.value.requestBack()
+  if (attachmentsOpen.value) {
+    attachmentEntry.value?.requestBack()
     return
   }
   if (galleryContent.value?.busy || coverContent.value?.busy) return
@@ -164,7 +162,7 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
 <template>
   <Teleport to="body">
     <div
-      v-show="!settingsOpen && !attachmentPanelOpen"
+      v-show="!settingsOpen && !attachmentsOpen"
       class="editor-overlay resource-detail-overlay"
       :class="{ 'resource-detail-overlay--content-editor': isContentEditing }"
       role="presentation"
@@ -420,9 +418,9 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
                 <ResourceSourceLinks v-model:links="sourceLinks" :resource-id="resource.id" />
                 <ResourceAttachmentEntry
                   ref="attachmentEntry"
+                  v-model:open="attachmentsOpen"
                   :resource="resource"
                   :disabled="busy"
-                  @open-change="attachmentPanelOpen = $event"
                   @changed="emit('attachmentsChanged', $event)"
                 />
               </section>

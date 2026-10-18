@@ -100,9 +100,11 @@ describe('BackupScopeTree', () => {
       },
     })
     try {
-      expect(wrapper.get('.backup-scope-tree__summary').text()).toContain('1 项资源 · 7.0 KB')
+      expect(wrapper.get('.backup-scope-tree__summary').text()).toContain('1 项资源')
+      expect(wrapper.get('.backup-scope-tree__summary').text()).toContain('7.0 KB')
       await wrapper.setProps({ modelValue: { resourceIds: [owner.id], scopeIds: [] } })
-      expect(wrapper.get('.backup-scope-tree__summary').text()).toContain('1 项资源 · 3.0 KB')
+      expect(wrapper.get('.backup-scope-tree__summary').text()).toContain('1 项资源')
+      expect(wrapper.get('.backup-scope-tree__summary').text()).toContain('3.0 KB')
     } finally {
       wrapper.unmount()
     }

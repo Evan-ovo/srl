@@ -62,7 +62,9 @@ onUnmounted(() => {
       <small>INSTALL · {{ BRIDGE_DOWNLOAD_VERSION }}</small>
       <strong>还没有安装互传扩展？</strong>
       <p>
+        <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-tavernbridgeinstallguide-vue-1 -->
         HTTPS 中继码需自部署 Worker，在设置 → 自部署 Worker 保存地址并检测通过；酒馆端填写相同地址。
+        <!-- SRL-PUBLIC-SYNC: END REPLACE id=public-tavernbridgeinstallguide-vue-1 -->
         此方式只需页面扩展；服务端插件用于旧版或本机离线中继兼容。
       </p>
     </header>

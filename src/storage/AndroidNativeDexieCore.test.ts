@@ -1,5 +1,8 @@
 import 'fake-indexeddb/auto'
 import console from 'node:console'
+import { Capacitor } from '@capacitor/core'
+import { nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
+import { createStructuredSnapshot } from '../services/CloudStructuredSnapshot'
 
 import { IndexedDbArchiveStorage } from './IndexedDbArchiveStorage'
 import { IndexedDbCategoryStorage } from './IndexedDbCategoryStorage'
@@ -404,6 +407,91 @@ async function delayedDatabase() {
     },
   }
 }
+
+it.each(['get', 'bulkGet', 'cursor'] as const)(
+  'preserves native album and Discord file sources after %s without sharing mutable records',
+  async (route) => {
+    const fixture = await delayedDatabase()
+    const { database, native } = fixture
+    const platform = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
+    const readBlob = native.readBlob.bind(native)
+    const reads = vi.spyOn(native, 'readBlob').mockImplementation(async (...args) => {
+      const blob = await readBlob(...args)
+      return blob ? rememberNativeFile(blob, `file:///fixture/${args[0]}/${args[2]}`) : undefined
+    })
+    const albumBlob = new Blob(['album-original'], { type: 'image/png' })
+    const attachmentBlob = new Blob(['discord-original'], { type: 'text/plain' })
+    try {
+      await database.generatedImageFiles.put({
+        id: 'album',
+        originalBlob: albumBlob,
+        originalMimeType: albumBlob.type,
+        updatedAt: 1,
+      })
+      await database.assetFiles.put({ assetId: 'attachment', blob: attachmentBlob, updatedAt: 1 })
+      reads.mockClear()
+      const album =
+        route === 'get'
+          ? await database.generatedImageFiles.get('album')
+          : route === 'bulkGet'
+            ? (await database.generatedImageFiles.bulkGet(['album']))[0]
+            : (await database.generatedImageFiles.toCollection().toArray())[0]
+      const attachment =
+        route === 'get'
+          ? await database.assetFiles.get('attachment')
+          : route === 'bulkGet'
+            ? (await database.assetFiles.bulkGet(['attachment']))[0]
+            : (await database.assetFiles.toCollection().toArray())[0]
+      expect(reads).toHaveBeenCalledTimes(2)
+      expect(nativeFileSource(album!.originalBlob!)).toBe(
+        'file:///fixture/generatedImageFiles/$/originalBlob',
+      )
+      expect(nativeFileSource(attachment!.blob)).toBe('file:///fixture/assetFiles/$/blob')
+      expect(await album!.originalBlob!.text()).toBe(await albumBlob.text())
+      expect(await attachment!.blob.text()).toBe(await attachmentBlob.text())
+      expect(nativeFileSource(album!.originalBlob!.slice(0, 2))).toBeUndefined()
+      expect(nativeFileSource(new Blob([attachment!.blob, '!']))).toBeUndefined()
+      const created = await createStructuredSnapshot(
+        [],
+        [],
+        [],
+        {
+          version: 1,
+          generatedImageAlbum: [
+            {
+              item: {
+                id: 'album',
+                name: 'album',
+                source: 'imported',
+                category: '',
+                mimeType: 'image/png',
+                sizeBytes: albumBlob.size,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            },
+          ],
+        },
+        { readAlbumFile: async () => album!.originalBlob! },
+      )
+      expect(created.objectPlans[0]?.source).toEqual({
+        kind: 'file',
+        uri: 'file:///fixture/generatedImageFiles/$/originalBlob',
+        offset: 0,
+        size: albumBlob.size,
+      })
+      expect(created.chunks.size).toBe(0)
+      expect(reads).toHaveBeenCalledTimes(2)
+      album!.updatedAt = 999
+      attachment!.updatedAt = 999
+      expect((await database.generatedImageFiles.get('album'))!.updatedAt).toBe(1)
+      expect((await database.assetFiles.get('attachment'))!.updatedAt).toBe(1)
+    } finally {
+      platform.mockRestore()
+      await fixture.close()
+    }
+  },
+)
 
 it.each([false, true])(
   'reads prepared gallery previews and changes gallery metadata without native original IO (vault=%s)',

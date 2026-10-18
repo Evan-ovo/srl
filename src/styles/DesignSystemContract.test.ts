@@ -41,7 +41,9 @@ describe('mobile design system contract', () => {
       /var\((?:--color-paper|--color-bg|--text-secondary|--color-muted|--color-border|--color-text-secondary|--color-grid|--shadow-soft|--color-surface-soft|--color-accent-contrast|--surface-muted|--text-muted|--line-soft|--accent-strong)\b/
     const failures: string[] = []
     for (const path of sourceFiles(fileURLToPath(new URL('../', import.meta.url)))) {
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-source-boundary-filter
       if (/ChatReader|ResourcePlaza|AppearanceUiEditor/.test(path)) continue
+      // SRL-PUBLIC-SYNC: END REPLACE id=appearance-source-boundary-filter
       const source = readFileSync(path, 'utf8')
       const styles = path.endsWith('.vue')
         ? parse(source).descriptor.styles.map((style) => style.content)
@@ -179,13 +181,14 @@ describe('mobile design system contract', () => {
     expect(stylesEntry).not.toContain('FrontendWorkshopLegacyUiMigration.css')
   })
 
-  it('keeps direct iOS top inset reads in the host, startup and isolated reader token owners', () => {
+  it('keeps direct iOS top inset reads in the host, startup and isolated shadow token owners', () => {
     const sourceRoot = fileURLToPath(new URL('../', import.meta.url))
     const directTopInset = ['env(', 'safe-area-inset-top'].join('')
     const consumers = sourceFiles(sourceRoot)
       .filter((path) => !path.endsWith('/styles/Foundation.css'))
       .filter((path) => !path.endsWith('/styles/Startup.css'))
       .filter((path) => !path.endsWith('/reader/ChatReader.css'))
+      .filter((path) => !path.endsWith('/styles/RecoveryControls.css'))
       .filter((path) => readFileSync(path, 'utf8').includes(directTopInset))
 
     expect(consumers).toEqual([])
@@ -198,5 +201,15 @@ describe('mobile design system contract', () => {
     const reader = readFileSync(new URL('../reader/ChatReader.css', import.meta.url), 'utf8')
     expect(reader).toMatch(/^:host\s*\{\s*--reader-safe-top: env\(safe-area-inset-top, 0px\);/)
     expect(reader.split(directTopInset)).toHaveLength(2)
+    // Recovery runs in a protected Shadow DOM. Its exit control must not inherit
+    // user-authored safe-area variables that could move the only exit offscreen.
+    const recovery = readFileSync(new URL('./RecoveryControls.css', import.meta.url), 'utf8')
+    expect(recovery).toMatch(
+      /\.appearance-preview-controls\s*\{\s*--recovery-safe-top: env\(safe-area-inset-top, 0px\);/,
+    )
+    expect(recovery.split(directTopInset)).toHaveLength(2)
+    expect(recovery).toContain(
+      'inset: max(6px, var(--recovery-safe-top)) max(8px, var(--recovery-safe-right))',
+    )
   })
 })

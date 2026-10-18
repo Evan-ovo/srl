@@ -183,6 +183,12 @@ const {
         <fieldset
           class="scroll image-generation-controls"
           :class="{ 'is-prompt': section === 'generate' && internalTab === 'prompt' }"
+          :style="{
+            '--image-generation-prompt-folds':
+              1 +
+              (capabilities.textRendering === 'supported' ? 1 : 0) +
+              (provider === 'openai' ? 1 : 0),
+          }"
           :disabled="busy || hostingBusy || resultBusy"
         >
           <template v-if="section === 'generate' && capabilities.textToImage === 'supported'">

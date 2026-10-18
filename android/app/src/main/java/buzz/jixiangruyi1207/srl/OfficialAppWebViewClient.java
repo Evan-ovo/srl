@@ -48,14 +48,8 @@ final class OfficialAppWebViewClient extends BridgeWebViewClient {
                     return new WebResourceResponse(mime, null, 200, "OK",
                         Collections.singletonMap("Cache-Control", "no-store"), stream);
                 } catch (IOException ignored) {
-                    if (path.matches("/official-apps/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\\.srlapp")) {
-                        // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-hosted-package-request
-                        try {
-                            return fetchHostedPackage(buildHostedPackageUrl(new URL(url.toString()), BuildConfig.SRL_PUBLIC_ASSET_ORIGIN));
-                        } catch (IOException invalidRequest) {
-                            return packageErrorResponse(503, "APP package download origin is not configured");
-                        }
-                        // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-hosted-package-request
+                    if (isHostedDownloadPath(path)) {
+                        return fetchHostedPackage(url);
                     }
                     // Catalogs and shell assets are expected to be bundled in the APK.
                 }
@@ -74,6 +68,12 @@ final class OfficialAppWebViewClient extends BridgeWebViewClient {
                 } catch (IOException ignored) {
                     return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", Collections.emptyMap(), null);
                 }
+                // Prefer packaged shared modules; fetch only missing optional program files.
+                try (InputStream packaged = assets.open("public" + path)) {
+                    return super.shouldInterceptRequest(view, request);
+                } catch (IOException missing) {
+                    if (isHostedDownloadPath(path)) return fetchHostedPackage(url);
+                }
             }
         }
         if (!origin.getScheme().equals(url.getScheme()) || !origin.getAuthority().equals(url.getAuthority())) {
@@ -83,28 +83,20 @@ final class OfficialAppWebViewClient extends BridgeWebViewClient {
         return super.shouldInterceptRequest(view, request);
     }
 
-    // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-hosted-package-url-validation
-    static URL buildHostedPackageUrl(URL localUrl, String assetOrigin) throws IOException {
-        if (assetOrigin == null || assetOrigin.isEmpty()) throw new IOException("APP package origin is not configured");
-        String path = localUrl.getPath();
-        if (path == null || java.util.Arrays.stream(path.split("/", -1)).anyMatch(segment -> segment.equals(".") || segment.equals("..")) || !path.matches("/official-apps/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\\.srlapp")) {
-            throw new IOException("Invalid APP package path");
-        }
-        java.net.URI origin = java.net.URI.create(assetOrigin);
-        if (!"https".equals(origin.getScheme()) || origin.getHost() == null || origin.getUserInfo() != null
-                || origin.getPort() != -1 || (origin.getPath() != null && !origin.getPath().isEmpty()
-                && !"/".equals(origin.getPath())) || origin.getQuery() != null || origin.getFragment() != null) {
-            throw new IOException("Invalid APP package origin");
-        }
-        return new URL(origin.toString().replaceAll("/+$", "") + path);
+    static boolean isHostedDownloadPath(String path) {
+        return path != null && !path.contains("..") && (
+            path.matches("/official-apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\.srlapp") ||
+            path.matches("/official-apps/[A-Za-z0-9_.-]+/[A-Za-z0-9_-]+-[a-f0-9]{16}\\.json") ||
+            path.matches("/assets/[A-Za-z0-9_.-]+\\.(?:js|css|wasm|woff2)")
+        );
     }
 
-    // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-hosted-package-url-validation
-
-    private WebResourceResponse fetchHostedPackage(URL hostedUrl) {
+    private WebResourceResponse fetchHostedPackage(Uri uri) {
         HttpURLConnection connection = null;
         try {
-            connection = (HttpURLConnection) hostedUrl.openConnection();
+            // SRL-PUBLIC-SYNC: BEGIN REPLACE id=official-app-download-origin
+            connection = (HttpURLConnection) buildHostedAssetUrl(new URL(uri.toString()), BuildConfig.SRL_PUBLIC_ASSET_ORIGIN).openConnection();
+            // SRL-PUBLIC-SYNC: END REPLACE id=official-app-download-origin
             connection.setRequestMethod("GET");
             connection.setInstanceFollowRedirects(true);
             connection.setRequestProperty("Accept", "application/zip, application/octet-stream;q=0.9, */*;q=0.8");
@@ -144,11 +136,19 @@ final class OfficialAppWebViewClient extends BridgeWebViewClient {
                 Collections.emptyMap(), new ByteArrayInputStream(message));
         }
     }
-    // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-hosted-package-error
-    private WebResourceResponse packageErrorResponse(int status, String message) {
-        byte[] body = message.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        return new WebResourceResponse("text/plain", "UTF-8", status,
-            status == 503 ? "Service Unavailable" : "Bad Gateway", Collections.emptyMap(), new ByteArrayInputStream(body));
+    // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-hosted-asset-origin
+    static URL buildHostedAssetUrl(URL localUrl, String assetOrigin) throws IOException {
+        if (assetOrigin == null || assetOrigin.isEmpty()) throw new IOException("APP asset origin is not configured");
+        String assetPath = localUrl.getPath();
+        if (!isHostedDownloadPath(assetPath)) throw new IOException("Invalid APP asset path");
+        java.net.URI origin;
+        try { origin = java.net.URI.create(assetOrigin); }
+        catch (IllegalArgumentException invalid) { throw new IOException("Invalid APP asset origin", invalid); }
+        if (!"https".equals(origin.getScheme()) || origin.getHost() == null || origin.getUserInfo() != null
+                || origin.getPort() != -1 || (origin.getPath() != null && !origin.getPath().isEmpty()
+                && !"/".equals(origin.getPath())) || origin.getQuery() != null || origin.getFragment() != null)
+            throw new IOException("Invalid APP asset origin");
+        return new URL(origin.toString().replaceAll("/+$", "") + assetPath);
     }
-    // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-hosted-package-error
+    // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-hosted-asset-origin
 }

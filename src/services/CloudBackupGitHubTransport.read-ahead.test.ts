@@ -25,6 +25,7 @@ const config: GitHubBackupConfig = {
 }
 const container = 'srl-cloud-objects-0001'
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+// SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-1
 const workerStorageKey = 'srl.publicWorker.baseUrl.v1'
 function useCustomWorkerForProxyTests() {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
@@ -42,6 +43,7 @@ function useCustomWorkerForProxyTests() {
     else Reflect.deleteProperty(globalThis, 'localStorage')
   }
 }
+// SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-1
 async function until(check: () => boolean) {
   await vi.waitFor(() => expect(check()).toBe(true), { timeout: 1_000, interval: 1 })
 }
@@ -398,7 +400,9 @@ describe('bounded GitHub chunk read ahead', () => {
 
   it('uses the real scoped transport without AbortSignal.any and still cancels streaming bodies', async () => {
     const test = await fixture([['one', 'two']])
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-2
     const restoreWorker = useCustomWorkerForProxyTests()
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-2
     class Probe extends CloudBackupTransport {
       reader(signal: AbortSignal) {
         return this.createGitHubObjectReader(config, 'fixture', { signal })
@@ -445,13 +449,17 @@ describe('bounded GitHub chunk read ahead', () => {
     } finally {
       globalThis.fetch = originalFetch
       Object.defineProperty(AbortSignal, 'any', originalAny)
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-3
       restoreWorker()
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-3
     }
   })
 
   it('aborts a stalled 404 metadata refresh when a sibling fails SHA, without aborting the parent', async () => {
     const test = await fixture([['one', 'two']])
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-4
     const restoreWorker = useCustomWorkerForProxyTests()
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-4
     class Probe extends CloudBackupTransport {
       reader(signal: AbortSignal) {
         return this.createGitHubObjectReader(config, 'fixture', { signal })
@@ -510,13 +518,17 @@ describe('bounded GitHub chunk read ahead', () => {
     } finally {
       parent.abort()
       globalThis.fetch = originalFetch
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-5
       restoreWorker()
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-5
     }
   })
 
   it('disposes successful batch signal links while the parent operation stays live', async () => {
     const test = await fixture([['one'], ['two']])
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-6
     const restoreWorker = useCustomWorkerForProxyTests()
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-6
     class Probe extends CloudBackupTransport {
       reader(signal: AbortSignal) {
         return this.createGitHubObjectReader(config, 'fixture', { signal })
@@ -564,7 +576,9 @@ describe('bounded GitHub chunk read ahead', () => {
       added.mockRestore()
       removed.mockRestore()
       globalThis.fetch = originalFetch
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-7
       restoreWorker()
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-cloudbackupgithubtransport-read-ahead-test-ts-7
     }
   })
 

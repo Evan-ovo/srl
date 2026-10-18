@@ -226,11 +226,9 @@ function formatBytes(bytes: number): string {
 <template>
   <section class="backup-scope-tree" aria-label="备份范围选择">
     <header class="backup-scope-tree__summary">
-      <div>
-        <strong>{{ mode === 'restore' ? '恢复范围' : '备份范围' }}</strong
-        ><small v-if="mode !== 'restore'">云备份与本地导入导出使用同一套选择逻辑</small>
-      </div>
-      <span>{{ selectedResourceCount }} 项资源 · {{ formatBytes(selectedResourceSize) }}</span>
+      <strong>{{ mode === 'restore' ? '将导入' : '已选择' }}</strong>
+      <span>{{ selectedResourceCount }} 项资源</span>
+      <small>{{ formatBytes(selectedResourceSize) }}</small>
     </header>
     <input
       v-model="query"
@@ -243,18 +241,23 @@ function formatBytes(bytes: number): string {
       >搜索只过滤显示；分组全选仍包含该分组的全部资源。</small
     >
     <section v-for="group in visibleGroups" :key="group.id" class="backup-scope-tree__group">
-      <header :class="{ 'is-complete': groupState(group.id) === 'all' }">
+      <header>
         <button
           type="button"
           class="backup-scope-tree__group-toggle"
+          :aria-expanded="expanded.has(group.id)"
           @click="toggleExpanded(group.id)"
         >
-          <span :class="`is-${groupState(group.id)}`" aria-hidden="true"></span>
+          <span
+            class="backup-scope-tree__disclosure"
+            :class="{ 'is-open': expanded.has(group.id) }"
+            aria-hidden="true"
+          ></span>
           <strong>{{ group.label }}</strong>
           <small>{{ group.description }}</small>
         </button>
         <button type="button" class="backup-scope-tree__select" @click="toggleGroup(group.id)">
-          {{ groupState(group.id) === 'all' ? '取消全选' : '选择全部' }}
+          {{ groupState(group.id) === 'all' ? '取消全选' : '全选本组' }}
         </button>
       </header>
       <div v-if="expanded.has(group.id)" class="backup-scope-tree__children">
@@ -262,7 +265,7 @@ function formatBytes(bytes: number): string {
           v-if="group.id === 'tavernResources' && categories.length"
           class="backup-scope-tree__filters"
         >
-          <span>按文件夹查看</span>
+          <span class="backup-scope-tree__folder-label">按文件夹查看</span>
           <button
             type="button"
             :class="{ 'is-active': activeCategoryId === 'all' }"
@@ -292,12 +295,17 @@ function formatBytes(bytes: number): string {
           v-for="scope in scopesForGroup(group.id)"
           :key="scope.id"
           class="backup-scope-tree__scope"
-          :class="{ 'is-disabled': disabled.has(scope.id) }"
+          :class="{
+            'is-disabled': disabled.has(scope.id),
+            'is-selected': scopeState(scope.id) === 'all',
+            'is-partial': scopeState(scope.id) === 'some',
+          }"
         >
           <button
             type="button"
             class="backup-scope-tree__scope-row"
             :class="{ 'is-selected': scopeState(scope.id) === 'all' }"
+            :aria-pressed="scopeState(scope.id) !== 'none'"
             :disabled="disabled.has(scope.id)"
             @click="toggleScope(scope.id)"
           >
@@ -329,7 +337,7 @@ function formatBytes(bytes: number): string {
               {{
                 expanded.has(scope.id)
                   ? '收起'
-                  : `查看 ${visibleResourcesForScope(scope.id).length} 项`
+                  : `${visibleResourcesForScope(scope.id).length} 项 ›`
               }}
             </button>
           </div>
@@ -388,77 +396,63 @@ function formatBytes(bytes: number): string {
 <style scoped>
 .backup-scope-tree__search {
   min-width: 0;
-  width: calc(100% - 2rem);
-  margin: 0.5rem 1rem;
-  min-height: 2.25rem;
+  width: 100%;
+  margin: 0.15rem 0 0.35rem;
+  min-height: 2.5rem;
   color: var(--color-ink);
   background: var(--control-background, var(--color-surface-raised));
 }
 .backup-scope-tree {
   display: grid;
-  gap: 0.75rem;
-  font-size: 0.75rem;
+  gap: 0;
+  font-size: 0.82rem;
   line-height: 1.45;
 }
-.backup-scope-tree__summary,
-.backup-scope-tree__group > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
 .backup-scope-tree__summary {
-  align-items: center;
-  padding: 0.75rem 0.85rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  background: var(--glass-panel-strong);
-  box-shadow: var(--glass-shadow);
-}
-.backup-scope-tree__summary strong,
-.backup-scope-tree__summary small {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.1rem 0 0.35rem;
 }
 .backup-scope-tree__summary strong {
-  font-size: 0.78rem;
-  letter-spacing: 0.01em;
+  color: var(--color-ink);
+  font-weight: 700;
 }
 .backup-scope-tree__summary small,
 .backup-scope-tree__summary > span {
   color: var(--color-ink-soft);
-  font-size: 0.65rem;
+  font-size: 0.72rem;
   line-height: 1.4;
 }
 .backup-scope-tree__summary > span {
-  flex: 0 0 auto;
-  padding: 0.28rem 0.45rem;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-control);
-  background: var(--glass-panel-muted);
-  font-weight: 700;
+  color: var(--color-ink);
+  font-weight: 750;
 }
 .backup-scope-tree__group {
-  overflow: hidden;
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-panel);
-  background: var(--glass-panel);
-  box-shadow: var(--glass-shadow);
+  min-width: 0;
+  border-top: 1px solid var(--color-line);
+}
+.backup-scope-tree__group:last-of-type {
+  border-bottom: 1px solid var(--color-line);
 }
 .backup-scope-tree__group > header {
-  padding: 0.75rem 0.85rem;
-  border-bottom: 1px solid var(--glass-border);
-  background: var(--glass-panel-strong);
-}
-.backup-scope-tree__group > header.is-complete {
-  background: color-mix(in srgb, var(--color-accent-soft) 35%, var(--glass-panel-strong));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 3.5rem;
+  padding: 0.45rem 0.2rem;
+  background: transparent;
 }
 .backup-scope-tree__group-toggle {
   min-width: 0;
   flex: 1;
   display: grid;
-  grid-template-columns: 0.8rem minmax(0, auto);
+  grid-template-columns: 0.65rem minmax(0, 1fr);
   align-items: center;
-  gap: 0.3rem;
+  column-gap: 0.55rem;
+  row-gap: 0.05rem;
+  min-height: 2.75rem;
   padding: 0;
   border: 0;
   background: transparent;
@@ -469,39 +463,65 @@ function formatBytes(bytes: number): string {
 .backup-scope-tree__group-toggle small {
   grid-column: 2;
   color: var(--color-ink-soft);
-  font-size: 0.62rem;
+  font-size: 0.7rem;
 }
 .backup-scope-tree__group-toggle strong {
-  font-size: 0.76rem;
+  font-size: 0.9rem;
 }
 .backup-scope-tree__select,
 .backup-scope-tree__expand {
   flex-shrink: 0;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.55rem;
   white-space: nowrap;
   border: 0;
   background: transparent;
   color: var(--color-accent);
-  font-size: 0.65rem;
-  font-weight: 750;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.backup-scope-tree__select {
+  border-radius: 0.55rem;
+}
+.backup-scope-tree__select:hover,
+.backup-scope-tree__expand:hover {
+  background: var(--selection-background, var(--color-accent-soft));
 }
 .backup-scope-tree__children {
   display: grid;
 }
 .backup-scope-tree__scope {
-  position: relative;
-  border-bottom: 1px solid var(--color-line);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.35rem;
+  min-width: 0;
+  border-top: 1px solid var(--color-line);
+  border-left: 2px solid transparent;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
 }
-.backup-scope-tree__scope:last-child {
-  border-bottom: 0;
+.backup-scope-tree__scope.is-selected {
+  border-left-color: var(--color-accent);
+  background: color-mix(
+    in srgb,
+    var(--selection-background, var(--color-accent-soft)) 56%,
+    transparent
+  );
+}
+.backup-scope-tree__scope.is-partial {
+  border-left-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-line));
 }
 .backup-scope-tree__scope-row {
   display: grid;
-  grid-template-columns: 0.8rem minmax(0, 1fr);
+  grid-template-columns: 0.9rem minmax(0, 1fr);
   width: 100%;
   align-items: center;
-  gap: 0.45rem;
-  min-height: 3.15rem;
-  padding: 0.6rem 0.85rem;
+  gap: 0.6rem;
+  min-height: 3.65rem;
+  padding: 0.55rem 0.65rem;
   border: 0;
   background: transparent;
   color: var(--color-ink);
@@ -509,9 +529,12 @@ function formatBytes(bytes: number): string {
   cursor: pointer;
   transition: background 140ms ease;
 }
-.backup-scope-tree__scope-row:hover,
-.backup-scope-tree__scope-row.is-selected {
-  background: var(--selection-background, var(--color-accent-soft));
+.backup-scope-tree__scope-row:hover {
+  background: color-mix(
+    in srgb,
+    var(--selection-background, var(--color-accent-soft)) 52%,
+    transparent
+  );
 }
 .backup-scope-tree__scope-row > span:nth-child(2) {
   min-width: 0;
@@ -521,30 +544,29 @@ function formatBytes(bytes: number): string {
   display: block;
 }
 .backup-scope-tree__scope-row strong {
-  font-size: 0.72rem;
+  font-size: 0.82rem;
 }
 .backup-scope-tree__scope-row small {
   margin-top: 0.16rem;
   color: var(--color-ink-soft);
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   line-height: 1.4;
 }
 .backup-scope-tree__scope-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.45rem;
-  min-height: 1.25rem;
-  padding: 0 0.85rem 0.5rem 2.1rem;
-  background: color-mix(in srgb, var(--color-accent-soft) 12%, var(--glass-panel-muted));
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  padding-right: 0.35rem;
 }
 .backup-scope-tree__scope-actions em {
-  padding: 0.15rem 0.3rem;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 0.2rem;
+  padding: 0.18rem 0.38rem;
+  border: 1px solid var(--color-line);
+  border-radius: 999px;
   color: var(--color-ink-soft);
-  font-size: 0.58rem;
+  font-size: 0.65rem;
   font-style: normal;
+  white-space: nowrap;
 }
 .backup-scope-tree__scope-actions em.is-sensitive {
   border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-line));
@@ -554,33 +576,45 @@ function formatBytes(bytes: number): string {
   opacity: 0.55;
 }
 .backup-scope-tree__expand {
-  padding: 0;
+  border-radius: 0.5rem;
+  font-variant-numeric: tabular-nums;
 }
 .backup-scope-tree__filters {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.55rem 0.7rem;
-  border-bottom: 1px solid var(--glass-border);
-  background: color-mix(in srgb, var(--color-accent-soft) 15%, var(--glass-panel-muted));
+  gap: 0.4rem;
+  min-width: 0;
+  padding: 0.55rem 0.15rem 0.7rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
-.backup-scope-tree__filters > span {
-  margin-right: 0.15rem;
+.backup-scope-tree__folder-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: 0 0 auto;
+  padding: 0.2rem 0.3rem 0.2rem 0;
+  background: var(--color-surface);
   color: var(--color-ink-soft);
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   font-weight: 700;
+  white-space: nowrap;
 }
 .backup-scope-tree__filters button {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.25rem 0.4rem;
+  flex: 0 0 auto;
+  min-height: 2.75rem;
+  padding: 0.3rem 0.65rem;
   border: 1px solid var(--button-border, var(--color-line-strong));
-  border-radius: var(--button-radius, var(--glass-radius-control));
-  background: var(--button-background, var(--glass-panel-strong));
+  border-radius: 999px;
+  background: var(--color-surface);
   color: var(--button-color, var(--color-ink));
-  font-size: 0.6rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
 }
 .backup-scope-tree__filters button.is-active {
   border-color: var(--selection-border, var(--color-accent));
@@ -601,19 +635,25 @@ nav.backup-scope-tree__filters button {
 }
 .backup-scope-tree__resources {
   display: grid;
-  gap: 0.25rem;
-  padding: 0.25rem 0.85rem 0.7rem 2.1rem;
-  background: color-mix(in srgb, var(--color-accent-soft) 10%, var(--glass-panel-muted));
+  gap: 0;
+  grid-column: 1 / -1;
+  padding: 0 0.55rem 0.55rem 2.15rem;
+}
+nav.backup-scope-tree__filters {
+  grid-column: 1 / -1;
 }
 .backup-scope-tree__resources label {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 0.45rem;
-  padding: 0.45rem 0.5rem;
-  border: 1px solid color-mix(in srgb, var(--glass-border) 75%, transparent);
-  border-radius: calc(var(--glass-radius-control) * 0.75);
-  background: color-mix(in srgb, var(--color-accent-soft) 22%, var(--glass-panel));
+  min-height: 2.75rem;
+  padding: 0.35rem 0.25rem;
+  border-bottom: 1px solid var(--color-line);
+  background: transparent;
+}
+.backup-scope-tree__resources label:last-child {
+  border-bottom: 0;
 }
 .backup-scope-tree__resources strong,
 .backup-scope-tree__resources small {
@@ -621,13 +661,13 @@ nav.backup-scope-tree__filters button {
 }
 .backup-scope-tree__resources strong {
   overflow: hidden;
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .backup-scope-tree__resources small {
   color: var(--color-ink-soft);
-  font-size: 0.58rem;
+  font-size: 0.65rem;
 }
 .backup-scope-tree__hint {
   margin: 0;
@@ -637,31 +677,66 @@ nav.backup-scope-tree__filters button {
 }
 .backup-scope-tree__group-toggle > span,
 .backup-scope-tree__scope-row > span:first-child {
-  width: 0.75rem;
-  height: 0.75rem;
+  width: 0.9rem;
+  height: 0.9rem;
   border: 1px solid var(--color-line-strong);
   border-radius: 0.18rem;
   background: var(--color-surface);
 }
-.backup-scope-tree__group-toggle > span.is-all,
 .backup-scope-tree__scope-row > span:first-child.is-all {
   border-color: var(--color-accent);
   background: var(--color-accent);
   box-shadow: inset 0 0 0 0.16rem var(--color-surface);
 }
-.backup-scope-tree__group-toggle > span.is-some,
 .backup-scope-tree__scope-row > span:first-child.is-some {
   border-color: var(--color-accent);
   background: linear-gradient(var(--color-accent), var(--color-accent)) center / 0.42rem 0.14rem
     no-repeat;
 }
+.backup-scope-tree__group-toggle > .backup-scope-tree__disclosure {
+  width: 0.48rem;
+  height: 0.48rem;
+  border: 0;
+  border-right: 1.5px solid var(--color-ink-soft);
+  border-bottom: 1.5px solid var(--color-ink-soft);
+  background: transparent;
+  transform: rotate(-45deg);
+  transition: transform 140ms ease;
+}
+.backup-scope-tree__group-toggle > .backup-scope-tree__disclosure.is-open {
+  transform: rotate(45deg);
+}
+.backup-scope-tree__group-toggle:focus-visible,
+.backup-scope-tree__select:focus-visible,
+.backup-scope-tree__expand:focus-visible,
+.backup-scope-tree__filters button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
 @media (max-width: 520px) {
   .backup-scope-tree__summary {
-    align-items: flex-start;
+    align-items: baseline;
   }
-
   .backup-scope-tree__summary > span {
-    font-size: 0.6rem;
+    font-size: 0.72rem;
+  }
+  .backup-scope-tree__group-toggle small {
+    font-size: 0.66rem;
+  }
+  .backup-scope-tree__scope-row {
+    min-height: 3.5rem;
+    padding-left: 0.45rem;
+  }
+  .backup-scope-tree__scope-actions {
+    gap: 0.1rem;
+    padding-right: 0.15rem;
+  }
+  .backup-scope-tree__scope-actions em {
+    font-size: 0.58rem;
+  }
+  .backup-scope-tree__expand {
+    padding-inline: 0.35rem;
+    font-size: 0.68rem;
   }
 }
 </style>

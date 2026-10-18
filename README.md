@@ -1,6 +1,6 @@
 # SillyTavern Resource Library
 
-SRL 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作工具。本仓库保留本地与自部署功能，不包含维护者账号系统、账号依赖的资源广场、管理后台、反馈服务、维护者预签名 APK、官方 APK 更新通道或账号依赖的在线组件分享。需要云端基础设施的能力由部署者自行配置。功能边界与服务配置见 [Public 版本边界与自部署](docs/PUBLIC_RELEASE_DIFFERENCES.md)。
+SRL 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作工具。本仓库保留本地与自部署功能，不包含维护者账号系统、账号依赖的资源广场、公告、公共图床、管理后台、反馈服务、维护者预签名 APK、官方 APK 更新通道或账号依赖的在线组件分享。需要云端基础设施的能力由部署者自行配置。功能边界与服务配置见 [Public 版本边界与自部署](docs/PUBLIC_RELEASE_DIFFERENCES.md)。
 
 > [!WARNING]
 > **关于本文档**
@@ -27,9 +27,9 @@ SRL 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作
 - **导入与导出**：导入常见 SillyTavern 资源文件和备份，解析角色卡、世界书、预设等格式；支持链接导入、整库或选定内容的 ZIP 备份与恢复，以及资源包导入导出。
 - **酒馆互传**：与 SillyTavern/TavernHelper 相关环境交换受支持的角色卡、世界书和预设。连接方式取决于网页或 Android 版本及使用者部署的桥接服务。
 - **云备份**：连接使用者自己的 GitHub 仓库或 WebDAV/Koofr，支持手动、定时备份和恢复。云端目标及访问权限由使用者配置和管理。
-- **前端创作工作台**：管理 HTML/CSS/JavaScript 项目，编辑和预览内容，使用模板、检查器、AI 辅助创作和本地组件库；组件支持本地创作、导入与导出。Public v1 不提供在线发布、分享链接、撤销分享或自部署分享后端。
+- **前端创作工作台**：管理 HTML/CSS/JavaScript 项目，编辑和预览内容，使用模板、检查器、AI 辅助创作和本地组件库；组件支持本地创作、导入与导出。Public 不提供在线发布、分享链接、撤销分享或自部署分享后端。
 - **图像与 AI**：使用自行配置的主 API 进行兼容任务和 AI 辅助操作；通过 NovelAI、OpenAI 或兼容服务生成图像；管理本地生图相册，并按需上传至使用者自己的 ImgBed。
-- **资源扩展**：管理用户导入的第三方 APP/扩展；权限受应用内的沙箱和逐项授权机制约束。
+- **资源扩展**：管理内置 APP 的安装、内容更新和卸载，支持复用未变化文件、按需补齐内容；第三方 APP/扩展仍通过完整 `.srlapp` 包导入或更新，不使用内置 APP 的增量清单通道。权限受应用内的沙箱和逐项授权机制约束。
 - **个性化工具**：自定义外观与 CSS、可视化文件夹、预设缝合、随机抽取、人设管理、角色卡资源装配和 AI 标签等。
 - **网页与 Android**：网页支持 PWA 和离线应用壳；Capacitor Android 版提供网页功能及原生文件、备份和系统集成；独立 Kotlin 原生版提供本地资源管理和导入导出。不同版本的功能范围可能不同。
 
@@ -38,7 +38,7 @@ SRL 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作
 ### 数据存在哪里
 
 - **网页/PWA**：资源正文、原始文件、分类、标签、历史版本、前端工作台项目、组件、相册、扩展数据和应用设置主要保存在浏览器的 IndexedDB；少量界面偏好、草稿恢复数据和兼容配置保存在当前站点的 `localStorage`。PWA 使用 Service Worker/Cache Storage 缓存网页应用壳和已访问的静态资源，以支持离线打开；这不等同于资源库备份。清除浏览器站点数据可能删除本机资料，请定期导出备份。
-- **Capacitor Android**：网页部分的数据保存在应用私有 WebView 存储中；原生资源文件、索引和任务状态保存在应用私有目录/数据库中。卸载应用或清除应用数据可能删除这些内容。应用关闭了 Android 自动备份；需要迁移时请使用应用内导出或备份功能。
+- **Capacitor Android**：资源库默认使用应用私有原生 SQLite 数据库与文件目录，原有 WebView 数据沿迁移流程接入；界面偏好及部分兼容状态仍使用 WebView 存储。处于旧库兼容或回退状态时按应用提示处理，不能只复制 WebView 数据当作完整迁移。卸载应用或清除应用数据可能删除本机资料。应用关闭了 Android 自动备份；需要迁移时请使用应用内导出或备份功能。
 - **独立 Kotlin 原生 Android**：资源索引保存在应用私有 SQLite 数据库，资源包保存在应用私有文件目录。导出的文件写入使用者选择的目录或系统提供的分享/保存位置。
 - **保险库**：网页和 Capacitor 资源库可选择开启本地数据加密；使用 PBKDF2 从密码派生密钥，并用 AES-256-GCM 加密资源名称、标签、解析内容、原文件、缩略图和历史快照。密码只用于当前会话，不会保存；忘记密码无法解密。内容指纹仍用于本机去重。此保险库不代表所有应用设置、缓存或外部服务数据都已加密。
 - **凭据**：Web 环境将 API Key、Token 等敏感凭据与普通配置分开保存，以不可导出的本机密钥和 AES-GCM 加密后存入当前浏览器 IndexedDB；Android 应用使用 Android Keystore 保护凭据。它们仍受当前设备、浏览器用户配置、恶意软件及同源脚本安全影响，不应把本机凭据存储视为远端备份或绝对安全边界。
@@ -105,9 +105,11 @@ docs/             当前公开版功能边界说明
 
 修改功能时可从对应目录的页面、composable 和 service 开始追踪；`.test.ts` 等测试通常与业务代码相邻。`dist/` 是构建生成目录，不是源码编辑位置。
 
+内置前端模板中的 `YOUR-IMGBED-DOMAIN` 是示例图片地址占位符，不是可用的公共图床。使用模板时请通过图片素材替换为自己的图片或已配置的图床链接。
+
 ## 本机运行
 
-需要 Node.js 22 或更高版本及 pnpm 11。
+推荐 Node.js 24 和项目锁定的 pnpm 11.5.0。若使用 Node.js 22，至少为 22.13.0；早期 22.x 不满足当前 Vite/jsdom 的依赖要求。先运行 `node --version`、`pnpm --version` 核对；本轮本机验证使用 Node.js 24.15.0。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -152,7 +154,9 @@ pnpm secret:scan --base <上次已审计的完整提交SHA>
 
 ## 部署到 Cloudflare Workers
 
-本仓库部署的 Worker 用于托管 SRL 网页静态资源。部署前需单独的 Worker 功能请从 `SRL-Worker-Public` fork 并部署；设备码中继和 Koofr WebDAV 代理均由该独立 Worker 提供。网页/PWA 在“设置 → 自部署 Worker”填写其 HTTPS 根地址，独立 Kotlin APK 也在应用“设置”中填写。Discord Bridge 仍使用自己的独立 Worker 配置。
+本仓库部署的 Worker 用于托管 SRL 网页静态资源。设备码中继、加密暂存、可选 GitHub 备份中继和网页 Koofr WebDAV 代理来自独立的 `SRL-Worker-Public`，需要这些能力时另行 fork 并部署。网页/PWA 和 Capacitor APK 在“设置 → 中继服务”中的“自部署 Worker”填写其 HTTPS 根地址，保存后点“检查连接”；设备码须检测通过，酒馆端须填写相同地址。独立 Kotlin APK 在“设置 → SRL Worker 地址”填写。Discord Bridge 使用自己的独立 Worker 配置。
+
+网页未配置 Worker 时，GitHub 备份直连 GitHub；配置后只使用自己的 Worker，失败不自动切回直连或官方服务。网页 Koofr 中继、设备码和加密暂存在未配置时不可用；APK 原生云盘直连不依赖该中继。网页站点地址、独立中继地址和可选 Discord/ImgBed 地址分别配置，不能相互替代。
 
 1. Fork 或下载本仓库，在本地安装依赖并构建：
 
@@ -189,13 +193,13 @@ pnpm secret:scan --base <上次已审计的完整提交SHA>
 | Deploy command                 | `pnpm exec wrangler deploy --config wrangler.example.jsonc`                 |
 | Preview command                | 保留默认 `npx wrangler preview`；首次部署建议关闭 **Enable Preview builds** |
 | Protect with Cloudflare Access | 关闭                                                                        |
-| Advanced settings              | 保持默认；如果出现 Node.js 版本选项，选择 `22`                              |
+| Advanced settings              | 设置构建环境变量 `NODE_VERSION=24`，使用与本机验证相同的 Node.js 主版本     |
 
 `Project name` 必须与 `wrangler.example.jsonc` 中的 Worker 名称 `srl-resource-library` 一致。部署命令显式使用仓库内的通用配置模板；不要改成默认的 `npx wrangler deploy`，也不要把个人的 `wrangler.jsonc`、账号信息或凭据提交到 fork。首次部署时，Cloudflare 会引导授权 GitHub 仓库和 Cloudflare 账号；部署完成后，在 Worker 的 Overview 页面查看站点地址。若之后要启用 Preview builds，Preview command 也要指定模板：`pnpm exec wrangler preview --config wrangler.example.jsonc`。
 
 保存命令返回的 HTTPS 站点来源，验证首页、`/api/version`、`/manifest.webmanifest` 和图标。设备码中继与 Koofr 代理不由该静态站点 Worker 提供。独立 Worker 部署说明见 [SRL-Worker-Public](https://github.com/jixiangruyi117/SRL-Worker-Public)。
 
-不需要设备互传或 Koofr 云备份时，可直接把 `dist/` 部署为 Cloudflare Pages 静态站点，构建命令为 `pnpm build`、输出目录为 `dist`，并设置 `NODE_VERSION=22`。Pages Git 构建说明见 [Cloudflare Pages 文档](https://developers.cloudflare.com/pages/configuration/build-configuration/)。
+也可把 `dist/` 部署为 Cloudflare Pages 静态站点，构建命令为 `pnpm build`、输出目录为 `dist`，并设置 `NODE_VERSION=24`。静态站点同样可以连接另行部署的中继；Pages 本身不提供本仓库 Worker 的 `/api/version` 等接口，网页更新主要依赖 Service Worker。Pages Git 构建说明见 [Cloudflare Pages 文档](https://developers.cloudflare.com/pages/configuration/build-configuration/)。
 
 ### ImgBed 跨域中转（可选）
 
@@ -203,10 +207,10 @@ pnpm secret:scan --base <上次已审计的完整提交SHA>
 
 1. 进入 `cloudflare/imgbed-proxy/`，复制 `wrangler.example.jsonc` 为 `wrangler.jsonc`。
 2. 将 `IMGBED_ORIGIN` 改为自己的 ImgBed HTTPS 根地址；将 `ALLOWED_ORIGINS` 改为自己 SRL 部署的完整 Origin。此设置只控制浏览器 CORS，不是身份认证。
-3. 在该目录部署：
+3. 回到仓库根目录，使用项目已锁定的 Wrangler 部署，避免依赖全局安装：
 
    ```bash
-   wrangler deploy --config wrangler.jsonc
+   pnpm exec wrangler deploy --config cloudflare/imgbed-proxy/wrangler.jsonc
    ```
 
 4. 在 SRL 的前端工作台或生图相册中连接自己的 ImgBed。填写 Worker 地址和 ImgBed 自己签发的 Token；不要把 Token 写入 Worker 源码或配置。模板将单次上传限制为 10 MiB。
@@ -230,7 +234,7 @@ pnpm secret:scan --base <上次已审计的完整提交SHA>
    npx wrangler d1 create srl-discord-source-handoff
    ```
 
-   把命令返回的 `database_id` 填入 `wrangler.jsonc` 中 `d1_databases` 的 `database_id` 字段。数据库名称也可以修改，但要同时更新配置和创建命令。
+   把命令返回的 `database_id` 填入 `wrangler.jsonc` 中 `d1_databases` 的 `database_id` 字段。建议保留示例数据库名称；若改名，须同步修改创建命令、配置中的 `database_name` 以及该子目录 `package.json` 的 `db:migrate` 脚本，`DB` 绑定名保持不变。
 
 3. 将 Discord Developer Portal 中自己的 Application ID、Public Key 和 Bot Token 分别保存为 Worker Secret：
 
@@ -254,16 +258,17 @@ pnpm secret:scan --base <上次已审计的完整提交SHA>
 
 ## Android 源码构建
 
-需要 Android Studio、Android SDK、JDK 21、Node.js 22 和 pnpm 11。当前默认应用名为 `SRL_Pubilc`，应用 ID 为 `app.srl.publicedition`，与官版独立，可同时安装。两个版本的本地资料相互隔离，可通过备份迁移。
+需要 Android Studio、Android SDK（包含 Android 36 平台和 Build Tools）、JDK 21，以及前述 Node.js/pnpm 环境。当前默认应用名为 `SRL_Pubilc`，应用 ID 为 `app.srl.publicedition`，与官版独立，可同时安装。两个版本的本地资料相互隔离，可通过备份迁移。
 
 ### 打包网页功能的离线 APK（推荐）
 
-先确定自己的 Worker 地址。以下 PowerShell 示例中的地址和路径均替换为自己的配置，不写入源码：
+先确定托管网页与 APP 静态包的站点地址；它与应用设置中填写的独立中继地址不同。以下 PowerShell 示例中的地址和路径均替换为自己的配置，不写入源码：
 
 ```powershell
 pnpm install --frozen-lockfile
 $env:JAVA_HOME = 'X:\Android\jbr'
 $env:ANDROID_HOME = 'X:\Android\Sdk'
+$env:GRADLE_USER_HOME = Join-Path $env:USERPROFILE '.gradle'
 $env:SRL_PUBLIC_ORIGIN = 'https://你的-worker.workers.dev'
 $env:SRL_PUBLIC_ASSET_ORIGIN = 'https://你的-worker.workers.dev'
 ```

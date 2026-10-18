@@ -131,11 +131,15 @@ afterEach(() => {
 })
 
 describe('ExternalAppManager', () => {
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-externalappmanager-test-ts-1
   it('keeps embedded installation preview inside its modal', async () => {
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-externalappmanager-test-ts-1
     const sharedFiles = [new File(['package'], 'counter.srlapp')]
     const wrapper = mount(ExternalAppManager, {
       attachTo: document.body,
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-externalappmanager-test-ts-2
       props: { embedded: true, sharedFiles },
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-externalappmanager-test-ts-2
     })
     wrappers.push(wrapper)
     await flushPromises()
@@ -148,7 +152,9 @@ describe('ExternalAppManager', () => {
     await button(wrapper, '安装 APP').trigger('click')
     await flushPromises()
     expect(service.install).toHaveBeenCalledWith(
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-externalappmanager-test-ts-3
       expect.objectContaining({ packageFingerprint: 'app-test' }),
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-externalappmanager-test-ts-3
       'isolated',
     )
   })

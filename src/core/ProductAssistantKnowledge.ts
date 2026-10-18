@@ -133,7 +133,9 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     aliases: ['后台音频', '静音音频', '保活', '系统通知', '通知授权', 'PWA通知'],
     entry: ['设置', '后台与通知'],
     steps: [
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-2
       '系统通知权限须在系统或浏览器设置撤销；浏览器通知仅在用户主动授权后启用。',
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-2
       '后台音频保活只有一个开关，独立于收件箱和配对；没有收件箱配对也可手动开启，供需要后台运行的功能使用，各功能仍需单独启动。关闭音频不停止收件，停止收件也不关闭音频。关闭设置后音频保持，刷新或页面离开不自动播放。',
       '云备份、云下载/导入、本地备份预检/恢复/导出、链接下载导入与显式网页收件在开始时，若保活关闭，会询问是否为本次任务开启；可选“开启并继续”或“直接继续”，拒绝保活不取消任务。已开启时复用同一音频，多个任务仅在最后一个结束后释放临时保活。设置中的“手动常开后台音频保活”不随任务完成、失败或停止关闭，任务中也可手动转为常开；显式关闭、音频中断或页面退出会停止，刷新不自动播放。',
       '系统通知使用同一个授权入口，用户点击才申请权限；已授权时显示已授权，不重复申请。APK调用原生通知权限，网页使用浏览器通知权限；不支持时显示不支持。权限撤销由系统管理。',
@@ -314,7 +316,9 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '统一外观优先在全局CSS的:root修改公共变量：--color-canvas控制页面与APP底色，--color-surface/--color-surface-raised控制内容区域与内层卡片，--glass-panel/--glass-panel-strong/--glass-panel-muted控制玻璃面板；页面和卡片不是同一个变量，对比图未换色不代表不能修改。--color-accent/--color-on-accent控制主按钮，--color-danger/--color-on-danger控制危险确认，--dialog-background/--dialog-radius/--dialog-border/--dialog-shadow控制公共弹窗，--overlay-background控制遮罩；通知默认沿用弹窗材质，也可用--notice-background/--notice-radius/--notice-border/--notice-shadow单独调整。--glass-radius-control控制控件，--button-radius可单独调整按钮。浮层不一定在页面局部CSS范围内，统一弹窗和通知使用全局变量；阅读正文、作者作品和独立APP的专属主题仍按各自外观范围处理。',
       '外层设置、主API和中继输入、导入导出、保险库、文件夹管理、资源来源管理及反馈页面使用公共控件变量：--button-background/--button-border/--button-color/--button-radius/--button-shadow控制普通按钮，--button-primary-background/--button-primary-border/--button-primary-color控制主按钮，--control-background/--control-border/--control-radius/--control-shadow控制输入框，--selection-background/--selection-border/--selection-color控制选中状态。分类颜色属于保存的数据，浅深主题示意图保持两种主题区别；品牌标识可用--color-brand-discord/--color-brand-github/--color-on-brand单独调整，存储图颜色可用--usage-color-*调整。',
       '常驻的外观、收藏柜、收件箱、云备份、扩展沿用公共控件变量；云备份方式与计划、文件夹筛选和整理选择沿用选中变量，备份范围、收件设置及扩展安装/管理弹窗沿用公共弹窗变量。收藏柜封面与资源占位底色可用--folder-cover-background、占位图文字和图案可用--folder-cover-color、侧栏、文件夹管理及备份范围的文件夹圆点可用--folder-indicator-color统一；留空沿用已保存的分类色和默认前景，颜色选择框仍显示实际选择值，不改变分类数据、自定义图片或教程截图。第三方APP宿主底部启动条沿--color-accent/--color-on-accent，不由APP清单的splashColor覆盖；隔离文档内的作者启动画面和内容不改。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-3
       '抽了么、缝了么、前端了么、AI生图、生图相册、user才是老大、酒馆互传和蒜惹菈的操作控件沿用公共按钮、输入与选中变量。十连抽结果背景使用--dialog-background，完成/翻页按钮使用普通按钮变量，查看详情使用主按钮变量，缩略图选中使用选中变量，空卡面使用--control-background；十连抽弹层挂在页面外，修改这些全局变量即可统一，翻牌动画、角色图片和抽取规则保持。读了么的宿主外层沿用公共主题；阅读正文与作者作品独立保留。',
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-3
       '选择APP或界面后优先编辑CSS；颜色、圆角、动效、字体直接在CSS代码中修改，不另设快捷面板。卡片横竖仅在手机宽度不超过860px生效；自定义CSS不要无条件写死卡片height/min-height/aspect-ratio或加important，否则会盖过系统尺寸规则。高度按data-resource-card-height、方向按data-mobile-card-orientation限定；固定正文可通过--resource-card-fixed-body-length调整，无封面为最低高度。外观文字按钮可见底色/边框归appearance-action-face，沿公共按钮变量；点击区域仍保留44px。高级：Vue自定义默认折叠，创建Vue模板默认不启用，联网由设置中的允许远程资源统一控制，默认关闭。View.vue可直接改标题、返回按钮和本地交互，Layout/Region保留原布局上下文及动态列表/表单，Page.js只按当前界面的最新控件调用原操作；资源保存与导出仍归原控制器，不直接访问数据库。编辑区只提供源码、启用、预览和恢复默认，不另设文件或联网管理；旧单文件及多文件项目和素材保留，直接编辑其入口文件，不自动重写。自定义CSS右上角圆圈问号打开接口参考弹窗，可一键复制。手动源码“全屏预览”与CSS共用真实页面和退出恢复链，临时启用当前界面Vue但不改变草稿勾选，取消脚本确认不运行。旧示例快照预览已退出；助手工具preview_vue仍是独立的只读代码验收，不冒充手动真实预览。恢复默认需确认。',
       '源码在隔离iframe运行，通过window.srlUi.subscribe取得当前显示的非敏感界面与控件，通过invoke调用原控件；不开放底层服务、数据库或凭据。画布、图片、媒体、阅读器和受保护输入保持原实例，可用data-srl-native放置。网络默认关闭，运行权限单独确认；文件解析和备份恢复默认关闭源码运行及网络权限；从文件导入含Vue的当前预设时会询问“启用并试用”或“仅应用 CSS”，同意后沿原15秒保护直接启用，拒绝仍保留全部源码并只应用CSS。批量导入只对最后选中并应用的预设询问，其余预设不自动启用；文件内allowNetwork不能改变宿主联网策略。',
       '保存并应用后先试用，保护提示超时会恢复原源码与CSS；恢复按钮默认隐藏，长按运行界面2秒显示“恢复原界面”与“收起”，点击恢复才停用当前源码。3秒内连续点击悬浮蒜惹菈桌宠5下打开“外观快捷切换”，Vue关闭时也可用；可从外观预设库选择并应用预设，含启用的Vue按原确认和15秒保护试用，也可“关闭Vue”保留CSS，或“恢复默认预设”清空当前自定义CSS、关闭所有Vue并清空活动预设选择，保留主题/布局、预设库与源码。恢复会结束待决试用，旧倒计时不重新启用Vue。拖动、键盘操作、切后台或隐藏桌宠后重新计数，原单击/双击聊天保留。松手、滑动、多指、切后台或关闭界面取消计时，长按后的原控件点击不执行；原生区域和Vue页面共用手势，独立源码预览不启用。仍可用Alt+Shift+0停用当前源码；预设源码仍保留，外观页显示“已保存 · 未应用”，可点“重新应用”再次试用，无需改动代码或重建预设。Vue勾选表示随预设应用时启用，不代表当前已运行。代码编译/运行失败显示原界面；Vue初始化、渲染及事件异常传入同一保护并停用当前运行源码，提示失败但保留已保存预设，原样重新应用仍可用。恢复默认视图不删除业务数据；源码保存在原外观预设与备份链中，存储不足时保留草稿并提示失败。',
@@ -450,9 +454,11 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     steps: [
       '教程截图可点击打开原图，并用双指缩放、拖动查看细节。',
       '在云备份页选择备份方式，展开“连接与自动备份设置”，保存配置并测试连接；已配置时该区默认收起，不要把凭据发给助手。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-6
       '网页 Koofr 通过设置 → 自部署 Worker 选择的 Worker 转发；未填写时中继不可用，自建失败不回退。Koofr 凭据会经过该中继，只填自己部署、可信地址。APK 云盘直连保持，GitHub、账号及 Discord 服务设置不随此项改变；Worker 地址仅本机保存，不进资源/云备份。',
       '网页 GitHub 云备份默认直连 GitHub；配置自部署 Worker 后，GitHub API 与附件请求改由该 Worker 转发，仓库令牌会经过你自己的 Worker。未配置时不使用任何默认中继；已配置 Worker 但请求失败时不会回退直连。确认 Worker 部署由你控制且值得信任；APK 的 GitHub 云备份仍直连。',
-      '点击“调整范围”，在弹窗选择资源和附加内容并确认范围；保存配置后使用“立即备份（只传变化）”。',
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-6
+      '点击“调整范围”，在弹窗选择资源和附加内容并确认范围；保存配置后使用“立即备份”。',
       'Discord 社区内容默认不勾选；主动选择并确认私有目标后，V3 云备份保存帖子正文、评论、历史快照、资源关联及已保存附件。恢复清单中单独勾选“Discord 社区内容”，也可只恢复帖子；没有导入的关联资源保留为待整理帖子。旧快照未保存的帖子不能从角色卡链接重建，需从原设备重新备份。',
       '换机备份可分别勾选“生图相册”“生图配置与草稿”“前端项目与创作记录”，保存原图、分类与生成参数、各供应商草稿/模板、项目原始源码/恢复版本/组件收录和已保存AI会话。未选范围和未保存的当前会话不会迁移。已保存人设模板随“常用偏好”迁移，人设资源需选择对应资源范围；旧备份缺少的资料需在原设备重新备份。',
       '网页/iOS PWA 云备份可离开备份页面继续；复用设置中的后台音频和系统通知授权。可在页面、任务和通知入口暂停、停止或继续；重开后未完成任务须显式继续，沿原目标与范围核对并复用已上传对象，不会自动复活已停止的备份。最终清单提交成功后才发完成通知，点击返回云备份；应用内完成通知及任务约5秒后移除，备份页仍可查看结果，失败和待继续记录保留。系统通知投递失败不改变备份结果。',
@@ -464,6 +470,8 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '有未完成云恢复时，从任务通知或云备份的“继续恢复”入口返回原任务；最终以本机导入结果为准。',
       '恢复选择区显示预计新增、已有内容及ID冲突；实际以导入结果为准。页面有“恢复尚未完成”记录时使用“继续恢复”，不重新创建恢复任务。',
       '“前端组件库”范围包含 Source Component 源码及来源许可，不含项目收录关系；恢复只补入缺少的组件，不覆盖同 ID 本地组件。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-7
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-7
     ],
     troubleshooting: [
       '检查失败发生在测试连接、上传对象、提交清单、读取快照还是导入本机阶段。',
@@ -474,7 +482,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '“连续45秒没有收到响应或新数据”表示本次请求等待超时，不能仅凭此判断资源损坏；它与先前备份的上传未完成状态是不同问题。保留当前资源、分块、附件编号及失败阶段，检查网络或中继后手动重试，不要清空本机资源。',
       '如果提示云备份任务数据库升级被旧页面占用，关闭其他资源库页面后重试；已有任务记录保留，不需要清空浏览器数据。',
       'APK 提示“Transaction has already completed or failed”属于本机数据库事务错误；保留本机资源与旧云备份，更新包含事务修复的 APK 后再试，不要把它当成凭据错误或清空数据。',
-      '出现“备份已提交成功，正在按保留份数检查旧快照”说明新备份已提交，仍在维护旧快照；维护失败会单独显示警告。可查看“上次任务性能”区分准备、上传、校验与维护时间。',
+      '出现“新对象快照已上传成功”说明新备份已提交，旧备份维护单独显示结果。GitHub 删除回执异常时会只读复核；无法确认时保留警告。旧快照已清理而后续内容对象回收失败时，会保留已清理份数，不把整个备份报成失败。可查看“上次任务性能”区分准备、上传、校验与维护时间。',
       '旧快照维护显示引用检查、过期快照删除和无引用内容对象处理计数；准备包含扫描、哈希和对象构建，本机准备只统计原生磁盘与桥接，请求累计耗时与清理耗时可能重叠，不能直接相加。',
       'Koofr 已读到远端对象和快照但清单校验失败时，不能据此认定云端没有备份；有效备份保留并显示失败清单，全部候选失败会明确报错。进度区分下载清单与解压解析，清单网络连续45秒没有新数据会停止等待。',
       '任务错误分类可以帮助区分网络、限流、空间或校验错误；工具不会读取云端凭据或主动测试远端。',
@@ -517,7 +525,9 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '开始互传前先在 SillyTavern 安装并打开“酒馆资源库互传”页面扩展。资源库的“功能 → 酒馆互传”里展开“连接帮助 → 查看”可读安装教程；询问安装教程时，小助手可直接打开教程内容并高亮，不必再手动展开。新版 HTTPS 设备码只需要页面扩展，服务端插件仅用于旧版或本机离线中继兼容。',
       '安装教程推荐在酒馆扩展面板点拼图图标，选择 Install Extension，粘贴教程中的仓库链接并确认；扩展列表出现“酒馆资源库互传”后才继续连接。没有 git/网络或安装失败时，再展开教程里的“离线 / 备用安装（ZIP 下载）”。',
       '扩展就绪后选择设备码连接、本机直连或界面提供的目录绑定方式；设备码与确认配对码用途不同。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-8
       '官方中继码功能已停用。使用设备码前，先自部署 SRL-Worker-Public，在设置 → 中继服务填写 HTTPS 根地址、保存并点检查连接；云盘和中继码接口检测通过后才开启。未配置时点击中继码入口显示居中弹窗“中继码功能已停用，请自部署worker”；换地址或检测失败需重新检测。酒馆端填写相同自建地址。加密暂存和网页 Koofr 也必须配置该 Worker；留空时不可用，本机直连和目录读写不受影响；已有连接或云盘任务先结束/取消再切换，自建失败或配置无效不回退。',
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-8
       '连接成功后读取目录，再明确选择要传输的资源；连接成功不等于已传输完成。',
       '右上角齿轮“酒馆互传设置”以一行分段按钮统一选择发送原版或修改版，默认修改版并在本机记住选择；实时互传、目录写入、加密暂存与随附角色卡共用。原版指当前版本的原文件；修改版同步角色卡、世界书、预设、单条正则、快速回复、主题、脚本容器和单个人设的已保存名称；聊天按新名称导出文件，保持角色绑定；合集成员与正则作用域目标不改。角色卡应用内容编辑、替换/启停与选定封面。系统设置→修改版导出与互传→修改版是否更改标签，默认关闭保留卡内原标签，开启后使用资源库已保存的标签（为空则清空），用于修改版下载、实时互传、目录写入、加密暂存和随附角色卡。其他资源没有通用酒馆标签格式。备注作者、资料简介、未保存草稿和额外图库不传入原生酒馆文件；脚本停用及目标适配仍沿现有规则。',
       '聊天互传默认只保存聊天，卡内角色脚本与头像、阅读正则随聊天资料保留，不新增独立脚本资源；可以另选同时保存角色卡。互传设置保留“聊天记录互传携带脚本”开关，只控制角色脚本；关闭时不保存聊天角色脚本，暂存领取与实时取回均遵循该选择，不提供额外全局／预设来源。全局和预设脚本需独立导入，在读了么管理脚本中自行选择；接收后默认不运行。旧包的外部随附脚本不自动入库，原库已有随附资源不批量删除。',
@@ -584,6 +594,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '快速导入、默认模板和助手创建 APP 的默认桌面封面跟随全局色调；作者指定的图标和用户自选图片保持原样。第三方 APP 沉浸启动中或启动失败时，点左上角返回箭头可直接退出；正常运行后仍可长按显示返回。',
       '更新多个官方 APP 时，进入“功能 → APP 管理”，勾选要更新的 APP 后点“更新所选”，或点“更新全部”。最多同时下载两个包，按顺序安装；每项显示真实进度，失败项可单独重试，更新保留原有数据。',
       '安装目录在当前运行中复用，安装和卸载后立即更新。日常打开只核对目标 APP 的安装记录和必要宿主依赖；需要完整文件校验时，打开“APP 管理”右上角问号，在“APP 管理说明”弹窗点“检查 APP 状态”，有损坏时点对应 APP 的“修复”，原有数据保留。',
+      '第三方 APP 通过完整 .srlapp 包导入和更新，继续执行整包校验，不使用内置 APP 的增量文件下载通道。',
       '也可以在 AI 助手中描述一个小 APP，生成草稿后试用并对话修改；明确要求后导出安装包或确认安装到扩展。',
       'APP 草稿卡中的制作进度区分待制作、待验收、已通过和未通过；AI 用 set_app_plan 记录清单，test_app 或验收按钮在独立隔离预览检查按钮、保存和重载，不覆盖用户试用输入或安装数据。',
       '验收仅覆盖清单中的实际后置检查，未制作、只有点击而没有结果检查、运行失败均不能算通过；修改源码或恢复草稿后重新验收，安装后的资源、网络和设备能力另需实际验证。',
@@ -596,10 +607,10 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '不要为加载失败建议清空整个资源库；没有包校验或设备证据时不能确定包损坏。',
       '安装包文件数按含 manifest.json 的总数检查：新版官方包最多256个，第三方包最多128个；下载50MiB、解压100MiB和单文件25MiB上限保留。旧APK仍使用内置限制，需更新APK后使用新的官方包上限。',
     ],
-    // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=target-app-public-installer-guide
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=official-app-manager-guide
     implementation:
       '官方 APP 与蒜惹菈按需安装；安装后在功能桌面显示，也可通过 APP 管理下载、更新或卸载。蒜惹菈独立使用，外观设置页不嵌入聊天面板。安装注册由 OfficialAppService 管理，第三方 APP 由 ExternalAppService 管理。已安装 APP 可用时直接打开，不因资源库构建版本变化重复安装；共享服务模块和运行时导入路径必须实际可用，缺少文件或确实不兼容时才需要下载兼容版本，已有资源和 APP 数据保留。',
-    // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=target-app-public-installer-guide
+    // SRL-PUBLIC-SYNC: END REPLACE id=official-app-manager-guide
     owners: [
       'src/core/FeatureAppRegistry.ts',
       'src/components/OfficialAppManager.vue',
@@ -646,7 +657,9 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '选择连续阅读、单楼滚动或分页模式；正文/状态栏显示异常时检查显示正则。',
       '阅读设置中的“允许远程资源”控制远程图片、字体、样式和已启用脚本的远程依赖；内置读了么开启后不再额外询问 APP 联网授权，关闭仍阻止这些资源加载。',
       '读了么在网页和APK中使用宿主内置界面，直接通过资源服务读取本地目录和阅读数据；列表备注与进度批量读取，原收藏、外观及备份数据保留。作者脚本仍在隔离文档运行，第三方APP仍沿原权限确认。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-13
       '读了么的启动页、角色列表、导航和工具弹窗默认跟随资源库公共主题。阅读正文的纸色、护眼色、夜间模式、字号和作者内容仍沿阅读外观设置独立处理。',
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-13
       '在角色对应的记录中搜索、收藏楼层或查看已保存的变量快照。',
       '阅读显示 → 管理脚本；来源分组默认折叠，展开后选择角色脚本或资源库脚本；只保存聊天时角色脚本来自聊天自带资料，旧聊天自动随附引用已退役，保留的旧资源可手动选择，已删除的旧资源不再提示随附丢失。在完整模式打开“运行所选脚本”，点“启用并应用”；开关关闭时按钮只保存选择、不运行。相同运行设置不重新加载。管理页关闭后回到阅读显示。',
       '运行脚本后，正文左下角的“脚本”提供当前楼层的快捷操作；小手机铺满正文时仍可点击，选择“手机显隐切换”等作者按钮。也可点“停止脚本，返回正文”，保留脚本勾选供下次启用。',
@@ -739,6 +752,8 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '创建或打开人设文件，选择一个人设条目并编辑通用设定。',
       '需要针对某个角色时，明确选择角色并编辑该角色的差分或版本，再保存。',
       '需要发送到酒馆时使用现有互传入口；头像等资源按单独的资源关联处理。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-15
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-15
     ],
     troubleshooting: [
       '通用设定和角色专属差分是不同内容；同名角色不会自动认定为同一个绑定。',
@@ -876,6 +891,8 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
       '添加或编辑番外时点击“导入 TXT/Word”，选择 TXT、MD、DOCX 或 Word97–2003 DOC，在本机提取正文后填入可编辑草稿；空名称自动取文件名，已有正文替换前需确认，点击保存才入库。TXT支持UTF-8、带BOM的UTF-16与常见GBK中文；输入限16 MiB、正文100万字符，保存仍受个人资源预算与本机空间限制。加密、损坏或不支持的Word版本以及只有图片的扫描件会明确报错，失败与取消保留草稿。',
       '网址、安装包和源码附件可在小手机对应分类中查看；私密字段通过密码设置解锁管理。',
       '修改普通内容后以页面保存结果为准；附件和字段按各自入口管理。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-17
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-17
     ],
     troubleshooting: [
       '公开源码定位不授权读取用户的私密字段、附件或密码。',
@@ -901,6 +918,8 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     entry: ['资源详情', '概览最底部的附件与数量'],
     steps: [
       '点击附件右侧箭头进入全屏列表，点击右上角 + 导入任意格式文件；附件不会作为独立资源占据主列表。',
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-19
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-assistant-guide-19
       '点击文件查看TXT、Word、PDF；ZIP只查看目录中的文件名和大小，不解压包内正文。其他格式可以原样导出。',
       'TXT可编辑全文；DOCX按段修改文字，保留字体、图片、表格和原有段落结构；旧DOC支持正文查看与导出，需先另存DOCX才能保留格式编辑。更多菜单可导出最初原件，也可重命名、替换、删除或导出当前文件。',
       '删除附件移入现有回收站；删除所属资源同时保存并删除附件。角色卡原件导出不带附件。',

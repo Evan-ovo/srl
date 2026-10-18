@@ -4,7 +4,12 @@ import { zipSync } from 'fflate'
 import { OfficialAppService } from './OfficialAppService'
 import { hashBytes } from './HashService'
 import type { OfficialAppPackageStorage } from '../storage/OfficialAppPackageStorage'
-import type { InstalledOfficialApp, OfficialAppId, OfficialAppPackage } from '../types/OfficialApp'
+import type {
+  InstalledOfficialApp,
+  OfficialAppId,
+  OfficialAppPackage,
+  OfficialAppDownload,
+} from '../types/OfficialApp'
 
 describe('official APP package lifecycle', () => {
   it('shares concurrent catalog requests but fetches fresh data after completion or failure', async () => {
@@ -163,7 +168,8 @@ describe('official APP package lifecycle', () => {
     archive['manifest.json'] = new TextEncoder().encode(JSON.stringify(app))
     const bytes = zipSync(archive)
     const descriptor = {
-      shellVersion: 'test-shell',
+      manifest: undefined as OfficialAppDownload['manifest'],
+      shellVersion: app.shellVersion,
       hostApiVersion: 1,
       assetMode: app.assetMode,
       appContentHash: app.appContentHash,
@@ -196,8 +202,155 @@ describe('official APP package lifecycle', () => {
       1,
       async () => Object.fromEntries(app.files.map((file) => [file.path, file])),
     )
-    return { service, fetcher, app, bytes }
+    return { service, fetcher, app, bytes, descriptor, payload }
   }
+
+  async function enableIncremental(
+    pkg: Awaited<ReturnType<typeof fixture>>,
+    corrupt?: 'manifest' | 'file',
+  ) {
+    const metadata = new TextEncoder().encode(JSON.stringify(pkg.app))
+    pkg.descriptor.manifest = {
+      url: pkg.descriptor.url.replace(/\.srlapp$/u, '.json'),
+      size: metadata.length,
+      sha256: await hashBytes(metadata),
+    }
+    const original = pkg.fetcher.getMockImplementation()!
+    pkg.fetcher.mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname
+      if (path === pkg.descriptor.manifest!.url)
+        return new Response(corrupt === 'manifest' ? new Uint8Array(metadata.length) : metadata)
+      if (path.startsWith('/assets/'))
+        return new Response(corrupt === 'file' ? new Uint8Array(pkg.payload.length) : pkg.payload)
+      return original(input, init)
+    })
+    pkg.fetcher.mockClear()
+  }
+
+  it('updates an installed APP through a verified manifest without downloading reused files or a ZIP', async () => {
+    const pkg = await fixture()
+    await pkg.service.install('draw')
+    const installedAt = records.get('draw')!.installedAt
+    await enableIncremental(pkg)
+    await pkg.service.install('draw')
+    expect(pkg.fetcher.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      '/official-apps/api-1/catalog.json',
+      '/official-apps/test-shell/draw.json',
+    ])
+    expect(records.get('draw')!.installedAt).toBe(installedAt)
+    expect(clearData).not.toHaveBeenCalled()
+  })
+
+  it('repairs unchanged content using only a moved shared file and preserves data/revision/install time', async () => {
+    const old = await fixture('draw', (app) => {
+      app.assetMode = 'self-contained'
+    })
+    await old.service.install('draw')
+    const installedAt = records.get('draw')!.installedAt
+    const current = await fixture('draw', (app) => {
+      app.assetMode = 'self-contained'
+      app.files[1]!.path = '/assets/shared-456.js'
+    })
+    await enableIncremental(current)
+    expect(await current.service.availableUpdates()).toEqual({})
+    await current.service.repairCompatibility('draw')
+    const requests = current.fetcher.mock.calls.map(([url]) => new URL(String(url)).pathname)
+    expect(requests.filter((path) => path.endsWith('.srlapp'))).toEqual([])
+    expect(requests.filter((path) => path.startsWith('/assets/'))).toEqual([
+      '/assets/shared-456.js',
+    ])
+    expect(records.get('draw')).toMatchObject({ appContentRevision: 1, installedAt })
+    expect(await current.service.ready('draw')).toBe(true)
+    const count = current.fetcher.mock.calls.length
+    await current.service.repairCompatibility('draw')
+    expect(current.fetcher).toHaveBeenCalledTimes(count)
+    expect(clearData).not.toHaveBeenCalled()
+    expect(clearStyles).not.toHaveBeenCalled()
+  })
+
+  it('does not automatically upgrade content even when its shared files moved', async () => {
+    const old = await fixture('draw', (app) => {
+      app.assetMode = 'self-contained'
+    })
+    await old.service.install('draw')
+    const installed = records.get('draw')
+    const current = await fixture('draw', (app) => {
+      app.assetMode = 'self-contained'
+      app.appContentRevision = 2
+      app.files[1]!.path = '/assets/shared-456.js'
+    })
+    await enableIncremental(current)
+    await current.service.repairCompatibility('draw')
+    expect(records.get('draw')).toEqual(installed)
+    expect(current.fetcher.mock.calls.every(([url]) => String(url).endsWith('catalog.json'))).toBe(
+      true,
+    )
+  })
+
+  it.each(['manifest', 'file'] as const)(
+    'keeps the old installation when incremental %s verification fails, without a full ZIP fallback',
+    async (corrupt) => {
+      const old = await fixture('draw', (app) => {
+        app.assetMode = 'self-contained'
+      })
+      await old.service.install('draw')
+      const installed = records.get('draw')
+      const paths = [...files.keys()]
+      const current = await fixture('draw', (app) => {
+        app.assetMode = 'self-contained'
+        app.files[1]!.path = '/assets/shared-456.js'
+      })
+      await enableIncremental(current, corrupt)
+      await expect(current.service.install('draw')).rejects.toThrow('校验失败')
+      expect(records.get('draw')).toEqual(installed)
+      expect([...files.keys()]).toEqual(paths)
+      expect(current.fetcher.mock.calls.some(([url]) => String(url).endsWith('.srlapp'))).toBe(
+        false,
+      )
+    },
+  )
+
+  it('rejects an incremental manifest from another origin before requesting it', async () => {
+    const pkg = await fixture()
+    await pkg.service.install('draw')
+    const installed = records.get('draw')
+    await enableIncremental(pkg)
+    pkg.descriptor.manifest!.url = 'https://other.test/draw.json'
+    await expect(pkg.service.install('draw')).rejects.toThrow('清单无效')
+    expect(pkg.fetcher.mock.calls).toHaveLength(1)
+    expect(records.get('draw')).toEqual(installed)
+  })
+
+  it('stops taking missing files after leaving a compatibility repair and keeps the installed record', async () => {
+    const old = await fixture('draw', (app) => {
+      app.assetMode = 'self-contained'
+    })
+    await old.service.install('draw')
+    const installed = records.get('draw')
+    const current = await fixture('draw', (app) => {
+      app.assetMode = 'self-contained'
+      app.files[1]!.path = '/assets/shared-456.js'
+      app.files.push({ ...app.files[1]!, path: '/assets/third-456.js' })
+    })
+    await enableIncremental(current)
+    const controller = new AbortController()
+    const original = current.fetcher.getMockImplementation()!
+    current.fetcher.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/assets/shared-456.js')) {
+        expect(init?.signal).toBe(controller.signal)
+        controller.abort(new DOMException('left APP', 'AbortError'))
+      }
+      return original(input, init)
+    })
+    await expect(current.service.repairCompatibility('draw', controller.signal)).rejects.toThrow(
+      'left APP',
+    )
+    expect(records.get('draw')).toEqual(installed)
+    expect(current.fetcher.mock.calls.some(([url]) => String(url).includes('third-456'))).toBe(
+      false,
+    )
+    expect(files.has('/assets/shared-456.js')).toBe(false)
+  })
   async function batchFixture(ids: OfficialAppId[]) {
     const packages = await Promise.all(ids.map((id) => fixture(id)))
     const apps = Object.assign(

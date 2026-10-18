@@ -315,7 +315,15 @@ export function officialAppPackagesPlugin(shellVersion: string, requireLoadingGa
           const packageHash = createHash('sha256').update(content).digest('hex')
           const url = `official-apps/${shellVersion}/${id}-${packageHash.slice(0, 16)}.srlapp`
           this.emitFile({ type: 'asset', fileName: url, source: content })
+          const manifest = archive['manifest.json']!
+          const manifestUrl = url.replace(/\.srlapp$/u, '.json')
+          this.emitFile({ type: 'asset', fileName: manifestUrl, source: manifest })
           catalog[id] = {
+            manifest: {
+              url: '/' + manifestUrl,
+              size: manifest.byteLength,
+              sha256: createHash('sha256').update(manifest).digest('hex'),
+            },
             shellVersion,
             hostApiVersion: OFFICIAL_APP_HOST_API_VERSION,
             assetMode,
@@ -430,12 +438,10 @@ export function officialAppPackagesPlugin(shellVersion: string, requireLoadingGa
           this.emitFile({
             type: 'asset',
             fileName: 'images/frontend-workbench-cover-v1.jpg',
-            // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=retained-public-workbench-cover
             source:
               cover?.type === 'asset'
                 ? cover.source
                 : readFileSync(resolve('src/assets/frontend-workbench-cover-v1.jpg')),
-            // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=retained-public-workbench-cover
           })
         }
         for (const [hostApiVersion, apps] of compatibleCatalogs) {

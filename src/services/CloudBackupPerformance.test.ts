@@ -1,9 +1,4 @@
 /** @vitest-environment node */
-// SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=cloud-performance-worker-settings
-vi.mock('./PublicWorkerSettingsService', () => ({
-  publicWorkerEndpoint: (pathname: string) => new URL(pathname, 'https://worker.example/'),
-}))
-// SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=cloud-performance-worker-settings
 import { IDBFactory } from 'fake-indexeddb'
 import { JSDOM } from 'jsdom'
 import type { CreatedStructuredSnapshot } from './CloudStructuredSnapshot'
@@ -538,7 +533,13 @@ describe('retention waits and deletion boundaries', () => {
       } finally {
         release()
       }
-      expect(await operation).toMatchObject({ message: 'fixture delete refused' })
+      const failure = await operation
+      expect(failure).toMatchObject({
+        stage: 'snapshots',
+        deletedSnapshots: 2,
+        cause: { message: 'fixture delete refused' },
+      })
+      expect(failure.message).toContain('fixture delete refused')
       expect(deletions).toHaveLength(3)
       expect(eligible).not.toHaveBeenCalled()
       expect(progress).toHaveBeenCalledWith('正在核对快照引用（5/5）…')

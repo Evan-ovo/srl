@@ -72,6 +72,8 @@ const { loadDrawState, listExternalApps, listOfficialApps, installedListeners } 
     listOfficialApps: vi.fn(async () =>
       [
         'draw',
+        // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-1
+        // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-1
         'assistant',
         'stitch',
         'frontendWorkshop',
@@ -222,12 +224,20 @@ describe('FeatureHub', () => {
     const { rows, reads } = countedResources(1001)
     const wrapper = render({ resources: rows })
     await flushPromises()
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-2
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-2
     expect(wrapper.get('.feature-app--persona em').text()).toBe('500 份人设文件')
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-3
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-3
     reads.count = 0
     for (let index = 0; index < 4; index++) {
       await wrapper.get('[aria-label="下一页应用"]').trigger('click')
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-4
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-4
       await wrapper.get('[aria-label="上一页应用"]').trigger('click')
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-5
       expect(wrapper.get('.feature-app--persona em').text()).toBe('500 份人设文件')
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-5
       expect(wrapper.get('.feature-app--stitch em').text()).toBe('501 个预设可用')
     }
     expect(reads.count).toBe(0)
@@ -274,6 +284,8 @@ describe('FeatureHub', () => {
     await flushPromises()
     expect(wrapper.get('.feature-app--folders em').text()).toBe('2 个文件夹')
     expect(wrapper.get('.feature-app--stitch em').text()).toBe('1 个预设可用')
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-6
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-6
     expect(wrapper.get('.feature-app--persona em').text()).toBe('2 份人设文件')
     rows[2]!.type = RESOURCE_TYPE.USER_PERSONA
     await nextTick()
@@ -396,6 +408,8 @@ describe('FeatureHub', () => {
         app.classes().find((className) => className.startsWith('feature-app--')),
       ),
     ).toEqual([
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-7
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-7
       'feature-app--draw',
       'feature-app--appearance',
       'feature-app--assistant',
@@ -620,12 +634,14 @@ describe('FeatureHub', () => {
   it('removes the retired bundle launcher from every desktop page', async () => {
     const wrapper = render()
     await flushPromises()
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-featurehub-test-ts-10
     for (let page = 0; page < 5 && !wrapper.find('.feature-app--persona').exists(); page += 1) {
       expect(wrapper.find('.feature-app--bundle').exists()).toBe(false)
       const next = wrapper.find('button[aria-label="下一页应用"]')
       if (!next.exists() || (next.element as HTMLButtonElement).disabled) break
       await next.trigger('click')
     }
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-featurehub-test-ts-10
     expect(wrapper.find('.feature-app--bundle').exists()).toBe(false)
     expect(wrapper.find('.feature-app--persona').exists()).toBe(true)
   })

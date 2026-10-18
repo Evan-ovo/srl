@@ -1,8 +1,6 @@
 package buzz.jixiangruyi1207.srl;
 
 import java.io.File;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.Locale;
@@ -32,7 +30,7 @@ final class NativeRecoveryDeletion {
                 File[] files = directory.listFiles();
                 if (!metadata.getCanonicalFile().equals(metadata.getAbsoluteFile()) || files == null || files.length != 1
                     || !metadata.isFile() || metadata.length() > 1024 * 1024) throw new IllegalStateException("原生索引无法完整核对，已保留原件");
-                JSONObject record = new JSONObject(new String(Files.readAllBytes(metadata.toPath()), StandardCharsets.UTF_8));
+                JSONObject record = NativeReplacedObjectCleanup.read(metadata);
                 if (!item.getString("nativeId").equals(record.getString("id")) || !hash.equalsIgnoreCase(record.getString("contentHash"))
                     || item.getLong("size") != record.getLong("size")) throw new IllegalStateException("原生索引已变化，请重新扫描");
                 ignored.add(metadata.getCanonicalFile());
@@ -45,7 +43,7 @@ final class NativeRecoveryDeletion {
             else deleted.put(hash);
         }
         for (File metadata : ignored) {
-            JSONObject record = new JSONObject(new String(Files.readAllBytes(metadata.toPath()), StandardCharsets.UTF_8));
+            JSONObject record = NativeReplacedObjectCleanup.read(metadata);
             if (!object(library, record.getString("contentHash")).exists()) {
                 if (!metadata.delete()) throw new IllegalStateException("原件已删除，旧索引未能清除，请重新检查");
                 metadata.getParentFile().delete(); // Only remove an empty, verified index directory.

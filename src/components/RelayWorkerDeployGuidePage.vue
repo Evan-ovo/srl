@@ -151,7 +151,9 @@ onBeforeUnmount(() => {
               <h2 id="worker-step-three">填回 Worker 地址</h2>
               <p>
                 复制 Cloudflare 显示的 HTTPS 根地址，在 SRL 的
+                <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkerdeployguidepage-vue-1 -->
                 <strong>设置 → 自部署 Worker</strong>
+                <!-- SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkerdeployguidepage-vue-1 -->
                 中粘贴并保存，再点“检查连接”；检测通过后中继码才会开启。
               </p>
             </div>

@@ -2836,14 +2836,24 @@ describe('goal-based configuration and repository evidence', () => {
     const jsonc = '/* current config */' + JSON.stringify(value).replace(/}$/, ',}')
     expect(validate(jsonc)).toMatchObject({ ok: true, errors: [] })
   })
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-discordsetuppage-test-ts-1
   it('does not expose maintainer source ownership as a browser repository kind', () => {
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-discordsetuppage-test-ts-1
     const f = page(
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-discordsetuppage-test-ts-2
       '<meta name="user-login" content="account"><button>release</button><a href="/account/worker/commit/' +
+        // SRL-PUBLIC-SYNC: END REPLACE id=public-discordsetuppage-test-ts-2
         'a'.repeat(40) +
+        // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-discordsetuppage-test-ts-3
         '">commit</a>',
       'https://github.com/account/worker',
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-discordsetuppage-test-ts-3
     )
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-discordsetuppage-test-ts-4
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-discordsetuppage-test-ts-4
     expect(f.run('inspect').repository).toBeUndefined()
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-discordsetuppage-test-ts-5
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-discordsetuppage-test-ts-5
     f.dom.window.close()
   })
   it('validates an already saved JSONC on the actual branch without opening the editor', () => {

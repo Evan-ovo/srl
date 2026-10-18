@@ -18,8 +18,10 @@ const installed = ref(false)
 const hasInstallationRecord = ref(false)
 let release: (() => void) | undefined
 let disposed = false
+const controller = new AbortController()
 onBeforeUnmount(() => {
   disposed = true
+  controller.abort(new DOMException('已离开 APP', 'AbortError'))
   release?.()
 })
 async function open() {
@@ -38,6 +40,14 @@ async function open() {
     if (!loaded) {
       release()
       release = undefined
+      if (
+        !disposed &&
+        !import.meta.env.DEV &&
+        (await officialAppService.repairCompatibility(props.appId, controller.signal))
+      ) {
+        if (!disposed) await open()
+        return
+      }
       hasInstallationRecord.value = Boolean(await officialAppService.getInstalled(props.appId))
       return
     }

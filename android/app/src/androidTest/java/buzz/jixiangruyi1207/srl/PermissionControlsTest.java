@@ -11,7 +11,6 @@ import java.lang.reflect.*;
 import java.net.*;
 import java.util.Map;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -19,66 +18,6 @@ import org.junit.runner.RunWith;
 @RunWith(AndroidJUnit4.class)
 public class PermissionControlsTest {
     private final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-    private ApkUpdaterPlugin plugin() { return new ApkUpdaterPlugin() { @Override public Context getContext() { return context; } }; }
-    private Object download() throws Exception {
-        Constructor<?> constructor = Class.forName(ApkUpdaterPlugin.class.getName() + "$Download").getDeclaredConstructor();
-        constructor.setAccessible(true); return constructor.newInstance();
-    }
-    @SuppressWarnings("unchecked") private Map<String,Object> downloads(ApkUpdaterPlugin plugin) throws Exception {
-        Field field = ApkUpdaterPlugin.class.getDeclaredField("downloads"); field.setAccessible(true); return (Map<String,Object>)field.get(plugin);
-    }
-    private JSObject cancel(ApkUpdaterPlugin plugin, String id) {
-        AtomicReference<JSObject> result = new AtomicReference<>();
-        JSObject data = new JSObject(); data.put("taskId", id);
-        plugin.cancelDownload(new PluginCall(null,"ApkUpdater","test","cancelDownload",data) {
-            @Override public void resolve(JSObject value) { result.set(value); }
-        });
-        return result.get();
-    }
-    @Test public void cancellationIsScopedAndCannotInterruptInstallerCommit() throws Exception {
-        ApkUpdaterPlugin plugin = plugin(); Object first=download(), second=download();
-        downloads(plugin).put("first",first); downloads(plugin).put("second",second);
-        assertEquals("cancelled",cancel(plugin,"first").getString("status"));
-        Field cancelled=first.getClass().getDeclaredField("cancelled"); cancelled.setAccessible(true);
-        assertTrue(cancelled.getBoolean(first)); assertFalse(cancelled.getBoolean(second));
-        Field committing=second.getClass().getDeclaredField("committing"); committing.setAccessible(true); committing.setBoolean(second,true);
-        assertEquals("committing",cancel(plugin,"second").getString("status"));
-        assertFalse(cancelled.getBoolean(second));
-        assertEquals("missing",cancel(plugin,"absent").getString("status"));
-    }
-    @Test public void realHttpDownloadStopsAndRemovesPartialFileAfterCancel() throws Exception {
-        ApkUpdaterPlugin plugin=plugin(); Object download=download(); String id="permission-device-cancel";
-        downloads(plugin).put(id,download);
-        ExecutorService executor=Executors.newFixedThreadPool(2);
-        ServerSocket server=new ServerSocket(0,1,InetAddress.getByName("127.0.0.1"));
-        CountDownLatch release=new CountDownLatch(1);
-        Future<?> peer=executor.submit(() -> {
-            try(Socket socket=server.accept()) {
-                BufferedReader request=new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                String line; while((line=request.readLine())!=null && !line.isEmpty()) {}
-                OutputStream out=socket.getOutputStream();
-                out.write("HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n".getBytes("US-ASCII"));
-                out.write(new byte[65536]); out.flush(); release.await(10,TimeUnit.SECONDS);
-            } catch(Exception error) { throw new RuntimeException(error); }
-        });
-        File partial=new File(context.getCacheDir(),"apk-updates/srl-update-"+id+".apk.part");
-        File finalFile=new File(context.getCacheDir(),"apk-updates/srl-update-"+id+".apk");
-        Method read=ApkUpdaterPlugin.class.getDeclaredMethod("downloadVerifiedApk",String.class,String.class,download.getClass(),String.class); read.setAccessible(true);
-        Future<?> transfer=executor.submit(() -> {
-            try { read.invoke(plugin,"http://127.0.0.1:"+server.getLocalPort()+"/fixture","0".repeat(64),download,id); throw new AssertionError("Cancelled transfer completed"); }
-            catch(InvocationTargetException error) { assertTrue(error.getCause().getMessage().contains("取消") || ((Boolean)readCancelled(download))); }
-            catch(Exception error) { throw new RuntimeException(error); }
-        });
-        try {
-            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
-            while(partial.length()==0 && !transfer.isDone() && System.nanoTime()<deadline) Thread.sleep(20);
-            if (transfer.isDone()) transfer.get();
-            assertTrue("actual native HTTP bytes must arrive before cancellation",partial.length()>0);
-            assertEquals("cancelled",cancel(plugin,id).getString("status"));
-            release.countDown(); transfer.get(8,TimeUnit.SECONDS); peer.get(8,TimeUnit.SECONDS);
-            assertFalse(partial.exists()); assertFalse(finalFile.exists());
-        } finally { release.countDown();server.close();executor.shutdownNow();partial.delete();finalFile.delete(); }
-    }
     private static final class Reply extends PluginCall {
         final CountDownLatch completed = new CountDownLatch(1);
         JSObject value; String error;

@@ -12,10 +12,14 @@ afterEach(() => {
   localStorage.clear()
   vi.unstubAllGlobals()
 })
+// SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-1
 it('restores a saved choice on reopening and disables relay features when cleared', async () => {
+  // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-1
   localStorage.clear()
   const first = mount(RelayWorkerSettings)
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-2
   expect(first.text()).toContain('当前使用：未配置')
+  // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-2
   await first.get('input').setValue('https://worker.example')
   await first
     .findAll('button')
@@ -28,7 +32,9 @@ it('restores a saved choice on reopening and disables relay features when cleare
   try {
     await reopened
       .findAll('button')
+      // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-3
       .find((b) => b.text() === '清除地址')!
+      // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-3
       .trigger('click')
     expect(reopened.text()).toContain('先断开互传')
     expect(loadRelayWorkerBaseUrl()).toBe('https://worker.example')
@@ -37,16 +43,24 @@ it('restores a saved choice on reopening and disables relay features when cleare
   }
   await reopened
     .findAll('button')
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-4
     .find((b) => b.text() === '清除地址')!
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-4
     .trigger('click')
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-5
   expect(reopened.text()).toContain('当前使用：未配置')
+  // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-5
   reopened.unmount()
 })
 it('keeps invalid stored settings visible for repair and does not claim an unsuccessful check passed', async () => {
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-6
   localStorage.setItem('srl.publicWorker.baseUrl.v1', 'https://worker.example/private')
+  // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-6
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
   const panel = mount(RelayWorkerSettings)
   expect(panel.text()).toContain('配置无效，已停止中继请求')
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-7
+  // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-7
   await panel.get('input').setValue('https://worker.example')
   await panel
     .findAll('button')
@@ -54,9 +68,9 @@ it('keeps invalid stored settings visible for repair and does not claim an unsuc
     .trigger('click')
   await flushPromises()
   expect(panel.get('[role="status"]').text()).toContain('offline')
-  expect(localStorage.getItem('srl.publicWorker.baseUrl.v1')).toBe(
-    'https://worker.example/private',
-  )
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettings-test-ts-8
+  expect(localStorage.getItem('srl.publicWorker.baseUrl.v1')).toBe('https://worker.example/private')
+  // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettings-test-ts-8
   panel.unmount()
 })
 

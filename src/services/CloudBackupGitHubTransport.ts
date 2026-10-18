@@ -86,6 +86,77 @@ export async function githubFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  const deletingAsset =
+    (init.method ?? 'GET').toUpperCase() === 'DELETE' && /^\/releases\/assets\/\d+$/u.test(path)
+  const stopped = (error: unknown): boolean =>
+    Boolean(
+      context.signal?.aborted ||
+      init.signal?.aborted ||
+      (error instanceof Error && error.name === 'AbortError'),
+    )
+  let response: Response
+  try {
+    response = await requestGitHub(context, config, secret, path, init)
+  } catch (error) {
+    const status = (error as { status?: number } | null)?.status
+    if (
+      !deletingAsset ||
+      stopped(error) ||
+      (error as { code?: string } | null)?.code === 'SITE_UNAUTHENTICATED' ||
+      (status !== undefined && status !== 404 && status < 500)
+    )
+      throw error
+
+    // A lost DELETE receipt does not prove deletion failed. Read this asset's
+    // metadata once; release read access must still work because private repos
+    // also return 404 when Contents access is lost. Repository metadata alone
+    // cannot prove this permission. Never repeat the DELETE here.
+    let present = false
+    try {
+      try {
+        const asset = await requestGitHub(context, config, secret, path, { signal: init.signal })
+        await asset.body?.cancel()
+        present = true
+      } catch (verificationError) {
+        if ((verificationError as { status?: number } | null)?.status !== 404)
+          throw verificationError
+        const releases = await requestGitHub(
+          context,
+          config,
+          secret,
+          '/releases?per_page=10&page=1',
+          { signal: init.signal },
+        )
+        await releases.body?.cancel()
+      }
+    } catch (verificationError) {
+      if (stopped(verificationError)) throw verificationError
+      throw new Error(
+        'GitHub 删除结果尚未确认：删除回执异常，且远端复核未完成；文件可能已删除，请查看云端列表后再清理。',
+        { cause: verificationError },
+      )
+    }
+    if (present)
+      throw new Error('GitHub 删除未完成：远端文件仍然存在，请稍后重新执行清理。', { cause: error })
+    response = new Response(null, { status: 204 })
+  }
+  if (response.ok && deletingAsset) {
+    const assetId = Number(path.split('/').at(-1))
+    if (Number.isSafeInteger(assetId)) {
+      for (const assets of githubInventory(context, config)?.assets.values() ?? [])
+        assets.delete(assetId)
+    }
+  }
+  return response
+}
+
+async function requestGitHub(
+  context: CloudBackupTransportContext,
+  config: GitHubBackupConfig,
+  secret: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
   const response = await context.cloudFetch(
     `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repository)}${path}`,
     {
@@ -99,13 +170,6 @@ export async function githubFetch(
     },
     'github',
   )
-  if (response.ok && (init.method ?? 'GET').toUpperCase() === 'DELETE') {
-    const assetId = Number(/\/releases\/assets\/(\d+)/u.exec(path)?.[1] ?? Number.NaN)
-    if (Number.isSafeInteger(assetId)) {
-      for (const assets of githubInventory(context, config)?.assets.values() ?? [])
-        assets.delete(assetId)
-    }
-  }
   if (!response.ok) {
     const detail = (await response.json().catch(() => ({}))) as GitHubErrorDetail
     if (
@@ -113,7 +177,10 @@ export async function githubFetch(
       response.status === 401 &&
       (detail as GitHubErrorDetail & { code?: string }).code === 'UNAUTHENTICATED'
     ) {
-      throw new Error('上传 GitHub 备份需要登录当前资源库网站；请先登录本站，再继续备份。')
+      throw Object.assign(
+        new Error('上传 GitHub 备份需要登录当前资源库网站；请先登录本站，再继续备份。'),
+        { code: 'SITE_UNAUTHENTICATED' },
+      )
     }
     throw githubError(response.status, detail, path, init.method ?? 'GET', response.headers)
   }

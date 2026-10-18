@@ -1,4 +1,4 @@
-import { mapWithConcurrency } from './CloudBackupHttp'
+import { friendlyNetworkError, mapWithConcurrency } from './CloudBackupHttp'
 import type { CloudBackupSnapshotOperationsContext } from './CloudBackupSnapshotOperations'
 import type { CloudBackupConfig, CloudBackupItem, CloudBackupProvider } from '../types/CloudBackup'
 
@@ -20,6 +20,32 @@ import {
 import { isStructuredSnapshotObjectKey, structuredSnapshotParts } from './CloudStructuredSnapshot'
 
 export const ORPHAN_CHUNK_GRACE_MS = 24 * 60 * 60 * 1000
+
+export class CloudBackupMaintenanceError extends Error {
+  readonly status?: number
+  readonly code?: string
+  readonly stage: 'snapshots' | 'objects'
+  readonly deletedSnapshots: number
+  constructor(
+    stage: 'snapshots' | 'objects',
+    deletedSnapshots: number,
+    total: number,
+    provider: CloudBackupProvider,
+    cause: unknown,
+  ) {
+    const result =
+      stage === 'snapshots'
+        ? `已确认清理 ${deletedSnapshots}/${total} 份旧快照，其余清理未完成`
+        : `${deletedSnapshots ? `已清理 ${deletedSnapshots} 份旧快照` : '快照保留检查已完成'}，但无引用内容对象回收未完成`
+    super(`${result}：${friendlyNetworkError(cause, provider).message}`, { cause })
+    this.name = 'CloudBackupMaintenanceError'
+    this.stage = stage
+    this.deletedSnapshots = deletedSnapshots
+    const detail = cause as { status?: number; code?: string } | null
+    this.status = detail?.status
+    this.code = detail?.code
+  }
+}
 
 export function isVerifiedChunkObjectName(name: string): boolean {
   return /^srl-chunk--sha256-[a-f0-9]{64}$/iu.test(name)
@@ -205,39 +231,107 @@ export async function prune(
   // 本轮就不会继续回收内容对象，避免留下“仍可见但缺对象”的旧快照。
   let deleted = 0
   report(`正在清理过期快照（0/${removed.length}）…`)
-  await mapWithConcurrency(removed, 3, async (item) => {
+  try {
+    await mapWithConcurrency(removed, 3, async (item) => {
+      if (config.provider === 'github') {
+        await context.githubFetch(config, secret, `/releases/assets/${item.id}`, {
+          method: 'DELETE',
+        })
+      } else {
+        await context.deleteWebDavObject(config, secret, item.objectKey)
+      }
+      report(`正在清理过期快照（${++deleted}/${removed.length}）…`)
+    })
+  } catch (error) {
+    throw new CloudBackupMaintenanceError(
+      'snapshots',
+      deleted,
+      removed.length,
+      config.provider,
+      error,
+    )
+  }
+
+  try {
+    const now = Date.now()
+    const candidates = new Set(
+      [...pending, ...retiredParts].filter(
+        (part) => !keptParts.has(part) && isVerifiedChunkIdentity(config.provider, part),
+      ),
+    )
+
+    if (deep && config.provider === 'github') {
+      const containers: Array<{ tag: string; release: GitHubRelease }> = []
+      const legacy = await context.getGitHubRelease(config, secret, false, LEGACY_RELEASE_TAG)
+      if (legacy) containers.push({ tag: LEGACY_RELEASE_TAG, release: legacy })
+      for (let index = 1; index <= 10_000; index += 1) {
+        const tag = `${OBJECT_RELEASE_PREFIX}${String(index).padStart(4, '0')}`
+        const release = await context.getGitHubRelease(config, secret, false, tag)
+        if (!release) break
+        containers.push({ tag, release })
+      }
+      const orphanAssets = new Map<string, GitHubAsset>()
+      for (const container of containers) {
+        for (const asset of await context.listGitHubAssets(config, secret, container.release.id)) {
+          const identity = `${container.tag}\u0000${asset.name}`
+          orphanAssets.set(identity, asset)
+          if (isVerifiedChunkObjectName(asset.name) && !keptParts.has(identity))
+            candidates.add(identity)
+        }
+      }
+      const eligible = await context.transportState.jobStore.eligibleOrphans(
+        orphanScope,
+        candidates,
+        now,
+        ORPHAN_CHUNK_GRACE_MS,
+      )
+      for (const identity of eligible) {
+        const asset = orphanAssets.get(identity)
+        if (!asset) continue
+        await context.githubFetch(config, secret, `/releases/assets/${asset.id}`, {
+          method: 'DELETE',
+        })
+        await context.transportState.jobStore.clearOrphan(orphanScope, identity)
+      }
+      return removed.length
+    }
+
     if (config.provider === 'github') {
-      await context.githubFetch(config, secret, `/releases/assets/${item.id}`, { method: 'DELETE' })
-    } else {
-      await context.deleteWebDavObject(config, secret, item.objectKey)
+      report('正在检查可回收内容对象…')
+      const eligible = await context.transportState.jobStore.eligibleOrphans(
+        orphanScope,
+        candidates,
+        now,
+        ORPHAN_CHUNK_GRACE_MS,
+      )
+      const assetsByIdentity = new Map<string, GitHubAsset>()
+      const containers = [...new Set(eligible.map((identity) => identity.split('\u0000', 1)[0]!))]
+      await mapWithConcurrency(containers, 3, async (container) => {
+        const release = await context.getGitHubRelease(config, secret, false, container)
+        if (!release) return
+        for (const asset of await context.listGitHubAssets(config, secret, release.id))
+          assetsByIdentity.set(`${container}\u0000${asset.name}`, asset)
+      })
+      let reclaimed = 0
+      report(`正在处理无引用内容对象（0/${eligible.length}）…`)
+      await mapWithConcurrency(eligible, 3, async (identity) => {
+        const asset = assetsByIdentity.get(identity)
+        if (asset)
+          await context.githubFetch(config, secret, `/releases/assets/${asset.id}`, {
+            method: 'DELETE',
+          })
+        await context.transportState.jobStore.clearOrphan(orphanScope, identity)
+        report(`正在处理无引用内容对象（${++reclaimed}/${eligible.length}）…`)
+      })
+      report('旧快照维护完成。')
+      return removed.length
     }
-    report(`正在清理过期快照（${++deleted}/${removed.length}）…`)
-  })
 
-  const now = Date.now()
-  const candidates = new Set(
-    [...pending, ...retiredParts].filter(
-      (part) => !keptParts.has(part) && isVerifiedChunkIdentity(config.provider, part),
-    ),
-  )
-
-  if (deep && config.provider === 'github') {
-    const containers: Array<{ tag: string; release: GitHubRelease }> = []
-    const legacy = await context.getGitHubRelease(config, secret, false, LEGACY_RELEASE_TAG)
-    if (legacy) containers.push({ tag: LEGACY_RELEASE_TAG, release: legacy })
-    for (let index = 1; index <= 10_000; index += 1) {
-      const tag = `${OBJECT_RELEASE_PREFIX}${String(index).padStart(4, '0')}`
-      const release = await context.getGitHubRelease(config, secret, false, tag)
-      if (!release) break
-      containers.push({ tag, release })
-    }
-    const orphanAssets = new Map<string, GitHubAsset>()
-    for (const container of containers) {
-      for (const asset of await context.listGitHubAssets(config, secret, container.release.id)) {
-        const identity = `${container.tag}\u0000${asset.name}`
-        orphanAssets.set(identity, asset)
-        if (isVerifiedChunkObjectName(asset.name) && !keptParts.has(identity))
-          candidates.add(identity)
+    if (deep) {
+      for (const object of await context.listWebDavObjects(config, secret)) {
+        const leaf = object.objectKey.split('/').at(-1) ?? ''
+        if (isVerifiedChunkObjectName(leaf) && !keptParts.has(object.objectKey))
+          candidates.add(object.objectKey)
       }
     }
     const eligible = await context.transportState.jobStore.eligibleOrphans(
@@ -246,68 +340,22 @@ export async function prune(
       now,
       ORPHAN_CHUNK_GRACE_MS,
     )
-    for (const identity of eligible) {
-      const asset = orphanAssets.get(identity)
-      if (!asset) continue
-      await context.githubFetch(config, secret, `/releases/assets/${asset.id}`, {
-        method: 'DELETE',
-      })
-      await context.transportState.jobStore.clearOrphan(orphanScope, identity)
-    }
-    return removed.length
-  }
-
-  if (config.provider === 'github') {
-    report('正在检查可回收内容对象…')
-    const eligible = await context.transportState.jobStore.eligibleOrphans(
-      orphanScope,
-      candidates,
-      now,
-      ORPHAN_CHUNK_GRACE_MS,
-    )
-    const assetsByIdentity = new Map<string, GitHubAsset>()
-    const containers = [...new Set(eligible.map((identity) => identity.split('\u0000', 1)[0]!))]
-    await mapWithConcurrency(containers, 3, async (container) => {
-      const release = await context.getGitHubRelease(config, secret, false, container)
-      if (!release) return
-      for (const asset of await context.listGitHubAssets(config, secret, release.id))
-        assetsByIdentity.set(`${container}\u0000${asset.name}`, asset)
-    })
     let reclaimed = 0
     report(`正在处理无引用内容对象（0/${eligible.length}）…`)
-    await mapWithConcurrency(eligible, 3, async (identity) => {
-      const asset = assetsByIdentity.get(identity)
-      if (asset)
-        await context.githubFetch(config, secret, `/releases/assets/${asset.id}`, {
-          method: 'DELETE',
-        })
-      await context.transportState.jobStore.clearOrphan(orphanScope, identity)
+    await mapWithConcurrency(eligible, 3, async (objectKey) => {
+      await context.deleteWebDavObject(config, secret, objectKey)
+      await context.transportState.jobStore.clearOrphan(orphanScope, objectKey)
       report(`正在处理无引用内容对象（${++reclaimed}/${eligible.length}）…`)
     })
     report('旧快照维护完成。')
     return removed.length
+  } catch (error) {
+    throw new CloudBackupMaintenanceError(
+      'objects',
+      deleted,
+      removed.length,
+      config.provider,
+      error,
+    )
   }
-
-  if (deep) {
-    for (const object of await context.listWebDavObjects(config, secret)) {
-      const leaf = object.objectKey.split('/').at(-1) ?? ''
-      if (isVerifiedChunkObjectName(leaf) && !keptParts.has(object.objectKey))
-        candidates.add(object.objectKey)
-    }
-  }
-  const eligible = await context.transportState.jobStore.eligibleOrphans(
-    orphanScope,
-    candidates,
-    now,
-    ORPHAN_CHUNK_GRACE_MS,
-  )
-  let reclaimed = 0
-  report(`正在处理无引用内容对象（0/${eligible.length}）…`)
-  await mapWithConcurrency(eligible, 3, async (objectKey) => {
-    await context.deleteWebDavObject(config, secret, objectKey)
-    await context.transportState.jobStore.clearOrphan(orphanScope, objectKey)
-    report(`正在处理无引用内容对象（${++reclaimed}/${eligible.length}）…`)
-  })
-  report('旧快照维护完成。')
-  return removed.length
 }

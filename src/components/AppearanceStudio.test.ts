@@ -60,6 +60,7 @@ describe('AppearanceStudio cabinet layout', () => {
     storage.setCustomUiPresets([preset])
     storage.setActiveCustomUiPresetId(preset.id)
     storage.setCustomUiViews(preset.views)
+    const savedPresets = storage.getCustomUiPresets()
     const wrapper = mount(AppearanceStudio, {
       props: { theme: 'light', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
     })
@@ -75,6 +76,7 @@ describe('AppearanceStudio cabinet layout', () => {
       await save.trigger('click')
       await flushPromises()
       expect(wrapper.emitted('save-css')?.at(-1)).toEqual(['', { views: preset.views }])
+      expect(storage.getCustomUiPresets()).toEqual(savedPresets)
       storage.setCustomUiViews(preset.views)
       await flushPromises()
       expect(save.element.disabled).toBe(true)

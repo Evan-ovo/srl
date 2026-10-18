@@ -11,15 +11,16 @@ async function hashPackageBytes(bytes: Uint8Array): Promise<string> {
     : hashBytes(bytes)
 }
 
-async function downloadAndUnzipPackage(
+async function downloadVerifiedBytes(
   fetcher: typeof fetch,
   url: URL,
   expectedBytes: number,
   expectedHash: string,
   onDownload?: (bytes: number) => void,
   onCheck?: () => void,
-): ReturnType<typeof unzipPackage> {
-  const response = await fetcher(url, { cache: 'no-store' })
+  signal?: AbortSignal,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const response = await fetcher(url, { cache: 'no-store', ...(signal ? { signal } : {}) })
   if (!response.ok || !response.body) throw new Error('APP 下载失败，请检查网络后重试')
   const reader = response.body.getReader()
   // Allocate once and fill the bounded buffer as the stream arrives. Keeping chunks and
@@ -44,6 +45,13 @@ async function downloadAndUnzipPackage(
   if (length !== expectedBytes) throw new Error('APP 下载不完整')
   onCheck?.()
   if ((await hashPackageBytes(bytes)) !== expectedHash) throw new Error('APP 下载校验失败')
+  return bytes
+}
+
+async function downloadAndUnzipPackage(
+  ...args: Parameters<typeof downloadVerifiedBytes>
+): ReturnType<typeof unzipPackage> {
+  const bytes = await downloadVerifiedBytes(...args)
   return unzipPackage(bytes.buffer, OFFICIAL_APP_MAX_PACKAGE_FILES)
 }
 
@@ -339,6 +347,14 @@ export class OfficialAppService {
         const requiresAssetRepair =
           !requiresHostUpdate &&
           (this.checkedReady(app) === false || !(await this.isReadyForPackage(app, false)))
+        // Same-content dependency moves are repaired by the gate, not offered as APP updates.
+        if (
+          currentRevision === latest.appContentRevision &&
+          latest.manifest &&
+          !requiresHostUpdate &&
+          app.runtimeEntry === latest.runtimeEntry
+        )
+          continue
         if (
           currentRevision >= latest.appContentRevision &&
           !requiresHostUpdate &&
@@ -458,6 +474,27 @@ export class OfficialAppService {
     })
   }
 
+  /** Repair only unchanged content whose actual shared dependencies moved with the shell. */
+  async repairCompatibility(id: OfficialAppId, signal?: AbortSignal): Promise<boolean> {
+    const installed = await this.getInstalled(id)
+    if (
+      !installed ||
+      (installed.hostApiVersion ?? 1) !== this.hostApiVersion ||
+      (this.runtimeEntry !== undefined && installed.runtimeEntry !== this.runtimeEntry) ||
+      (this.checkedReady(installed) !== false && (await this.isReadyForPackage(installed, false)))
+    )
+      return false
+    const catalog = await this.catalog()
+    const revision = installed.appContentRevision ?? LEGACY_OFFICIAL_APP_CONTENT_REVISION
+    const candidate = await this.latestCompatibleDownload(catalog.apps[id] ?? [])
+    if (!candidate?.manifest || candidate.appContentRevision !== revision) return false
+    await this.withExclusiveAppUse(id, '更新', async () => {
+      const [result] = await this.installBatch([id], undefined, id, revision, signal)
+      if (result?.error) throw result.error
+    })
+    return Boolean(await this.getReadyPackage(id))
+  }
+
   installMany(
     ids: readonly OfficialAppId[],
     onProgress?: (progress: OfficialAppInstallProgress) => void,
@@ -469,6 +506,8 @@ export class OfficialAppService {
     requested: readonly OfficialAppId[],
     onProgress?: (progress: OfficialAppInstallProgress) => void,
     heldApp?: OfficialAppId,
+    repairRevision?: number,
+    signal?: AbortSignal,
   ): Promise<OfficialAppInstallResult[]> {
     const ids = [...new Set(requested)]
     if (ids.some((id) => !isOfficialAppId(id))) throw new Error('APP 标识无效')
@@ -492,11 +531,28 @@ export class OfficialAppService {
               const index = next++
               const id = ids[index]!
               const work = async () => {
-                const prepared = await this.prepareInstall(id, catalog.apps[id] ?? [], onProgress)
-                onProgress?.({ id, stage: 'waiting' })
-                const commit = commitTail.then(() =>
-                  this.applyInstall(id, prepared, verifiedFiles, onProgress),
+                signal?.throwIfAborted()
+                if (
+                  repairRevision !== undefined &&
+                  (await this.getInstalled(id))?.appContentRevision !== repairRevision
                 )
+                  return
+                const candidates = (catalog.apps[id] ?? []).filter(
+                  (candidate) =>
+                    repairRevision === undefined || candidate.appContentRevision === repairRevision,
+                )
+                const prepared = await this.prepareInstall(
+                  id,
+                  candidates,
+                  onProgress,
+                  verifiedFiles,
+                  signal,
+                )
+                onProgress?.({ id, stage: 'waiting' })
+                const commit = commitTail.then(() => {
+                  signal?.throwIfAborted()
+                  return this.applyInstall(id, prepared, verifiedFiles, onProgress)
+                })
                 commitTail = commit.catch(() => {})
                 await commit
               }
@@ -506,6 +562,7 @@ export class OfficialAppService {
                 results[index] = { id }
                 onProgress?.({ id, stage: 'done' })
               } catch (failure) {
+                if (signal?.aborted) throw signal.reason
                 const error = failure instanceof Error ? failure : new Error('APP 安装失败')
                 results[index] = { id, error }
                 onProgress?.({ id, stage: 'failed', message: error.message })
@@ -523,6 +580,8 @@ export class OfficialAppService {
     id: OfficialAppId,
     candidates: OfficialAppDownload[],
     onProgress?: (progress: OfficialAppInstallProgress) => void,
+    verifiedFiles = new Map<string, string>(),
+    signal?: AbortSignal,
   ) {
     const download = await this.latestCompatibleDownload(candidates)
     if (
@@ -549,20 +608,48 @@ export class OfficialAppService {
       packagePath.split('/').some((segment) => segment === '.' || segment === '..')
     )
       throw new Error('APP 下载来源无效')
-    const files = await downloadAndUnzipPackage(
-      this.fetcher,
-      url,
-      download.downloadBytes,
-      download.sha256,
-      (downloadedBytes) =>
-        onProgress?.({
-          id,
-          stage: 'downloading',
-          downloadedBytes,
-          totalBytes: download.downloadBytes,
-        }),
-      () => onProgress?.({ id, stage: 'checking' }),
-    )
+    const partial = Boolean(download.manifest && (await this.getInstalled(id)))
+    let files: Record<string, Uint8Array>
+    if (partial) {
+      const manifest = download.manifest!
+      const manifestUrl = new URL(manifest.url, this.origin)
+      if (
+        manifestUrl.origin !== this.origin ||
+        manifestUrl.pathname !== url.pathname.replace(/\.srlapp$/u, '.json') ||
+        manifestUrl.search ||
+        manifestUrl.hash ||
+        !safeHash(manifest.sha256) ||
+        !Number.isSafeInteger(manifest.size) ||
+        manifest.size <= 0 ||
+        manifest.size > 128 * 1024
+      )
+        throw new Error('APP 增量文件清单无效')
+      files = {
+        'manifest.json': await downloadVerifiedBytes(
+          this.fetcher,
+          manifestUrl,
+          manifest.size,
+          manifest.sha256,
+          undefined,
+          undefined,
+          signal,
+        ),
+      }
+    } else
+      files = await downloadAndUnzipPackage(
+        this.fetcher,
+        url,
+        download.downloadBytes,
+        download.sha256,
+        (downloadedBytes) =>
+          onProgress?.({
+            id,
+            stage: 'downloading',
+            downloadedBytes,
+            totalBytes: download.downloadBytes,
+          }),
+        () => onProgress?.({ id, stage: 'checking' }),
+      )
     if (!files['manifest.json'] || files['manifest.json'].length > 128 * 1024)
       throw new Error('APP 缺少文件清单')
     const app = this.validate(
@@ -570,14 +657,23 @@ export class OfficialAppService {
       id,
       download.entry,
     )
-    if (Object.keys(files).length !== app.files.length + 1) throw new Error('APP 包含未声明文件')
+    if (!partial && Object.keys(files).length !== app.files.length + 1)
+      throw new Error('APP 包含未声明文件')
     delete files['manifest.json']
-    for (const file of app.files) {
-      const data = files[file.path.slice(1)]
-      if (!data || data.length !== file.size || (await hashPackageBytes(data)) !== file.sha256)
-        throw new Error('APP 文件校验失败')
-    }
+    if (!partial)
+      for (const file of app.files) {
+        signal?.throwIfAborted()
+        const data = files[file.path.slice(1)]
+        if (!data || data.length !== file.size || (await hashPackageBytes(data)) !== file.sha256)
+          throw new Error('APP 文件校验失败')
+      }
     if (app.assetMode !== download.assetMode) throw new Error('APP 安装包资源模式与下载清单不匹配')
+    if (
+      app.shellVersion !== download.shellVersion ||
+      (app.hostApiVersion ?? 1) !== download.hostApiVersion ||
+      app.runtimeEntry !== download.runtimeEntry
+    )
+      throw new Error('APP 文件清单与下载目标不匹配')
     const appContentHash = await officialAppContentHash(app.files, app.assetMode ?? 'host')
     if (
       appContentHash !== download.appContentHash ||
@@ -595,6 +691,32 @@ export class OfficialAppService {
       )
     )
       throw new Error('APP 的共享运行时与当前资源库不兼容，请下载兼容版本')
+    if (partial) {
+      let downloadedBytes = 0
+      for (const file of app.files) {
+        signal?.throwIfAborted()
+        const bundled = app.assetMode === 'self-contained' ? false : file.bundled
+        const identity = `${file.size}:${file.sha256}:${Boolean(bundled)}`
+        if (
+          verifiedFiles.get(file.path) === identity ||
+          (await this.storage.hasFileHash(file.path, file.size, file.sha256, bundled))
+        ) {
+          verifiedFiles.set(file.path, identity)
+          continue
+        }
+        files[file.path.slice(1)] = await downloadVerifiedBytes(
+          this.fetcher,
+          new URL(file.path, this.origin),
+          file.size,
+          file.sha256,
+          undefined,
+          undefined,
+          signal,
+        )
+        downloadedBytes += file.size
+        onProgress?.({ id, stage: 'downloading', downloadedBytes })
+      }
+    }
     return { app, download, files, appContentHash }
   }
 
@@ -626,7 +748,10 @@ export class OfficialAppService {
       files: installedFiles,
       appContentHash,
       appContentRevision: download.appContentRevision,
-      installedAt: Date.now(),
+      installedAt:
+        previous.find(
+          (old) => old.id === id && old.appContentRevision === download.appContentRevision,
+        )?.installedAt ?? Date.now(),
     }
     try {
       let completedFiles = 0

@@ -201,7 +201,7 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
             :disabled="Boolean(busyAction) || nativeBackupActive"
             @click="createBackup"
           >
-            {{ busyAction === 'backup' ? '生成并上传中…' : '立即备份（只传变化）' }}</button
+            {{ busyAction === 'backup' ? '生成并上传中…' : '立即备份' }}</button
           ><button
             v-if="busyAction === 'backup' || nativeBackupActive"
             type="button"

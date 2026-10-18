@@ -13,7 +13,9 @@ import {
   saveRelayWorkerBaseUrl,
 } from './RelayWorkerSettingsService'
 
+// SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettingsservice-test-ts-1
 const key = 'srl.publicWorker.baseUrl.v1'
+// SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettingsservice-test-ts-1
 const healthyWorker = (url: unknown) =>
   new Response(
     JSON.stringify({
@@ -38,13 +40,19 @@ afterEach(() => {
 })
 
 describe('optional relay target', () => {
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettingsservice-test-ts-2
   it('requires a configured Public worker and persists it through the existing settings owner', () => {
     expect(resolveRelayWorkerTarget().origin).toBe('')
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettingsservice-test-ts-2
     expect(resolveRelayWorkerTarget().custom).toBe(false)
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettingsservice-test-ts-3
     expect(() => acquireRelayWorkerTarget()).toThrow('配置自己的 SRL Worker')
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettingsservice-test-ts-3
     saveRelayWorkerBaseUrl(' worker.example/ ')
     expect(loadRelayWorkerBaseUrl()).toBe('https://worker.example')
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettingsservice-test-ts-4
     expect(localStorage.getItem(key)).toBe('https://worker.example')
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettingsservice-test-ts-4
     expect(relayWorkerEndpoint('/api/bridge/join').href).toBe(
       'https://worker.example/api/bridge/join',
     )
@@ -64,8 +72,10 @@ describe('optional relay target', () => {
   })
   it('does not turn a corrupted or unreadable saved address into an official request', () => {
     localStorage.setItem(key, 'https://worker.example/private')
+    // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-relayworkersettingsservice-test-ts-5
     expect(() => resolveRelayWorkerTarget()).toThrow('不能包含')
     expect(() => acquireRelayWorkerTarget()).toThrow()
+    // SRL-PUBLIC-SYNC: END REPLACE id=public-relayworkersettingsservice-test-ts-5
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage denied')
     })
