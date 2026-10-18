@@ -3,25 +3,14 @@ import config from '../../public-release.config.json'
 
 export const APK_RELEASE_REPOSITORY =
   import.meta.env.VITE_SRL_APK_UPDATE_REPOSITORY || config.repository
-const MANIFEST = /<!-- srl-public-apk:(\{[^\n]*\}) -->/u
+const MAX_MANIFEST_LENGTH = 128 * 1024
 
+/** The existing Release asset is public CDN content, independent of REST API IP quotas. */
 export function parseGitHubApkRelease(value: unknown, repository = APK_RELEASE_REPOSITORY) {
   if (!/^[\w.-]+\/[\w.-]+$/u.test(repository)) throw new Error('APK 更新仓库配置无效')
-  if (!value || typeof value !== 'object') throw new Error('GitHub Release 格式无效')
-  const release = value as {
-    draft?: boolean
-    prerelease?: boolean
-    tag_name?: string
-    body?: string
-    assets?: Array<{ name: string; browser_download_url: string; size: number; digest?: string }>
-  }
-  if (release.draft || release.prerelease || !/^public-[a-f0-9]{40}$/u.test(release.tag_name || ''))
-    throw new Error('该 Release 不是已发布的 Public APK 版本')
-  const body = release.body || ''
-  if (body.length > 128 * 1024) throw new Error('GitHub Release 说明过大')
-  const match = MANIFEST.exec(body)
-  if (!match) throw new Error('该 Release 缺少 Public APK 更新清单')
-  const manifest = JSON.parse(match[1]!) as {
+  if (!value || typeof value !== 'object') throw new Error('APK 更新清单格式无效')
+  const manifest = value as {
+    repository: string
     versionCode: number
     versionName: string
     sha256: string
@@ -30,23 +19,21 @@ export function parseGitHubApkRelease(value: unknown, repository = APK_RELEASE_R
     applicationId: string
     sourceCommit: string
   }
-  const asset = release.assets?.find((item) => item.name === manifest.apkName)
   if (
+    manifest.repository !== repository ||
     manifest.applicationId !== config.applicationId ||
     !Number.isSafeInteger(manifest.versionCode) ||
     manifest.versionCode <= 0 ||
     typeof manifest.versionName !== 'string' ||
     !manifest.versionName ||
+    typeof manifest.sha256 !== 'string' ||
     !/^[a-f0-9]{64}$/iu.test(manifest.sha256) ||
     !Number.isSafeInteger(manifest.sizeBytes) ||
     manifest.sizeBytes <= 0 ||
-    release.tag_name !== `public-${manifest.sourceCommit}` ||
-    !asset ||
-    asset.size !== manifest.sizeBytes ||
-    !/^[\w.-]+\.apk$/u.test(manifest.apkName) ||
-    asset.browser_download_url !==
-      `https://github.com/${repository}/releases/download/${release.tag_name}/${manifest.apkName}` ||
-    (asset.digest && asset.digest.toLowerCase() !== `sha256:${manifest.sha256.toLowerCase()}`)
+    typeof manifest.sourceCommit !== 'string' ||
+    !/^[a-f0-9]{40}$/u.test(manifest.sourceCommit) ||
+    typeof manifest.apkName !== 'string' ||
+    !/^[\w.-]+\.apk$/u.test(manifest.apkName)
   )
     throw new Error('APK 更新清单、下载来源或完整性信息不一致')
   return {
@@ -54,23 +41,27 @@ export function parseGitHubApkRelease(value: unknown, repository = APK_RELEASE_R
     versionName: manifest.versionName,
     sha256: manifest.sha256,
     sizeBytes: manifest.sizeBytes,
-    apkUrl: asset.browser_download_url,
-    notes: body.replace(MANIFEST, '').trim(),
+    // Pin the APK to the validated manifest's immutable product tag, never latest or a supplied URL.
+    apkUrl: `https://github.com/${repository}/releases/download/public-${manifest.sourceCommit}/${manifest.apkName}`,
   }
 }
 
 export async function loadAndroidApkRelease(): Promise<{ status: number; release?: unknown }> {
   if (!/^[\w.-]+\/[\w.-]+$/u.test(APK_RELEASE_REPOSITORY)) throw new Error('APK 更新仓库配置无效')
   const response = await fetch(
-    `https://api.github.com/repos/${APK_RELEASE_REPOSITORY}/releases/latest`,
+    `https://github.com/${APK_RELEASE_REPOSITORY}/releases/latest/download/public-release.json`,
     {
-      headers: { accept: 'application/vnd.github+json' },
+      headers: { accept: 'application/json' },
       credentials: 'omit',
-      redirect: 'error',
+      redirect: 'follow',
       cache: 'no-store',
     },
   )
   if (!response.ok) return { status: response.status }
-  return { status: response.status, release: parseGitHubApkRelease(await response.json()) }
+  if (Number(response.headers.get('content-length')) > MAX_MANIFEST_LENGTH)
+    throw new Error('APK 更新清单过大')
+  const text = await response.text()
+  if (text.length > MAX_MANIFEST_LENGTH) throw new Error('APK 更新清单过大')
+  return { status: response.status, release: parseGitHubApkRelease(JSON.parse(text)) }
 }
 // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=github-android-apk-release

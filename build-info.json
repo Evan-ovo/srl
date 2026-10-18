@@ -1,9 +1,9 @@
 {
-  "webVersion": "0.0.244",
-  "androidVersionName": "0.0.244",
-  "androidVersionCode": 244,
-  "buildId": "srl-public-0.0.244-v15",
-  "workerDeployVersion": "public-sync-release-244-v15",
+  "webVersion": "0.0.245",
+  "androidVersionName": "0.0.245",
+  "androidVersionCode": 245,
+  "buildId": "srl-public-0.0.245-v16",
+  "workerDeployVersion": "public-sync-release-245-v16",
   "databaseVersion": 25,
   "bridgeProtocolVersion": 2,
   "nativeApiVersion": 1

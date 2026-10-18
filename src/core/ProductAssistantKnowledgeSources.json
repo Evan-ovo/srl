@@ -1,5 +1,5 @@
 {
-  "knowledgeSha256": "735fddc92090874f44c36be51de87948f0a01545ead22f678143cfda9058cc2c",
+  "knowledgeSha256": "eca00e26ec31b30d9af09255cff81b75dc361f5d857cc47ab14123b27c6da219",
   "sources": [
     {
       "path": "src/components/RecycleBinPanel.vue",
@@ -1466,7 +1466,7 @@
     {
       "path": "src/core/GitHubAndroidApkRelease.ts",
       "guides": ["background-notifications"],
-      "sha256": "80aeb636078bddd0b6659319bb527840b31ca228ac82fc736ee2a0f2e4b4cb8c"
+      "sha256": "690ea3112a81c799bb6224e6d3b845188457ab8fdfa3e94ef9b17a6634b4131e"
     }
   ]
 }

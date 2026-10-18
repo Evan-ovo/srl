@@ -1,5 +1,10 @@
 # 当前进度
 
+## 2026-10-19 当前：Public APK 更新403修复候选（n6k2）
+
+- 原GitHub匿名REST API真实403/remaining0，静态Release清单同网络200；Public更新Owner已改读同仓库latest/download/public-release.json，沿CDN读取已有842bytes清单，不再调用REST API，不需要Token或另配CF。APK固定到清单的产品提交，原哈希/大小/包名/版本/签名与任务停止校验保持。
+- 3文件38项、真实公网loader200/1逻辑请求/0API、定向lint/290知识Owner/14APP33合同通过；Public候选0.0.245，仅助手说明内容49→50。完整类型/生产PWA与9当前+51兼容包校验已通过；新签名发行/小号Fork-CF同步进行中，旧APK需手动覆盖安装一次。旧WebKit附加与3行数门禁、清理拒绝保留，不冒称手机已验证；主库官版更新源未改。
+
 ## 2026-10-19 当前：多选下载与最新共享更新已正式发布
 
 - 产品候选1a08c9586be9bf4ba5d5d8a3177b3e4f18238c7d，GitHub发行39151038433成功；APK0.0.244/code1000046、原Public签名、Packaged按需模式（0个.srlapp），289宿主文件SHA已复核。26+6382=6408测试通过/2既有跳过，595文件完整覆盖，构建/验签/JVM/lint通过。

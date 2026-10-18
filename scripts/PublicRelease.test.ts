@@ -12,6 +12,7 @@ import {
   releaseBuildInfo,
 } from './PublicRelease.mjs'
 import { loadPublicWeb, unpackPublicWeb } from './Build-PublicWeb.mjs'
+import { parseGitHubApkRelease } from '../src/core/GitHubAndroidApkRelease'
 
 const commit = 'a'.repeat(40)
 const repository = 'owner/project'
@@ -90,6 +91,18 @@ describe('Public release candidate', () => {
       const result = await packageRelease(root, apk, repository, output)
       expect(readFileSync(resolve(output, result.apkName))).toEqual(readFileSync(apk))
       expect(result.apkName).toBe('SRL_Pubilc.apk')
+      // The updater consumes the actual published asset, not an independently generated index.
+      expect(
+        parseGitHubApkRelease(
+          JSON.parse(readFileSync(resolve(output, 'public-release.json'), 'utf8')),
+          repository,
+        ),
+      ).toMatchObject({
+        versionCode: result.versionCode,
+        sha256: result.sha256,
+        sizeBytes: result.sizeBytes,
+        apkUrl: `https://github.com/${repository}/releases/download/public-${product}/SRL_Pubilc.apk`,
+      })
       const files = unpackPublicWeb(readFileSync(resolve(output, 'public-web.zip')), result)
       expect(new TextDecoder().decode(files['index.html'])).toBe('web bytes')
       expect(readFileSync(resolve(output, 'release-notes.md'), 'utf8')).toContain(

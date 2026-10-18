@@ -5,6 +5,7 @@ import { loadAndroidApkRelease, parseGitHubApkRelease } from './GitHubAndroidApk
 const repository = 'jixiangruyi117/SillyTavernResourceLibrary-Public'
 const commit = 'a'.repeat(40)
 const manifest = {
+  repository,
   applicationId: 'app.srl.publicedition',
   sourceCommit: commit,
   versionCode: 1000012,
@@ -13,53 +14,96 @@ const manifest = {
   sizeBytes: 123,
   sha256: 'b'.repeat(64),
 }
-function fixture(change = {}) {
-  const value = { ...manifest, ...change }
-  return {
-    draft: false,
-    prerelease: false,
-    tag_name: `public-${commit}`,
-    body: `更新说明\n<!-- srl-public-apk:${JSON.stringify(value)} -->`,
-    assets: [
-      {
-        name: manifest.apkName,
-        size: manifest.sizeBytes,
-        digest: `sha256:${manifest.sha256}`,
-        browser_download_url: `https://github.com/${repository}/releases/download/public-${commit}/${manifest.apkName}`,
-      },
-    ],
-  }
-}
 afterEach(() => vi.unstubAllGlobals())
 describe('GitHub APK release', () => {
-  it('resolves only the matching complete APK asset and removes metadata from notes', () => {
-    expect(parseGitHubApkRelease(fixture(), repository)).toMatchObject({
+  it('reads the static release manifest and constructs a pinned repository download', () => {
+    expect(parseGitHubApkRelease(manifest, repository)).toMatchObject({
       versionCode: 1000012,
-      notes: '更新说明',
       sizeBytes: 123,
+      sha256: manifest.sha256,
+      apkUrl: `https://github.com/${repository}/releases/download/public-${commit}/SRL_Pubilc.apk`,
     })
   })
   it.each([
+    { repository: 'other/repository' },
     { applicationId: 'other.app' },
-    { sourceCommit: 'c'.repeat(40) },
-    { sizeBytes: 124 },
-    { sha256: 'd'.repeat(64) },
+    { sourceCommit: '../bad' },
+    { sourceCommit: 'c'.repeat(39) },
+    { sizeBytes: 0 },
+    { sizeBytes: 1.5 },
+    { sha256: 'invalid' },
     { apkName: '../bad.apk' },
+    { apkName: 'other.apk?url=https://example.com' },
     { versionCode: -1 },
-  ])('rejects a mismatched manifest %j', (change) => {
-    expect(() => parseGitHubApkRelease(fixture(change), repository)).toThrow()
+    { versionCode: '1000012' },
+    { versionName: '' },
+  ])('rejects an invalid or foreign manifest %j', (change) => {
+    expect(() => parseGitHubApkRelease({ ...manifest, ...change }, repository)).toThrow()
   })
-  it('rejects drafts, missing assets and cross-repository downloads', () => {
-    expect(() => parseGitHubApkRelease({ ...fixture(), draft: true }, repository)).toThrow()
-    expect(() => parseGitHubApkRelease({ ...fixture(), assets: [] }, repository)).toThrow()
-    expect(() => parseGitHubApkRelease(fixture(), 'other/repository')).toThrow()
+  it('rejects malformed and API release responses instead of trusting their URLs', () => {
+    for (const value of [
+      null,
+      [],
+      'invalid',
+      { draft: false, tag_name: `public-${commit}`, assets: [] },
+    ])
+      expect(() => parseGitHubApkRelease(value, repository)).toThrow()
+    expect(() => parseGitHubApkRelease(manifest, 'invalid')).toThrow()
+    expect(
+      parseGitHubApkRelease({ ...manifest, apkUrl: 'https://example.com/bad.apk' }).apkUrl,
+    ).toContain(`https://github.com/${repository}/releases/download/`)
   })
-  it('uses the anonymous API once; an unpublished channel does not start a download', async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response('', { status: 404 }))
+  it('uses the anonymous static asset once, following CDN redirects without an API request', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json(manifest))
     vi.stubGlobal('fetch', fetcher)
-    expect(await loadAndroidApkRelease()).toEqual({ status: 404 })
+    expect(await loadAndroidApkRelease()).toMatchObject({
+      status: 200,
+      release: { versionCode: 1000012 },
+    })
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(
+      `https://github.com/${repository}/releases/latest/download/public-release.json`,
+      {
+        headers: { accept: 'application/json' },
+        credentials: 'omit',
+        redirect: 'follow',
+        cache: 'no-store',
+      },
+    )
+  })
+  it.each([404, 403, 429, 503])(
+    'returns HTTP %s without an API fallback or retry',
+    async (status) => {
+      const fetcher = vi.fn().mockResolvedValue(new Response('', { status }))
+      vi.stubGlobal('fetch', fetcher)
+      expect(await loadAndroidApkRelease()).toEqual({ status })
+      expect(fetcher).toHaveBeenCalledTimes(1)
+    },
+  )
+  it('does not use a token or API fallback on network failure', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('offline'))
+    vi.stubGlobal('fetch', fetcher)
+    await expect(loadAndroidApkRelease()).rejects.toThrow('offline')
     expect(fetcher).toHaveBeenCalledTimes(1)
-    expect(fetcher.mock.calls[0]?.[1]).toMatchObject({ credentials: 'omit', redirect: 'error' })
+  })
+  it('rejects oversized or non-JSON manifests', async () => {
+    const text = vi.fn()
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-length': String(128 * 1024 + 1) }),
+          text,
+        }),
+    )
+    await expect(loadAndroidApkRelease()).rejects.toThrow('过大')
+    expect(text).not.toHaveBeenCalled()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('x'.repeat(128 * 1024 + 1))))
+    await expect(loadAndroidApkRelease()).rejects.toThrow('过大')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>not a manifest</html>')))
+    await expect(loadAndroidApkRelease()).rejects.toThrow()
   })
 })
 // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=github-android-apk-release-tests

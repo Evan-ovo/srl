@@ -493,3 +493,13 @@
 - 公网/api/version为public-sync-release-1000046-v1000046且no-store；official-app-assets及API2 catalog与APK内逐字节一致，9个当前APP包全部验证大小/SHA，首页/模块可读、缺失脚本404。Python urllib只读探测遇CF1010；默认curl正常200并完成上述核验，未调整安全策略或凭据。私有映射仅更新Public GitHub发行回执，不改官版或旧来源设置。
 - 普通check的3处既有行数门禁仍未放宽；Windows WebKit额外大包回归未完成，持久上下文尝试无改善已撤回，仅保留失败证据，不声明Safari/手机通过。已成功清理临时source/误装依赖/JVM探针、latest重复截图和校验APK副本（与交付件同SHA）；6个被自动审批拒绝的测试根502文件76161637bytes及350bytes成功结果保留，准确路径/原因/复核节点见前条，不重试旧拒绝范围。
 - 本次仅追加既有进度/日志，不改变已发布产品候选；Fork同步这些记录仍复用1a08c95同一Release。公开增量基线1a08c9586be9bf4ba5d5d8a3177b3e4f18238c7d，仅2文档；提交后复核新增内容和noreply，下一审计基线为本条所属提交，完整SHA回执记维护者既有日志。
+
+## 2026-10-19：Public APK 静态清单更新检查（n6k2）
+
+- 用户报告Public APK更新403；电脑匿名请求原api.github.com/releases/latest真实复现403/rate limit exceeded，响应limit60/remaining0。同一时刻GitHub Releases静态latest/download/public-release.json沿两次正常重定向返回200、842bytes。根因是原检查依赖出口IP共享的匿名REST API额度；无手机访问或测试。
+- 仅改PUBLIC-ONLY GitHubAndroidApkRelease Owner，直接读取发行脚本已有静态清单，不再请求API、不加入Token/代理/重试或额外CF服务。校验仓库、应用ID、40位产品提交、版本号、大小、SHA和安全APK文件名，由可信仓库和提交拼接固定版本下载URL，不能使用清单自带任意URL；保留原native完整包大小/哈希/包名/较高版本/签名、TaskCenter停止和系统安装确认。清单限定128KiB；HTTP失败保留状态、无循环请求。
+- 复用既有草稿全部资产上传后才公开流程，public-release.json随发行自动更新，无新增索引分支/手工配置/运行时Owner。README、Public边界与助手说明明确匿名API额度、网络仍可能受限、旧APK需手动覆盖安装一次；仅助手内容49→50，其他APP内容修订保持。版本提升Public0.0.245，正式code仍由提交计数生成。主库官版使用自己发行源不受本Public适配影响，共享源码不修改。
+- 新静态协议4项红测复现旧实现无法支持，随后3文件38项全部通过，含错误仓库/应用/路径/字段类型、固定提交URL、不信任输入URL、未发布/403/429/503/断网不重试、过大/无效JSON与真实packageRelease产物可直接消费。定向eslint、290知识Owner、14APP33范围合同通过；直接运行打包后的真实loader访问公网清单200，逻辑fetch1/API请求0，版本/SHA/大小匹配已发行原包，非mock或手机证据。生产构建与正式新APK/CF回执后补。
+- 本轮公开审计起点a70742d0aee1d6227a3420d7e9caaba931672ef0；公开前仅审计本轮增量与身份，不重扫历史。旧6根清理拒绝范围及WebKit/3行数门禁限制原位保持，未重试删除、未更改用户凭据或其他会话工作。没有新增持久过程文件，正式测试临时夹具沿原安全路径自动收尾。
+
+- 本地完整类型/生产PWA构建通过，9当前+51兼容包/27可选资产校验通过；公开增量a70742d0至本条所属提交，12路径、0新增二进制/凭据命中。地址复核3个代码/测试文件仅github.com官方发行路径和example.com占位符，无私人邮箱/域名/基础设施；新author/committer使用对应noreply。正式云端发行继续沿原全部门禁，非跳过重建。
