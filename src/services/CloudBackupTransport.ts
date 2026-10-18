@@ -15,6 +15,7 @@ import * as CloudBackupGitHubTransport from './CloudBackupGitHubTransport'
 import {
   cloudProxyUnavailableError,
   fetchWithDeadline,
+  readCloudResponseBlob,
   isCloudRequestTimeout,
   proxyPayloadTooLargeError,
 } from './CloudBackupHttp'
@@ -39,6 +40,11 @@ import { type GitHubBundleManifest } from './GitHubBackupBundle'
 import { isNativeCloudTransferAvailable, nativeWebDavFetch } from './NativeCloudTransfer'
 
 /** Shared transport state and provider dispatch for one backup service instance. */
+export interface RestoreTransferOptions {
+  signal: AbortSignal
+  onTransfer?: (received: number, total: number | undefined, fileName?: string) => void
+}
+
 export class CloudBackupTransport {
   private relayWorkerScope?: ReturnType<typeof acquireRelayWorkerTarget> & { users: number }
 
@@ -77,7 +83,82 @@ export class CloudBackupTransport {
 
   protected transportContext?: CloudBackupTransportContext
 
-  protected getTransportContext(): CloudBackupTransportContext {
+  protected getTransportContext(
+    signal?: AbortSignal,
+    beginCommit?: () => void,
+  ): CloudBackupTransportContext {
+    if (signal) {
+      const scoped = Object.create(this.getTransportContext()) as CloudBackupTransportContext
+      scoped.signal = signal
+      scoped.beginCommit = beginCommit
+      const requestSignals = new WeakMap<AbortSignal, AbortSignal>()
+      scoped.cloudFetch = (url, init, provider) => {
+        signal.throwIfAborted()
+        let requestSignal = signal
+        if (init.signal && init.signal !== signal) {
+          const child = init.signal
+          let combined = requestSignals.get(child)
+          if (!combined) {
+            const controller = new AbortController()
+            const abortParent = () => controller.abort(signal.reason)
+            const abortChild = () => controller.abort(child.reason)
+            const cleanup = () => {
+              signal.removeEventListener('abort', abortParent)
+              child.removeEventListener('abort', abortChild)
+            }
+            controller.signal.addEventListener('abort', cleanup, { once: true })
+            signal.addEventListener('abort', abortParent, { once: true })
+            child.addEventListener('abort', abortChild, { once: true })
+            if (child.aborted) abortChild()
+            combined = controller.signal
+            requestSignals.set(child, combined)
+          }
+          requestSignal = combined
+        }
+        // Keep cancellation connected after headers, without requiring AbortSignal.any.
+        return this.cloudFetch(url, { ...init, signal: requestSignal }, provider)
+      }
+      scoped.materializeCloudObject = async (plan) => {
+        signal.throwIfAborted()
+        const blob = await this.materializeCloudObject(plan)
+        signal.throwIfAborted()
+        return blob
+      }
+      scoped.githubFetch = (...args) => CloudBackupGitHubTransport.githubFetch(scoped, ...args)
+      scoped.ensureGitHubInitialCommit = (...args) =>
+        CloudBackupGitHubTransport.ensureGitHubInitialCommit(scoped, ...args)
+      scoped.getGitHubRelease = (...args) =>
+        CloudBackupGitHubTransport.getGitHubRelease(scoped, ...args)
+      scoped.listGitHubObjectContainers = (...args) =>
+        CloudBackupGitHubTransport.listGitHubObjectContainers(scoped, ...args)
+      scoped.listGitHubAssets = (...args) =>
+        CloudBackupGitHubTransport.listGitHubAssets(scoped, ...args)
+      scoped.uploadGitHubAsset = (...args) =>
+        CloudBackupGitHubTransport.uploadGitHubAsset(scoped, ...args)
+      scoped.confirmGitHubAssetSize = (...args) =>
+        CloudBackupGitHubTransport.confirmGitHubAssetSize(scoped, ...args)
+      scoped.readGitHubStructuredSnapshot = (...args) =>
+        CloudBackupGitHubTransport.readGitHubStructuredSnapshot(scoped, ...args)
+      scoped.readGitHubPartInventory = (...args) =>
+        CloudBackupGitHubTransport.readGitHubPartInventory(scoped, ...args)
+      scoped.readGitHubBundleManifest = (...args) =>
+        CloudBackupGitHubTransport.readGitHubBundleManifest(scoped, ...args)
+      scoped.ensureWebDavFolder = (...args) =>
+        CloudBackupWebDavTransport.ensureWebDavFolder(scoped, ...args)
+      scoped.listWebDavObjects = (...args) =>
+        CloudBackupWebDavTransport.listWebDavObjects(scoped, ...args)
+      scoped.uploadWebDavObject = (...args) =>
+        CloudBackupWebDavTransport.uploadWebDavObject(scoped, ...args)
+      scoped.readWebDavRemoteSize = (...args) =>
+        CloudBackupWebDavTransport.readWebDavRemoteSize(scoped, ...args)
+      scoped.verifyWebDavUploadSize = (...args) =>
+        CloudBackupWebDavTransport.verifyWebDavUploadSize(scoped, ...args)
+      scoped.readWebDavBundleManifest = (...args) =>
+        CloudBackupWebDavTransport.readWebDavBundleManifest(scoped, ...args)
+      scoped.readWebDavStructuredSnapshot = (...args) =>
+        CloudBackupWebDavTransport.readWebDavStructuredSnapshot(scoped, ...args)
+      return scoped
+    }
     if (this.transportContext) return this.transportContext
     const state = this.transportState
     this.transportContext = {
@@ -155,6 +236,44 @@ export class CloudBackupTransport {
       }
     }
     if (provider === 'github') {
+      const target = new URL(url)
+      if (
+        (target.hostname === 'uploads.github.com' || target.hostname === 'api.github.com') &&
+        !isCapacitorApp()
+      ) {
+        const relayTarget = this.relayWorkerScope?.target ?? resolveRelayWorkerTarget()
+        if (!relayTarget.custom) return measuredFetch(url, init)
+        const headers = new Headers(init.headers)
+        if (init.body instanceof Blob) {
+          headers.set('X-SRL-Content-Length', String(init.body.size))
+        }
+        const proxyUrl = relayWorkerEndpoint(
+          `/api/cloud/proxy/github?url=${encodeURIComponent(url)}`,
+          relayTarget,
+        ).href
+        let response: Response
+        try {
+          response = await measuredFetch(proxyUrl, {
+            ...init,
+            headers,
+            credentials: 'omit',
+            redirect: 'error',
+            cache: 'no-store',
+          })
+        } catch (error) {
+          if (isCloudRequestTimeout(error)) throw error
+          throw new Error(
+            '自部署 Worker 没有收到 GitHub 请求，请检查 Worker 地址、部署状态及 CORS 配置；不会自动切回其他中继。',
+            {
+              cause: error,
+            },
+          )
+        }
+        if (response.status === 413) throw proxyPayloadTooLargeError(init.body)
+        if (response.headers.get('x-srl-cloud-proxy') !== '1')
+          throw new Error('当前自部署 Worker 没有可用的 GitHub 中继')
+        return response
+      }
       return measuredFetch(url, init)
     }
     if (
@@ -242,6 +361,7 @@ export class CloudBackupTransport {
     secret: string,
     create: boolean,
     tag = LEGACY_RELEASE_TAG,
+    signal?: AbortSignal,
   ): Promise<GitHubRelease | undefined> {
     return CloudBackupGitHubTransport.getGitHubRelease(
       this.getTransportContext(),
@@ -249,6 +369,7 @@ export class CloudBackupTransport {
       secret,
       create,
       tag,
+      signal,
     )
   }
 
@@ -269,9 +390,11 @@ export class CloudBackupTransport {
     snapshot: CreatedStructuredSnapshot,
     onProgress?: CloudBackupProgressCallback,
     respectAutomaticConstraints = false,
+    signal?: AbortSignal,
+    beginCommit?: () => void,
   ): Promise<CloudBackupItem> {
     return CloudBackupGitHubTransport.uploadGitHubStructuredBackup(
-      this.getTransportContext(),
+      this.getTransportContext(signal, beginCommit),
       config,
       secret,
       snapshot,
@@ -308,6 +431,7 @@ export class CloudBackupTransport {
     secret: string,
     uploaded: GitHubAsset,
     expectedSize: number,
+    expectedHash?: string,
   ): Promise<GitHubAsset | undefined> {
     return CloudBackupGitHubTransport.confirmGitHubAssetSize(
       this.getTransportContext(),
@@ -315,6 +439,7 @@ export class CloudBackupTransport {
       secret,
       uploaded,
       expectedSize,
+      expectedHash,
     )
   }
 
@@ -333,12 +458,14 @@ export class CloudBackupTransport {
     config: GitHubBackupConfig,
     secret: string,
     releaseId: number,
+    signal?: AbortSignal,
   ): Promise<GitHubAsset[]> {
     return CloudBackupGitHubTransport.listGitHubAssets(
       this.getTransportContext(),
       config,
       secret,
       releaseId,
+      signal,
     )
   }
 
@@ -397,12 +524,27 @@ export class CloudBackupTransport {
   protected async createGitHubObjectReader(
     config: GitHubBackupConfig,
     secret: string,
+    options?: RestoreTransferOptions,
   ): Promise<(object: GitHubBundleManifest) => Promise<Blob>> {
     return CloudBackupGitHubTransport.createGitHubObjectReader(
-      this.getTransportContext(),
+      this.getRestoreReaderContext(options),
       config,
       secret,
     )
+  }
+
+  private getRestoreReaderContext(options?: RestoreTransferOptions): CloudBackupTransportContext {
+    if (!options) return this.getTransportContext()
+    const context = this.getTransportContext(options.signal)
+    context.readResponseBlob = (response, total, fileName) =>
+      readCloudResponseBlob(
+        response,
+        total,
+        options.onTransfer
+          ? (received, expected) => options.onTransfer!(received, expected, fileName)
+          : undefined,
+      )
+    return context
   }
 
   protected async downloadGitHubBundle(
@@ -428,9 +570,11 @@ export class CloudBackupTransport {
     snapshot: CreatedStructuredSnapshot,
     onProgress?: CloudBackupProgressCallback,
     respectAutomaticConstraints = false,
+    signal?: AbortSignal,
+    beginCommit?: () => void,
   ): Promise<CloudBackupItem> {
     return CloudBackupWebDavTransport.uploadWebDavStructuredBackup(
-      this.getTransportContext(),
+      this.getTransportContext(signal, beginCommit),
       config,
       secret,
       snapshot,
@@ -553,9 +697,10 @@ export class CloudBackupTransport {
   protected createWebDavObjectReader(
     config: WebDavBackupConfig,
     secret: string,
+    options?: RestoreTransferOptions,
   ): (object: GitHubBundleManifest) => Promise<Blob> {
     return CloudBackupWebDavTransport.createWebDavObjectReader(
-      this.getTransportContext(),
+      this.getRestoreReaderContext(options),
       config,
       secret,
     )

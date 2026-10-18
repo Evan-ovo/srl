@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { isCompletedNotice, noticeCenter, type NoticeRecord } from '../core/NoticeCenter'
-import { taskCenter, type TaskRecord } from '../core/TaskCenter'
+import { isAutoClearingTask, taskCenter, type TaskRecord } from '../core/TaskCenter'
 
 const props = withDefaults(
   defineProps<{
@@ -25,6 +25,7 @@ const notices = computed(() =>
   noticeRecords.value.filter((notice) => !props.hiddenNoticeIds.includes(notice.id)),
 )
 const open = ref(false)
+const selectedView = ref<'tasks' | 'notices'>('tasks')
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | undefined
 let unsubscribeTasks: (() => void) | undefined
@@ -66,24 +67,57 @@ const visibleTasks = computed(() =>
 function isCompletedTask(task: TaskRecord): boolean {
   return task.status === 'completed' && task.phase !== '下载完成，可继续导入'
 }
-const completedTasks = computed(() => displayedTasks.value.filter(isCompletedTask))
+const recentCompletedTasks = computed(() => displayedTasks.value.filter(isAutoClearingTask))
+const completedTasks = computed(() =>
+  displayedTasks.value.filter((task) => isCompletedTask(task) && !isAutoClearingTask(task)),
+)
 const pendingNotices = computed(() => notices.value.filter((notice) => !isCompletedNotice(notice)))
 const completedNotices = computed(() => notices.value.filter(isCompletedNotice))
-const activityGroups = computed(() =>
-  [
-    { completed: false, tasks: visibleTasks.value, notices: pendingNotices.value.slice(0, 8) },
-    {
-      completed: true,
-      tasks: completedTasks.value,
-      notices: completedNotices.value,
-    },
-  ].filter((group) => group.tasks.length || group.notices.length),
-)
+const activityGroups = computed(() => {
+  const groups =
+    selectedView.value === 'tasks'
+      ? [
+          {
+            title: '任务',
+            completed: false,
+            tasks: visibleTasks.value,
+            notices: [] as NoticeRecord[],
+          },
+          {
+            title: '刚刚结束',
+            completed: false,
+            tasks: recentCompletedTasks.value,
+            notices: [] as NoticeRecord[],
+          },
+          {
+            title: '需要后续操作',
+            completed: true,
+            tasks: completedTasks.value,
+            notices: [] as NoticeRecord[],
+          },
+        ]
+      : [
+          {
+            title: '通知',
+            completed: false,
+            tasks: [] as TaskRecord[],
+            notices: pendingNotices.value.slice(0, 8),
+          },
+          {
+            title: '已完成通知',
+            completed: true,
+            tasks: [] as TaskRecord[],
+            notices: completedNotices.value,
+          },
+        ]
+  return groups.filter((group) => group.tasks.length || group.notices.length)
+})
 const visible = computed(() =>
   inline.value
     ? activeTasks.value.length > 0
     : visibleTasks.value.length > 0 ||
-      completedTasks.value.some((task) => task.actionLabel) ||
+      recentCompletedTasks.value.length > 0 ||
+      completedTasks.value.length > 0 ||
       notices.value.length > 0,
 )
 const persistentNoticeCount = computed(
@@ -92,18 +126,20 @@ const persistentNoticeCount = computed(
 const completedNoticeCount = computed(() => completedNotices.value.length)
 const completedTaskCount = computed(() => completedTasks.value.length)
 function dismissCompletedActivity(): void {
-  taskCenter.dismissCompleted()
-  noticeCenter.dismissCompleted()
+  if (selectedView.value === 'tasks') taskCenter.dismissCompleted()
+  else noticeCenter.dismissCompleted()
 }
 const summary = computed(() => {
+  if (open.value && selectedView.value === 'notices') return `通知 ${notices.value.length} 条`
   const active = activeTasks.value[0]
   if (active) return `${active.name} · ${active.phase}`
   const failed = visibleTasks.value.find((task) => task.status === 'failed')
   if (failed) return `${failed.name} · 失败`
-  return (
-    pendingNotices.value[0]?.message ??
-    `已完成 ${completedTaskCount.value + completedNoticeCount.value} 项`
-  )
+  const justCompleted = recentCompletedTasks.value[0]
+  if (justCompleted)
+    return `${justCompleted.name} · ${justCompleted.status === 'cancelled' ? '已取消' : '已完成'}`
+  if (notices.value.length) return `通知 ${notices.value.length} 条`
+  return `已完成 ${completedTaskCount.value} 项`
 })
 
 function refreshTasks(): void {
@@ -223,18 +259,38 @@ onUnmounted(() => {
 
     <section v-if="open && !inline" id="srl-activity-panel" class="activity-center__panel">
       <header>
-        <div><strong>任务与通知</strong></div>
+        <div>
+          <strong>{{ selectedView === 'tasks' ? '任务' : '通知' }}</strong>
+        </div>
         <div class="activity-center__header-actions">
           <button
-            v-if="completedNoticeCount || completedTaskCount"
+            v-if="selectedView === 'tasks' ? recentCompletedTasks.length : completedNoticeCount"
             type="button"
             @click="dismissCompletedActivity"
           >
-            清理完成项
+            {{ selectedView === 'tasks' ? '清理已结束任务' : '清理已完成通知' }}
           </button>
           <button type="button" aria-label="收起任务与通知" @click="open = false">×</button>
         </div>
       </header>
+
+      <nav class="activity-center__tabs" aria-label="任务和通知分类">
+        <button
+          type="button"
+          :aria-pressed="selectedView === 'tasks'"
+          @click="selectedView = 'tasks'"
+        >
+          任务
+          <span>{{ visibleTasks.length + recentCompletedTasks.length + completedTaskCount }}</span>
+        </button>
+        <button
+          type="button"
+          :aria-pressed="selectedView === 'notices'"
+          @click="selectedView = 'notices'"
+        >
+          通知 <span>{{ notices.length }}</span>
+        </button>
+      </nav>
 
       <component
         :is="group.completed ? 'details' : 'div'"
@@ -243,10 +299,10 @@ onUnmounted(() => {
         :class="{ 'activity-center__completed': group.completed }"
       >
         <summary v-if="group.completed">
-          已完成（{{ completedTaskCount + completedNoticeCount }}）
+          已完成（{{ selectedView === 'tasks' ? completedTaskCount : completedNoticeCount }}）
         </summary>
         <div v-if="group.tasks.length" class="activity-center__group">
-          <h3>任务</h3>
+          <h3>{{ group.title }}</h3>
           <article v-for="task in group.tasks" :key="task.operationId" class="activity-card">
             <div>
               <strong>{{ task.name }}</strong
@@ -298,7 +354,7 @@ onUnmounted(() => {
         </div>
 
         <div v-if="group.notices.length" class="activity-center__group">
-          <h3>通知</h3>
+          <h3>{{ group.title }}</h3>
           <article
             v-for="notice in group.notices"
             :key="notice.id"

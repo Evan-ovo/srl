@@ -1,3 +1,4 @@
+import { requestWebBackgroundAudio } from '../services/WebBackgroundKeepAlive'
 import type { ComputedRef, Ref, ShallowRef } from 'vue'
 import { computed, nextTick, onMounted, onScopeDispose } from 'vue'
 import {
@@ -168,6 +169,7 @@ export function useLibraryImport(getContext: () => LibraryImportContext) {
     activeImportAbortController = controller
     return taskCenter.start({
       ...options,
+      keepAlive: true,
       operationId,
       cancelable: true,
       cancel: () => controller.abort(new DOMException('用户已停止导入', 'AbortError')),
@@ -787,8 +789,13 @@ export function useLibraryImport(getContext: () => LibraryImportContext) {
       name: `导入 ${urls.length} 条资源链接`,
       phase: '检查资源链接',
     })
-    await startImportTask(operationId)
+    let releaseAudio = () => undefined as void
     try {
+      releaseAudio = await requestWebBackgroundAudio(
+        '链接下载与导入',
+        activeImportAbortController?.signal,
+      )
+      await startImportTask(operationId)
       let completedPosition = 0
       const results = await resourceService.importLinks(urls, {
         signal: activeImportAbortController?.signal,
@@ -844,6 +851,7 @@ export function useLibraryImport(getContext: () => LibraryImportContext) {
         context.showNotice(error instanceof Error ? error.message : '链接导入失败', 9000)
       }
     } finally {
+      releaseAudio()
       context.isBusy.value = false
       await stopImportTask(operationId)
     }

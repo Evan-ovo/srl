@@ -12,6 +12,9 @@ import {
   listNativeRecoveryCandidates,
   unlinkNativeResourceEntries,
   verifyNativeResourceLinks,
+  deleteNativeRecoveryCandidates,
+  type NativeRecoveryCandidate,
+  type NativeRecoveryDeletionReport,
   type NativeRecoveryCandidatePage,
 } from '../storage/NativeResourceFileMirror'
 
@@ -148,6 +151,67 @@ export class NativeResourceRecoveryService {
     return result
       ? { name: result.parsed.name, type: result.parsed.type }
       : { name: '未识别文件（保留原件）' }
+  }
+
+  async deleteCandidates(
+    candidates: readonly NativeRecoveryCandidate[],
+    options: { signal?: AbortSignal; onProgress?: (completed: number, total: number) => void } = {},
+  ): Promise<NativeRecoveryDeletionReport> {
+    this.assertWritable()
+    if (this.busy) throw new Error('已有原件找回或删除任务正在运行')
+    const hashes = new Set<string>()
+    for (const item of candidates) {
+      if (
+        !/^[a-f0-9]{64}$/.test(item.contentHash) ||
+        hashes.has(item.contentHash) ||
+        !Number.isSafeInteger(item.size) ||
+        item.size < 0 ||
+        !Number.isSafeInteger(item.modifiedAt) ||
+        item.modifiedAt < 0
+      )
+        throw new Error('待删除原件标识、大小或时间无效，请重新扫描')
+      hashes.add(item.contentHash)
+    }
+    this.busy = true
+    const report: NativeRecoveryDeletionReport = {
+      deletedHashes: [],
+      retainedHashes: [],
+      clearedBytes: 0,
+    }
+    try {
+      for (let offset = 0; offset < candidates.length; offset += 100) {
+        options.signal?.throwIfAborted()
+        this.assertWritable()
+        const batch = candidates.slice(offset, offset + 100)
+        const result = await deleteNativeRecoveryCandidates(batch)
+        if (
+          !result ||
+          !Array.isArray(result.deletedHashes) ||
+          !Array.isArray(result.retainedHashes)
+        )
+          throw new Error('原件删除回执不完整，请重新检查；部分文件可能已删除')
+        const returned = [...result.deletedHashes, ...result.retainedHashes]
+        if (
+          returned.length !== batch.length ||
+          new Set(returned).size !== batch.length ||
+          returned.some((hash) => !batch.some((item) => item.contentHash === hash)) ||
+          !Number.isSafeInteger(result.clearedBytes) ||
+          result.clearedBytes < 0 ||
+          result.clearedBytes !==
+            batch
+              .filter((item) => result.deletedHashes.includes(item.contentHash))
+              .reduce((sum, item) => sum + item.size, 0)
+        )
+          throw new Error('原件删除回执不完整，请重新检查；部分文件可能已删除')
+        report.deletedHashes.push(...result.deletedHashes)
+        report.retainedHashes.push(...result.retainedHashes)
+        report.clearedBytes += result.clearedBytes
+        options.onProgress?.(offset + batch.length, candidates.length)
+      }
+      return report
+    } finally {
+      this.busy = false
+    }
   }
 
   async recover(
@@ -290,7 +354,7 @@ export class NativeResourceRecoveryService {
     return this.storage.nativeMirrorDuplicationSummary()
   }
 
-  storageAccounting() {
-    return this.storage.storageAccounting()
+  storageAccounting(options?: Parameters<IndexedDbResourceHealthStorage['storageAccounting']>[0]) {
+    return this.storage.storageAccounting(options)
   }
 }

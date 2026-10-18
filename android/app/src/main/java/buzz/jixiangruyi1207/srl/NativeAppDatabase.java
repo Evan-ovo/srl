@@ -889,6 +889,52 @@ final class NativeAppDatabase extends SQLiteOpenHelper {
         for (String hash : hashes) removeUnreferencedBlob(hash);
     }
 
+    /** Hold the existing SQLite writer lock across reference checks and the selected filesystem action. */
+    JSONObject deleteUnreferencedRecoveryCandidates(JSONArray candidates, RecoveryDeletionAction action) throws Exception {
+        SQLiteDatabase database = getWritableDatabase();
+        database.beginTransaction();
+        try {
+            requireActiveLibrary(database);
+            Set<String> protectedHashes = new HashSet<>();
+            for (int i = 0; i < candidates.length(); i++) {
+                JSONObject item = candidates.getJSONObject(i);
+                String hash = item.getString("contentHash");
+                JSONObject query = new JSONObject().put("indexName", "contentHash").put("lower", JSONObject.quote(hash))
+                    .put("upper", JSONObject.quote(hash)).put("countOnly", true);
+                if (NativeDatabaseKeyQuery.query(database, "resources", query).getLong("count") > 0
+                    || NativeDatabaseKeyQuery.query(database, "resourceVersions", query).getLong("count") > 0
+                    || (item.has("nativeId") && getRecord("resources", JSONObject.quote(item.getString("nativeId"))) != null)) protectedHashes.add(hash);
+            }
+            for (String store : new String[] { "settings", "restoreStaging" }) {
+                String after = null;
+                JSONArray fields = new JSONArray(store.equals("settings") ? "[\"id\",\"value.contentHash\"]" : "[\"record.resource.contentHash\",\"record.resource.nativeOriginal.contentHash\"]");
+                for (;;) {
+                    JSONArray rows = getRecords(store, after, 100, fields);
+                    for (int i = 0; i < rows.length(); i++) {
+                        JSONObject value = rows.getJSONObject(i).getJSONObject("value");
+                        if (store.equals("settings")) {
+                            if (value.optString("id").startsWith("native-recovery-link:") && value.optJSONObject("value") != null)
+                                protectedHashes.add(value.getJSONObject("value").optString("contentHash"));
+                        } else if (value.optJSONObject("record") != null) {
+                            JSONObject record = value.getJSONObject("record").optJSONObject("resource");
+                            if (record != null) {
+                                protectedHashes.add(record.optString("contentHash"));
+                                if (record.optJSONObject("nativeOriginal") != null) protectedHashes.add(record.getJSONObject("nativeOriginal").optString("contentHash"));
+                            }
+                        }
+                    }
+                    if (rows.length() < 100) break;
+                    after = rows.getJSONObject(rows.length() - 1).getString("key");
+                }
+            }
+            JSONObject result = action.run(protectedHashes);
+            database.setTransactionSuccessful();
+            return result;
+        } finally { database.endTransaction(); }
+    }
+
+    interface RecoveryDeletionAction { JSONObject run(Set<String> protectedHashes) throws Exception; }
+
     private static void requireActiveLibrary(SQLiteDatabase database) {
         try (Cursor cursor = database.query("app_state", new String[] {"state_value"},
             "state_key = ?", new String[] {"migration:appdb:v1:active"}, null, null, null)) {

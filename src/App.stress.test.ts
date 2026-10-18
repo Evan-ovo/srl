@@ -175,7 +175,9 @@ describe('App 资源量压力回归', () => {
     await wrapper.get('.mobile-bottom-nav > button:first-child').trigger('click')
     await vi.waitFor(() => expect(stressApi.backfillCardFingerprints).toHaveBeenCalledTimes(1))
     expect(stressApi.upgradeLegacyJsonResources).toHaveBeenCalledTimes(2)
-    expect(stressApi.listSummaries).toHaveBeenCalledTimes(2)
+    expect(stressApi.listSummaries).not.toHaveBeenCalled()
+    // One initial list read plus two maintenance snapshots after the interruption.
+    expect(stressApi.listResourceListSummaries).toHaveBeenCalledTimes(3)
     wrapper.unmount()
   })
   it('存储统计未返回时资源列表已就绪', async () => {

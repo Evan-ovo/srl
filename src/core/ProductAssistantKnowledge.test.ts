@@ -46,6 +46,16 @@ describe('assistant focused work and result-only replies', () => {
 })
 
 describe('assistant verified feature guidance', () => {
+  it('distinguishes incomplete body search and stage-specific startup failures', () => {
+    const search = findAssistantFeatureGuides('library-search')[0]
+    expect(search?.steps.join()).toContain('正文搜索未完成')
+    expect(search?.steps.join()).toContain('重试')
+    expect(search?.owners).toContain('src/composables/UseSearchIndex.ts')
+    expect(search?.owners).toContain('src/core/FatalErrorNotice.ts')
+    const backup = findAssistantFeatureGuides('backup')[0]
+    expect(backup?.troubleshooting.join()).toContain('不能把所有启动失败都判断为数据库损坏')
+    expect(backup?.owners).toContain('src/composables/UseLibraryLifecycle.ts')
+  })
   it('解释多线路预览下载的确认、平台范围和设备负担', () => {
     const guide = findAssistantFeatureGuides('增加多线路下载怎么开启')[0]
     expect(guide?.id).toBe('appearance')

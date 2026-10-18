@@ -291,34 +291,6 @@
   border-color: var(--control-border, var(--color-accent-soft));
 }
 
-.resource-source-add-choice {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px 2px;
-  border-top: 1px solid var(--color-line);
-}
-
-.resource-source-add-choice:first-of-type {
-  margin-top: 10px;
-}
-
-.resource-source-add-choice strong,
-.resource-source-add-choice small {
-  display: block;
-}
-
-.resource-source-add-choice strong {
-  font-size: 0.68rem;
-}
-
-.resource-source-add-choice small {
-  margin-top: 3px;
-  color: var(--color-ink-soft);
-  font-size: 0.57rem;
-  line-height: 1.45;
-}
-
 .resource-source-add-error {
   margin: 10px 0 0 !important;
   color: var(--color-danger) !important;
@@ -342,12 +314,6 @@
   border-color: var(--button-primary-border, var(--color-accent));
   background: var(--button-primary-background, var(--color-accent));
   color: var(--button-primary-color, var(--color-on-accent));
-}
-
-.resource-source-add-actions button:disabled,
-.resource-source-add-field input:disabled {
-  cursor: wait;
-  opacity: 0.6;
 }
 
 @media (max-width: 640px) {

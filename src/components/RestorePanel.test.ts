@@ -26,7 +26,7 @@ it('registers an empty gallery category catalog even without image resources and
     const confirm = wrapper.findAll('button').find((button) => button.text() === '确认新增')!
     expect(confirm.attributes('disabled')).toBeUndefined()
     await confirm.trigger('click')
-    expect(wrapper.emitted('confirm')?.at(-1)).toEqual(['merge', [], true])
+    expect(wrapper.emitted('confirm')?.at(-1)).toEqual(['merge', [], true, false])
     await tree
       .findAll('button')
       .find((button) => button.text().includes('额外资源'))!
@@ -108,12 +108,12 @@ it('allows portable-data merge and full replacement when all originals already e
     expect(wrapper.text()).toContain('成功后无法自动撤销，建议先导出当前库')
     expect(wrapper.text()).not.toContain('创建完整快照')
     await confirm.trigger('click')
-    expect(wrapper.emitted('confirm')).toEqual([['merge', [], false]])
+    expect(wrapper.emitted('confirm')).toEqual([['merge', [], false, false]])
     await wrapper.get('input[value="replace"]').setValue(true)
     const replace = wrapper.findAll('button').find((button) => button.text() === '确认覆盖')!
     expect(replace.attributes('disabled')).toBeUndefined()
     await replace.trigger('click')
-    expect(wrapper.emitted('confirm')?.at(-1)).toEqual(['replace', [], false])
+    expect(wrapper.emitted('confirm')?.at(-1)).toEqual(['replace', [], false, false])
   } finally {
     wrapper.unmount()
   }
@@ -158,7 +158,7 @@ it('uses the shared registry to deselect gallery images while retaining the cove
       .findAll('button')
       .find((button) => button.text() === '确认新增')!
       .trigger('click')
-    expect(wrapper.emitted('confirm')?.at(-1)).toEqual(['merge', ['owner', 'cover'], false])
+    expect(wrapper.emitted('confirm')?.at(-1)).toEqual(['merge', ['owner', 'cover'], false, false])
   } finally {
     wrapper.unmount()
   }

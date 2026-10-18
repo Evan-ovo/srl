@@ -36,7 +36,6 @@ import {
   registerWebInboxParticipant,
   type WebInboxCycle,
 } from '../services/WebDiscordInboxSession'
-import { installWebInboxNotificationNavigation } from '../services/WebDiscordInboxNotifications'
 import type { NativeDeepLink } from '../core/NativeRuntime'
 import type { ResourceCommunitySourceView } from '../types/CommunitySource'
 import type { ResourceListSummary } from '../types/Resource'
@@ -58,7 +57,6 @@ let receiveOperations = 0
 let inboxRun: Promise<void> | undefined
 let inboxRequested = false
 let unregisterWebInbox: (() => void) | undefined
-let removeNotificationNavigation: (() => void) | undefined
 let disposed = false
 const queuedRequests = new Map<string, Promise<void>>()
 const deferredRequests = new Map<string, DiscordHandoffRequest>()
@@ -697,7 +695,6 @@ function keepForLater(): void {
 }
 
 onMounted(() => {
-  removeNotificationNavigation = installWebInboxNotificationNavigation()
   if (isWebDiscordInboxAvailable())
     unregisterWebInbox = registerWebInboxParticipant('posts', async (cycle) => {
       await inboxRun
@@ -721,7 +718,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true
   unregisterWebInbox?.()
-  removeNotificationNavigation?.()
   manualWaitingDeliveries.clear()
   window.removeEventListener('srl:native-deep-link', handleNativeDeepLink)
   window.removeEventListener('srl:vault-unlocked', handleVaultUnlocked)

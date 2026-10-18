@@ -89,7 +89,9 @@ describe('IndexedDbResourceHealthStorage', () => {
     activateAndroidNativeAppDatabase()
     const audit = await health.audit()
     expect(audit.currentSummaryDrift).toHaveLength(3000)
-    expect((await health.storageAccounting()).currentOriginalBytes).toBe(3000 * 1024 * 1024)
+    const nativeAccounting = await health.storageAccounting({ browserDetails: true })
+    expect(nativeAccounting.currentOriginalBytes).toBe(3000 * 1024 * 1024)
+    expect(nativeAccounting.browserStores).toBeUndefined()
     expect((await health.nativeMirrorDuplicationSummary()).reclaimableBytes).toBe(
       3000 * 1024 * 1024,
     )
@@ -98,6 +100,135 @@ describe('IndexedDbResourceHealthStorage', () => {
     expect(getRecords.mock.calls.every((call) => Array.isArray(call[3]))).toBe(true)
     expect(getRecords.mock.calls.some((call) => call[3]?.includes('originalBlob'))).toBe(true)
     expect(getRecords.mock.calls.every((call) => !call[3]?.includes('metadata'))).toBe(true)
+  })
+
+  it('inventories browser records once by store without decoding binary payloads or writing data', async () => {
+    const file = new Blob([new Uint8Array(1024)])
+    await storage.save(resource('browser'))
+    await database.resourceVersions.put({ ...resource('old'), versionGroupId: 'browser' })
+    await database.externalAppData.put({
+      id: 'app-data',
+      appId: 'reader',
+      key: 'books',
+      value: { text: '中文😀', file },
+      updatedAt: 1,
+    })
+    await database.externalAppRuntimes.put({
+      id: 'reader',
+      runtimeHtml: '<html/>',
+      packageFiles: { 'data.bin': new Uint8Array(2048) },
+      updatedAt: 1,
+    })
+    await database.assets.put({
+      assetId: 'cover',
+      contentHash: 'hash',
+      mimeType: 'image/png',
+      size: 1024,
+      source: 'thumbnail',
+      thumbnailRefs: {},
+      createdAt: 1,
+    })
+    await database.assetFiles.put({ assetId: 'cover', blob: file, updatedAt: 1 })
+    await database.settings.put({ id: 'native-recovery-link:pending', value: {}, updatedAt: 1 })
+    const read = vi
+      .spyOn(Blob.prototype, 'arrayBuffer')
+      .mockRejectedValue(new Error('binary must not be read'))
+    const text = vi
+      .spyOn(Blob.prototype, 'text')
+      .mockRejectedValue(new Error('binary must not be decoded'))
+    const progress = vi.fn()
+    const result = await health.storageAccounting({ browserDetails: true, onProgress: progress })
+    expect(result.currentOriginalBytes).toBe(11)
+    expect(result.versionOriginalBytes).toBe(11)
+    expect(result.assetBytes).toBe(1024)
+    expect(result.thumbnailAssetCount).toBe(1)
+    expect(result.pendingNativeLinkCount).toBe(1)
+    expect(result.browserStores).toHaveLength(database.tables.length)
+    expect(result.browserStores!.find((part) => part.store === 'externalAppData')).toEqual({
+      store: 'externalAppData',
+      bytes: 1093,
+      records: 1,
+    })
+    expect(
+      result.browserStores!.find((part) => part.store === 'externalAppRuntimes')!.bytes,
+    ).toBeGreaterThan(2048)
+    expect(progress).toHaveBeenCalledTimes(database.tables.length)
+    expect(read).not.toHaveBeenCalled()
+    expect(text).not.toHaveBeenCalled()
+    expect(await health.storageAccounting({ browserDetails: true })).toEqual(result)
+    expect(await database.externalAppData.count()).toBe(1)
+    expect((await database.externalAppData.get('app-data'))!.value).toHaveProperty('text', '中文😀')
+  })
+
+  it('stops between browser stores and never starts remaining stores or resumes automatically', async () => {
+    const controller = new AbortController()
+    const progress = vi.fn(() => controller.abort())
+    await expect(
+      health.storageAccounting({
+        browserDetails: true,
+        signal: controller.signal,
+        onProgress: progress,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(progress).toHaveBeenCalledOnce()
+    await expect(
+      health.storageAccounting({
+        browserDetails: true,
+        signal: controller.signal,
+        onProgress: progress,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(progress).toHaveBeenCalledOnce()
+    expect((await health.storageAccounting({ browserDetails: true })).browserStores).toHaveLength(
+      database.tables.length,
+    )
+  })
+
+  it('pages 1000 APP data records and propagates unavailable stores instead of reporting zero', async () => {
+    await database.externalAppData.bulkPut(
+      Array.from({ length: 1000 }, (_, index) => ({
+        id: `app-${index}`,
+        appId: 'reader',
+        key: 'books',
+        value: '中文😀',
+        updatedAt: 1,
+      })),
+    )
+    const result = await health.storageAccounting({ browserDetails: true })
+    expect(result.browserStores!.find((part) => part.store === 'externalAppData')!.records).toBe(
+      1000,
+    )
+    const table = vi.spyOn(Object.getPrototypeOf(database.resources), 'orderBy')
+    table.mockImplementation(() => {
+      throw new Error('storage unavailable')
+    })
+    await expect(health.storageAccounting({ browserDetails: true })).rejects.toThrow(
+      'storage unavailable',
+    )
+  })
+
+  it('keeps 100-row browser pages complete across compound staging keys without decoding buffers', async () => {
+    await database.restoreStagingChunks.bulkPut(
+      Array.from({ length: 205 }, (_, index) => ({
+        jobId: `job-${Math.floor(index / 150)}`,
+        path: 'resource.bin',
+        chunkIndex: index,
+        data: new Uint8Array(1024).buffer,
+        updatedAt: 1,
+      })),
+    )
+    const pages = vi.spyOn(
+      Object.getPrototypeOf(database.restoreStagingChunks.orderBy(':id')),
+      'toArray',
+    )
+    const result = await health.storageAccounting({ browserDetails: true })
+    expect(result.restoreStagingBytes).toBe(205 * 1024)
+    expect(
+      result.browserStores!.find((part) => part.store === 'restoreStagingChunks')!.records,
+    ).toBe(205)
+    const batches = await Promise.all(pages.mock.results.map((call) => call.value))
+    expect(batches.every((batch) => batch.length <= 100)).toBe(true)
+    expect(batches.filter((batch) => batch.length === 100)).toHaveLength(2)
   })
 
   it('keeps corrupt original parsing in explicit deep audits and skips it for quick scans', async () => {

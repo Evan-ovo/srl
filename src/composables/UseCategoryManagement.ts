@@ -10,6 +10,7 @@ interface CategoryManagementContext {
   /** 详情/管理类操作共用的忙碌标记。 */
   isOrganizing: Ref<boolean>
   showNotice: (message: string) => void
+  loadCategories: () => Promise<void>
   loadLibrary: () => Promise<void>
 }
 
@@ -27,7 +28,7 @@ export function useCategoryManagement(context: CategoryManagementContext) {
     context.isOrganizing.value = true
     try {
       await categoryService.create(details.name, details.color)
-      await context.loadLibrary()
+      await context.loadCategories()
       categoryManagerKey.value += 1
       context.showNotice('文件夹已创建')
     } catch (error) {
@@ -45,7 +46,7 @@ export function useCategoryManagement(context: CategoryManagementContext) {
     context.isOrganizing.value = true
     try {
       await categoryService.update(details.category, details.name, details.color)
-      await context.loadLibrary()
+      await context.loadCategories()
       categoryManagerKey.value += 1
       context.showNotice('文件夹已更新')
     } catch (error) {
@@ -63,7 +64,7 @@ export function useCategoryManagement(context: CategoryManagementContext) {
       if (hidden && context.activeCategoryId.value === category.id) {
         context.activeCategoryId.value = undefined
       }
-      await context.loadLibrary()
+      await context.loadCategories()
       categoryManagerKey.value += 1
       context.showNotice(
         hidden ? `“${category.name}”已从资源库和抽卡隐藏` : `“${category.name}”已恢复显示`,

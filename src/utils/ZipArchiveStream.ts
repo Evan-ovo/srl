@@ -10,6 +10,8 @@ export async function* zipArchiveChunks(
   headersOnly = false,
   selectEntry?: (path: string) => boolean,
   signal?: AbortSignal,
+  onDirectory?: (entries: Array<{ name: string; size: number; compressedSize: number }>) => void,
+  directoryOnly = false,
 ): AsyncGenerator<Uint8Array> {
   const throwIfAborted = () => {
     if (signal?.aborted) {
@@ -155,6 +157,14 @@ export async function* zipArchiveChunks(
     })
     cursor = recordEnd
   }
+  onDirectory?.(
+    entries.map((entry) => ({
+      name: entry.decodedName,
+      size: entry.original,
+      compressedSize: entry.compressed,
+    })),
+  )
+  if (directoryOnly) return
   const uncompressedBytes = entries.reduce(
     (total, entry) => total + (entry.selected ? entry.original : 0),
     0,

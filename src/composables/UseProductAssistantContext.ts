@@ -131,6 +131,12 @@ export function useProductAssistantContext(options: {
     if (first || options.preferences.value.estimateInputTokens || automatic) {
       const message = [
         `发送到：${destination}\n模型：${config.model}`,
+        request.canCaptureCurrent
+          ? '助手如需查看当前界面，会另行询问；确认后截图会发送到上述 AI 服务。'
+          : '',
+        request.canRunPageScripts
+          ? '页面脚本另行确认；停止助手不能强制终止脚本或撤销已发生的操作。'
+          : '',
         automatic
           ? `先压缩较早对话：${plan.end - plan.start} 条，${plan.batches.length} 次请求。`
           : '',

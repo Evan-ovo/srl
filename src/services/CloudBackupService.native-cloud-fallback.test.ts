@@ -430,6 +430,12 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
           ]),
         }
       }
+      listGitHubObjectContainers() {
+        return Promise.resolve([
+          { id: 20, tag_name: 'srl-cloud-objects-0001', assets: [] },
+          { id: 30, tag_name: 'srl-cloud-objects-0002', assets: [] },
+        ])
+      }
       upload() {
         return this.uploadGitHubStructuredBackup(
           config,
@@ -446,13 +452,19 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
     }
     const fresh = { ...asset, id: 99, name: 'fresh' }
     const fetch = vi.fn(async (target: string) => {
-      const path = new URL(target).pathname
+      const requestUrl = new URL(target, 'http://localhost')
+      const upstreamUrl = new URL(requestUrl.searchParams.get('url') ?? target, 'http://localhost')
+      const path = upstreamUrl.pathname
       if (path.endsWith('/releases'))
-        return Response.json([
-          { id: 20, tag_name: 'srl-cloud-objects-0001' },
-          { id: 30, tag_name: 'srl-cloud-objects-0002' },
-        ])
-      if (path.endsWith('/assets')) return Response.json([fresh])
+        return Response.json(
+          [
+            { id: 20, tag_name: 'srl-cloud-objects-0001' },
+            { id: 30, tag_name: 'srl-cloud-objects-0002' },
+          ],
+          { headers: { 'X-SRL-Cloud-Proxy': '1' } },
+        )
+      if (path.endsWith('/assets'))
+        return Response.json([fresh], { headers: { 'X-SRL-Cloud-Proxy': '1' } })
       throw new Error(`redundant release query: ${path}`)
     })
     vi.stubGlobal('fetch', fetch)
@@ -464,7 +476,7 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
     expect(await probe.release()).toMatchObject({ id: 10 })
     expect(await probe.assets(30)).toEqual([fresh])
     expect(await probe.assets(10)).toEqual([fresh])
-    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('does not start a second APK backup while a persisted WorkManager job is queued', async () => {
@@ -612,14 +624,21 @@ describe('CloudBackupService Native Cloud fail-closed handoff', () => {
     expect(nativeCloud.uploadNativeStructuredSnapshot).not.toHaveBeenCalled()
   })
 
-  it.each(['github', 'webdav'] as const)(
-    'APK V3 %s restore uses native files followed by per-card reads',
-    async (provider) => {
+  it.each([
+    ['github', 3],
+    ['github', 4],
+    ['webdav', 3],
+    ['webdav', 4],
+    ['github', 5],
+    ['webdav', 5],
+  ] as const)(
+    'APK %s manifest revision %s restore uses native files followed by per-card reads',
+    async (provider, revision) => {
       const hash = 'b'.repeat(64)
       const objectName = `srl-chunk--sha256-${hash}`
       const snapshot: StructuredSnapshot = {
         format: 'srl-structured-cloud-snapshot',
-        version: 3,
+        version: revision,
         createdAt: '2026-08-26T00:00:00.000Z',
         categories: [],
         resources: [

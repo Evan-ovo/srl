@@ -21,7 +21,18 @@ export interface CustomUiView {
 }
 
 export type CustomUiViews = Partial<Record<CustomCssScope, CustomUiView>>
+/** A live, memory-only appearance session; exiting returns to its retained source page. */
+export interface AppearancePreviewRequest {
+  css: string
+  views: CustomUiViews
+  scope?: CustomCssScope
+  /** Existing navigation destination to return to; defaults to the appearance editor. */
+  returnTo?: string
+  onExit(): void
+}
 export interface UiApplyOptions {
+  /** Temporary live preview; never persists CSS, Vue, or preset selection. */
+  preview?: { onExit(): void; beforeExit?(): Promise<boolean> }
   /** Explicit safe exit: close Vue while keeping CSS, or restore the uncustomized appearance. */
   recovery?: 'vue' | 'default'
   assistant?: boolean
@@ -68,6 +79,8 @@ export interface UiNativePlacement {
   left: number
   width: number
   height: number
+  /** Visible rectangular pieces in local coordinates; absent in older runtimes. */
+  visibleRects?: Array<{ top: number; left: number; width: number; height: number }>
 }
 
 export interface UiViewAction {

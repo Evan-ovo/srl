@@ -347,6 +347,22 @@ export class ProductAssistantWorkspaceService {
     if (!api.url || !api.model) throw new Error('请填写助手 API 地址和模型，或选择使用主 API')
     return normalizedConfig(api)
   }
+  async reloadImportedPreferences(): Promise<void> {
+    await this.initializing
+    this.initialized = false
+    await this.initializePreferences()
+    for (const listener of this.preferenceListeners) listener(this.preferences())
+  }
+  async exportPortableGitHubCredential(): Promise<string | undefined> {
+    await this.initializePreferences()
+    return this.preferencesValue.githubReadPersistence === 'session'
+      ? undefined
+      : (await this.credentials.read(githubCredentialId)) || undefined
+  }
+  async importPortableGitHubCredential(token: string): Promise<void> {
+    await this.initializePreferences()
+    await this.savePreferences({ ...this.preferencesValue, githubReadPersistence: 'local' }, token)
+  }
   async readGitHubCredential(): Promise<string> {
     await this.initializePreferences()
     return this.preferencesValue.githubReadPersistence === 'session'

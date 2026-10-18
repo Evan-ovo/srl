@@ -14,6 +14,7 @@ const props = defineProps<{
   loading?: boolean
   cover?: boolean
   minimal?: boolean
+  teleportTo?: string | HTMLElement
 }>()
 const emit = defineEmits<{ close: []; previous: []; next: []; loaded: [] }>()
 const stage = ref<HTMLElement>()
@@ -49,7 +50,25 @@ function controlUp(event: PointerEvent) {
   if (!start || start.id !== event.pointerId || start.button.disabled) return
   if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8) return
   completedTouch = start.button
+  if (start.button.dataset.viewerAction === 'close') consumeClosingClick()
   activateControl(start.button.dataset.viewerAction!)
+}
+function consumeClosingClick() {
+  // Removing the sheet on touch release can retarget its compatibility click to
+  // the cover underneath. Keep this guard through unmount, only until that click
+  // or the next pointer sequence (including browsers that omit the click).
+  const clear = () => {
+    document.removeEventListener('click', consume, true)
+    document.removeEventListener('pointerdown', clear, true)
+  }
+  const consume = (event: MouseEvent) => {
+    clear()
+    if (event.detail === 0) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+  document.addEventListener('click', consume, true)
+  document.addEventListener('pointerdown', clear, true)
 }
 function controlClick(event: MouseEvent) {
   if (event.detail !== 0 && completedTouch?.contains(event.target as Node)) {
@@ -103,6 +122,7 @@ function key(event: KeyboardEvent) {
     }
   }
   if (event.key === 'Escape') {
+    event.preventDefault()
     event.stopImmediatePropagation()
     emit('close')
   }
@@ -128,7 +148,7 @@ onBeforeUnmount(() => {
 })
 </script>
 <template>
-  <Teleport to="body">
+  <Teleport :to="teleportTo ?? 'body'">
     <div
       class="resource-image-viewer"
       :class="{ 'resource-image-viewer--minimal': minimal }"
@@ -149,14 +169,17 @@ onBeforeUnmount(() => {
         @click.capture="controlClick"
       >
         <header class="resource-image-viewer__header">
-          <span v-if="!cover" class="resource-image-viewer__title"
+          <span v-if="loading" class="resource-image-viewer__title" role="status"
+            >正在读取原图…</span
+          >
+          <span v-else-if="!cover" class="resource-image-viewer__title"
             >{{ name }}<small v-if="position"> · {{ position }}</small></span
           >
           <button
             v-if="!cover && isLongImage"
             class="resource-image-viewer__action"
             type="button"
-            :disabled="!ready"
+            :disabled="loading || !ready"
             data-viewer-action="fit"
             @click="activateControl('fit')"
           >
@@ -176,12 +199,12 @@ onBeforeUnmount(() => {
           ref="stage"
           class="resource-image-viewer__canvas"
           :aria-busy="loading"
-          @pointerdown="gestures.down"
+          @pointerdown="!loading && gestures.down($event)"
           @pointermove="gestures.move"
           @pointerup="gestures.up"
           @pointercancel="gestures.cancel"
           @lostpointercapture="gestures.lost"
-          @wheel.prevent="gestures.wheel"
+          @wheel.prevent="!loading && gestures.wheel($event)"
           @contextmenu.prevent
         >
           <p v-if="failed" role="status">图片暂时无法加载</p>

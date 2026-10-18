@@ -127,7 +127,12 @@ onBeforeUnmount(() => {
         </button>
       </template>
     </FeatureAppHeader>
-    <div ref="view" class="chat-reader-app__view" aria-label="读了么阅读工作区" />
+    <div
+      ref="view"
+      class="chat-reader-app__view"
+      data-srl-native-root
+      aria-label="读了么阅读工作区"
+    />
   </section>
 </template>
 <style scoped>

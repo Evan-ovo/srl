@@ -26,7 +26,13 @@ data class NativeWebDavConfig(
     override val chargingOnly: Boolean = false,
 ) : NativeCloudConfig
 
-data class NativeCloudObject(val id: String, val name: String, val size: Long, val createdAt: Long)
+data class NativeCloudObject(
+    val id: String,
+    val name: String,
+    val size: Long,
+    val createdAt: Long,
+    val digest: String? = null,
+)
 
 data class NativeCloudBackup(
     val id: String,

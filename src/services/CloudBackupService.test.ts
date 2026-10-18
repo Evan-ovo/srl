@@ -10,6 +10,11 @@ import type { RestoreService } from './RestoreService'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import type { GitHubBackupConfig, WebDavBackupConfig } from '../types/CloudBackup'
 import type { ArchivePortableData, PreparedRestore } from '../types/Backup'
+import { noticeCenter } from '../core/NoticeCenter'
+import { taskCenter } from '../core/TaskCenter'
+import { waitForCloudRetry } from './CloudBackupHttp'
+import { hashCloudBlob } from './CloudArchiveCodec'
+import { decodeStructuredSnapshot } from './CloudStructuredSnapshot'
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>()
@@ -69,7 +74,7 @@ function githubRepositoryResponse(status = 200, isPrivate = true): Response {
           }
         : { message: status === 401 ? 'Bad credentials' : 'forbidden' },
     ),
-    { status },
+    { status, headers: { 'x-srl-cloud-proxy': '1' } },
   )
 }
 
@@ -210,6 +215,7 @@ describe('CloudBackupService V3', () => {
       expect(filter).toHaveBeenCalledWith({ version: 1, chatReader: remapped.chatReader })
       expect(imported).toHaveBeenCalledWith({ version: 1, chatReader: remapped.chatReader })
       expect(restored.mock.calls[0]?.[0].resources).toEqual([])
+      expect(readSnapshot).toHaveBeenCalledOnce()
       expect(snapshot.portableData.credentials).toBeDefined()
     },
   )
@@ -221,6 +227,33 @@ describe('CloudBackupService V3', () => {
     localStorage.setItem('srl.publicWorker.baseUrl.v1', 'https://worker.example')
     vi.stubGlobal('sessionStorage', new MemoryStorage())
     vi.stubGlobal('indexedDB', new IDBFactory())
+  })
+
+  it('passes the normalized selected resource IDs to plaintext companion preparation', async () => {
+    const personal = await import('./PersonalResourceBackup')
+    const copies = vi
+      .spyOn(personal, 'cloudPlainSecretCopies')
+      .mockRejectedValueOnce(new Error('fixture copy boundary'))
+    const resources = {} as ResourceService
+    const service = createService(resources)
+    await expect(
+      service.createBackup(
+        {
+          ...githubConfig,
+          contentSelection: {
+            resourceIds: ['only-secret'],
+            personalResources: { secret: true },
+            plaintextSecretCopy: true,
+          },
+        },
+        'fixture',
+      ),
+    ).rejects.toThrow('fixture copy boundary')
+    expect(copies).toHaveBeenCalledWith(
+      expect.objectContaining(githubConfig),
+      resources,
+      expect.objectContaining({ secret: true, resourceIds: ['only-secret'] }),
+    )
   })
 
   it.each(['github', 'webdav'] as const)(
@@ -236,6 +269,10 @@ describe('CloudBackupService V3', () => {
       ) as unknown as {
         createBackup: CloudBackupService['createBackup']
         getSnapshot: CloudBackupService['getSnapshot']
+        getTransportContext: (
+          signal?: AbortSignal,
+          beginCommit?: () => void,
+        ) => import('./CloudBackupTransportContext').CloudBackupTransportContext
         getGitHubRelease: ReturnType<typeof vi.fn>
         listGitHubObjectContainers: ReturnType<typeof vi.fn>
         listGitHubAssets: ReturnType<typeof vi.fn>
@@ -254,6 +291,7 @@ describe('CloudBackupService V3', () => {
         id: 30,
         name,
         size: blob.size,
+        digest: `sha256:${await hashCloudBlob(blob)}`,
         state: 'uploaded',
         created_at: new Date().toISOString(),
       }))
@@ -266,6 +304,20 @@ describe('CloudBackupService V3', () => {
       service.listGitHubObjectContainers = inventory
       service.listWebDavObjects = inventory
       service.prune = vi.fn(async () => 0)
+      const context = service.getTransportContext()
+      service.getTransportContext = (signal, beginCommit) =>
+        ({
+          ...context,
+          signal,
+          beginCommit,
+          getGitHubRelease: service.getGitHubRelease,
+          listGitHubObjectContainers: service.listGitHubObjectContainers,
+          listGitHubAssets: service.listGitHubAssets,
+          uploadGitHubAsset: service.uploadGitHubAsset,
+          ensureWebDavFolder: service.ensureWebDavFolder,
+          listWebDavObjects: service.listWebDavObjects,
+          uploadWebDavObject: service.uploadWebDavObject,
+        }) as unknown as import('./CloudBackupTransportContext').CloudBackupTransportContext
       const config = provider === 'github' ? githubConfig : webDavConfig
       await expect(service.createBackup(config, 'fixture')).rejects.toThrow(
         'fixture inventory interrupted',
@@ -326,7 +378,19 @@ describe('CloudBackupService V3', () => {
     const categoryService = { list: vi.fn(async () => []) } as unknown as CategoryService
     const fetchMock = vi.fn().mockResolvedValue(githubRepositoryResponse())
     vi.stubGlobal('fetch', fetchMock)
-    const service = createService(resourceService, categoryService) as unknown as {
+    const service = new CloudBackupService(
+      resourceService,
+      categoryService,
+      {} as ExportService,
+      {} as RestoreService,
+      async () => ({
+        version: 1,
+        communitySources: {
+          data: { version: 1, sources: [], messages: [], bindings: [] },
+          attachments: [],
+        },
+      }),
+    ) as unknown as {
       saveConfig: CloudBackupService['saveConfig']
       createBackup: CloudBackupService['createBackup']
       uploadGitHubStructuredBackup: ReturnType<typeof vi.fn>
@@ -375,6 +439,7 @@ describe('CloudBackupService V3', () => {
         secret: string,
         asset: unknown,
         size: number,
+        hash?: string,
       ) => Promise<unknown>
       githubFetch: ReturnType<typeof vi.fn>
     }
@@ -392,6 +457,35 @@ describe('CloudBackupService V3', () => {
     )
     expect(service.githubFetch).toHaveBeenCalledOnce()
     expect(service.githubFetch).toHaveBeenCalledWith(githubConfig, 'token', '/releases/assets/17')
+  })
+
+  it('rejects a same-size GitHub asset whose server SHA-256 differs from the planned object', async () => {
+    const service = createService() as unknown as {
+      confirmGitHubAssetSize: (
+        config: GitHubBackupConfig,
+        secret: string,
+        asset: unknown,
+        size: number,
+        hash?: string,
+      ) => Promise<unknown>
+      githubFetch: ReturnType<typeof vi.fn>
+    }
+    const expectedHash = 'a'.repeat(64)
+    const asset = {
+      id: 18,
+      name: 'srl-chunk--sha256-' + expectedHash,
+      size: 4,
+      state: 'uploaded',
+      digest: `sha256:${'b'.repeat(64)}`,
+      created_at: '2026-08-26T00:00:00.000Z',
+      url: '',
+    }
+    service.githubFetch = vi.fn(async () => new Response(JSON.stringify(asset)))
+
+    await expect(
+      service.confirmGitHubAssetSize(githubConfig, 'token', asset, 4, expectedHash),
+    ).resolves.toBeUndefined()
+    expect(service.githubFetch).toHaveBeenCalledOnce()
   })
 
   it('deletes expired manifests before starting an orphan grace period', async () => {
@@ -548,13 +642,15 @@ describe('CloudBackupService V3', () => {
       .fn()
       .mockResolvedValueOnce(githubRepositoryResponse())
       .mockResolvedValueOnce(githubRepositoryResponse(403))
-      .mockResolvedValueOnce(new Response('{}', { status: 404 }))
+      .mockResolvedValueOnce(
+        new Response('{}', { status: 404, headers: { 'x-srl-cloud-proxy': '1' } }),
+      )
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockResolvedValueOnce(githubRepositoryResponse(401))
     vi.stubGlobal('fetch', fetchMock)
     const service = createService()
     await service.saveConfig(githubConfig, 'saved-token')
-    for (const expected of [/403/, /404/, /没有收到响应/]) {
+    for (const expected of [/403/, /404/, /没有收到 GitHub 请求/]) {
       await expect(service.testConnection(githubConfig)).rejects.toThrow(expected)
       expect(service.getSnapshot().credentials.github).toBe('valid')
     }
@@ -593,8 +689,10 @@ describe('CloudBackupService V3', () => {
     expect(service.getSnapshot().credentials.webdav).toBe('invalid')
   })
 
-  it('sends Web GitHub directly with a binary body and never calls the CF proxy', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 201 }))
+  it('routes Web GitHub API and release asset requests through the configured Worker', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response('{}', { status: 201, headers: { 'x-srl-cloud-proxy': '1' } })),
+    )
     vi.stubGlobal('fetch', fetchMock)
     const service = createService() as unknown as {
       cloudFetch: (url: string, init: RequestInit, provider: 'github') => Promise<Response>
@@ -606,11 +704,121 @@ describe('CloudBackupService V3', () => {
       'github',
     )
     expect(fetchMock).toHaveBeenCalledOnce()
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      'https://uploads.github.com/repos/owner/repo/releases/1/assets',
+    expect(fetchMock.mock.calls[0]?.[0]).toContain(
+      'https://worker.example/api/cloud/proxy/github?url=',
     )
+    expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBe('omit')
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toBeInstanceOf(Headers)
+    expect((fetchMock.mock.calls[0]?.[1]?.headers as Headers).get('X-SRL-Content-Length')).toBe('3')
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(body)
-    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('/api/cloud/proxy/github')
+
+    await service.cloudFetch('https://api.github.com/repos/owner/repo', {}, 'github')
+    expect(fetchMock.mock.calls[1]?.[0]).toContain(
+      'https://worker.example/api/cloud/proxy/github?url=',
+    )
+    expect(fetchMock.mock.calls[1]?.[1]?.credentials).toBe('omit')
+  })
+
+  it('keeps Web GitHub requests direct until the user configures a Worker', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response('{}', { status: 200 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.removeItem('srl.publicWorker.baseUrl.v1')
+    const service = createService() as unknown as {
+      cloudFetch: (url: string, init: RequestInit, provider: 'github') => Promise<Response>
+    }
+
+    await service.cloudFetch('https://api.github.com/repos/owner/repo', {}, 'github')
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.github.com/repos/owner/repo')
+    expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBeUndefined()
+  })
+
+  it('deletes a same-name incomplete GitHub chunk only when the local SHA-256 matches', async () => {
+    const blob = new Blob(['valid chunk bytes'])
+    const hash = await hashCloudBlob(blob)
+    const name = `srl-chunk--sha256-${hash}`
+    const service = createService() as unknown as {
+      cloudFetch: ReturnType<typeof vi.fn>
+      githubFetch: ReturnType<typeof vi.fn>
+      listGitHubAssets: ReturnType<typeof vi.fn>
+      uploadGitHubAsset: (
+        config: GitHubBackupConfig,
+        secret: string,
+        releaseId: number,
+        name: string,
+        blob: Blob,
+        contentType: string,
+      ) => Promise<unknown>
+    }
+    service.cloudFetch = vi.fn(
+      async () => new Response('{"message":"already_exists"}', { status: 422 }),
+    )
+    service.githubFetch = vi.fn(async () => new Response(null, { status: 204 }))
+    service.listGitHubAssets = vi.fn(async () => [
+      {
+        id: 73,
+        name,
+        size: blob.size - 1,
+        created_at: '2026-10-16T00:00:00.000Z',
+        url: '',
+      },
+    ])
+
+    await expect(
+      service.uploadGitHubAsset(githubConfig, 'token', 41, name, blob, 'application/octet-stream'),
+    ).rejects.toThrow('已删除残缺附件，正在重试上传')
+    expect(service.githubFetch).toHaveBeenCalledWith(githubConfig, 'token', '/releases/assets/73', {
+      method: 'DELETE',
+    })
+  })
+
+  it('rechecks GitHub assets after an already-exists response is not yet visible', async () => {
+    const blob = new Blob(['already uploaded chunk'])
+    const name = `srl-chunk--sha256-${await hashCloudBlob(blob)}`
+    const service = createService() as unknown as {
+      cloudFetch: ReturnType<typeof vi.fn>
+      listGitHubAssets: ReturnType<typeof vi.fn>
+      uploadGitHubAsset: (
+        config: GitHubBackupConfig,
+        secret: string,
+        releaseId: number,
+        name: string,
+        blob: Blob,
+        contentType: string,
+      ) => Promise<{ id: number; name: string; size: number; state: string }>
+    }
+    service.cloudFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            message: 'Validation Failed',
+            errors: [{ resource: 'ReleaseAsset', code: 'already_exists', field: 'name' }],
+          }),
+          { status: 422 },
+        ),
+    )
+    service.listGitHubAssets = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 74,
+          name,
+          size: blob.size,
+          digest: `sha256:${await hashCloudBlob(blob)}`,
+          state: 'uploaded',
+          created_at: '2026-10-17T00:00:00.000Z',
+          url: '',
+        },
+      ])
+
+    await expect(
+      service.uploadGitHubAsset(githubConfig, 'token', 41, name, blob, 'application/octet-stream'),
+    ).resolves.toMatchObject({ id: 74, name, size: blob.size, state: 'uploaded' })
+    expect(service.listGitHubAssets).toHaveBeenCalledTimes(2)
   })
 
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=koofr-worker-proxy-test
@@ -682,6 +890,7 @@ describe('CloudBackupService V3', () => {
       id: ++nextAssetId,
       name,
       size: blob.size,
+      digest: `sha256:${/^srl-chunk--sha256-([a-f0-9]{64})$/u.exec(String(name))?.[1] ?? (await hashCloudBlob(blob))}`,
       state: 'uploaded',
       created_at: '2026-08-26T00:00:00Z',
       releaseId,
@@ -790,7 +999,7 @@ describe('CloudBackupService V3', () => {
       'snapshot.srlmanifest.v3.json.gz',
       false,
       expect.objectContaining({ version: 3 }),
-      undefined,
+      expect.any(Function),
     )
     service.reuseUnchangedStructuredBackup = vi.fn(async () => ({
       id: 'manifest-1',
@@ -844,6 +1053,7 @@ describe('CloudBackupService V3', () => {
       [],
       [],
       expect.any(String),
+      expect.objectContaining({ signal: expect.any(AbortSignal), onFailure: expect.any(Function) }),
     )
     expect(restore.prepare).not.toHaveBeenCalled()
   })
@@ -931,30 +1141,21 @@ describe('CloudBackupService V3', () => {
     service.readGitHubStructuredSnapshot = vi.fn(async () => snapshot)
     service.createGitHubObjectReader = vi.fn(async () => async () => new Blob(['object']))
 
-    const listed = await service.listBackupResources({
+    const item = {
       id: '1',
       objectKey: 'snapshot.srlmanifest.v3.json.gz',
       size: 1,
       createdAt: Date.now(),
-      kind: 'githubSnapshot',
-    })
+      kind: 'githubSnapshot' as const,
+    }
+    const listed = await service.listBackupResources(item)
     expect(listed.map((resource) => resource.id)).toEqual([
       snapshot.resources[0]!.id,
       'same-content-different-resource',
       snapshot.resources[2]!.id,
     ])
 
-    await service.restoreBackup(
-      {
-        id: '1',
-        objectKey: 'snapshot.srlmanifest.v3.json.gz',
-        size: 1,
-        createdAt: Date.now(),
-        kind: 'githubSnapshot',
-      },
-      undefined,
-      ['same-content-different-resource'],
-    )
+    await service.restoreBackup(item, undefined, ['same-content-different-resource'])
     expect(restore.restoreStructured).toHaveBeenCalledWith(
       expect.objectContaining({
         resources: [
@@ -966,7 +1167,168 @@ describe('CloudBackupService V3', () => {
       [],
       [],
       expect.any(String),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
+  })
+})
+
+describe('cloud restore selection session', () => {
+  function session(importer?: (data: ArchivePortableData) => Promise<void>) {
+    const resources = vi.fn(async () => [] as Resource[])
+    const restore = {
+      prepare: vi.fn(),
+      restore: vi.fn(async () => ({ restoredResources: 1 })),
+      restoreStructured: vi.fn(async () => ({ restoredResources: 1 })),
+    }
+    const service = new CloudBackupService(
+      { listResourceListSummaries: resources } as unknown as ResourceService,
+      { list: vi.fn(async () => []) } as unknown as CategoryService,
+      {} as ExportService,
+      restore as unknown as RestoreService,
+      undefined,
+      importer,
+    )
+    const state = { config: { ...githubConfig }, secret: 'fixture' }
+    const snapshot = vi.fn(async () => createdSnapshot().snapshot)
+    const download = vi.fn(async () => new Blob(['zip']))
+    Object.assign(service, {
+      initializeCredentials: async () => undefined,
+      getActiveConfig: () => state.config,
+      requireSecret: () => state.secret,
+      readGitHubStructuredSnapshot: snapshot,
+      createGitHubObjectReader: async () => vi.fn(),
+      downloadBackup: download,
+    })
+    const item = {
+      id: '1',
+      objectKey: 'snapshot.srlmanifest.v3.json.gz',
+      kind: 'githubSnapshot' as const,
+      size: 1,
+      createdAt: 1,
+    }
+    return { service, state, snapshot, download, restore, resources, item }
+  }
+
+  it('coalesces concurrent preview reads, reuses the manifest for import, then releases it', async () => {
+    const { service, snapshot, restore, item } = session()
+    const [first, second] = await Promise.all([
+      service.listBackupRestoreContents(item),
+      service.listBackupRestoreContents(item),
+    ])
+    expect(first).toBe(second)
+    expect(snapshot).toHaveBeenCalledOnce()
+    await service.restoreBackup(item)
+    expect(snapshot).toHaveBeenCalledOnce()
+    expect(restore.restoreStructured).toHaveBeenCalledOnce()
+    await service.listBackupRestoreContents(item)
+    expect(snapshot).toHaveBeenCalledTimes(2)
+    await service.clearRestorePreview()
+  })
+
+  it.each(['target', 'credential'] as const)(
+    'rejects an old selection after its %s changes',
+    async (change) => {
+      const { service, state, restore, snapshot, item } = session()
+      await service.listBackupRestoreContents(item)
+      if (change === 'target') state.config.repository = 'another-backup'
+      else state.secret = 'new-credential'
+      await expect(service.restoreBackup(item)).rejects.toThrow('已变化')
+      expect(restore.restoreStructured).not.toHaveBeenCalled()
+      await service.listBackupRestoreContents(item)
+      expect(snapshot).toHaveBeenCalledTimes(2)
+      await service.clearRestorePreview()
+    },
+  )
+
+  it('does not retain failed reads or expose late preview results after closing', async () => {
+    const { service, snapshot, item } = session()
+    snapshot.mockRejectedValueOnce(new Error('read failed'))
+    await expect(service.listBackupRestoreContents(item)).rejects.toThrow('read failed')
+    let finish!: (snapshot: StructuredSnapshot) => void
+    snapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const pending = service.listBackupRestoreContents(item)
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    const closing = service.clearRestorePreview()
+    finish(createdSnapshot().snapshot)
+    await rejected
+    await closing
+    await service.listBackupRestoreContents(item)
+    expect(snapshot).toHaveBeenCalledTimes(3)
+    await service.clearRestorePreview()
+  })
+
+  it('downloads and extracts a ZIP once, remapping preview conflict IDs after metadata replanning', async () => {
+    const { service, download, restore, item } = session()
+    const dispose = vi.fn()
+    const source = cloudResource('a'.repeat(64), 'preview-conflict')
+    const fresh = { ...source, id: 'commit-conflict' }
+    const prepared: PreparedRestore = {
+      resources: [source],
+      versions: [],
+      categories: [],
+      sourceResourceIds: [['archived-id', source.id]],
+      preview: {
+        fileName: 'backup.zip',
+        mode: 'full',
+        createdAt: '',
+        archiveResourceCount: 1,
+        resourcesToAdd: 1,
+        duplicatesToSkip: 0,
+        conflictsToPreserve: 1,
+        categoriesToCreate: 0,
+        categoriesToReuse: 0,
+      },
+      dispose,
+    }
+    prepared.replan = vi.fn(async (): Promise<PreparedRestore> => ({
+      ...prepared,
+      resources: [fresh],
+      sourceResourceIds: [['archived-id', fresh.id]],
+    }))
+    restore.prepare.mockResolvedValue(prepared)
+    const zip = { ...item, kind: 'single' as const, objectKey: 'backup.zip' }
+    const listed = await service.listBackupRestoreContents(zip)
+    expect(listed.resources[0]?.id).toBe(source.id)
+    expect(dispose).not.toHaveBeenCalled()
+    await service.restoreBackup(zip, undefined, [source.id])
+    expect(download).toHaveBeenCalledOnce()
+    expect(restore.prepare).toHaveBeenCalledOnce()
+    expect(prepared.replan).toHaveBeenCalledOnce()
+    expect(restore.restore).toHaveBeenCalledWith(
+      expect.objectContaining({ resources: [fresh] }),
+      undefined,
+      undefined,
+    )
+  })
+
+  it('releases retained ZIP staging when closing the selection', async () => {
+    const { service, restore, item } = session()
+    const dispose = vi.fn()
+    restore.prepare.mockResolvedValue({ resources: [], versions: [], categories: [], dispose })
+    await service.listBackupRestoreContents({ ...item, kind: 'single', objectKey: 'backup.zip' })
+    await service.clearRestorePreview()
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('retries only additional data after resources committed, without rereading or reimporting originals', async () => {
+    const importer = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('settings failed'))
+      .mockResolvedValue(undefined)
+    const { service, snapshot, restore, item } = session(importer)
+    await service.listBackupRestoreContents(item)
+    await expect(service.restoreBackup(item)).rejects.toThrow('settings failed')
+    await expect(service.restoreBackup(item, undefined, [])).rejects.toThrow('保持原选择')
+    await expect(service.restoreBackup(item)).resolves.toBe(1)
+    expect(snapshot).toHaveBeenCalledOnce()
+    expect(restore.restoreStructured).toHaveBeenCalledOnce()
+    expect(importer).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -1045,5 +1407,435 @@ describe('cloud retention no-op', () => {
     })
     expect(await service.prune(githubConfig, 'token')).toBe(0)
     expect(service.readGitHubStructuredSnapshot).not.toHaveBeenCalled()
+  })
+})
+
+it('stops during preparation, rejects overlapping work, and releases the lock only after the original step settles', async () => {
+  let finish!: (value: never[]) => void
+  const summaries = vi
+    .fn()
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    .mockResolvedValue([])
+  const service = createService(
+    {
+      listSummaries: summaries,
+      listVersions: vi.fn(async () => []),
+      listVersionSummaries: vi.fn(async () => []),
+    } as unknown as ResourceService,
+    { list: vi.fn(async () => []) } as unknown as CategoryService,
+  )
+  const upload = vi.fn(async () => ({
+    id: 'fixture',
+    objectKey: 'fixture',
+    kind: 'githubSnapshot',
+  }))
+  Object.assign(service, { uploadGitHubStructuredBackup: upload, prune: vi.fn(async () => 0) })
+  const pending = service.createBackup(githubConfig, 'fixture')
+  const failure = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  await vi.waitFor(() => expect(summaries).toHaveBeenCalledTimes(1))
+  const stopping = service.cancelActiveWebBackup()
+  await expect(service.createBackup(githubConfig, 'fixture')).rejects.toThrow('已有云备份')
+  expect(upload).not.toHaveBeenCalled()
+  finish([])
+  await failure
+  expect(await stopping).toBe('cancelled')
+  expect(upload).not.toHaveBeenCalled()
+  await expect(service.createBackup(githubConfig, 'fixture')).resolves.toMatchObject({
+    id: 'fixture',
+  })
+  expect(upload).toHaveBeenCalledTimes(1)
+})
+it('refuses cancellation once the final manifest commit begins and preserves the successful result', async () => {
+  const service = createService(
+    {
+      listSummaries: vi.fn(async () => []),
+      listVersions: vi.fn(async () => []),
+      listVersionSummaries: vi.fn(async () => []),
+    } as unknown as ResourceService,
+    { list: vi.fn(async () => []) } as unknown as CategoryService,
+  )
+  let commit!: () => void
+  let finish!: (value: { id: string; objectKey: string }) => void
+  Object.assign(service, {
+    uploadGitHubStructuredBackup: vi.fn(
+      (_c, _s, _snapshot, _progress, _constraints, signal, beginCommit) => {
+        expect(signal.aborted).toBe(false)
+        commit = beginCommit
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      },
+    ),
+    prune: vi.fn(async () => 0),
+  })
+  const pending = service.createBackup(githubConfig, 'fixture')
+  await vi.waitFor(() => expect(commit).toBeTypeOf('function'))
+  commit()
+  expect(await service.cancelActiveWebBackup()).toBe('committing')
+  finish({ id: 'committed', objectKey: 'fixture' })
+  await expect(pending).resolves.toMatchObject({ id: 'committed' })
+})
+
+describe('persistent web backup control', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    vi.stubGlobal('localStorage', new MemoryStorage())
+    vi.stubGlobal('sessionStorage', new MemoryStorage())
+    vi.stubGlobal('indexedDB', new IDBFactory())
+    localStorage.setItem('srl.publicWorker.baseUrl.v1', 'https://worker.example')
+    noticeCenter.dismiss('web-cloud-backup')
+  })
+  function sessionService() {
+    const service = createService(
+      {
+        listSummaries: vi.fn(async () => []),
+        listVersions: vi.fn(async () => []),
+        listVersionSummaries: vi.fn(async () => []),
+      } as unknown as ResourceService,
+      { list: vi.fn(async () => []) } as unknown as CategoryService,
+    )
+    Object.assign(service, {
+      getActiveConfig: () => githubConfig,
+      requireSecret: () => 'fixture',
+      prune: vi.fn(async () => 0),
+    })
+    return service
+  }
+  it('retires the committed backup notice and optional task action without clearing backup state', async () => {
+    const service = sessionService()
+    let finish!: (value: { id: string; objectKey: string }) => void
+    Object.assign(service, {
+      uploadGitHubStructuredBackup: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      ),
+    })
+    const pending = service.createBackup(githubConfig, 'fixture')
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    const id = service.getWebBackupState()!.operationId
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      finish({ id: 'committed', objectKey: 'manifest' })
+      await pending
+      expect(
+        noticeCenter.list().find((notice) => notice.id === 'web-cloud-backup')?.persistent,
+      ).toBe(false)
+      expect(taskCenter.list().find((task) => task.operationId === id)?.actionRequired).toBe(false)
+      vi.advanceTimersByTime(4_999)
+      expect(taskCenter.list().some((task) => task.operationId === id)).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(taskCenter.list().some((task) => task.operationId === id)).toBe(false)
+      expect(noticeCenter.list().some((notice) => notice.id === 'web-cloud-backup')).toBe(false)
+      expect(service.getWebBackupState()?.status).toBe('completed')
+    } finally {
+      noticeCenter.dismiss('web-cloud-backup')
+      taskCenter.dismiss(id)
+      vi.useRealTimers()
+    }
+  })
+  it('releases the service lock when the device cannot persist the initial control checkpoint', async () => {
+    const service = sessionService()
+    const upload = vi.fn(async () => ({ id: 'saved', objectKey: 'manifest' }))
+    Object.assign(service, { uploadGitHubStructuredBackup: upload })
+    const storage = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+      throw new Error('storage quota')
+    })
+    try {
+      await expect(service.createBackup(githubConfig, 'fixture')).rejects.toThrow('storage quota')
+      expect(upload).not.toHaveBeenCalled()
+      await expect(service.createBackup(githubConfig, 'fixture')).resolves.toMatchObject({
+        id: 'saved',
+      })
+    } finally {
+      storage.mockRestore()
+    }
+  })
+  it('continues after the page unsubscribes, and exposes the same task to a reopened page', async () => {
+    const service = sessionService()
+    let finish!: (value: { id: string; objectKey: string }) => void
+    Object.assign(service, {
+      uploadGitHubStructuredBackup: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      ),
+    })
+    const first = vi.fn(),
+      remove = service.subscribeWebBackup(first)
+    const pending = service.createBackup(githubConfig, 'fixture')
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    const state = service.getWebBackupState()!
+    expect(state.status).toBe('running')
+    expect(
+      taskCenter.list().find((task) => task.operationId === state.operationId)?.background,
+    ).toBe(false)
+    remove()
+    first.mockClear()
+    const reopened = vi.fn(),
+      removeReopened = service.subscribeWebBackup(reopened)
+    expect(service.getWebBackupState()?.operationId).toBe(state.operationId)
+    finish({ id: 'committed', objectKey: 'manifest' })
+    await pending
+    expect(first).not.toHaveBeenCalled()
+    expect(reopened).toHaveBeenCalled()
+    expect(service.getWebBackupState()?.status).toBe('completed')
+    expect(noticeCenter.list().find((notice) => notice.id === 'web-cloud-backup')?.completed).toBe(
+      true,
+    )
+    removeReopened()
+  })
+  it('pauses a retry wait, persists control across restart, blocks automatic revival and resumes only explicitly', async () => {
+    const service = sessionService()
+    let entered = false,
+      retries = 0
+    Object.assign(service, {
+      uploadGitHubStructuredBackup: vi.fn(async (_c, _s, _snap, _p, _a, signal) => {
+        entered = true
+        await waitForCloudRetry(60_000, signal)
+        retries++
+        throw new Error('must not retry after pause')
+      }),
+    })
+    const pending = service.createBackup(githubConfig, 'fixture')
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(entered).toBe(true))
+    await service.pauseActiveWebBackup()
+    await rejected
+    expect(retries).toBe(0)
+    expect(service.getWebBackupState()?.status).toBe('paused')
+    const restarted = sessionService()
+    const upload = vi.fn(async () => ({ id: 'resumed', objectKey: 'new-manifest' }))
+    Object.assign(restarted, { uploadGitHubStructuredBackup: upload })
+    expect(restarted.getWebBackupState()?.status).toBe('paused')
+    expect(await restarted.runDueBackup()).toBe('waiting')
+    expect(upload).not.toHaveBeenCalled()
+    await restarted.cancelActiveWebBackup()
+    expect(restarted.getWebBackupState()?.status).toBe('stopped')
+    expect(await restarted.runDueBackup()).toBe('waiting')
+    await restarted.resumeWebBackup()
+    expect(upload).toHaveBeenCalledOnce()
+    expect(restarted.getWebBackupState()?.status).toBe('completed')
+  })
+  it.each(['stopped', 'failed'] as const)(
+    'keeps a %s backup quiet across lifecycle checks and reopening until explicit continuation',
+    async (status) => {
+      const operationId = `${status}-backup-from-previous-session`
+      localStorage.setItem(
+        'srl.cloudBackup.status.v1',
+        JSON.stringify({
+          webBackup: {
+            operationId,
+            status,
+            phase: status === 'stopped' ? '备份已停止；已完成对象保留' : '云备份失败',
+            target: githubConfig,
+          },
+        }),
+      )
+      const checkpoint = localStorage.getItem('srl.cloudBackup.status.v1')
+      const upload = vi.fn(async () => ({ id: 'resumed', objectKey: 'new-manifest' }))
+      let reopened!: CloudBackupService
+      try {
+        for (let session = 0; session < 2; session++) {
+          reopened = sessionService()
+          Object.assign(reopened, { uploadGitHubStructuredBackup: upload })
+          expect(await reopened.runDueBackup()).toBe('waiting')
+          expect(await reopened.runDueBackup()).toBe('waiting')
+          expect(reopened.getWebBackupState()?.status).toBe(status)
+          expect(localStorage.getItem('srl.cloudBackup.status.v1')).toBe(checkpoint)
+          expect(upload).not.toHaveBeenCalled()
+          expect(taskCenter.list().some((task) => task.operationId === operationId)).toBe(false)
+          expect(noticeCenter.list().some((notice) => notice.id === 'web-cloud-backup')).toBe(false)
+        }
+        await reopened.resumeWebBackup()
+        expect(upload).toHaveBeenCalledOnce()
+        expect(reopened.getWebBackupState()?.status).toBe('completed')
+      } finally {
+        taskCenter.dismiss(operationId)
+        const resumedId = reopened?.getWebBackupState()?.operationId
+        if (resumedId) taskCenter.dismiss(resumedId)
+        noticeCenter.dismiss('web-cloud-backup')
+      }
+    },
+  )
+  it('reports a live failure once and does not resurrect dismissed failure cards', async () => {
+    const service = sessionService()
+    const upload = vi.fn(async () => {
+      throw new Error('fixture upload failed')
+    })
+    Object.assign(service, { uploadGitHubStructuredBackup: upload })
+    const notices = vi.spyOn(noticeCenter, 'push')
+    let operationId = ''
+    try {
+      await expect(service.createBackup(githubConfig, 'fixture')).rejects.toThrow(
+        'fixture upload failed',
+      )
+      operationId = service.getWebBackupState()!.operationId
+      expect(service.getWebBackupState()?.status).toBe('failed')
+      expect(taskCenter.list().find((task) => task.operationId === operationId)?.status).toBe(
+        'failed',
+      )
+      expect(
+        notices.mock.calls.filter(
+          ([notice]) => notice.id === 'web-cloud-backup' && notice.type === 'error',
+        ),
+      ).toHaveLength(1)
+      taskCenter.dismiss(operationId)
+      noticeCenter.dismiss('web-cloud-backup')
+      for (const owner of [service, sessionService()]) {
+        expect(await owner.runDueBackup()).toBe('waiting')
+        expect(await owner.runDueBackup()).toBe('waiting')
+        expect(taskCenter.list().some((task) => task.operationId === operationId)).toBe(false)
+        expect(noticeCenter.list().some((notice) => notice.id === 'web-cloud-backup')).toBe(false)
+      }
+      expect(upload).toHaveBeenCalledOnce()
+      expect(
+        notices.mock.calls.filter(
+          ([notice]) => notice.id === 'web-cloud-backup' && notice.type === 'error',
+        ),
+      ).toHaveLength(1)
+    } finally {
+      taskCenter.dismiss(operationId)
+      noticeCenter.dismiss('web-cloud-backup')
+      notices.mockRestore()
+    }
+  })
+  it.each(['paused', 'running'] as const)(
+    'keeps the continuation reminder for an unfinished %s backup without uploading',
+    async (status) => {
+      const operationId = `unfinished-${status}-backup`
+      localStorage.setItem(
+        'srl.cloudBackup.status.v1',
+        JSON.stringify({
+          webBackup: { operationId, status, phase: '待继续备份', target: githubConfig },
+        }),
+      )
+      const service = sessionService()
+      const upload = vi.fn()
+      Object.assign(service, { uploadGitHubStructuredBackup: upload })
+      try {
+        expect(await service.runDueBackup()).toBe('waiting')
+        expect(await service.runDueBackup()).toBe('waiting')
+        expect(upload).not.toHaveBeenCalled()
+        expect(taskCenter.list().filter((task) => task.operationId === operationId)).toHaveLength(1)
+        expect(
+          noticeCenter.list().filter((notice) => notice.id === 'web-cloud-backup'),
+        ).toHaveLength(1)
+      } finally {
+        taskCenter.dismiss(operationId)
+        noticeCenter.dismiss('web-cloud-backup')
+      }
+    },
+  )
+  it('does not restart a failed scheduled backup on later lifecycle checks', async () => {
+    const service = sessionService()
+    Object.assign(service, {
+      initializeCredentials: vi.fn(async () => undefined),
+      getSnapshot: () => ({
+        activeProvider: 'github',
+        github: { ...githubConfig, autoBackup: true },
+        status: { lastAttemptAt: Date.now() - 60 * 60 * 1000, lastError: '401: 请重新登录' },
+      }),
+      getSecret: () => 'fixture',
+      hasActiveNativeBackup: vi.fn(async () => false),
+      createBackup: vi.fn(async () => {
+        throw new Error('must require explicit continuation')
+      }),
+    })
+
+    expect(await service.runDueBackup()).toBe('waiting')
+    expect(await service.runDueBackup()).toBe('waiting')
+    expect(service.createBackup).not.toHaveBeenCalled()
+  })
+  it('restores an interrupted running checkpoint as paused without retaining credentials, and refuses a changed target', async () => {
+    localStorage.setItem(
+      'srl.cloudBackup.status.v1',
+      JSON.stringify({
+        webBackup: {
+          operationId: 'interrupted-backup',
+          status: 'running',
+          phase: 'upload',
+          target: githubConfig,
+        },
+      }),
+    )
+    const service = sessionService()
+    expect(service.getWebBackupState()?.status).toBe('paused')
+    Object.assign(service, { getActiveConfig: () => ({ ...githubConfig, repository: 'other' }) })
+    await expect(service.resumeWebBackup()).rejects.toThrow('原来的云端目标')
+    expect(JSON.stringify(service.getWebBackupState())).not.toContain('fixture')
+  })
+  it('resumes the real V3 object pipeline without reuploading verified bytes and commits just one complete manifest', async () => {
+    const resources = await Promise.all(
+      Array.from({ length: 5 }, async (_, index) => {
+        const resource = cloudResource(index + '-resource', 'object-' + index)
+        resource.contentHash = await hashCloudBlob(resource.originalBlob)
+        return resource
+      }),
+    )
+    const service = createService(
+      {
+        listSummaries: vi.fn(async () => resources),
+        listVersions: vi.fn(async () => []),
+        listVersionSummaries: vi.fn(async () => []),
+        get: vi.fn(async (id) => resources.find((resource) => resource.id === id)),
+        updateBackupDescriptor: vi.fn(async (id, descriptor) => {
+          resources.find((resource) => resource.id === id)!.backupDescriptor = descriptor
+        }),
+      } as unknown as ResourceService,
+      { list: vi.fn(async () => []) } as unknown as CategoryService,
+    )
+    const remote = new Map<string, Blob>(),
+      uploaded = new Map<string, number>()
+    let pausing = true
+    const originalContext = (
+      service as unknown as {
+        getTransportContext: (signal?: AbortSignal, commit?: () => void) => object
+      }
+    ).getTransportContext.bind(service)
+    const transfers = {
+      ensureWebDavFolder: async () => undefined,
+      listWebDavObjects: async () =>
+        [...remote].map(([objectKey, blob]) => ({ objectKey, size: blob.size, createdAt: 1 })),
+      uploadWebDavObject: async (_config: unknown, _secret: unknown, key: string, blob: Blob) => {
+        remote.set(key, blob)
+        uploaded.set(key, (uploaded.get(key) ?? 0) + 1)
+        if (pausing && remote.size === 2) {
+          pausing = false
+          void service.pauseActiveWebBackup()
+        }
+      },
+    }
+    Object.assign(service, {
+      getActiveConfig: () => webDavConfig,
+      requireSecret: () => 'fixture',
+      prune: async () => 0,
+      getTransportContext: (signal?: AbortSignal, commit?: () => void) =>
+        Object.assign(Object.create(originalContext(signal, commit)), transfers),
+    })
+    await expect(service.createBackup(webDavConfig, 'fixture')).rejects.toMatchObject({
+      name: 'AbortError',
+    })
+    expect(service.getWebBackupState()?.status).toBe('paused')
+    expect([...remote.keys()].some((key) => key.startsWith('snapshots/'))).toBe(false)
+    await service.resumeWebBackup()
+    const manifests = [...remote].filter(([key]) => key.startsWith('snapshots/'))
+    expect(manifests).toHaveLength(1)
+    const manifest = await decodeStructuredSnapshot(manifests[0]![1])
+    expect(manifest.resources).toHaveLength(5)
+    for (const resource of manifest.resources) {
+      for (const part of resource.object.parts) {
+        const key = `objects/${part.name}`
+        expect(uploaded.get(key)).toBe(1)
+        expect(await hashCloudBlob(remote.get(key)!)).toBe(part.sha256)
+      }
+    }
   })
 })

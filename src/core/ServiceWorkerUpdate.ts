@@ -2,7 +2,10 @@ import { registerSW } from 'virtual:pwa-register'
 
 import { isCapacitorApp } from '../utils/CapacitorDetection'
 import { relaunchCurrentShell } from './ServiceWorkerReload'
-import { startServiceWorkerUpdateChecks } from './ServiceWorkerUpdateChecks'
+import {
+  requestServiceWorkerUpdate,
+  startServiceWorkerUpdateChecks,
+} from './ServiceWorkerUpdateChecks'
 import { ASSISTANT_PET_ASSET_CACHE_NAME } from '../services/ProductAssistantPetAssets'
 
 const BANNER_ID = 'srl-update-notice'
@@ -22,6 +25,7 @@ function createUpdateState() {
   let stopPendingRelaunch: (() => void) | undefined
   let relaunchRequested = false
   let registrationFailed = false
+  let manualCheck: Promise<string> | undefined
 
   function relaunchOnce(): void {
     if (relaunchRequested) return
@@ -100,7 +104,14 @@ function createUpdateState() {
    * 手动触发更新检查，返回是否有新版本可用。
    * 可在设置中由用户主动调用，不依赖定时器或前台切换。
    */
-  async function manualCheckForUpdate(): Promise<string> {
+  function manualCheckForUpdate(): Promise<string> {
+    manualCheck ??= runManualCheck().finally(() => {
+      manualCheck = undefined
+    })
+    return manualCheck
+  }
+
+  async function runManualCheck(): Promise<string> {
     if (isCapacitorApp()) return 'APK 中不使用网页更新，请使用“检查 APK 版本更新”'
     if (!activeRegistration) {
       if (!('serviceWorker' in navigator))
@@ -121,7 +132,7 @@ function createUpdateState() {
     }
 
     try {
-      await activeRegistration.update()
+      await requestServiceWorkerUpdate(activeRegistration)
       if (activeRegistration.waiting) {
         showUpdateBanner(applyUpdateAndRelaunch)
         return '发现新版本，点击上方"立即刷新"使用'

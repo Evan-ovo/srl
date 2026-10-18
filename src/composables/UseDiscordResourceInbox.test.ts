@@ -1,3 +1,7 @@
+vi.mock('../services/WebBackgroundKeepAlive', async (original) => ({
+  ...(await original<typeof import('../services/WebBackgroundKeepAlive')>()),
+  requestWebBackgroundAudio: async () => () => undefined,
+}))
 /** @vitest-environment jsdom */
 import { defineComponent, ref } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -713,6 +717,82 @@ describe('cloud resource coordination', () => {
       expect(taskCenter.list()).toEqual([])
       expect(setup.stage).not.toHaveBeenCalled()
       expect(setup.refresh).toHaveBeenCalledOnce()
+      expect(setup.refresh).toHaveBeenCalledWith(['native-resource-1'])
+    },
+  )
+
+  it('retains the full refresh fallback for an old native receipt without a resource ID', async () => {
+    setup.native = true
+    setup.nativeRead.mockResolvedValue({
+      transferredBytes: 12,
+      nativeImportOutcome: { state: 'imported' },
+    })
+    start()
+    await flushPromises()
+    expect(setup.refresh).toHaveBeenCalledExactlyOnceWith()
+    expect(setup.cleanupNative).toHaveBeenCalledOnce()
+  })
+
+  it.each(['lock', 'target', 'unmount'] as const)(
+    'ignores a native success read arriving after %s',
+    async (change) => {
+      setup.native = true
+      let finish!: (value: unknown) => void
+      setup.nativeRead.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      const intake = start()
+      await flushPromises()
+      if (change === 'lock') intake.vault.value = { locked: true } as VaultStatus
+      else if (change === 'target') setup.target = { ...target, libraryId: 'other' }
+      else intake.wrapper.unmount()
+      finish({
+        transferredBytes: 12,
+        nativeImportOutcome: { state: 'imported', resourceId: 'saved' },
+      })
+      await flushPromises()
+      expect(setup.refresh).not.toHaveBeenCalled()
+      expect(setup.ack).not.toHaveBeenCalled()
+      expect(setup.cleanupNative).not.toHaveBeenCalled()
+      expect(intake.receive).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['lock', 'target', 'unmount'] as const)(
+    'retains a receipt when its refresh finishes after %s',
+    async (change) => {
+      setup.native = true
+      const outcome = {
+        transferredBytes: 12,
+        nativeImportOutcome: { state: 'imported', resourceId: 'saved' },
+      }
+      setup.nativeRead.mockResolvedValue(outcome)
+      let finish!: () => void
+      setup.refresh.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve
+          }),
+      )
+      const intake = start()
+      await flushPromises()
+      expect(setup.refresh).toHaveBeenCalledExactlyOnceWith(['saved'])
+      if (change === 'lock') intake.vault.value = { locked: true } as VaultStatus
+      else if (change === 'target') setup.target = { ...target, libraryId: 'other' }
+      else intake.wrapper.unmount()
+      finish()
+      await flushPromises()
+      expect(setup.ack).not.toHaveBeenCalled()
+      expect(setup.cleanupNative).not.toHaveBeenCalled()
+      if (change === 'lock') {
+        intake.vault.value = { locked: false } as VaultStatus
+        await flushPromises()
+        expect(setup.ack).toHaveBeenCalledWith(job.id, 'imported', target, undefined)
+        expect(setup.cleanupNative).toHaveBeenCalledOnce()
+      }
     },
   )
 
@@ -731,6 +811,7 @@ describe('cloud resource coordination', () => {
     const intake = start()
     await flushPromises()
     expect(setup.refresh).toHaveBeenCalledOnce()
+    expect(setup.refresh).toHaveBeenCalledWith(['existing-card'])
     expect(intake.receive).not.toHaveBeenCalled()
     expect(setup.cleanupNative).not.toHaveBeenCalled()
   })

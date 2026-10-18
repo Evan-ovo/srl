@@ -115,6 +115,32 @@ describe('ServiceWorkerUpdate early PWA checks', () => {
     return import('./ServiceWorkerUpdate')
   }
 
+  it('shares a pending automatic check with overlapping manual checks and permits the next check', async () => {
+    let finish!: () => void
+    const gate = new Promise<void>((resolve) => (finish = resolve))
+    const update = vi.fn(() => gate)
+    const registration = { update, installing: {} }
+    const getRegistration = vi.fn(async () => registration)
+    const api = await updater({ getRegistration })
+    const { startServiceWorkerUpdateChecks } = await import('./ServiceWorkerUpdateChecks')
+    const stop = startServiceWorkerUpdateChecks(registration as never)
+    try {
+      const first = api.manualCheckForUpdate()
+      const second = api.manualCheckForUpdate()
+      await Promise.resolve()
+      finish()
+      expect(await first).toContain('正在下载新版本')
+      expect(await second).toContain('正在下载新版本')
+      expect(update).toHaveBeenCalledTimes(1)
+      expect(getRegistration).toHaveBeenCalledTimes(1)
+      update.mockResolvedValueOnce()
+      await api.manualCheckForUpdate()
+      expect(update).toHaveBeenCalledTimes(2)
+    } finally {
+      stop()
+    }
+  })
+
   it('checks the browser registration before the delayed page registration callback has run', async () => {
     const update = vi.fn(async () => undefined)
     const registration = { update, installing: {} }

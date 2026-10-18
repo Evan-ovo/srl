@@ -60,7 +60,7 @@ export function hasResourceDetailDraftChanges(
     invalidDraftLink ||
     sortedJson(normalizeResourceLinks(draft.sourceLinks ?? [])) !==
       sortedJson(normalizeResourceLinks(resource.sourceLinks ?? [])) ||
-    sortedJson(draft.characterOverrides) !==
+    sortedJson(readCharacterCardOverrides({ characterOverrides: draft.characterOverrides })) !==
       sortedJson(readCharacterCardOverrides(resource.metadata)) ||
     sortedJson(draft.characterContentEdits) !==
       sortedJson(readCharacterCardContentEdits(resource.metadata.characterContentEdits))

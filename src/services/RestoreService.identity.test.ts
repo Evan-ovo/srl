@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AppDatabase } from '../database/AppDatabase'
 import { IndexedDbArchiveStorage } from '../storage/IndexedDbArchiveStorage'
 import { IndexedDbResourceStorage } from '../storage/IndexedDbResourceStorage'
@@ -71,6 +71,34 @@ function structured(resource: Resource): StructuredResource {
 }
 
 describe('restore the same backup repeatedly', () => {
+  it('replans verified ZIP staging against new conflicts without re-extracting or reading original bodies', async () => {
+    const db = new AppDatabase(`zip-replan-${crypto.randomUUID()}`)
+    const staging = new IndexedDbRestoreStagingStore(db)
+    const service = new RestoreService(new IndexedDbArchiveStorage(db), staging)
+    const records = await fixture()
+    const archive = await new ExportService().createArchive(records, [], { mode: 'full' })
+    const initial = await service.prepare(new File([archive.blob], archive.fileName), [], [], true)
+    const write = vi.spyOn(staging, 'putChunk')
+    const body = vi.spyOn(staging, 'get')
+    try {
+      const existing = [{ ...records[0]!, contentHash: 'f'.repeat(64) }]
+      const replanned = await initial.replan!(existing, [])
+      expect(replanned.resources).toHaveLength(records.length)
+      expect(replanned.resources[0]!.id).not.toBe(records[0]!.id)
+      expect(new Map(replanned.sourceResourceIds).get(records[0]!.id)).toBe(
+        replanned.resources[0]!.id,
+      )
+      expect(replanned.staging?.jobId).toBe(initial.staging?.jobId)
+      expect(write).not.toHaveBeenCalled()
+      expect(body).not.toHaveBeenCalled()
+    } finally {
+      await initial.dispose?.()
+      write.mockRestore()
+      body.mockRestore()
+      db.close()
+      await db.delete()
+    }
+  })
   it.each(['zip', 'structured', 'native', 'encrypted'] as const)(
     '%s adds no hidden avatars or history on repeat',
     async (mode) => {

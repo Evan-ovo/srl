@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const runtime = vi.hoisted(() => ({
-  play: vi.fn(),
-  stop: vi.fn(),
+  audioRequest: vi.fn(async (_name: string, _signal?: AbortSignal) => () => undefined),
+  audioAcquire: vi.fn(),
+  audioRelease: vi.fn(),
   initialize: vi.fn(),
   locked: false,
   connection: {
@@ -13,10 +14,12 @@ const runtime = vi.hoisted(() => ({
 }))
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => false } }))
 vi.mock('./WebBackgroundKeepAlive', () => ({
-  WebBackgroundKeepAlive: class {
-    start = runtime.play
-    stop = runtime.stop
+  acquireWebBackgroundAudio: () => {
+    runtime.audioAcquire()
+    return runtime.audioRelease
   },
+  requestWebBackgroundAudio: runtime.audioRequest,
+  withWebBackgroundAudio: (_name: string, run: (...args: unknown[]) => unknown) => run,
 }))
 vi.mock('./DiscordHandoffService', () => ({ inboxConnection: () => ({ ...runtime.connection }) }))
 vi.mock('../core/LibraryContainer', () => ({
@@ -40,7 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   runtime.locked = false
   runtime.connection.libraryId = 'library-1'
-  runtime.play.mockResolvedValue(undefined)
+  runtime.audioRequest.mockResolvedValue(() => undefined)
   runtime.initialize.mockResolvedValue(undefined)
 })
 afterEach(() => {
@@ -94,12 +97,13 @@ describe('explicit browser inbox session', () => {
     expect(isWebDiscordInboxRunning()).toBe(false)
     expect(isWebDiscordInboxPaused()).toBe(true)
   })
-  it('starts and stops receiving without starting or stopping global audio', async () => {
+  it('hands confirmed audio to the original task owner and releases it after safe pause', async () => {
     await startWebDiscordInbox()
     expect(isWebDiscordInboxRunning()).toBe(true)
     await pauseWebDiscordInbox()
-    expect(runtime.play).not.toHaveBeenCalled()
-    expect(runtime.stop).not.toHaveBeenCalled()
+    expect(runtime.audioRequest).toHaveBeenCalledWith('后台收件', expect.any(AbortSignal))
+    expect(runtime.audioAcquire).toHaveBeenCalledOnce()
+    expect(runtime.audioRelease).toHaveBeenCalledOnce()
   })
   it('stops a changed target and does not silently restart on vault unlock', async () => {
     await startWebDiscordInbox()

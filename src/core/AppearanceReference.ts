@@ -296,7 +296,7 @@ export function vueReferenceExample(chapter: ReferenceChapter): string {
   const title = JSON.stringify(chapter.scope.title).replaceAll('<', '\\u003c')
   return `<script setup>\nimport { ref } from 'vue'\nimport { usePage } from './Page.js'\nconst page = usePage()\nconst { Layout, Region } = page\nconst title = ref(${title})\nconst menu = ref(false)\n</script>\n<template>\n  <Layout>\n    <h1>{{ title }}</h1>\n    <button @click="menu = !menu">更多操作</button>\n    <section v-if="menu">自己的菜单</section>\n    <Region body />\n  </Layout>\n</template>`
 }
-export const VUE_REFERENCE_BOUNDARY = `在对应 APP 创建 View.vue，Page.js 随新模板提供。用 page.controls() 查看当前可调用的原控件；CSS 类不等于操作接口。资源保存与导出仍由原 APP 执行，无法直接读取宿主数据库或凭据。先预览，再启用、保存与试用；恢复默认或 Alt + Shift + 0 可回到原界面。联网由设置“允许远程资源”控制，默认关闭。`
+export const VUE_REFERENCE_BOUNDARY = `在对应 APP 创建 View.vue，Page.js 随新模板提供。用 page.controls() 查看当前可调用的原控件；CSS 类不等于操作接口。资源保存与导出仍由原 APP 执行，无法直接读取宿主数据库或凭据。原生图片长列表可在顶层自然高度容器加 data-srl-host-scroll，让模板与原图由宿主同层滚动；该容器不要用 iframe 的 100vh/dvh 作为最小高度，退出布局时移除标记。旧宿主不识别该标记时仍沿原滚动路线，需要更新宿主才能消除跨层滑动错位。原生区域支持属性变化、平移和轴向缩放，按祖先矩形裁切与常见定位遮罩限制可见和点击区域；动画仅在影响布局期间同步。用 Web Animations 等不改 DOM 属性的 API 启动动画后可调用 srlUi.refreshLayout()。读了么阅读工作区作为整体原生区域保留，正文不进入作者快照，内部阅读外观仍沿读了么设置管理。任意旋转、复杂非矩形路径和跨文档半透明混色不保证与单文档相同；几何动画仍有异步传递边界，不能宣称逐帧像素同步。先预览，再启用、保存与试用；恢复默认或 Alt + Shift + 0 可回到原界面。联网由设置“允许远程资源”控制，默认关闭。`
 
 export function referenceMarkdown(chapters: ReferenceChapter[], kind: ReferenceExportKind): string {
   const sections = [

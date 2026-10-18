@@ -819,3 +819,42 @@ describe('ExternalAppService', () => {
     }
   })
 })
+
+it('blocks HTTPS after a declared network grant is revoked, keeps source/data and notifies the live host', async () => {
+  const service = createService('network-revocation')
+  const preview = await service.inspect(
+    createPackage({
+      ...manifest,
+      schemaVersion: 2,
+      apiVersion: 'srl-app-api@1',
+      permissions: ['app.storage', 'network.https'],
+    }),
+  )
+  const app = await service.install(preview, 'trustedCompatible')
+  const changed = vi.fn()
+  const unsubscribe = service.subscribeAccessChanges(changed)
+  await service.setData(app.id, 'saved', { keep: true })
+  await service.setAllowedPermissions(app.id, ['app.storage'])
+  const denied = await service.get(app.id)
+  expect(denied?.runtimeHtml).toContain("connect-src 'none'")
+  expect(denied?.packageFingerprint).toBe(app.packageFingerprint)
+  expect(await service.getData(app.id, 'saved')).toEqual({ keep: true })
+  expect(changed).toHaveBeenCalledWith(app.id)
+  await service.setAllowedPermissions(app.id, ['app.storage', 'network.https'])
+  expect((await service.get(app.id))?.runtimeHtml).toBe(app.runtimeHtml)
+  unsubscribe()
+})
+
+it('places the network restriction ahead of scripts even with angle brackets in head attributes', async () => {
+  const { restrictExternalAppNetwork } = await import('./ExternalAppRuntime')
+  const html = restrictExternalAppNetwork(
+    '<html><head data-angle=">"><script>window.audit=1</script></head><body>kept</body></html>',
+  )
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  expect(document.head.firstElementChild?.getAttribute('http-equiv')).toBe(
+    'Content-Security-Policy',
+  )
+  expect(document.head.firstElementChild?.getAttribute('content')).toContain("connect-src 'none'")
+  expect(document.head.getAttribute('data-angle')).toBe('>')
+  expect(document.body.textContent).toBe('kept')
+})

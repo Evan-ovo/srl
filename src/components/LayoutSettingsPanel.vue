@@ -28,6 +28,7 @@ import MainApiSettings from './MainApiSettings.vue'
 import RelayWorkerSettings from './RelayWorkerSettings.vue'
 import SecretProtectionSettings from './SecretProtectionSettings.vue'
 import ResourceHealthCenter from './ResourceHealthCenter.vue'
+import LocalDataResetControls from './LocalDataResetControls.vue'
 import {
   stopWebBackgroundAudio,
   startWebBackgroundAudio,
@@ -117,7 +118,7 @@ const unsubscribeBackgroundAudio = subscribeWebBackgroundAudio(() => {
 async function toggleBackgroundAudio(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const enabled = input.checked
-  input.checked = backgroundAudio.value.status === 'running'
+  input.checked = backgroundAudio.value.manual
   audioError.value = ''
   try {
     if (enabled) await startWebBackgroundAudio()
@@ -138,6 +139,8 @@ function refreshNotificationPermission(): void {
   } else webNotificationPermission.value = webInboxNotificationStatus()
 }
 const nativeSafBackup = ref<NativeSafBackupStatus | null>(null)
+const safBackupMessage = ref('')
+const safBackupBusy = ref(false)
 const nativeHapticsEnabled = ref(isNativeHapticsEnabled())
 const nativeSystemUiState = ref<NativeSystemUiState | null>(null)
 const offlineResourceStatus = ref<OfflineResourceStatus | null>(null)
@@ -243,12 +246,34 @@ function formatBytes(bytes?: number): string {
 }
 
 async function chooseSafBackupDirectory(): Promise<void> {
-  nativeSafBackup.value = await platform.backup.chooseDirectory().catch(() => nativeSafBackup.value)
+  if (safBackupBusy.value) return
+  safBackupBusy.value = true
+  safBackupMessage.value = ''
+  try {
+    nativeSafBackup.value = await platform.backup.chooseDirectory()
+    safBackupMessage.value = nativeSafBackup.value?.warning || ''
+  } catch (error) {
+    safBackupMessage.value =
+      error instanceof Error ? error.message : '文件夹选择未完成，原配置保留。'
+  } finally {
+    safBackupBusy.value = false
+  }
 }
 
 async function clearSafBackupDirectory(): Promise<void> {
-  await platform.backup.clearDirectory()
-  nativeSafBackup.value = await platform.backup.getStatus().catch(() => null)
+  if (safBackupBusy.value) return
+  safBackupBusy.value = true
+  safBackupMessage.value = '正在停止备份写入并撤销目录授权…'
+  try {
+    const result = await platform.backup.clearDirectory()
+    nativeSafBackup.value = result ?? (await platform.backup.getStatus())
+    safBackupMessage.value = result?.warning || '已取消备份目录。'
+  } catch (error) {
+    safBackupMessage.value =
+      error instanceof Error ? error.message : '取消目录授权失败，原配置保留。'
+  } finally {
+    safBackupBusy.value = false
+  }
 }
 
 function toggleNativeHaptics(event: Event): void {
@@ -729,7 +754,7 @@ async function clearOfflineResources(): Promise<void> {
           </header>
           <label v-if="!isNativeApk" class="settings-switch-row">
             <span>
-              <strong>后台音频保活</strong>
+              <strong>手动常开后台音频保活</strong>
               <small v-if="audioError" role="alert">{{ audioError }}</small>
               <small v-else-if="backgroundAudio.message" role="status">{{
                 backgroundAudio.message
@@ -737,11 +762,15 @@ async function clearOfflineResources(): Promise<void> {
               <small v-else-if="backgroundAudio.status === 'starting'" role="status"
                 >正在开启…</small
               >
+              <small v-else-if="backgroundAudio.tasks && !backgroundAudio.manual" role="status"
+                >本次任务保活中，结束后自动关闭。</small
+              >
+              <small v-else>手动开启后持续保活，不随任务结束关闭。</small>
             </span>
             <input
               type="checkbox"
               aria-label="后台音频保活"
-              :checked="backgroundAudio.status === 'running'"
+              :checked="backgroundAudio.manual"
               :disabled="backgroundAudio.status === 'starting'"
               @change="toggleBackgroundAudio"
             />
@@ -866,6 +895,7 @@ async function clearOfflineResources(): Promise<void> {
           >
             <span>
               <strong id="saf-backup-title">系统文件夹备份</strong>
+              <small v-if="safBackupMessage" role="status">{{ safBackupMessage }}</small>
               <small v-if="!nativeSafBackup?.configured">
                 尚未选择文件夹。选择后，SRL 完整导出会直接保存到该文件夹，不申请全盘文件权限。
               </small>
@@ -884,15 +914,16 @@ async function clearOfflineResources(): Promise<void> {
               </small>
             </span>
             <div class="settings-number-row__control">
-              <button type="button" @click="chooseSafBackupDirectory">
+              <button type="button" :disabled="safBackupBusy" @click="chooseSafBackupDirectory">
                 {{ nativeSafBackup?.configured ? '重新选择' : '选择文件夹' }}
               </button>
               <button
                 v-if="nativeSafBackup?.configured"
                 type="button"
+                :disabled="safBackupBusy"
                 @click="clearSafBackupDirectory"
               >
-                取消授权
+                {{ safBackupBusy ? '正在撤销…' : '取消授权' }}
               </button>
             </div>
           </section>
@@ -978,8 +1009,8 @@ async function clearOfflineResources(): Promise<void> {
             <i>↺</i>
           </button>
         </section>
+        <LocalDataResetControls />
       </div>
-
       <footer class="layout-settings__footer">
         <span> API 配置需单独保存 </span>
         <button class="button button--primary" type="button" @click="emit('close')">完成</button>

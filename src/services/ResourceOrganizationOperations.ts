@@ -2,7 +2,7 @@ import type {
   ResourceMetadataPatch,
   ResourceStorageAdapter,
 } from '../storage/ResourceStorageAdapter'
-import { galleryOwnerId, isResourceGalleryImage } from '../types/ResourceGallery'
+import { resourceOwnedFileOwnerId, isResourceOwnedFile } from '../types/ResourceAttachment'
 import { moveResourceGallery } from './ResourceGalleryService'
 import { RestoreDuplicateIndex } from '../utils/RestoreIdentity'
 import {
@@ -11,7 +11,6 @@ import {
   isUserPersonaAvatarAttachment,
   normalizeResourceLinkUrl,
   normalizeResourceLinks,
-  normalizeResource,
   toResourceListSummary,
   RESOURCE_TYPE,
   type Resource,
@@ -219,9 +218,14 @@ export async function restoreRelatedLinks(
       requiredLinks.set(relatedId, sources)
     }
   }
-  const targets = (
-    await Promise.all(Array.from(requiredLinks.keys(), (id) => storage.get(id)))
-  ).flatMap((resource) => (resource ? [resource] : []))
+  await appendRelatedLinks(storage, requiredLinks)
+}
+
+async function appendRelatedLinks(
+  storage: ResourceStorageAdapter,
+  requiredLinks: Map<string, Set<string>>,
+): Promise<string[]> {
+  const targets = await readSelectedSummaries(storage, Array.from(requiredLinks.keys()))
   const now = Date.now()
   const changed = targets.flatMap((resource) => {
     const additions = requiredLinks.get(resource.id)
@@ -231,14 +235,14 @@ export async function restoreRelatedLinks(
     for (const sourceId of additions) relatedResourceIds.add(sourceId)
     if (relatedResourceIds.size === before) return []
     return [
-      normalizeResource({
-        ...resource,
-        relatedResourceIds: Array.from(relatedResourceIds),
-        updatedAt: now,
-      }),
+      {
+        id: resource.id,
+        changes: { relatedResourceIds: Array.from(relatedResourceIds), updatedAt: now },
+      },
     ]
   })
-  if (changed.length) await storage.saveMany(changed)
+  await writeMetadataPatches(storage, changed)
+  return targets.map((target) => target.id)
 }
 
 export async function moveManyToCategory(
@@ -248,14 +252,22 @@ export async function moveManyToCategory(
 ): Promise<void> {
   if (!ids.length) return
   const now = Date.now()
-  const patches = (await readSelectedSummaries(storage, ids)).map((resource) => {
+  const patches = (await readSelectedSummaries(storage, ids)).flatMap((resource) => {
     const categoryIds = categoryId
       ? Array.from(new Set([...getResourceCategoryIds(resource), categoryId]))
       : []
-    return {
-      id: resource.id,
-      changes: { categoryId: categoryIds[0] ?? null, categoryIds, updatedAt: now },
-    }
+    if (
+      resource.categoryId === (categoryIds[0] ?? null) &&
+      resource.categoryIds?.length === categoryIds.length &&
+      resource.categoryIds.every((id, index) => id === categoryIds[index])
+    )
+      return []
+    return [
+      {
+        id: resource.id,
+        changes: { categoryId: categoryIds[0] ?? null, categoryIds, updatedAt: now },
+      },
+    ]
   })
   await writeMetadataPatches(storage, patches)
 }
@@ -293,18 +305,20 @@ export async function updateTagsMany(
   const normalizedTag = tag.trim()
   if (!ids.length || !normalizedTag) throw new Error('请输入标签名称')
   const now = Date.now()
-  const patches = (await readSelectedSummaries(storage, ids)).map((resource) => ({
-    id: resource.id,
-    changes: {
-      tags:
-        action === 'add'
-          ? normalizeTags([...resource.tags, normalizedTag])
-          : resource.tags.filter(
-              (item) => item.toLocaleLowerCase() !== normalizedTag.toLocaleLowerCase(),
-            ),
-      updatedAt: now,
-    },
-  }))
+  const patches = (await readSelectedSummaries(storage, ids)).flatMap((resource) => {
+    const tags =
+      action === 'add'
+        ? normalizeTags([...resource.tags, normalizedTag])
+        : resource.tags.filter(
+            (item) => item.toLocaleLowerCase() !== normalizedTag.toLocaleLowerCase(),
+          )
+    if (
+      tags.length === resource.tags.length &&
+      tags.every((tag, index) => tag === resource.tags[index])
+    )
+      return []
+    return [{ id: resource.id, changes: { tags, updatedAt: now } }]
+  })
   await writeMetadataPatches(storage, patches)
 }
 
@@ -432,7 +446,7 @@ export async function deleteMany(
     ? await storage.listResourceListSummaries()
     : await storage.listSummaries()
   for (const image of summaries) {
-    if (isResourceGalleryImage(image) && deletedIds.has(galleryOwnerId(image)))
+    if (isResourceOwnedFile(image) && deletedIds.has(resourceOwnedFileOwnerId(image)))
       deletedIds.add(image.id)
   }
   const now = Date.now()
@@ -448,7 +462,7 @@ export async function deleteMany(
   // deleted. After deletion no new import can validate this owner; sweep that narrow gap.
   const afterDelete = await (storage.listResourceListSummaries?.() ?? storage.listSummaries())
   const lateImages = afterDelete.filter(
-    (image) => isResourceGalleryImage(image) && deletedIds.has(galleryOwnerId(image)),
+    (image) => isResourceOwnedFile(image) && deletedIds.has(resourceOwnedFileOwnerId(image)),
   )
   if (lateImages.length) await storage.deleteMany(lateImages.map((image) => image.id))
   const lateIds = new Set(lateImages.map((image) => image.id))
@@ -505,8 +519,8 @@ export async function mergeDuplicates(
   // Move incoming references before deleting copies; deleting alone would detach their owners.
   const galleryByOwner = new Map<string, ResourceListSummary[]>()
   for (const summary of summaries) {
-    if (!isResourceGalleryImage(summary)) continue
-    const owner = galleryOwnerId(summary)
+    if (!isResourceOwnedFile(summary)) continue
+    const owner = resourceOwnedFileOwnerId(summary)
     const images = galleryByOwner.get(owner) ?? []
     images.push(summary)
     galleryByOwner.set(owner, images)
@@ -549,26 +563,12 @@ export async function linkRelatedResources(
   resourceId: string,
   relatedIds: string[],
 ): Promise<string[]> {
-  const now = Date.now()
-  const targets = (
-    await Promise.all(
-      Array.from(new Set(relatedIds))
-        .filter((id) => id && id !== resourceId)
-        .map((id) => storage.get(id)),
-    )
-  ).flatMap((resource) => (resource ? [resource] : []))
-  if (targets.length) {
-    await storage.saveMany(
-      targets.map((target) =>
-        normalizeResource({
-          ...target,
-          relatedResourceIds: Array.from(new Set([...getRelatedResourceIds(target), resourceId])),
-          updatedAt: now,
-        }),
-      ),
-    )
-  }
-  return targets.map((target) => target.id)
+  return appendRelatedLinks(
+    storage,
+    new Map(
+      relatedIds.filter((id) => id && id !== resourceId).map((id) => [id, new Set([resourceId])]),
+    ),
+  )
 }
 
 /** 把两个或更多已入库资源设为双向关联，供成套但仍保持原生格式的资源使用。 */
@@ -579,14 +579,20 @@ export async function linkResources(
   const ids = Array.from(new Set(resourceIds.filter(Boolean)))
   if (ids.length < 2) return
 
-  const source = await storage.get(ids[0]!)
+  const source = await (storage.getSummary?.(ids[0]!) ?? storage.get(ids[0]!))
   if (!source) throw new Error('无法关联：主资源不存在或已被删除')
 
   const linkedIds = await linkRelatedResources(storage, source.id, ids.slice(1))
+  const relatedResourceIds = Array.from(
+    new Set([...getRelatedResourceIds(source), ...linkedIds]),
+  ).filter((id) => id !== source.id)
+  if (
+    source.relatedResourceIds?.length === relatedResourceIds.length &&
+    source.relatedResourceIds.every((id, index) => id === relatedResourceIds[index])
+  )
+    return
   await storage.update(source.id, {
-    relatedResourceIds: Array.from(
-      new Set([...getRelatedResourceIds(source), ...linkedIds]),
-    ).filter((id) => id !== source.id),
+    relatedResourceIds,
     updatedAt: Date.now(),
   })
 }

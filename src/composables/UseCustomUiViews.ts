@@ -3,6 +3,7 @@ import { BrowserStorageService } from '../services/BrowserStorageService'
 import { CUSTOM_UI_VIEWS_CHANGED, CUSTOM_UI_VIEWS_KEY } from '../types/UiCustomization'
 import { isSafeModeActive } from '../core/SafeStartup'
 import type { CustomUiViews } from '../types/UiCustomization'
+import { appearanceTransaction } from '../core/AppearanceSafety'
 import { confirmAction } from './UseConfirmDialog'
 
 /** One consent owner for editing, local imports and Resource Plaza appearance trials. */
@@ -39,7 +40,9 @@ export function useCustomUiViews() {
   const storage = new BrowserStorageService()
   const views = ref(storage.getCustomUiViews())
   const refresh = () => {
-    views.value = isSafeModeActive() ? {} : storage.getCustomUiViews()
+    views.value = isSafeModeActive()
+      ? {}
+      : (appearanceTransaction.getPreviewViews() ?? storage.getCustomUiViews())
   }
   const syncStorage = (event: StorageEvent) => {
     if (event.key === CUSTOM_UI_VIEWS_KEY) refresh()

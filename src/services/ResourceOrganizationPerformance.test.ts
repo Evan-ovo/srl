@@ -3,6 +3,8 @@ import console from 'node:console'
 import { expect, it, vi } from 'vitest'
 import { AppDatabase } from '../database/AppDatabase'
 import { IndexedDbResourceStorage } from '../storage/IndexedDbResourceStorage'
+import { ResourceService } from './ResourceService'
+import { ResourceParserRegistry } from '../parser/ResourceParser'
 import { RESOURCE_TYPE, toResourceListSummary, type Resource } from '../types/Resource'
 import {
   moveManyToCategory,
@@ -63,6 +65,19 @@ it.each([1000, 5000, 10000])(
       expect(originals).not.toHaveBeenCalled()
       expect(rewrites).not.toHaveBeenCalled()
       expect(summaries).not.toHaveBeenCalled()
+      const patches = vi.spyOn(storage, 'updateMetadataMany')
+      await moveManyToCategory(storage, ids, 'folder')
+      await updateTagsMany(storage, ids, 'new', 'add')
+      await updateTagsMany(storage, ids, 'absent', 'remove')
+      expect(patches).not.toHaveBeenCalled()
+      const service = new ResourceService(storage, new ResourceParserRegistry([]))
+      await service.linkResources([...ids, ids[0]!, 'missing'])
+      const committed = patches.mock.calls.length
+      await service.linkResources(ids)
+      await service.restoreRelatedLinks([{ ...rows[0]!, relatedResourceIds: ids.slice(1) }])
+      expect(originals.mock.calls.length).toBe(0)
+      expect(rewrites.mock.calls.length).toBe(0)
+      expect(patches.mock.calls.length).toBe(committed)
       database.close()
       await database.open()
       for (const id of ids) {
@@ -71,6 +86,7 @@ it.each([1000, 5000, 10000])(
         expect(loaded.categoryIds).toEqual(['folder'])
         expect(loaded.metadata).toEqual({ privateBody: 'keep' })
         expect(await loaded.originalBlob.text()).toBe(await blob.text())
+        expect(loaded.relatedResourceIds).toEqual(id === ids[0] ? ids.slice(1) : [ids[0]])
       }
       expect((await storage.get('r-5'))!.tags).toEqual(['保留'])
     } finally {

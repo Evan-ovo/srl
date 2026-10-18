@@ -136,8 +136,7 @@ public final class NativeCloudRestoreWorker extends Worker {
             NativeCloudRestoreTransport.RestoreCounts counts = NativeCloudRestoreTransport.restoreFiles(
                 new File(root, "restore-pending"), objects, resources,
                 hash -> NativeLibraryPlugin.objectFile(getApplicationContext(), hash),
-                (object, target) -> NativeCloudRestoreTransport.downloadRestoreObject(provider, object.url, secret,
-                    username, object.hash, object.size, target, call -> {
+                NativeCloudRestoreTransport.nativeDownloader(provider, secret, username, call -> {
                         activeCall = call;
                         if (isStopped()) call.cancel();
                     }), true,

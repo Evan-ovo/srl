@@ -531,3 +531,15 @@ export function inspectCompatibility(runtimeHtml: string): ExternalAppCompatibil
   }
   return notices
 }
+
+/** Revoke HTTPS in stored compatible documents without changing their package/source identity. */
+export function restrictExternalAppNetwork(html: string): string {
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  const policy = document.createElement('meta')
+  policy.httpEquiv = 'Content-Security-Policy'
+  policy.content =
+    "default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src data:; object-src 'none'; base-uri 'none'; form-action 'none'"
+  // Use a real element: a '>' inside a quoted head attribute must not swallow the policy.
+  document.head.prepend(policy)
+  return `<!doctype html>${document.documentElement.outerHTML}`
+}

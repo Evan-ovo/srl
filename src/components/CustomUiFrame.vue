@@ -22,6 +22,7 @@ const emit = defineEmits<{
   ready: []
   error: [message: string]
   native: [regions: UiNativePlacement[]]
+  layout: [height: number | null]
   recovery: []
 }>()
 const previewPolicy = usePreviewPolicy()
@@ -110,8 +111,16 @@ function connect(event: MessageEvent) {
       rendered = true
       emit('ready')
     } else if (data.type === 'reveal-recovery' && rendered && props.recovery) emit('recovery')
-    else if (data.type === 'native' && Array.isArray(data.regions)) emit('native', data.regions)
-    else if (data.type === 'error') fail('自定义界面运行失败，原界面仍保留')
+    else if (data.type === 'native' && Array.isArray(data.regions)) {
+      if (
+        data.hostScrollHeight === null ||
+        (typeof data.hostScrollHeight === 'number' &&
+          Number.isFinite(data.hostScrollHeight) &&
+          data.hostScrollHeight >= 0)
+      )
+        emit('layout', data.hostScrollHeight)
+      emit('native', data.regions)
+    } else if (data.type === 'error') fail('自定义界面运行失败，原界面仍保留')
     else if (
       data.type === 'action' &&
       Number.isSafeInteger(data.sequence) &&

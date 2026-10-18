@@ -168,14 +168,42 @@ export function useAppearanceSettings(showNotice: (message: string) => void) {
         preserveLength: true,
       },
     )
-    style.textContent = resolveUiCssAssets(source, browserStorageService.getCustomUiViews?.() ?? {})
+    style.textContent = resolveUiCssAssets(
+      source,
+      appearanceTransaction.getPreviewViews() ?? browserStorageService.getCustomUiViews?.() ?? {},
+    )
     document.head.append(style)
     window.dispatchEvent(new Event(APPLIED_CSS_CHANGED_EVENT))
   }
   onMounted(() => window.addEventListener(CUSTOM_UI_VIEWS_CHANGED, syncCustomUiCss))
   onUnmounted(() => window.removeEventListener(CUSTOM_UI_VIEWS_CHANGED, syncCustomUiCss))
+  onUnmounted(() => appearanceTransaction.exitPreview())
 
   function saveCustomUiCss(value: string, options?: UiApplyOptions): void {
+    appearanceTransaction.exitPreview()
+    if (options?.preview) {
+      if (isSafeModeActive()) {
+        showNotice('当前处于安全模式；恢复正常启动后才能预览自定义界面')
+        return
+      }
+      appearanceTransaction.rollback()
+      try {
+        appearanceTransaction.preview({
+          previousCss: customUiCss.value,
+          nextCss: value,
+          views: normalizeUiViews(options.views ?? {}),
+          apply: (css) => {
+            customUiCss.value = css
+            syncCustomUiCss()
+          },
+          onExit: options.preview.onExit,
+          beforeExit: options.preview.beforeExit,
+        })
+      } catch (error) {
+        showNotice(error instanceof Error ? error.message : '无法预览，已恢复原外观')
+      }
+      return
+    }
     if (options?.recovery) {
       const css = options.recovery === 'default' ? '' : browserStorageService.getCustomUiCss()
       const presetId =

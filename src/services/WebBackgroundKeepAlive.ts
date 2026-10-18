@@ -1,3 +1,6 @@
+import { Capacitor } from '@capacitor/core'
+import { confirmAction } from '../composables/UseConfirmDialog'
+
 /** A media adapter only. It neither owns inbox work nor promises OS background execution. */
 export class WebBackgroundKeepAlive {
   private media?: HTMLMediaElement
@@ -99,14 +102,22 @@ export class WebBackgroundKeepAlive {
 export interface WebBackgroundAudioState {
   status: 'off' | 'starting' | 'running'
   message: string
+  manual: boolean
+  tasks: number
 }
-let state: WebBackgroundAudioState = { status: 'off', message: '' }
+let state: Pick<WebBackgroundAudioState, 'status' | 'message'> = { status: 'off', message: '' }
+let manual = false
+const tasks = new Set<symbol>()
 let generation = 0
 let starting: Promise<void> | undefined
 let pageGuardInstalled = false
 const listeners = new Set<() => void>()
 const backgroundAudio = new WebBackgroundKeepAlive((message) => stopWebBackgroundAudio(message))
-export const webBackgroundAudioState = (): WebBackgroundAudioState => ({ ...state })
+export const webBackgroundAudioState = (): WebBackgroundAudioState => ({
+  ...state,
+  manual,
+  tasks: tasks.size,
+})
 export function subscribeWebBackgroundAudio(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -114,8 +125,13 @@ export function subscribeWebBackgroundAudio(listener: () => void): () => void {
 function publishAudio(): void {
   for (const listener of listeners) listener()
 }
-/** Global opt-in media only: no inbox, vault, task, pairing or network dependency. */
+/** A manual request outlives all temporary task requests in this page session. */
 export function startWebBackgroundAudio(): Promise<void> {
+  manual = true
+  return ensureWebBackgroundAudio()
+}
+function ensureWebBackgroundAudio(): Promise<void> {
+  publishAudio()
   if (starting) return starting
   if (state.status === 'running') return Promise.resolve()
   const id = ++generation
@@ -134,6 +150,8 @@ export function startWebBackgroundAudio(): Promise<void> {
       publishAudio()
     } catch (error) {
       if (id === generation) {
+        manual = false
+        tasks.clear()
         state = {
           status: 'off',
           message: error instanceof Error ? error.message : '后台音频未能开启。',
@@ -150,7 +168,64 @@ export function startWebBackgroundAudio(): Promise<void> {
 export function stopWebBackgroundAudio(message = ''): void {
   ++generation
   starting = undefined
+  manual = false
+  tasks.clear()
   backgroundAudio.stop()
   state = { status: 'off', message }
   publishAudio()
+}
+
+/** Each live operation releases only its own request; rejection never fails the operation. */
+export function acquireWebBackgroundAudio(confirmed = false): () => void {
+  if (typeof window === 'undefined' || Capacitor.isNativePlatform()) return () => undefined
+  if (!confirmed && state.status === 'off') return () => undefined
+  const token = Symbol()
+  tasks.add(token)
+  // play() is reached synchronously, before the caller's first await.
+  void ensureWebBackgroundAudio().catch(() => undefined)
+  return () => {
+    if (!tasks.delete(token)) return
+    if (!tasks.size && !manual) stopWebBackgroundAudio()
+    else publishAudio()
+  }
+}
+
+/** Called after acquiring the operation owner's lock; confirm plays in the actual click. */
+export async function requestWebBackgroundAudio(
+  name: string,
+  signal?: AbortSignal,
+): Promise<() => void> {
+  if (signal?.aborted || typeof window === 'undefined' || Capacitor.isNativePlatform())
+    return () => undefined
+  if (state.status !== 'off') return acquireWebBackgroundAudio()
+  let release = () => undefined as void
+  await confirmAction(
+    {
+      title: '本次任务后台保活',
+      message: `是否为“${name}”开启后台音频保活？任务结束后自动关闭；设置里手动开启的保活会继续保持。iOS 仍可能限制后台运行。`,
+      confirmLabel: '开启并继续',
+      cancelLabel: '直接继续',
+      centered: true,
+      onConfirm: () => {
+        release = acquireWebBackgroundAudio(true)
+      },
+    },
+    signal,
+  )
+  return release
+}
+
+/** The operation owner must hold its normal guard before calling this wrapper. */
+export function withWebBackgroundAudio<Args extends unknown[], Result>(
+  name: string,
+  operation: (...args: Args) => Promise<Result>,
+): (...args: Args) => Promise<Result> {
+  return async (...args) => {
+    const release = await requestWebBackgroundAudio(name)
+    try {
+      return await operation(...args)
+    } finally {
+      release()
+    }
+  }
 }

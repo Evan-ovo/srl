@@ -2,12 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { useTransientStatus } from '../composables/UseTransientStatus'
-import { communitySourceService } from '../core/CommunitySourceRuntime'
-import {
-  parseDiscordMessageUrl,
-  readDiscordSourceFromUrl,
-} from '../services/DiscordSourceRefreshService'
-import { COMMUNITY_SOURCE_MESSAGE_KIND } from '../types/CommunitySource'
 import {
   analyzeResourceLink,
   RESOURCE_INSTALL_TARGET,
@@ -22,7 +16,6 @@ import ResourceLinkAdvancedSettings from './ResourceLinkAdvancedSettings.vue'
 import ResourceLinkRow from './ResourceLinkRow.vue'
 
 type PlatformGroupId = 'discord' | 'github' | 'other'
-type AddSourceMode = 'link' | 'post'
 
 const props = defineProps<{ resourceId: string }>()
 const links = defineModel<ResourceLink[]>('links', { required: true })
@@ -34,11 +27,8 @@ const discordCommunityCount = ref(0)
 const communityRevision = ref(0)
 const addSourceOpen = ref(false)
 const addSourceUrl = ref('')
-const addSourceMode = ref<AddSourceMode>('post')
-const addSourceBusy = ref(false)
 const addSourceError = ref('')
 const { statusMessage, showTransientStatus } = useTransientStatus()
-let addSourceController: AbortController | undefined
 
 const discordLinks = computed(() =>
   links.value.filter((link) => link.type === RESOURCE_LINK_TYPE.DISCORD),
@@ -134,18 +124,12 @@ function createLink(value: string): ResourceLink {
 }
 
 function openAddSource(): void {
-  addSourceController?.abort()
   addSourceUrl.value = ''
-  addSourceMode.value = 'post'
   addSourceError.value = ''
-  addSourceBusy.value = false
   addSourceOpen.value = true
 }
 
 function closeAddSource(): void {
-  if (addSourceBusy.value) return
-  addSourceController?.abort()
-  addSourceController = undefined
   addSourceOpen.value = false
   addSourceError.value = ''
 }
@@ -156,28 +140,7 @@ function openPlatform(id: PlatformGroupId): void {
   openPlatforms.value = next
 }
 
-function finishCommunitySourceAdd(message: string): void {
-  addSourceOpen.value = false
-  openPlatform('discord')
-  communityRevision.value += 1
-  window.dispatchEvent(new Event('srl:community-sources-changed'))
-  showTransientStatus(message)
-}
-
-function localizeAttachmentsInBackground(sourceId: string, messageIds: readonly string[]): void {
-  if (!sourceId || !messageIds.length) return
-  void communitySourceService
-    .localizeSavedMessagesAttachments(sourceId, messageIds)
-    .catch(() => undefined)
-    .finally(() => {
-      window.dispatchEvent(
-        new CustomEvent('srl:community-source-attachments-updated', { detail: { sourceId } }),
-      )
-    })
-}
-
-async function submitAddSource(): Promise<void> {
-  if (addSourceBusy.value) return
+function submitAddSource(): void {
   const value = addSourceUrl.value.trim()
   if (!value) {
     addSourceError.value = '请先粘贴来源链接。'
@@ -196,117 +159,18 @@ async function submitAddSource(): Promise<void> {
   }
 
   addSourceError.value = ''
-  if (addSourceMode.value === 'link') {
-    const link = createLink(parsed.toString())
-    links.value = [...links.value, link]
-    if (link.type === RESOURCE_LINK_TYPE.DISCORD) {
-      openPlatform('discord')
-      discordManualOpen.value = true
-    } else if (link.type === RESOURCE_LINK_TYPE.GITHUB) {
-      openPlatform('github')
-    } else {
-      openPlatform('other')
-    }
-    addSourceOpen.value = false
-    showTransientStatus('来源链接已添加')
-    return
+  const link = createLink(parsed.toString())
+  links.value = [...links.value, link]
+  if (link.type === RESOURCE_LINK_TYPE.DISCORD) {
+    openPlatform('discord')
+    discordManualOpen.value = true
+  } else if (link.type === RESOURCE_LINK_TYPE.GITHUB) {
+    openPlatform('github')
+  } else {
+    openPlatform('other')
   }
-
-  const discordUrl = parseDiscordMessageUrl(parsed.toString())
-  if (!discordUrl) {
-    addSourceError.value = '读取完整帖子目前只支持 Discord 消息链接；其他链接请选择“仅保存链接”。'
-    return
-  }
-
-  addSourceBusy.value = true
-  addSourceController?.abort()
-  addSourceController = new AbortController()
-  const controller = addSourceController
-  const timer = window.setTimeout(() => controller.abort(), 15_000)
-  try {
-    const remote = await readDiscordSourceFromUrl(parsed.toString(), controller.signal)
-    if (remote.state === 'uncheckable') {
-      addSourceError.value =
-        'Discord Bot 无法直接读取这个社区。请在 Discord 中对目标消息执行“保存到资源库”，由消息命令传回可保存的快照。'
-      return
-    }
-    if (remote.state === 'unavailable') {
-      addSourceError.value = 'Discord 原帖当前不可访问，无法完成首次读取。'
-      return
-    }
-    const starter = remote.captures.find((capture) => capture.isStarter) ?? remote.captures[0]
-    if (!starter) throw new Error('Discord Bridge 没有返回可保存的帖子内容。')
-
-    const existing = await communitySourceService.findDiscordSourceForCapture(starter)
-    if (existing) {
-      const alreadyBound = existing.bindings.some(
-        (binding) => binding.resourceId === props.resourceId,
-      )
-      if (!alreadyBound)
-        await communitySourceService.bindSource(props.resourceId, existing.source.id)
-
-      const requested = remote.captures.find(
-        (capture) => capture.messageId === discordUrl.messageId,
-      )
-      const requestedAlreadySaved = Boolean(
-        requested && existing.messages.some((message) => message.messageId === requested.messageId),
-      )
-      let addedRequestedMessage = false
-      if (
-        requested &&
-        !requestedAlreadySaved &&
-        requested.messageId !== existing.source.starterMessageId
-      ) {
-        const saved = await communitySourceService.saveDiscordCapture(requested, {
-          kind:
-            existing.source.starterAuthorId &&
-            requested.authorId === existing.source.starterAuthorId
-              ? COMMUNITY_SOURCE_MESSAGE_KIND.AUTHOR_UPDATE
-              : COMMUNITY_SOURCE_MESSAGE_KIND.SELECTED_COMMENT,
-          deferAttachmentLocalization: true,
-        })
-        localizeAttachmentsInBackground(saved.source.id, [requested.messageId])
-        addedRequestedMessage = true
-      }
-
-      finishCommunitySourceAdd(
-        addedRequestedMessage
-          ? alreadyBound
-            ? '已添加到现有 Discord 来源'
-            : '已关联已有来源，并保存这条补充消息'
-          : alreadyBound
-            ? '这个 Discord 来源已经在当前资源中'
-            : '已关联已有 Discord 来源',
-      )
-      return
-    }
-
-    const ordered = [starter, ...remote.captures.filter((capture) => capture !== starter)]
-    let sourceId = ''
-    const messageIds: string[] = []
-    for (let index = 0; index < ordered.length; index += 1) {
-      const capture = ordered[index]
-      const saved = await communitySourceService.saveDiscordCapture(capture, {
-        ...(index === 0 ? { resourceId: props.resourceId } : {}),
-        deferAttachmentLocalization: true,
-      })
-      sourceId = saved.source.id
-      messageIds.push(capture.messageId)
-    }
-    finishCommunitySourceAdd('Discord 帖子正文已保存；附件会继续在后台保存到本机')
-    localizeAttachmentsInBackground(sourceId, messageIds)
-  } catch (error) {
-    addSourceError.value =
-      error instanceof DOMException && error.name === 'AbortError'
-        ? '读取 Discord 帖子超时，请确认 Bridge 和网络可以正常访问。'
-        : error instanceof Error
-          ? error.message
-          : '读取 Discord 帖子失败'
-  } finally {
-    window.clearTimeout(timer)
-    if (addSourceController === controller) addSourceController = undefined
-    addSourceBusy.value = false
-  }
+  addSourceOpen.value = false
+  showTransientStatus('来源链接已添加')
 }
 
 function updateLink(updated: ResourceLink): void {
@@ -333,7 +197,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  addSourceController?.abort()
   window.removeEventListener('srl:community-sources-changed', handleCommunitySourcesChanged)
 })
 </script>
@@ -436,7 +299,7 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="!groups.length && discordCommunityCount === 0" class="resource-sources__empty">
-      还没有保存来源。可以添加普通链接，或读取并保存 Discord 帖子。
+      还没有保存来源。可以添加来源链接；保存 Discord 帖子请前往“功能 → 收件箱”。
     </p>
 
     <p class="resource-sources__hint">
@@ -464,7 +327,7 @@ onBeforeUnmount(() => {
         aria-labelledby="resource-source-add-title"
       >
         <h3 id="resource-source-add-title">添加来源</h3>
-        <p>直接粘贴链接。Discord 消息可以仅保存 URL，也可以读取并保存完整帖子。</p>
+        <p>仅保存来源链接，不会读取帖子正文。</p>
 
         <label class="resource-source-add-field">
           <span>链接</span>
@@ -475,38 +338,23 @@ onBeforeUnmount(() => {
             autocomplete="off"
             maxlength="2000"
             placeholder="https://discord.com/channels/..."
-            :disabled="addSourceBusy"
           />
         </label>
 
-        <label class="resource-source-add-choice">
-          <input v-model="addSourceMode" type="radio" value="link" :disabled="addSourceBusy" />
-          <span>
-            <strong>仅保存链接</strong>
-            <small>保存为普通来源链接，之后可编辑或删除。</small>
-          </span>
-        </label>
-        <label class="resource-source-add-choice">
-          <input v-model="addSourceMode" type="radio" value="post" :disabled="addSourceBusy" />
-          <span>
-            <strong>读取并保存帖子</strong>
-            <small>Discord 专用；读取正文、Embed、附件信息，并支持后续手动检查更新。</small>
-          </span>
-        </label>
+        <p>需要保存 Discord 帖子，请前往“功能 → 收件箱”。</p>
 
         <p v-if="addSourceError" class="resource-source-add-error" role="alert">
           {{ addSourceError }}
         </p>
 
         <div class="resource-source-add-actions">
-          <button type="button" :disabled="addSourceBusy" @click="closeAddSource">取消</button>
+          <button type="button" @click="closeAddSource">取消</button>
           <button
             class="resource-source-add-actions__primary"
             type="button"
-            :disabled="addSourceBusy"
             @click="submitAddSource"
           >
-            {{ addSourceBusy ? '正在读取…' : '添加' }}
+            保存链接
           </button>
         </div>
       </section>

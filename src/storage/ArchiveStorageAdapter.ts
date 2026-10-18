@@ -14,7 +14,7 @@ export interface ArchiveStorageAdapter {
   isRestoreCommitted?(checkpointId: string): Promise<boolean>
   clearRestoreCheckpoint?(checkpointId: string): Promise<void>
   canRestoreNative?(): boolean
-  listRestoreVersionKeys?(): Promise<string[]>
+  listRestoreVersionKeys?(groupIds?: readonly string[]): Promise<string[]>
   restore(
     categories: Category[],
     resources: Resource[],

@@ -408,9 +408,9 @@ export class RecycleBinService {
     const selectedIds = Array.from(new Set(ids.filter(Boolean)))
     if (!selectedIds.length) throw new Error('请选择要移入回收站的资源')
 
-    const source = await createResourceArchiveSource(this.resourceService, selectedIds)
+    const source = await createResourceArchiveSource(this.resourceService, selectedIds, true)
     const selected = new Set(selectedIds)
-    includeResourceGalleryIds(source.resources, selected, true)
+    includeResourceGalleryIds(source.resources, selected, true, true, true)
     const resources = source.resources.filter((resource) => selected.has(resource.id))
     if (!resources.length) throw new Error('要删除的资源已经不存在')
 

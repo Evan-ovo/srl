@@ -28,7 +28,7 @@ export interface ExportRecoveryTask extends ArchiveTaskRecord {
     resources: ResourceSummary[]
     versions: ResourceSummary[]
     categories: Category[]
-    options: Omit<ArchiveOptions, 'communitySourceAttachments'>
+    options: Omit<ArchiveOptions, 'communitySourceAttachments' | 'readAlbumFile'>
     attachments: { assetId: string; hash: string; size: number }[]
     createdAt: string
     vaultEnabled: boolean
@@ -47,7 +47,7 @@ export class ArchiveRecoveryService {
     options: ArchiveOptions,
     vaultEnabled: boolean,
   ): Promise<ExportRecoveryTask | undefined> {
-    const { communitySourceAttachments = [], ...plan } = options
+    const { communitySourceAttachments = [], readAlbumFile: _readAlbumFile, ...plan } = options
     const attachments: ExportRecoveryTask['payload']['attachments'] = []
     for (const entry of communitySourceAttachments)
       attachments.push({

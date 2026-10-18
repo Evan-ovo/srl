@@ -4,12 +4,17 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ResourceReference } from '../types/Resource'
 
-const { getBlob, getImageUrl } = vi.hoisted(() => ({ getBlob: vi.fn(), getImageUrl: vi.fn() }))
+const { getBlob, getImageUrl, getImagePreview } = vi.hoisted(() => ({
+  getBlob: vi.fn(),
+  getImageUrl: vi.fn(),
+  getImagePreview: vi.fn(),
+}))
 vi.mock('../core/AppContainer', () => ({
   assetStore: {
     getBlob,
     getImageUrl,
   },
+  resourceGalleryService: { getImagePreview },
 }))
 import {
   enqueueThumbnailRead,
@@ -28,6 +33,74 @@ it('selects a prepared tier only when actual pixels fit, preserving high-density
 
 beforeEach(() => {
   getImageUrl.mockReset().mockResolvedValue(undefined)
+  getImagePreview.mockReset()
+})
+
+it('uses the preview owner for a custom cover and ignores a late image after switching covers', async () => {
+  vi.stubGlobal('IntersectionObserver', undefined)
+  let finish!: (preview: { blob?: Blob; url: string }) => void
+  getImagePreview.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  getImagePreview.mockResolvedValue({ url: 'https://example.com/new.png' })
+  const source = ref({
+    id: 'owner',
+    metadata: { resourceCoverId: 'old' },
+  } as unknown as ResourceReference)
+  const remote = ref('')
+  const wrapper = mount(
+    defineComponent({
+      setup() {
+        const blob = useResourceThumbnail(() => source.value, undefined, remote)
+        return () => h('div', `${remote.value}:${Boolean(blob.value)}`)
+      },
+    }),
+  )
+  await flushPromises()
+  expect(getImagePreview).toHaveBeenCalledExactlyOnceWith('owner', 'old')
+  source.value = { ...source.value, metadata: { resourceCoverId: 'new' } }
+  await flushPromises()
+  expect(remote.value).toBe('https://example.com/new.png')
+  finish({ blob: new Blob(['stale']), url: '' })
+  await flushPromises()
+  expect(wrapper.text()).toBe('https://example.com/new.png:false')
+  expect(getBlob).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+
+it('discards a gallery preview after unmount without publishing its URL or pixels', async () => {
+  let finish!: (preview: { blob?: Blob; url: string }) => void
+  getImagePreview.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  const remote = ref('')
+  const wrapper = mount(
+    defineComponent({
+      setup() {
+        useResourceThumbnail(
+          () =>
+            ({
+              id: 'owner',
+              metadata: { resourceCoverId: 'cover' },
+            }) as unknown as ResourceReference,
+          undefined,
+          remote,
+        )
+        return () => h('div')
+      },
+    }),
+  )
+  await flushPromises()
+  wrapper.unmount()
+  finish({ url: 'https://example.com/stale.png' })
+  await flushPromises()
+  expect(remote.value).toBe('')
 })
 
 afterEach(() => {

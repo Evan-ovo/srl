@@ -3,6 +3,7 @@ import type { ArchiveStreamWriter } from '../services/ExportService'
 import { transferNativeStream } from './NativeStreamTransfer'
 
 export interface NativeSafBackupStatus {
+  warning?: string
   configured: boolean
   available: boolean
   name?: string
@@ -37,9 +38,9 @@ export async function chooseNativeSafBackupDirectory(): Promise<NativeSafBackupS
   return plugin.chooseDirectory()
 }
 
-export async function clearNativeSafBackupDirectory(): Promise<void> {
-  if (!isNativeSafBackupAvailable()) return
-  await plugin.clearDirectory()
+export async function clearNativeSafBackupDirectory(): Promise<NativeSafBackupStatus | null> {
+  if (!isNativeSafBackupAvailable()) return null
+  return plugin.clearDirectory()
 }
 
 /** ZIP 编码器直接写入 SAF OutputStream；不会先在 JS 中合成完整备份 Blob。 */

@@ -1,5 +1,9 @@
 import { localCredentialStore, type LocalCredentialRepository } from './LocalCredentialStore'
-import { getNovelAiModelFamily, readRelayCapabilities } from './ImageGenerationCapabilities'
+import {
+  getNovelAiModelFamily,
+  readRelayCapabilities,
+  isOfficialOpenAiImageEndpoint,
+} from './ImageGenerationCapabilities'
 import type { ImageGenerationParameter } from '../types/GeneratedImageAlbum'
 import type {
   FrontendWorkshopImageProvider,
@@ -20,6 +24,7 @@ import {
   diagnosticEndpoint,
   boundedNumber,
   redactImageRequest,
+  validateImageGenerationConfig,
 } from './ImageGenerationRequest'
 import { buildNovelAiPayload } from './NovelAiImageRequest'
 import { buildOpenAiImageRequest, openAiInputBlob, validateOpenAiMask } from './OpenAiImageRequest'
@@ -32,6 +37,7 @@ import {
 } from './GeneratedImageData'
 import {
   responseError,
+  responseErrorDetail,
   imageGenerationErrorCategory,
   createProviderError,
 } from './ImageGenerationError'
@@ -159,7 +165,7 @@ export class FrontendWorkshopImageGenerationService {
       credentialPersistence: value.credentialPersistence === 'session' ? 'session' : 'local',
       relayCapabilities: value.relayCapabilities,
     }
-    if (!config.apiKey) throw new Error('请先填写当前供应商的 API 密钥')
+    validateImageGenerationConfig(config)
     if (config.credentialPersistence === 'local')
       await this.credentialStore.save(this.credentialIdentifier(config.provider), config.apiKey)
     else await this.credentialStore.clear(this.credentialIdentifier(config.provider))
@@ -179,6 +185,36 @@ export class FrontendWorkshopImageGenerationService {
     return [...this.savedConfigs.values()]
       .filter((config) => Boolean(config.apiKey))
       .map((config) => ({ ...config }))
+  }
+
+  exportPortableSettings(): FrontendWorkshopImageGenerationConfig[] {
+    return [...this.savedConfigs.values()].map((config) => ({ ...config, apiKey: '' }))
+  }
+
+  async importPortableSettings(values: FrontendWorkshopImageGenerationConfig[]): Promise<void> {
+    await this.initializeCredentials()
+    for (const value of values) {
+      if (
+        !IMAGE_PROVIDERS.includes(value.provider) ||
+        typeof value.endpoint !== 'string' ||
+        typeof value.model !== 'string'
+      )
+        throw new Error('生图连接配置备份无效')
+      const current = this.savedConfigs.get(value.provider)
+      if (current?.apiKey && current.endpoint !== value.endpoint) continue
+      this.savedConfigs.set(value.provider, { ...value, apiKey: current?.apiKey ?? '' })
+    }
+    this.writeSavedConfigurations()
+    const saved = localStorage.getItem(IMAGE_GENERATION_CONFIG_KEY)
+    if (
+      saved !==
+      JSON.stringify(
+        Object.fromEntries(
+          [...this.savedConfigs].map(([provider, config]) => [provider, { ...config, apiKey: '' }]),
+        ),
+      )
+    )
+      throw new Error('生图连接配置保存后读回失败')
   }
 
   async importConfigurations(
@@ -278,16 +314,32 @@ export class FrontendWorkshopImageGenerationService {
         },
       )
       if (!response.ok) {
-        const label = 'OpenAI'
-        throw new Error(
-          `${label}模型拉取失败：${redactImageRequest(await responseError(response), config.apiKey)}`,
+        throw createProviderError(
+          config.provider,
+          redactImageRequest(
+            diagnosticEndpoint(
+              requiredHttpsUrl(config.endpoint, DEFAULT_ENDPOINTS[config.provider]),
+            ),
+            config.apiKey,
+          ),
+          config.model,
+          {},
+          imageGenerationErrorCategory(response.status),
+          {
+            httpStatus: response.status,
+            responseBody: redactImageRequest(await responseError(response), config.apiKey),
+          },
         )
       }
       const payload = (await response.json()) as {
         data?: Array<{ id?: unknown; name?: unknown; capabilities?: unknown }>
         models?: Array<{ id?: unknown; name?: unknown; capabilities?: unknown } | string>
       }
-      const raw = Array.isArray(payload.data) ? payload.data : payload.models
+      const raw = Array.isArray(payload?.data)
+        ? payload.data
+        : Array.isArray(payload?.models)
+          ? payload.models
+          : []
       const options = (raw ?? [])
         .map((item) => {
           if (typeof item === 'string') return { id: item, name: item }
@@ -298,12 +350,22 @@ export class FrontendWorkshopImageGenerationService {
             : undefined
         })
         .filter((item): item is FrontendWorkshopImageModelOption => Boolean(item))
+        .filter(
+          (item) =>
+            !isOfficialOpenAiImageEndpoint(config.endpoint) ||
+            /^(gpt-image-|chatgpt-image-)/.test(item.id),
+        )
         .sort(
           (left, right) =>
             imageModelPriority(left.id) - imageModelPriority(right.id) ||
             left.name.localeCompare(right.name),
         )
-      if (!options.length) throw new Error('接口返回了空模型列表；你仍可手动填写模型 ID')
+      if (!options.length)
+        throw new Error(
+          isOfficialOpenAiImageEndpoint(config.endpoint)
+            ? '接口未返回可用的 GPT Image 模型；请检查图像模型权限，也可手动填写模型 ID'
+            : '接口返回了空模型列表；你仍可手动填写模型 ID',
+        )
       return {
         options,
         source: 'remote',
@@ -312,6 +374,11 @@ export class FrontendWorkshopImageGenerationService {
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError')
         throw new Error('拉取模型超时；你仍可手动填写模型 ID', { cause: error })
+      if (error instanceof TypeError || error instanceof SyntaxError)
+        throw new Error(
+          '模型列表读取失败，请检查网络、API 地址及接口是否返回有效 JSON；也可手动填写模型 ID',
+          { cause: error },
+        )
       throw error
     } finally {
       clearTimeout(timeout)
@@ -327,10 +394,11 @@ export class FrontendWorkshopImageGenerationService {
     request: FrontendWorkshopImageGenerationRequest,
     options: FrontendWorkshopImageGenerationOptions = {},
   ): Promise<FrontendWorkshopGeneratedImage> {
+    validateImageGenerationConfig(config)
+    options.signal?.throwIfAborted()
     const prompt = request.prompt.trim()
     if (!prompt && (config.provider === 'novelai' || !request.openAiEditInstruction?.trim()))
       throw new Error('请先填写生图提示词或编辑指令')
-    if (!config.apiKey.trim()) throw new Error('请先填写当前供应商的 API 密钥')
     return config.provider === 'novelai'
       ? this.generateNovelAi(config, { ...request, prompt }, options)
       : this.generateOpenAi(config, { ...request, prompt }, options)
@@ -420,22 +488,43 @@ export class FrontendWorkshopImageGenerationService {
     }
     try {
       payload = await response.json()
-    } catch {
+      options.signal?.throwIfAborted()
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
       throw createProviderError(
         config.provider,
         redactImageRequest(diagnosticEndpoint(endpoint), config.apiKey),
         model,
         diagnosticParameters,
         'response_parse',
+        {
+          responseBody: '接口未返回有效的图片列表 JSON，请检查 API 地址和模型是否支持图像生成。',
+          requestId: options.requestId,
+        },
       )
     }
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.data))
+      throw createProviderError(
+        config.provider,
+        redactImageRequest(diagnosticEndpoint(endpoint), config.apiKey),
+        model,
+        diagnosticParameters,
+        'response_parse',
+        {
+          responseBody: redactImageRequest(
+            responseErrorDetail(payload) ?? '接口没有返回图片列表，请检查模型是否支持图像生成。',
+            config.apiKey,
+          ),
+          requestId: options.requestId,
+        },
+      )
     const source = payload.data?.[0]
     const declaredFormat =
       payload.output_format && FORMAT_MIME[payload.output_format]
         ? payload.output_format
         : outputFormat
     let format = declaredFormat
-    if (source?.b64_json) {
+    if (typeof source?.b64_json === 'string' && source.b64_json) {
       const encoded = source.b64_json.startsWith('data:')
         ? source.b64_json.split(',')[1]
         : source.b64_json
@@ -443,7 +532,9 @@ export class FrontendWorkshopImageGenerationService {
         const prefix = Uint8Array.from(atob((encoded ?? '').slice(0, 64)), (character) =>
           character.charCodeAt(0),
         )
-        format = imageFormatFromBytes(prefix)?.extension ?? declaredFormat
+        const detected = imageFormatFromBytes(prefix)
+        if (!detected) throw new Error('返回的 Base64 内容不是 PNG、JPEG 或 WebP 图片')
+        format = detected.extension
       } catch {
         throw createProviderError(
           config.provider,
@@ -456,8 +547,20 @@ export class FrontendWorkshopImageGenerationService {
     }
     const mimeType = FORMAT_MIME[format]
     const dataUrl = asImageDataUrl(source?.b64_json, mimeType)
-    const temporaryUrl = source?.url?.startsWith('https://') ? source.url : undefined
-    if (!dataUrl && !temporaryUrl) throw new Error('OpenAI 没有返回可用图片')
+    const temporaryUrl =
+      typeof source?.url === 'string' && source.url.startsWith('https://') ? source.url : undefined
+    if (!dataUrl && !temporaryUrl)
+      throw createProviderError(
+        config.provider,
+        diagnosticEndpoint(endpoint),
+        model,
+        diagnosticParameters,
+        'response_parse',
+        {
+          responseBody: '接口没有返回可用图片，请检查模型是否支持图像生成。',
+          requestId: options.requestId,
+        },
+      )
     return {
       id: crypto.randomUUID(),
       provider: config.provider,
@@ -525,9 +628,10 @@ export class FrontendWorkshopImageGenerationService {
     const isModern = family !== 'v3'
     const requestedSmea = request.novelAiSmea ?? false
     const requestedSmeaDyn = requestedSmea && (request.novelAiSmeaDyn ?? false)
-    const smea = isModern ? false : requestedSmea
-    const smeaDyn = isModern ? false : requestedSmeaDyn
-    const smeaSuppressed = isModern && (requestedSmea || requestedSmeaDyn)
+    const canSmea = !isModern && sampler !== 'ddim'
+    const smea = canSmea && requestedSmea
+    const smeaDyn = canSmea && requestedSmeaDyn
+    const smeaSuppressed = !canSmea && (requestedSmea || requestedSmeaDyn)
     const negativePrompt = request.negativePrompt?.trim() || ''
     const diagnosticParameters = {
       prompt: request.prompt,

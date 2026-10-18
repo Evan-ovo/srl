@@ -12,6 +12,7 @@ import {
   RESOURCE_LINK_TYPE,
   RESOURCE_TYPE,
   toResourceSummary,
+  toResourceListSummary,
   type Resource,
 } from '../types/Resource'
 import { IndexedDbResourceStorage } from './IndexedDbResourceStorage'
@@ -42,6 +43,270 @@ function createResource(index: number): Resource {
 }
 
 describe('IndexedDbResourceStorage', () => {
+  it.each([false, true])(
+    'streams authoritative web history rows without retaining a batch of originals (vault=%s)',
+    async (encrypted) => {
+      const database = new AppDatabase(`history-cursor-${crypto.randomUUID()}`)
+      const vault = new VaultService(database)
+      try {
+        await vault.initialize()
+        if (encrypted) await vault.enable('synthetic-history-password')
+        const storage = new IndexedDbResourceStorage(database, vault)
+        const versions = Array.from({ length: encrypted ? 3 : 251 }, (_, index): Resource => ({
+          ...createResource(index),
+          id: `v-${String(index).padStart(4, '0')}`,
+          versionGroupId: 'owner',
+          updatedAt: Math.floor(index / 2),
+          metadata: { creator: `author-${index}`, parserVersion: 5 },
+          thumbnailBlob: undefined,
+        }))
+        for (const version of versions) await storage.saveVersion(version)
+        const expected = (
+          await Promise.all(versions.map((version) => storage.getSummary(version.id, true)))
+        )
+          .map((version) => toResourceListSummary(version!))
+          .sort((left, right) => right.updatedAt - left.updatedAt)
+        // These are derived rows. Missing, stale or orphaned summaries must not affect the result.
+        await database.resourceVersionSummaries.clear()
+        const staleSummary = toResourceListSummary(versions[0]!)
+        staleSummary.name = 'stale name'
+        staleSummary.updatedAt = 9999
+        await database.resourceVersionSummaries.put(staleSummary)
+        await database.resourceVersionSummaries.put({
+          ...toResourceListSummary(versions[0]!),
+          id: 'orphan',
+        })
+        const bulkGet = vi
+          .spyOn(database.resourceVersions, 'bulkGet')
+          .mockRejectedValue(new Error('must not retain a batch of original buffers'))
+        const get = vi.spyOn(database.resourceVersions, 'get')
+        try {
+          const rows = await storage.listVersionListSummaries()
+          expect(rows).toEqual(expected)
+          expect(rows.every((row) => !('originalBlob' in row) && !('thumbnailBlob' in row))).toBe(
+            true,
+          )
+          expect(bulkGet).not.toHaveBeenCalled()
+          expect(get).not.toHaveBeenCalled()
+        } finally {
+          bulkGet.mockRestore()
+          get.mockRestore()
+        }
+        const stored = await storage.listVersions('owner')
+        expect(stored).toHaveLength(versions.length)
+        const originals = new Map(versions.map((version) => [version.id, version.originalBlob]))
+        for (const version of stored)
+          expect(
+            await crypto.subtle.digest('SHA-256', await version.originalBlob.arrayBuffer()),
+          ).toEqual(
+            await crypto.subtle.digest('SHA-256', await originals.get(version.id)!.arrayBuffer()),
+          )
+        if (encrypted) {
+          vault.lock()
+          await expect(storage.listVersionListSummaries()).rejects.toThrow()
+        }
+      } finally {
+        database.close()
+        await database.delete()
+      }
+    },
+  )
+
+  it.each([false, true])(
+    'does not allocate fake originals per metadata edit and retains all current/history bytes (vault=%s)',
+    async (encrypted) => {
+      const db = new AppDatabase('metadata-placeholder-' + crypto.randomUUID()),
+        vault = new VaultService(db)
+      try {
+        await vault.initialize()
+        if (encrypted) await vault.enable('fixture-password')
+        const storage = new IndexedDbResourceStorage(db, vault)
+        const rows = Array.from({ length: 20 }, (_, i): Resource => ({
+          ...createResource(i),
+          type: RESOURCE_TYPE.OTHER,
+          mimeType: 'application/octet-stream',
+          thumbnailBlob: undefined,
+        }))
+        const versions = Array.from({ length: 5 }, (_, i): Resource => ({
+          ...createResource(100 + i),
+          type: RESOURCE_TYPE.OTHER,
+          mimeType: 'application/octet-stream',
+          thumbnailBlob: undefined,
+          versionGroupId: rows[i]!.id,
+        }))
+        const digest = async (blob: Blob) =>
+          [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))]
+            .map((value) => value.toString(16).padStart(2, '0'))
+            .join('')
+        for (const row of [...rows, ...versions]) row.contentHash = await digest(row.originalBlob)
+        await storage.saveMany(rows)
+        for (const row of versions) await storage.saveVersion(row)
+        const NativeBlob = globalThis.Blob
+        let emptyAllocations = 0
+        vi.stubGlobal(
+          'Blob',
+          new Proxy(NativeBlob, {
+            construct(target, args, newTarget) {
+              if (!args[0] || args[0].length === 0) emptyAllocations++
+              return Reflect.construct(target, args, newTarget)
+            },
+          }),
+        )
+        try {
+          await storage.updateMetadataMany(
+            rows.map((row) => ({
+              id: row.id,
+              changes: {
+                name: 'edited-' + row.id,
+                metadata: { preserved: row.id },
+                updatedAt: 200,
+              },
+            })),
+          )
+          for (const row of versions)
+            await storage.updateVersion(row.id, { versionNote: 'edited-' + row.id, updatedAt: 200 })
+        } finally {
+          vi.unstubAllGlobals()
+        }
+        for (const row of rows) {
+          const saved = await storage.get(row.id)
+          expect(saved?.name).toBe('edited-' + row.id)
+          expect(saved?.metadata).toMatchObject({ preserved: row.id })
+          expect(await digest(saved!.originalBlob)).toBe(row.contentHash)
+        }
+        for (const row of versions) {
+          const saved = await storage.getVersion(row.id)
+          expect(saved?.versionNote).toBe('edited-' + row.id)
+          expect(saved?.versionGroupId).toBe(row.versionGroupId)
+          expect(await digest(saved!.originalBlob)).toBe(row.contentHash)
+        }
+        expect(emptyAllocations).toBeLessThanOrEqual(1)
+      } finally {
+        db.close()
+        await db.delete()
+      }
+    },
+  )
+
+  it.each([false, true])(
+    'inserts atomically without replacing occupied resources or either summary (vault=%s)',
+    async (encrypted) => {
+      const db = new AppDatabase('insert-only-' + crypto.randomUUID())
+      const vault = new VaultService(db)
+      try {
+        await vault.initialize()
+        if (encrypted) await vault.enable('test-password')
+        const storage = new IndexedDbResourceStorage(db, vault)
+        const first = createResource(1)
+        expect(await storage.insertIfAbsent(first)).toBe(true)
+        expect(
+          await storage.insertIfAbsent({ ...first, name: 'must not replace', tags: ['wrong'] }),
+        ).toBe(false)
+        expect((await storage.get(first.id))?.name).toBe(first.name)
+        expect(
+          (await vault.decodeResourceSummary((await db.resourceSummaries.get(first.id))!)).tags,
+        ).toEqual(first.tags)
+        expect((await storage.getResourceListSummary(first.id))?.tags).toEqual(first.tags)
+        const second = createResource(2)
+        const values = [
+          { ...second, name: 'one' },
+          { ...second, name: 'two' },
+        ]
+        const results = await Promise.all(values.map((value) => storage.insertIfAbsent(value)))
+        expect([...results].sort()).toEqual([false, true])
+        expect((await storage.getSummary(second.id))?.name).toBe(
+          values[results.indexOf(true)]!.name,
+        )
+      } finally {
+        db.close()
+        await db.delete()
+      }
+    },
+  )
+
+  it('rolls back an inserted resource and both summaries when the final index write fails', async () => {
+    const db = new AppDatabase('insert-rollback-' + crypto.randomUUID())
+    try {
+      const storage = new IndexedDbResourceStorage(db),
+        row = createResource(1)
+      vi.spyOn(db.resourceListSummaries, 'bulkPut').mockRejectedValueOnce(new Error('index failed'))
+      await expect(storage.insertIfAbsent(row)).rejects.toThrow('index failed')
+      expect(await db.resources.get(row.id)).toBeUndefined()
+      expect(await db.resourceSummaries.get(row.id)).toBeUndefined()
+      expect(await db.resourceListSummaries.get(row.id)).toBeUndefined()
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+  it.each([false, true])(
+    'batch-reads only committed rows in bounded requests without repair (vault=%s)',
+    async (encrypted) => {
+      const database = new AppDatabase(`committed-batch-${crypto.randomUUID()}`)
+      try {
+        const vault = encrypted ? new VaultService(database) : undefined
+        await vault?.initialize()
+        await vault?.enable('test-password')
+        const storage = new IndexedDbResourceStorage(database, vault)
+        const base = toResourceListSummary(createResource(1))
+        const rows = Array.from({ length: 501 }, (_, index) => ({ ...base, id: `r-${index}` }))
+        for (let start = 0; start < rows.length; start += 250) {
+          const batch = rows.slice(start, start + 250)
+          await database.resourceListSummaries.bulkPut(
+            vault ? await Promise.all(batch.map((row) => vault.encodeResourceSummary(row))) : batch,
+          )
+        }
+        const reads = vi.spyOn(database.resourceListSummaries, 'bulkGet')
+        const originals = vi.spyOn(database.resources, 'toCollection')
+        const result = await storage.getResourceListSummaries([
+          ...rows.map((row) => row.id),
+          'r-0',
+          'missing',
+        ])
+        expect(result).toEqual(rows)
+        expect(reads.mock.calls.map(([ids]) => ids.length)).toEqual([250, 250, 2])
+        expect(originals.mock.calls.length).toBe(0)
+        expect(await database.settings.get('index.resourceListSummaries.v20')).toBeUndefined()
+        await storage.getResourceListSummaries([])
+        expect(reads.mock.calls.length).toBe(3)
+      } finally {
+        await database.delete()
+      }
+    },
+  )
+
+  it('uses both existing category indexes without loading unrelated summaries or originals', async () => {
+    const database = new AppDatabase(`category-query-${crypto.randomUUID()}`)
+    try {
+      const storage = new IndexedDbResourceStorage(database)
+      const rows = [
+        ...Array.from({ length: 1000 }, (_, index) => createResource(index)),
+        { ...createResource(1001), categoryId: 'remove', categoryIds: ['remove', 'keep'] },
+        { ...createResource(1002), categoryId: 'keep', categoryIds: ['keep', 'remove'] },
+      ]
+      await database.resources.bulkPut(rows)
+      await database.resourceListSummaries.bulkPut(rows.map(toResourceListSummary))
+      await database.settings.put({
+        id: 'index.resourceListSummaries.v20',
+        value: true,
+        updatedAt: 1,
+      })
+      await storage.listResourceListSummaries()
+      const read = vi.spyOn(database.resourceListSummaries, 'bulkGet')
+      const full = vi.spyOn(database.resources, 'toArray')
+      expect(
+        (await storage.listResourceListSummaries({ categoryId: 'remove' })).map((r) => r.id),
+      ).toEqual(['resource-1002', 'resource-1001'])
+      expect(read.mock.calls.flatMap(([ids]) => ids).sort()).toEqual([
+        'resource-1001',
+        'resource-1002',
+      ])
+      expect(full.mock.calls.length).toBe(0)
+    } finally {
+      await database.delete()
+    }
+  })
+
   it('repairs only selected keys, removes selected orphans, and leaves the global repair marker unset', async () => {
     const database = new AppDatabase(`scoped-repair-${crypto.randomUUID()}`)
     try {

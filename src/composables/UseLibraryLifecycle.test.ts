@@ -1,18 +1,22 @@
 /** @vitest-environment jsdom */
 import { computed, defineComponent, ref } from 'vue'
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useLibraryLifecycle } from './UseLibraryLifecycle'
 import type { SharedFileBatch } from '../utils/ShareTargetIntake'
 
 const intake = vi.hoisted(() => ({ take: vi.fn(), retry: vi.fn(), complete: vi.fn() }))
+const greetings = vi.hoisted(() => new Set<(resourceId: string, changed: boolean) => void>())
 const startup = vi.hoisted(() => ({
   initializeVaultOnce: vi.fn(() => new Promise<never>(() => undefined)),
   syncNativeResourceFiles: vi.fn((): Promise<void> => Promise.resolve()),
   reconcileNativeJob: vi.fn(async () => undefined),
   runDueBackup: vi.fn(async () => undefined),
   listSummaries: vi.fn(async (): Promise<never[]> => []),
-  upgrade: vi.fn(async () => 0),
+  listLightSummaries: vi.fn(async (): Promise<never[]> => []),
+  upgrade: vi
+    .fn<(checkpoint: () => Promise<void>, snapshot?: never[]) => Promise<number>>()
+    .mockResolvedValue(0),
   backfill: vi.fn(async () => 0),
 }))
 vi.mock('../utils/ShareTargetIntake', () => ({
@@ -23,9 +27,15 @@ vi.mock('../utils/ShareTargetIntake', () => ({
 }))
 vi.mock('../core/LibraryContainer', () => ({
   initializeVaultOnce: startup.initializeVaultOnce,
-  greetingResourceService: { onSaved: () => () => undefined },
+  greetingResourceService: {
+    onSaved: (listener: (resourceId: string, changed: boolean) => void) => {
+      greetings.add(listener)
+      return () => greetings.delete(listener)
+    },
+  },
   resourceService: {
     listSummaries: startup.listSummaries,
+    listResourceListSummaries: startup.listLightSummaries,
     repairThumbnailAssets: vi.fn(async () => 0),
     upgradeLegacyJsonResources: startup.upgrade,
     backfillCardFingerprints: startup.backfill,
@@ -42,15 +52,18 @@ vi.mock('../core/AppContainer', () => ({
   },
 }))
 vi.mock('../core/SafeStartup', () => ({ markStartupReady: vi.fn() }))
+// Lifecycle tests do not start the independent inbox owner or its startup reads.
+vi.mock('./UseDiscordResourceInbox', () => ({ useDiscordResourceInbox: vi.fn() }))
 
 function mountLifecycle(onRender?: (cssSyncCount: number) => void) {
+  const overlay = ref(false)
   const receive = vi.fn(),
     notice = vi.fn()
   const syncCustomUiCss = vi.fn()
   const context: Parameters<typeof useLibraryLifecycle>[0] = {
     showNotice: notice,
     receiveSharedFileBatch: receive,
-    loadResources: vi.fn(),
+    loadResources: vi.fn(async () => undefined),
     refreshStorageHealth: vi.fn(),
     vaultStatus: ref({ locked: false } as Parameters<
       typeof useLibraryLifecycle
@@ -61,7 +74,7 @@ function mountLifecycle(onRender?: (cssSyncCount: number) => void) {
     loadLibrary: vi.fn(),
     loadRecycleBin: vi.fn(),
     handleNativeDeepLink: vi.fn(),
-    isOverlayOpen: computed(() => false),
+    isOverlayOpen: computed(() => overlay.value),
     searchScope: ref('name'),
     activeFilter: ref('all'),
     activeCategoryId: ref(undefined),
@@ -99,7 +112,7 @@ function mountLifecycle(onRender?: (cssSyncCount: number) => void) {
       },
     }),
   )
-  return { wrapper, lifecycle, receive, notice, context }
+  return { wrapper, lifecycle, receive, notice, context, overlay }
 }
 function empty(): SharedFileBatch {
   return { files: [], acknowledge: async () => undefined }
@@ -117,19 +130,207 @@ function attachment(index: number): SharedFileBatch {
 }
 
 describe('系统分享待处理队列', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it.each(['vault', 'library', 'deep-link'] as const)(
+    'reports the actual startup failure stage: %s',
+    async (stage) => {
+      const failure = new Error('private-resource token=secret')
+      if (stage === 'vault') startup.initializeVaultOnce.mockRejectedValueOnce(failure)
+      else startup.initializeVaultOnce.mockResolvedValueOnce({ locked: false } as never)
+      intake.take.mockResolvedValue([])
+      const { wrapper, context, notice } = mountLifecycle()
+      if (stage === 'library') vi.mocked(context.loadLibrary).mockRejectedValueOnce(failure)
+      if (stage === 'deep-link')
+        vi.mocked(context.handleNativeDeepLink).mockRejectedValueOnce(failure)
+      try {
+        const code = {
+          vault: 'SRL-LIBRARY-VAULT-INIT',
+          library: 'SRL-LIBRARY-LOAD',
+          'deep-link': 'SRL-LIBRARY-DEEP-LINK',
+        }[stage]
+        await vi.waitFor(() => expect(notice).toHaveBeenCalledWith(expect.stringContaining(code)))
+        expect(JSON.stringify(notice.mock.calls)).not.toContain('private-resource')
+        expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('secret')
+        expect(notice).not.toHaveBeenCalledWith('无法读取本地数据库，请刷新后重试')
+      } finally {
+        wrapper.unmount()
+        intake.take.mockReset()
+      }
+    },
+  )
+
+  it.each([false, true])(
+    'does not report cancelled or disposed startup failures (disposed=%s)',
+    async (disposed) => {
+      let reject!: (error: Error) => void
+      startup.initializeVaultOnce.mockImplementationOnce(
+        () =>
+          new Promise<never>((_, fail) => {
+            reject = fail
+          }),
+      )
+      const { wrapper, notice } = mountLifecycle()
+      if (disposed) wrapper.unmount()
+      reject(disposed ? new Error('late failure') : new DOMException('stopped', 'AbortError'))
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(notice).not.toHaveBeenCalled()
+      expect(console.warn).not.toHaveBeenCalled()
+      if (!disposed) wrapper.unmount()
+    },
+  )
+
+  it('records maintenance failure stage without logging raw errors', async () => {
+    startup.initializeVaultOnce.mockResolvedValueOnce({ locked: false } as never)
+    startup.backfill.mockRejectedValueOnce(new Error('private-maintenance token=secret'))
+    intake.take.mockResolvedValue([])
+    const { wrapper } = mountLifecycle()
+    try {
+      await vi.waitFor(() =>
+        expect(console.warn).toHaveBeenCalledWith(
+          '[SRL:HandledError]',
+          expect.objectContaining({ code: 'SRL-LIBRARY-MAINTENANCE-FINGERPRINTS' }),
+        ),
+      )
+      expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('secret')
+    } finally {
+      wrapper.unmount()
+      intake.take.mockReset()
+    }
+  })
+
+  it('records optional startup reads independently and keeps the library usable', async () => {
+    startup.initializeVaultOnce.mockResolvedValueOnce({ locked: false } as never)
+    intake.take.mockResolvedValue([])
+    const { wrapper, context, notice } = mountLifecycle()
+    vi.mocked(context.refreshStorageHealth).mockRejectedValueOnce(new Error('storage private'))
+    vi.mocked(context.loadRecycleBin).mockRejectedValueOnce(new Error('recycle private'))
+    try {
+      await vi.waitFor(() =>
+        expect(notice).toHaveBeenCalledWith(expect.stringContaining('SRL-LIBRARY-RECYCLE-LOAD')),
+      )
+      expect(notice).toHaveBeenCalledWith(expect.stringContaining('SRL-LIBRARY-STORAGE-HEALTH'))
+      expect(context.loadLibrary).toHaveBeenCalledOnce()
+    } finally {
+      wrapper.unmount()
+      intake.take.mockReset()
+    }
+  })
+
+  it('does not restart a maintenance operation cancelled by its storage owner', async () => {
+    startup.initializeVaultOnce.mockResolvedValueOnce({ locked: false } as never)
+    startup.upgrade
+      .mockClear()
+      .mockRejectedValueOnce(new DOMException('cancelled read', 'AbortError'))
+    startup.backfill.mockClear()
+    intake.take.mockResolvedValue([])
+    const { wrapper } = mountLifecycle()
+    try {
+      await vi.waitFor(() => expect(startup.upgrade).toHaveBeenCalledOnce())
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(startup.upgrade).toHaveBeenCalledOnce()
+      expect(startup.backfill).not.toHaveBeenCalled()
+      expect(console.warn).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      startup.upgrade.mockReset().mockResolvedValue(0)
+      intake.take.mockReset()
+    }
+  })
+
+  it('refreshes only committed greeting IDs, skips no-op saves and releases the listener', async () => {
+    const { wrapper, context, notice } = mountLifecycle()
+    try {
+      expect(greetings.size).toBe(1)
+      greetings.forEach((listener) => listener('unchanged', false))
+      expect(context.loadResources).not.toHaveBeenCalled()
+      greetings.forEach((listener) => listener('greeting-new', true))
+      greetings.forEach((listener) => listener('character-updated', true))
+      expect(vi.mocked(context.loadResources).mock.calls).toEqual([
+        [['greeting-new']],
+        [['character-updated']],
+      ])
+      vi.mocked(context.loadResources).mockRejectedValueOnce(new Error('synthetic read failure'))
+      greetings.forEach((listener) => listener('committed-but-unreadable', true))
+      await vi.waitFor(() =>
+        expect(notice).toHaveBeenCalledWith(
+          expect.stringContaining('SRL-LIBRARY-GREETING-REFRESH'),
+        ),
+      )
+    } finally {
+      wrapper.unmount()
+    }
+    expect(greetings.size).toBe(0)
+  })
+
+  it('drops a maintenance snapshot when an overlay opens during reading and rereads after it closes', async () => {
+    let finish!: (rows: never[]) => void
+    let paused = false
+    startup.initializeVaultOnce.mockImplementation(async () => ({ locked: false }) as never)
+    startup.listLightSummaries
+      .mockReset()
+      .mockResolvedValue([])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+    startup.upgrade.mockReset().mockImplementation(async (checkpoint: () => Promise<void>) => {
+      try {
+        await checkpoint()
+      } catch (error) {
+        paused = true
+        throw error
+      }
+      return 0
+    })
+    startup.backfill.mockReset().mockResolvedValue(0)
+    intake.take.mockResolvedValue([])
+    const { wrapper, overlay } = mountLifecycle()
+    try {
+      await vi.waitFor(() => expect(startup.listLightSummaries).toHaveBeenCalledOnce())
+      overlay.value = true
+      finish([])
+      await vi.waitFor(() => expect(paused).toBe(true))
+      expect(startup.backfill).not.toHaveBeenCalled()
+      expect(startup.listLightSummaries).toHaveBeenCalledOnce()
+      overlay.value = false
+      await vi.waitFor(() => expect(startup.backfill).toHaveBeenCalledOnce())
+      expect(startup.listLightSummaries).toHaveBeenCalledTimes(2)
+    } finally {
+      wrapper.unmount()
+      startup.initializeVaultOnce
+        .mockReset()
+        .mockImplementation(() => new Promise<never>(() => undefined))
+      startup.listLightSummaries.mockReset().mockResolvedValue([])
+      startup.upgrade.mockReset().mockResolvedValue(0)
+      startup.backfill.mockReset().mockResolvedValue(0)
+      intake.take.mockReset()
+    }
+  })
+
   it.each([0, 1])(
     'shares the maintenance snapshot only when no content upgrade committed (%i)',
     async (upgraded) => {
       const snapshot = [{ id: 'snapshot' }] as never[]
       startup.initializeVaultOnce.mockImplementation(async () => ({ locked: false }) as never)
-      startup.listSummaries.mockReset().mockResolvedValue(snapshot)
+      startup.listLightSummaries.mockReset().mockResolvedValue(snapshot)
+      startup.listSummaries.mockClear()
       startup.upgrade.mockReset().mockResolvedValue(upgraded)
       startup.backfill.mockReset().mockResolvedValue(0)
       intake.take.mockResolvedValue([])
       const { wrapper } = mountLifecycle()
       try {
         await vi.waitFor(() => expect(startup.backfill).toHaveBeenCalledOnce())
-        expect(startup.listSummaries).toHaveBeenCalledOnce()
+        expect(startup.listLightSummaries).toHaveBeenCalledOnce()
+        expect(startup.listSummaries).not.toHaveBeenCalled()
         expect(startup.upgrade.mock.calls[0]).toEqual([expect.any(Function), snapshot])
         expect(startup.backfill.mock.calls[0]).toEqual([
           expect.any(Function),
@@ -143,6 +344,7 @@ describe('系统分享待处理队列', () => {
         startup.upgrade.mockReset().mockResolvedValue(0)
         startup.backfill.mockReset().mockResolvedValue(0)
         startup.listSummaries.mockReset().mockResolvedValue([])
+        startup.listLightSummaries.mockReset().mockResolvedValue([])
         startup.syncNativeResourceFiles.mockClear()
         startup.reconcileNativeJob.mockClear()
         startup.runDueBackup.mockClear()
@@ -193,7 +395,11 @@ describe('系统分享待处理队列', () => {
     const { wrapper, notice } = mountLifecycle()
     try {
       await vi.waitFor(() =>
-        expect(notice).toHaveBeenCalledWith(expect.stringContaining('startup fixture failure')),
+        expect(notice).toHaveBeenCalledWith(
+          expect.stringContaining(
+            failed === 'sync' ? 'SRL-BACKUP-NATIVE-FILE-SYNC' : 'SRL-BACKUP-RECEIPT-RECONCILE',
+          ),
+        ),
       )
       expect(startup.runDueBackup).not.toHaveBeenCalled()
     } finally {

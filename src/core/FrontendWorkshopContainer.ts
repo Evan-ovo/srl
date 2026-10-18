@@ -21,6 +21,11 @@ import { appDatabase as database } from './AppDatabaseInstance'
 import { mainApiService } from './AppContainer'
 
 const frontendWorkshopProjectStorage = new IndexedDbFrontendWorkshopProjectStorage(database)
+export const exportPortableWorkshopProjects = () =>
+  frontendWorkshopProjectStorage.exportPortableState()
+export const importPortableWorkshopProjects = (
+  data: import('../storage/FrontendWorkshopProjectStorage').FrontendWorkshopBackup,
+) => frontendWorkshopProjectStorage.importPortableState(data)
 const frontendWorkshopSourceComponentStorage = new IndexedDbFrontendWorkshopSourceComponentStorage(
   database,
 )

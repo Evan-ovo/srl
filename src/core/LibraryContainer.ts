@@ -8,6 +8,7 @@ import { ResourceParserRegistry } from '../parser/ResourceParser'
 import { ResourceService } from '../services/ResourceService'
 import { BrowserStorageService } from '../services/BrowserStorageService'
 import { VaultService } from '../services/VaultService'
+import { ResourceAttachmentService } from '../services/ResourceAttachmentService'
 import { ResourceGalleryService } from '../services/ResourceGalleryService'
 import { GreetingResourceService } from '../services/GreetingResourceService'
 import { CommunitySourceService } from '../services/CommunitySourceService'
@@ -74,9 +75,11 @@ export const nativeResourceRecoveryService = new NativeResourceRecoveryService(
   assetStore,
   () => vaultService.isEnabled(),
 )
+export const resourceAttachmentService = new ResourceAttachmentService(storage)
 export const resourceGalleryService = new ResourceGalleryService(
   storage,
   new IndexedDbResourceGalleryCategoryStorage(database),
+  assetStore,
 )
 export const greetingResourceService = new GreetingResourceService(resourceService)
 export const discordInboxAutomationSettingsService = new DiscordInboxAutomationSettingsService(
@@ -93,12 +96,20 @@ export const characterDrawService = new CharacterDrawService(database)
 export const exportService = new ExportService(
   () => communitySourceService.exportAll(),
   () => exportCommunitySourceLocalAttachments(communitySourceService),
+  async (id) =>
+    (await import('./ImageAlbumContainer')).generatedImageAlbumService.getOriginalBlob(id),
 )
 export const restoreService = new CommunitySourceRestoreService(
   archiveStorage,
   restoreStagingStore,
   communitySourceService,
   (entries) => restoreCommunitySourceLocalAttachments(assetStore, entries),
+  {
+    importPortableState: async (...args) =>
+      (await import('./ImageAlbumContainer')).generatedImageAlbumService.importPortableState(
+        ...args,
+      ),
+  },
 )
 export const recycleBinService = new RecycleBinService(
   database,

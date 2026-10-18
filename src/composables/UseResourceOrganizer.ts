@@ -1,7 +1,7 @@
 import type { EmitFn } from 'vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import { chooseAction, confirmAction } from '../composables/UseConfirmDialog'
-import { isResourceGalleryImage } from '../types/ResourceGallery'
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
 import { createAsyncPanel } from '../core/AsyncPanel'
 import { dirtyStateRegistry } from '../core/DirtyStateRegistry'
 import { hasResourceDetailDraftChanges } from '../services/ResourceDetailDirtyState'
@@ -49,6 +49,7 @@ export type ResourceOrganizerProps = {
 }
 
 export type ResourceOrganizerEvents = {
+  attachmentsChanged: [ids: string[]]
   openSecretSettings: []
   personalSaved: [resource: Resource]
   personalBusy: [busy: boolean]
@@ -414,9 +415,7 @@ export function useResourceOrganizer(
   const relationTypeOptions = computed(() => {
     const types = new Set(
       props.resources
-        .filter(
-          (resource) => resource.id !== props.resource.id && !isResourceGalleryImage(resource),
-        )
+        .filter((resource) => resource.id !== props.resource.id && !isResourceOwnedFile(resource))
         .map((resource) => resource.type),
     )
     return typeOptions.filter((option) => types.has(option.value))
@@ -450,7 +449,7 @@ export function useResourceOrganizer(
     const versionIds = new Set(props.versions.map((version) => version.resource.id))
     return props.resources
       .filter((resource) => resource.id !== props.resource.id)
-      .filter((resource) => !isResourceGalleryImage(resource))
+      .filter((resource) => !isResourceOwnedFile(resource))
       .filter((resource) => resource.type === props.resource.type)
       .filter((resource) => !versionIds.has(resource.id))
       .sort(

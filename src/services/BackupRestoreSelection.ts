@@ -38,6 +38,8 @@ export function selectPreparedRestore(
   prepared: PreparedRestore,
   selectors: ReadonlySet<string>,
   includeGallery = true,
+  includeCommunitySources?: boolean,
+  includeAttachments = true,
 ): PreparedRestore {
   const selectedIds = new Set<string>()
   const withCompanions = new Set(selectors)
@@ -46,6 +48,7 @@ export function selectPreparedRestore(
     [...prepared.resources, ...(prepared.galleryOwners ?? [])],
     withCompanions,
     includeGallery,
+    includeAttachments,
   )
   const selectedResources: Resource[] = []
   for (const resource of prepared.resources) {
@@ -77,25 +80,36 @@ export function selectPreparedRestore(
   // A complete restore also includes unbound sources and bindings mapped to existing
   // duplicate resources, which are intentionally absent from prepared.resources.
   const allResourcesSelected = prepared.resources.every((resource) => selectedIds.has(resource.id))
+  const plannedIds = new Set(prepared.resources.map((resource) => resource.id))
   const communitySourceData =
-    prepared.communitySourceData && !allResourcesSelected
-      ? (() => {
-          const bindings = prepared.communitySourceData!.bindings.filter((binding) =>
-            selectedIds.has(binding.resourceId),
-          )
-          const sourceIds = new Set(bindings.map((binding) => binding.sourceId))
-          return {
-            ...prepared.communitySourceData!,
-            sources: prepared.communitySourceData!.sources.filter((source) =>
-              sourceIds.has(source.id),
+    includeCommunitySources === false
+      ? undefined
+      : includeCommunitySources === true && prepared.communitySourceData
+        ? {
+            ...prepared.communitySourceData,
+            bindings: prepared.communitySourceData.bindings.filter(
+              (binding) =>
+                selectedIds.has(binding.resourceId) || !plannedIds.has(binding.resourceId),
             ),
-            messages: prepared.communitySourceData!.messages.filter((message) =>
-              sourceIds.has(message.sourceId),
-            ),
-            bindings,
           }
-        })()
-      : prepared.communitySourceData
+        : prepared.communitySourceData && !allResourcesSelected
+          ? (() => {
+              const bindings = prepared.communitySourceData!.bindings.filter((binding) =>
+                selectedIds.has(binding.resourceId),
+              )
+              const sourceIds = new Set(bindings.map((binding) => binding.sourceId))
+              return {
+                ...prepared.communitySourceData!,
+                sources: prepared.communitySourceData!.sources.filter((source) =>
+                  sourceIds.has(source.id),
+                ),
+                messages: prepared.communitySourceData!.messages.filter((message) =>
+                  sourceIds.has(message.sourceId),
+                ),
+                bindings,
+              }
+            })()
+          : prepared.communitySourceData
 
   const assetIds = communitySourceData
     ? collectCommunitySourceLocalAssetIds(communitySourceData)
@@ -136,11 +150,12 @@ export function selectStructuredSnapshot(
   snapshot: StructuredSnapshot,
   selectors: ReadonlySet<string>,
   includeGallery = true,
+  includeAttachments = true,
 ): StructuredSnapshot {
   const selectedIds = new Set<string>()
   const withCompanions = new Set(selectors)
   includeChatCompanionIds(snapshot.resources, withCompanions)
-  includeResourceGalleryIds(snapshot.resources, withCompanions, includeGallery)
+  includeResourceGalleryIds(snapshot.resources, withCompanions, includeGallery, includeAttachments)
   const resources = snapshot.resources.filter((resource) => {
     if (!withCompanions.has(resource.id)) return false
     selectedIds.add(resource.id)
@@ -201,7 +216,12 @@ export async function readBackupRestoreContents(
   resourceService: Pick<ResourceService, 'listResourceListSummaries'>,
   categoryService: Pick<CategoryService, 'list'>,
   restoreService: Pick<RestoreService, 'prepare'>,
-): Promise<{ resources: ResourceSummary[]; portableData?: ArchivePortableData }> {
+  retainPrepared?: (prepared: PreparedRestore) => void,
+): Promise<{
+  resources: ResourceSummary[]
+  portableData?: ArchivePortableData
+  communitySources?: boolean
+}> {
   if (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot') {
     const snapshot = await readStructuredSnapshot()
     return {
@@ -215,6 +235,7 @@ export async function readBackupRestoreContents(
     resourceService,
     categoryService,
     restoreService,
+    retainPrepared,
   )
 }
 
@@ -224,7 +245,12 @@ async function readArchiveRestoreContents(
   resourceService: Pick<ResourceService, 'listResourceListSummaries'>,
   categoryService: Pick<CategoryService, 'list'>,
   restoreService: Pick<RestoreService, 'prepare'>,
-): Promise<{ resources: ResourceListSummary[]; portableData?: ArchivePortableData }> {
+  retainPrepared?: (prepared: PreparedRestore) => void,
+): Promise<{
+  resources: ResourceListSummary[]
+  portableData?: ArchivePortableData
+  communitySources?: boolean
+}> {
   const blob = await downloadBackup()
   const [resources, categories] = await Promise.all([
     resourceService.listResourceListSummaries(),
@@ -236,21 +262,26 @@ async function readArchiveRestoreContents(
     categories as Category[],
     true,
   )
+  let retained = false
   try {
+    retainPrepared?.(prepared)
+    retained = Boolean(retainPrepared)
     return {
       resources: [...prepared.resources, ...(prepared.galleryOwners ?? [])].map((resource) =>
         toResourceListSummary(resource),
       ),
       portableData: prepared.portableData,
+      communitySources: Boolean(prepared.communitySourceData),
     }
   } finally {
-    await prepared.dispose?.()
+    if (!retained) await prepared.dispose?.()
   }
 }
 
 const PORTABLE_SCOPE_FIELDS: Partial<
   Record<BackupScopeId, readonly (keyof Omit<ArchivePortableData, 'version'>)[]>
 > = {
+  'extra.communitySources': ['communitySources'],
   'extra.resourceGallery': ['resourceGalleryCategories'],
   'extra.externalApps': ['externalApps'],
   'extra.chatReader': ['chatReader'],
@@ -258,6 +289,9 @@ const PORTABLE_SCOPE_FIELDS: Partial<
   'extra.aiTaggingState': ['aiTaggingState'],
   'extra.stitchWork': ['stitchWork'],
   'extra.frontendWorkshopComponents': ['frontendWorkshopComponents'],
+  'extra.frontendWorkshopProjects': ['frontendWorkshopProjects'],
+  'extra.imageGeneration': ['imageGeneration'],
+  'extra.generatedImageAlbum': ['generatedImageAlbum'],
   'extra.appearance': ['appearance'],
   'extra.generalPreferences': ['generalPreferences'],
   'extra.characterDraw': ['characterDraw'],

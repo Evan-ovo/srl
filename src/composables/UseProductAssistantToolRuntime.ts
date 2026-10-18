@@ -31,12 +31,32 @@ export async function executeAssistantViewTool(
   context: () => AssistantContext,
   navigate?: (id: string) => Promise<void>,
   capture?: (signal: AbortSignal) => Promise<AssistantImage>,
+  getConfig?: () => MainApiConfig,
+  canCapture: () => boolean = () => true,
 ): Promise<AssistantExecution> {
   if (signal.aborted || !isAlive()) throw new DOMException('已停止', 'AbortError')
   if (reply.action === 'view-current-ui') {
     if (!capture || !request.canCaptureCurrent) throw new Error('当前界面无法截图')
+    const config = getConfig?.()
+    const destination = config
+      ? `${new URL(config.url).origin}（${config.model}）`
+      : '本轮对话使用的 AI 服务'
+    const accepted = await confirmAction(
+      {
+        title: '截图并发送给 AI',
+        message: `将截取当前可见界面，并把遮蔽处理后的图片发送给：${destination}。请确认界面中没有不希望发送的内容；取消后不会截图或发送。`,
+        confirmLabel: '截图并发送',
+        centered: true,
+      },
+      signal,
+    )
+    if (!accepted || signal.aborted || !isAlive() || !canCapture())
+      return { text: '已取消截图，未发送图片。', ok: false, cancelled: true }
+    if (config && JSON.stringify(getConfig?.()) !== JSON.stringify(config))
+      throw new Error('AI 目标已变化，未截图或发送，请重新发起')
     const image = await capture(signal)
     if (signal.aborted || !isAlive()) throw new DOMException('已停止', 'AbortError')
+    if (!canCapture()) return { text: '截图权限已关闭，未发送图片。', ok: false, cancelled: true }
     return { text: '已截取当前界面。', image, modelImage: image }
   }
   const target = context().navigationTargets?.find((item) => item.id === reply.target)

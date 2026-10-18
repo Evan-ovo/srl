@@ -110,8 +110,9 @@ describe('Feature App visual contract', () => {
     expect(cloud.indexOf('class="cloud-operations"')).toBeLessThan(
       cloud.indexOf('class="cloud-config"'),
     )
-    expect(cloudCss).toContain('.cloud-config {\n  grid-column: 1;\n  grid-row: 1;')
-    expect(cloudCss).toContain('.cloud-operations {\n  grid-column: 2;\n  grid-row: 1;')
+    expect(cloud).toContain('class="cloud-connection"')
+    expect(cloud).toContain(':open="snapshot.credentials[activeProvider] !== \'valid\'"')
+    expect(cloudCss).toMatch(/\.cloud-workspace\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\)/)
     expect(cloudCss).not.toContain('.cloud-vault')
     expect(cloudCss).toContain('min-height: var(--size-touch);')
   })

@@ -178,6 +178,34 @@ export function isCloudRequestTimeout(error: unknown): error is CloudRequestTime
   return error instanceof CloudRequestTimeoutError
 }
 
+/** Observe the existing streamed body without another fetch or a second byte buffer. */
+export async function readCloudResponseBlob(
+  response: Response,
+  totalBytes?: number,
+  onProgress?: (transferredBytes: number, totalBytes?: number) => void,
+): Promise<Blob> {
+  if (!response.body || !onProgress) return response.blob()
+  let received = 0
+  let publishedAt = 0
+  const stream = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        received += chunk.byteLength
+        const now = performance.now()
+        if (!publishedAt || now - publishedAt >= 100 || received === totalBytes) {
+          onProgress(received, totalBytes)
+          publishedAt = now
+        }
+        controller.enqueue(chunk)
+      },
+      flush() {
+        if (received !== totalBytes) onProgress(received, totalBytes)
+      },
+    }),
+  )
+  return new Response(stream, { headers: response.headers }).blob()
+}
+
 export async function mapWithConcurrency<T>(
   values: readonly T[],
   concurrency: number,
@@ -232,8 +260,12 @@ export function githubError(
   const retryAfter = Number(headers?.get('retry-after') ?? 0)
   const acceptedPermissions = headers?.get('x-accepted-github-permissions')
   const requestId = headers?.get('x-github-request-id')
+  const upstream = headers?.get('x-srl-cloud-upstream')
   let hint = ''
-  if (/user.?agent/i.test(detail.message ?? '')) {
+  if (upstream === 'github-asset') {
+    hint =
+      '\nGitHub API 已返回下载地址，本次错误来自附件下载服务器；这不代表附件已被删除或令牌无权访问仓库。'
+  } else if (/user.?agent/i.test(detail.message ?? '')) {
     hint = '\nGitHub 没有收到有效的 User-Agent；请更新网页端/CF Worker 后重试。'
   } else if (remaining === '0' && resetAt > 0) {
     hint = `\nGitHub API 额度已用完，可在 ${new Date(resetAt * 1000).toLocaleString('zh-CN')} 后重试。`
@@ -249,7 +281,7 @@ export function githubError(
     new Error(
       `${action ? `${action} → ` : ''}${status}${detail.message ? `：${detail.message}` : ''}${reason}${hint}`,
     ),
-    { status },
+    { status, upstream },
   )
 }
 
@@ -276,11 +308,17 @@ export function cloudProxyUnavailableError(cause: unknown): Error {
 export function friendlyNetworkError(error: unknown, provider: CloudBackupProvider): Error {
   // 413 等已带可执行结论的错误不再套用通用网络文案
   if (error instanceof Error && /（413）/.test(error.message)) return error
-  if (error instanceof Error && /Failed to fetch|NetworkError|Load failed/i.test(error.message)) {
+  if (
+    error instanceof Error &&
+    /^(?:Failed to fetch|NetworkError(?: when attempting to fetch resource\.)?|Load failed)\.?$/i.test(
+      error.message,
+    )
+  ) {
     return new Error(
       provider === 'webdav'
         ? 'Koofr 拒绝了普通网页的跨域 WebDAV 请求（CORS）。这通常不是邮箱或应用密码错误：纯浏览器/Netlify 静态版无法直接绕过，需使用 APK 原生网络层或可信的同源后端。'
-        : 'GitHub 直连请求没有收到响应。请检查浏览器到 api.github.com / uploads.github.com 的网络、代理、VPN、广告拦截与 DNS；令牌或仓库配置错误通常会返回明确的 401/403/404。',
+        : 'GitHub 请求没有收到响应。可能是本站中转或附件下载连接失败，仅凭此错误不能判断浏览器断网、令牌无效或文件丢失。',
+      { cause: error },
     )
   }
   return error instanceof Error ? error : new Error('云端操作失败')
@@ -288,4 +326,20 @@ export function friendlyNetworkError(error: unknown, provider: CloudBackupProvid
 
 export function cloudHttpError(message: string, status: number): Error {
   return Object.assign(new Error(message), { status })
+}
+
+/** Retry waits belong to the same operation signal as the request; stop releases the timer. */
+export function waitForCloudRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer)
+      reject(signal?.reason ?? new DOMException('已停止', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', abort, { once: true })
+  })
 }

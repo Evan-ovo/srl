@@ -104,10 +104,10 @@ export class CategoryService {
 
   async reorder(orderedIds: string[]): Promise<void> {
     const categories = await this.storage.list()
-    const categoryIds = new Set(categories.map((category) => category.id))
+    const categoriesById = new Map(categories.map((category) => [category.id, category]))
     const seen = new Set<string>()
     const normalizedIds = orderedIds.filter((id) => {
-      if (!categoryIds.has(id) || seen.has(id)) return false
+      if (!categoriesById.has(id) || seen.has(id)) return false
       seen.add(id)
       return true
     })
@@ -117,7 +117,11 @@ export class CategoryService {
 
     const updatedAt = Date.now()
     await Promise.all(
-      normalizedIds.map((id, sortOrder) => this.storage.update(id, { sortOrder, updatedAt })),
+      normalizedIds.flatMap((id, sortOrder) =>
+        categoriesById.get(id)?.sortOrder === sortOrder
+          ? []
+          : [this.storage.update(id, { sortOrder, updatedAt })],
+      ),
     )
   }
 

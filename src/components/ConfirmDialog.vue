@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import '../styles/ConfirmDialog.css'
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { defineAsyncComponent } from 'vue'
 
 import { useConfirmDialogState, type ConfirmDialogResponse } from '../composables/UseConfirmDialog'
 import { SRL_BACK_REQUEST_EVENT, type SrlBackRequestDetail } from '../composables/UseBackStack'
 import { triggerNativeHaptic } from '../core/NativeHaptics'
+import { matchesConfirmationText } from '../utils/ConfirmationText'
 
 const { activeDialog, respond } = useConfirmDialogState()
 const modal = ref<HTMLDialogElement>()
@@ -16,6 +17,14 @@ const SecretProtectionSettings = defineAsyncComponent(
   () => import('./SecretProtectionSettings.vue'),
 )
 const secretReady = ref(false)
+const confirmationText = ref('')
+const composing = ref(false)
+const textReady = computed(
+  () =>
+    !activeDialog.value?.requiredText ||
+    (!composing.value &&
+      matchesConfirmationText(confirmationText.value, activeDialog.value.requiredText)),
+)
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-token-review-dialog-state
 const TokenReview = defineAsyncComponent(() => import('./ProductAssistantTokenReview.vue'))
 const tokenReview = ref<{ closeDetail: () => void }>()
@@ -46,6 +55,8 @@ watch(
   async (dialog, previous) => {
     detailsOpen.value = false
     secretReady.value = false
+    confirmationText.value = ''
+    composing.value = false
     if (!dialog) {
       await nextTick()
       if (!activeDialog.value && returnFocus?.isConnected)
@@ -68,7 +79,7 @@ function handleKeydown(event: KeyboardEvent): void {
   if (event.key === 'Tab') {
     const buttons = Array.from(
       dialogPanel.value?.querySelectorAll<HTMLElement | SVGElement>(
-        'button:not(:disabled), input:not(:disabled), [tabindex="0"], summary',
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"], summary',
       ) ?? [],
     )
     const first = buttons[0]
@@ -100,10 +111,11 @@ function cancelOrReturn(): void {
 }
 
 function respondWithHaptic(response: ConfirmDialogResponse): void {
+  if (response === 'confirm' && !textReady.value) return
   if (response === 'confirm' && activeDialog.value?.secretUnlock && !secretReady.value) return
   if (response === 'confirm')
     triggerNativeHaptic(activeDialog.value?.danger ? 'warning' : 'confirm')
-  respond(response)
+  respond(response, confirmationText.value)
 }
 function handleBack(event: Event): void {
   if (!activeDialog.value || !(event instanceof CustomEvent)) return
@@ -136,11 +148,15 @@ onUnmounted(() => {
       <section
         ref="dialogPanel"
         class="confirm-dialog"
+        :class="{ 'confirm-dialog--typed': activeDialog.requiredText }"
         role="alertdialog"
         aria-modal="true"
         :aria-label="activeDialog.title"
       >
         <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-token-review-dialog-content -->
+        <span v-if="activeDialog.requiredText" class="confirm-dialog__warning"
+          >最后一步 · 无法撤销</span
+        >
         <h3 v-if="!detailsOpen">{{ activeDialog.title }}</h3>
         <TokenReview
           v-if="activeDialog.tokenReview"
@@ -150,6 +166,27 @@ onUnmounted(() => {
           @details="detailsOpen = $event"
         />
         <p v-else>{{ activeDialog.message }}</p>
+        <label v-if="activeDialog.requiredText" class="confirm-dialog__typed">
+          <span class="confirm-dialog__field-label">请手动输入以下确认句子</span>
+          <span class="confirm-dialog__phrase">{{ activeDialog.requiredText }}</span>
+          <textarea
+            v-model="confirmationText"
+            aria-label="手动输入确认句子"
+            aria-describedby="confirm-dialog-typing-hint"
+            placeholder="在此手动输入完整句子"
+            rows="3"
+            autocomplete="off"
+            autocapitalize="off"
+            :spellcheck="false"
+            @paste.prevent
+            @drop.prevent
+            @compositionstart="composing = true"
+            @compositionend="composing = false"
+          />
+          <small id="confirm-dialog-typing-hint"
+            >需手动输入，不支持粘贴；标点、空格、大小写与全半角不影响确认。</small
+          >
+        </label>
         <SecretProtectionSettings
           v-if="activeDialog.secretUnlock"
           :key="activeDialog.id"
@@ -182,7 +219,7 @@ onUnmounted(() => {
             ref="confirmButton"
             type="button"
             class="confirm-dialog__confirm"
-            :disabled="activeDialog.secretUnlock && !secretReady"
+            :disabled="(activeDialog.secretUnlock && !secretReady) || !textReady"
             :class="{ 'confirm-dialog__confirm--danger': activeDialog.danger }"
             @click="respondWithHaptic('confirm')"
           >

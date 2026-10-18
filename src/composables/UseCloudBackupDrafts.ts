@@ -36,6 +36,9 @@ export const DEFAULT_CONTENT_SELECTION: CloudBackupContentSelection = {
   chatReader: true,
   assistantData: false,
   stitchWork: false,
+  imageGeneration: true,
+  generatedImageAlbum: false,
+  frontendWorkshopProjects: false,
 }
 
 export function useCloudBackupDrafts(snapshot: Ref<CloudBackupSnapshot>) {
@@ -125,6 +128,10 @@ export function cloudBackupSelectionModel(
   setScope('extra.resourceGallery', configured.resourceGallery, false)
   setScope('extra.stitchWork', configured.stitchWork, false)
   setScope('extra.communitySources', configured.communitySources, false)
+  setScope('extra.frontendWorkshopComponents', configured.frontendWorkshopComponents, false)
+  setScope('extra.frontendWorkshopProjects', configured.frontendWorkshopProjects, false)
+  setScope('extra.generatedImageAlbum', configured.generatedImageAlbum, false)
+  setScope('extra.imageGeneration', configured.imageGeneration, false)
   setScope('extra.appearance', configured.appearance, true)
   setScope('extra.cloudBackup', configured.cloudBackup, true)
   setScope('extra.characterDraw', configured.characterDraw, true)

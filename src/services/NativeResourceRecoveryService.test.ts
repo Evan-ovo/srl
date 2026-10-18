@@ -12,6 +12,7 @@ import type { NativeRecoveryMetadata } from '../storage/NativeResourceFileMirror
 import { NativeResourceRecoveryService } from './NativeResourceRecoveryService'
 import type { Resource } from '../types/Resource'
 import type { NativeBackedResourceRecord } from '../types/Vault'
+import * as nativeFiles from '../storage/NativeResourceFileMirror'
 
 const cardText = JSON.stringify({
   spec: 'chara_card_v2',
@@ -24,6 +25,49 @@ const candidate = {
 const empty = { created: 0, updated: 0, existing: 0, unsupported: 0, failed: 0, pendingLinks: 0 }
 
 describe('NativeResourceRecoveryService', () => {
+  it('deletes selected candidates in 100-item batches and stops before the next batch', async () => {
+    const controller = new AbortController()
+    const selected = Array.from({ length: 201 }, (_, index) => ({
+      contentHash: index.toString(16).padStart(64, '0'),
+      size: 1,
+      modifiedAt: 1,
+    }))
+    const bridge = vi
+      .spyOn(nativeFiles, 'deleteNativeRecoveryCandidates')
+      .mockImplementation(async (items) => ({
+        deletedHashes: items.map((item) => item.contentHash),
+        retainedHashes: [],
+        clearedBytes: items.length,
+      }))
+    await expect(
+      service.deleteCandidates(selected, {
+        signal: controller.signal,
+        onProgress: () => controller.abort(),
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(bridge).toHaveBeenCalledOnce()
+    expect(bridge.mock.calls[0]![0]).toHaveLength(100)
+    const report = await service.deleteCandidates(selected.slice(100))
+    expect(report.deletedHashes).toHaveLength(101)
+    expect(bridge.mock.calls.slice(1).map(([items]) => items.length)).toEqual([100, 1])
+  })
+  it('does not delete invalid/stale candidates or while vault protection is active, and validates native receipts', async () => {
+    const bridge = vi
+      .spyOn(nativeFiles, 'deleteNativeRecoveryCandidates')
+      .mockResolvedValue({ deletedHashes: [], retainedHashes: [], clearedBytes: 0 })
+    await expect(service.deleteCandidates([{ ...candidate, modifiedAt: -1 }])).rejects.toThrow(
+      '时间无效',
+    )
+    expect(bridge).not.toHaveBeenCalled()
+    vault = true
+    await expect(service.deleteCandidates([{ ...candidate, modifiedAt: 1 }])).rejects.toThrow(
+      '保险箱',
+    )
+    vault = false
+    await expect(service.deleteCandidates([{ ...candidate, modifiedAt: 1 }])).rejects.toThrow(
+      '回执不完整',
+    )
+  })
   let db: AppDatabase
   let health: IndexedDbResourceHealthStorage
   let storage: IndexedDbResourceStorage

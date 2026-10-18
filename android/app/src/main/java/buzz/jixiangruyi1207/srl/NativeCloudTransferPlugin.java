@@ -26,6 +26,7 @@ import androidx.lifecycle.Observer;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.RandomAccessFile;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.IOException;
@@ -303,6 +304,7 @@ public class NativeCloudTransferPlugin extends Plugin {
             job.put("lastStagedAt", now);
             job.put("wifiOnly", call.getBoolean("wifiOnly", false));
             job.put("chargingOnly", call.getBoolean("chargingOnly", false));
+            job.put("automatic", call.getBoolean("automatic", false));
             job.put("config", new JSONObject(config.toString()));
             job.put("objectCount", 0);
             job.put("totalBytes", 0L);
@@ -469,6 +471,70 @@ public class NativeCloudTransferPlugin extends Plugin {
             }
             call.resolve(stageSourceEntry(call, root, name, segments, total));
         });
+    }
+
+    /** Snapshot an AssetStore file range into this job without sending its bytes through JS. */
+    @PluginMethod
+    public void stageObjectFromFile(PluginCall call) {
+        runIo(call, () -> {
+            File root = jobRoot(safeId(call.getString("jobId")));
+            JSONObject job = readJob(root);
+            ensureJobAccepting(job);
+            String name = NativeCloudObjectKey.validate(job.optString("provider", ""),
+                required(call.getString("name"), "对象名称", 240), false);
+            String baseName = NativeCloudObjectKey.baseName(name);
+            if (!baseName.startsWith("srl-chunk--sha256-")) throw new IllegalArgumentException("附件对象名称无效");
+            String hash = requiredHash(baseName.substring("srl-chunk--sha256-".length()));
+            long offset = NativeBridgeNumber.bounded(call.getData().opt("offset"), 0L, MAX_RESOURCE_BYTES, "附件范围无效");
+            long size = NativeBridgeNumber.bounded(call.getData().opt("size"), 0L, MAX_OBJECT_BYTES, "附件范围无效");
+            File source = NativeFileAccess.resolve(getContext(), call.getString("uri"));
+            if (!source.isFile() || offset > source.length() || size > source.length() - offset)
+                throw new IllegalStateException("Discord 附件来源缺失或长度已变化");
+            String token = UUID.randomUUID().toString();
+            File temporary = new File(root, token + ".part");
+            File destination = new File(root, token + ".bin");
+            try {
+                copyVerifiedFileRange(source, temporary, offset, size, hash);
+                ensureJobAccepting(readJob(root));
+                if (!temporary.renameTo(destination)) throw new IOException("无法提交 Discord 附件暂存");
+                JSONObject entry = new JSONObject();
+                entry.put("token", token); entry.put("name", name); entry.put("size", size);
+                entry.put("sha256", hash); entry.put("manifest", false);
+                entry.put("contentType", call.getString("contentType", "application/octet-stream"));
+                entry.put("existingId", call.getString("existingId", ""));
+                long releaseId = NativeBridgeNumber.boundedOrDefault(call.getData().opt("releaseId"), -1L, 1L,
+                    NativeBridgeNumber.MAX_SAFE_INTEGER, "GitHub Release ID 无效");
+                if (releaseId > 0) entry.put("releaseId", releaseId);
+                appendStagedEntry(root, entry);
+            } catch (Exception error) {
+                temporary.delete(); destination.delete(); throw error;
+            }
+            JSObject result = new JSObject(); result.put("staged", true); call.resolve(result);
+        });
+    }
+
+    static void copyVerifiedFileRange(File source, File temporary, long offset, long size, String hash) throws Exception {
+        if (offset < 0 || size < 0 || size > MAX_OBJECT_BYTES || offset > source.length() || size > source.length() - offset)
+            throw new IOException("Discord 附件范围无效或原件已变化");
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (RandomAccessFile input = new RandomAccessFile(source, "r");
+                 FileOutputStream output = new FileOutputStream(temporary)) {
+                input.seek(offset);
+                byte[] buffer = new byte[256 * 1024];
+                long remaining = size;
+                while (remaining > 0) {
+                    int count = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                    if (count < 0) throw new IOException("Discord 附件读取不完整");
+                    output.write(buffer, 0, count);
+                    digest.update(buffer, 0, count);
+                    remaining -= count;
+                }
+            }
+            if (!hash.equals(hex(digest.digest()))) throw new IllegalStateException("Discord 附件分块 SHA-256 校验失败");
+        } catch (Exception error) {
+            temporary.delete(); throw error;
+        }
     }
 
     @PluginMethod
@@ -854,7 +920,7 @@ public class NativeCloudTransferPlugin extends Plugin {
 
     private JSObject jobSummary(JSONObject job) {
         JSObject result = new JSObject();
-        for (String key : new String[]{"id", "kind", "provider", "status", "error", "resultId", "resultName"})
+        for (String key : new String[]{"id", "kind", "provider", "status", "error", "resultId", "resultName", "automatic"})
             if (job.has(key)) result.put(key, job.opt(key));
         result.put("completed", job.optInt("completed", 0));
         result.put("total", job.optInt("total", 0));

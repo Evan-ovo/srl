@@ -4,9 +4,19 @@ import { defineComponent, ref } from 'vue'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useCloudBackupCenter } from './UseCloudBackupCenter'
 import { noticeCenter } from '../core/NoticeCenter'
+import { taskCenter } from '../core/TaskCenter'
+import type { CloudRestoreOptions } from '../services/CloudBackupService'
 import type { ResourceSummary } from '../types/Resource'
+import type { WebCloudBackupState } from '../types/CloudBackup'
+import type { RestoreReport } from '../types/Backup'
 
 const runtime = vi.hoisted(() => ({
+  native: true,
+  webState: undefined as WebCloudBackupState | undefined,
+  webListeners: new Set<() => void>(),
+  webPause: vi.fn(),
+  webCancel: vi.fn(),
+  create: vi.fn(),
   snapshot: {
     activeProvider: 'github',
     status: {},
@@ -24,12 +34,23 @@ const runtime = vi.hoisted(() => ({
   contents: vi.fn(),
 }))
 vi.mock('@capacitor/core', () => ({
-  Capacitor: { isNativePlatform: () => true, getPlatform: () => 'android' },
+  Capacitor: {
+    isNativePlatform: () => runtime.native,
+    getPlatform: () => (runtime.native ? 'android' : 'web'),
+  },
   registerPlugin: () => ({}),
 }))
 vi.mock('../core/AppContainer', () => ({
   resourceService: {},
   cloudBackupService: {
+    getWebBackupState: () => runtime.webState,
+    subscribeWebBackup: (listener: () => void) => {
+      runtime.webListeners.add(listener)
+      return () => runtime.webListeners.delete(listener)
+    },
+    pauseActiveWebBackup: runtime.webPause,
+    cancelActiveWebBackup: runtime.webCancel,
+    createBackup: runtime.create,
     getSnapshot: () => runtime.snapshot,
     hasCredential: () => true,
     initializeCredentials: async () => undefined,
@@ -42,6 +63,7 @@ vi.mock('../core/AppContainer', () => ({
     reconcileNativeJob: runtime.reconcile,
     restoreBackup: runtime.restore,
     listBackupRestoreContents: runtime.contents,
+    clearRestorePreview: vi.fn(async () => undefined),
   },
 }))
 vi.mock('./UseConfirmDialog', () => ({ confirmAction: runtime.confirm }))
@@ -69,6 +91,9 @@ const resource = (id: string, hash = id) =>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  runtime.native = true
+  runtime.webState = undefined
+  runtime.webListeners.clear()
   runtime.save.mockResolvedValue(runtime.snapshot)
   runtime.list.mockResolvedValue([])
   runtime.pending.mockResolvedValue([])
@@ -100,6 +125,146 @@ function mountCenter(resources = ref<ResourceSummary[]>([])) {
   center.github.value.repository = 'private-backup'
   return { center, wrapper, emit, resources }
 }
+
+it('shows real preparation/write counters and current download bytes, and acknowledges a stop', async () => {
+  runtime.native = false
+  runtime.confirm.mockResolvedValue(true)
+  let options!: CloudRestoreOptions
+  runtime.restore.mockImplementationOnce(
+    async (_item, _filter, _keys, _gallery, _scopes, _commit, controls) => {
+      options = controls
+      controls.onProgress({ phase: 'prepare', completed: 2, total: 9, fileName: 'third.png' })
+      controls.onTransfer(1024 * 1024, 4 * 1024 * 1024, 'third.png')
+      await new Promise<void>((_resolve, reject) =>
+        controls.signal.addEventListener('abort', () => reject(controls.signal.reason), {
+          once: true,
+        }),
+      )
+    },
+  )
+  const { center, wrapper } = mountCenter()
+  try {
+    await flushPromises()
+    center.restorePicker.value = { item, resources: [resource('one')] }
+    center.selectedRestoreKeys.value = new Set(['one'])
+    const importing = center.restore(item)
+    await flushPromises()
+    expect(center.restoreProgress.value).toMatchObject({ completed: 2, total: 9, phase: 'prepare' })
+    expect(center.message.value).toContain('1.0 MiB / 4.0 MiB')
+    const id = center.restoreOperation.value
+    expect(taskCenter.list().find((r) => r.operationId === id)?.itemProgress).toEqual({
+      completed: 2,
+      total: 9,
+    })
+    center.stopRestore()
+    await importing
+    expect(options.signal?.aborted).toBe(true)
+    expect(center.message.value).toContain('已停止')
+    expect(taskCenter.list().find((r) => r.operationId === id)?.status).toBe('cancelled')
+    expect(center.restorePicker.value).toBeDefined()
+    taskCenter.dismiss(id)
+  } finally {
+    wrapper.unmount()
+  }
+})
+
+it('distinguishes final writing from extra-data import and disables stopping once commit starts', async () => {
+  runtime.native = false
+  runtime.confirm.mockResolvedValue(true)
+  let finish!: () => void
+  runtime.restore.mockImplementationOnce(
+    async (_item, _filter, _keys, _gallery, _scopes, _commit, controls) => {
+      controls.onProgress({
+        phase: 'commit',
+        completed: 4,
+        total: 9,
+        transferredBytes: 4000,
+        totalBytes: 9000,
+      })
+      controls.onPhase('extras')
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      return 9
+    },
+  )
+  const { center, wrapper } = mountCenter()
+  try {
+    await flushPromises()
+    center.restorePicker.value = { item, resources: [resource('one')] }
+    center.selectedRestoreKeys.value = new Set(['one'])
+    const importing = center.restore(item)
+    await flushPromises()
+    expect(center.restorePhase.value).toBe('extras')
+    expect(center.message.value).toContain('附加数据')
+    const id = center.restoreOperation.value
+    expect(taskCenter.list().find((r) => r.operationId === id)?.cancelable).toBe(false)
+    finish()
+    await importing
+    taskCenter.dismiss(id)
+  } finally {
+    wrapper.unmount()
+  }
+})
+
+it('rebinds a live web backup on page reentry and permits pause/stop while the backup action is busy', async () => {
+  runtime.native = false
+  runtime.webState = {
+    operationId: 'live-web',
+    status: 'running',
+    phase: '上传 2 / 5',
+    target: {
+      provider: 'github',
+      owner: 'example-user',
+      repository: 'private-backup',
+      retention: 7,
+      autoBackup: false,
+    },
+  }
+  runtime.webCancel.mockResolvedValue('cancelled')
+  runtime.webPause.mockResolvedValue('cancelled')
+  const { center, wrapper } = mountCenter()
+  await flushPromises()
+  expect(center.busyAction.value).toBe('backup')
+  expect(center.message.value).toBe('上传 2 / 5')
+  center.selectProvider('webdav')
+  expect(center.activeProvider.value).toBe('github')
+  await center.pauseWebBackup()
+  expect(runtime.webPause).toHaveBeenCalledOnce()
+  await center.cancelNativeBackup()
+  expect(runtime.webCancel).toHaveBeenCalledOnce()
+  wrapper.unmount()
+  expect(runtime.webListeners.size).toBe(0)
+  const reopened = mountCenter()
+  await flushPromises()
+  expect(reopened.center.webBackup.value?.operationId).toBe('live-web')
+  expect(reopened.center.busyAction.value).toBe('backup')
+  reopened.wrapper.unmount()
+})
+
+it('does not start an upload when stop is clicked while asynchronous configuration preflight is pending', async () => {
+  runtime.native = false
+  let saved!: (value: typeof runtime.snapshot) => void
+  runtime.save.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        saved = resolve
+      }),
+  )
+  const { center, wrapper } = mountCenter()
+  try {
+    await flushPromises()
+    const pending = center.createBackup()
+    await flushPromises()
+    expect(center.busyAction.value).toBe('backup')
+    await center.cancelNativeBackup()
+    saved(runtime.snapshot)
+    await pending
+    expect(runtime.create).not.toHaveBeenCalled()
+  } finally {
+    wrapper.unmount()
+  }
+})
 
 it('locks list preflight and prevents duplicate requests or provider changes before save finishes', async () => {
   let saved!: (value: typeof runtime.snapshot) => void
@@ -167,6 +332,55 @@ it('locks a restore during confirmation and releases it after cancellation witho
   }
 })
 
+it('rejects a selected snapshot when its repository changes before import', async () => {
+  runtime.native = false
+  runtime.contents.mockResolvedValue({ resources: [resource('one')], portableScopeIds: [] })
+  const { center, wrapper } = mountCenter()
+  try {
+    await flushPromises()
+    await center.restore(item)
+    center.github.value.repository = 'another-target'
+    runtime.confirm.mockResolvedValue(true)
+    await center.restore(item)
+    expect(runtime.contents).toHaveBeenCalledOnce()
+    expect(runtime.restore).not.toHaveBeenCalled()
+    expect(center.message.value).toContain('目标已变化')
+    expect(center.restorePicker.value).toBeUndefined()
+  } finally {
+    wrapper.unmount()
+  }
+})
+
+it('forwards committed resource IDs for targeted refresh and skips refresh for a no-op restore', async () => {
+  const { center, wrapper, emit } = mountCenter()
+  try {
+    await flushPromises()
+    runtime.confirm.mockResolvedValue(true)
+    let ids = ['committed-id']
+    runtime.restore.mockImplementation(
+      async (_item, _filter, _keys, _gallery, _scopes, onCommitted) => {
+        onCommitted({ restoredResources: ids.length, resourceIds: ids, categoriesChanged: false })
+        return ids.length
+      },
+    )
+    center.restorePicker.value = { item, resources: [resource('one')] }
+    center.selectedRestoreKeys.value = new Set(['one'])
+    await center.restore(item)
+    expect(emit).toHaveBeenCalledExactlyOnceWith(
+      'library-changed',
+      expect.objectContaining({ resourceIds: ids, categoriesChanged: false }),
+    )
+    emit.mockClear()
+    ids = []
+    center.restorePicker.value = { item, resources: [resource('one')] }
+    center.selectedRestoreKeys.value = new Set(['one'])
+    await center.restore(item)
+    expect(emit).not.toHaveBeenCalled()
+  } finally {
+    wrapper.unmount()
+  }
+})
+
 it('previews only selected resources against the latest library using the shared identity rules', async () => {
   const { center, wrapper, resources } = mountCenter(ref([resource('same', 'old')]))
   try {
@@ -192,11 +406,60 @@ it('allows restoring selected settings without resources and forwards the exact 
     center.restoreScopeModel.value = { resourceIds: [], scopeIds: ['extra.generalPreferences'] }
     runtime.confirm.mockResolvedValue(true)
     await center.restore(item)
-    expect(runtime.restore).toHaveBeenCalledWith(item, expect.any(Function), [], false, [
-      'extra.generalPreferences',
-    ])
-    expect(emit).toHaveBeenCalledWith('library-changed')
+    expect(runtime.restore).toHaveBeenCalledWith(
+      item,
+      expect.any(Function),
+      [],
+      false,
+      ['extra.generalPreferences'],
+      expect.any(Function),
+      expect.objectContaining({
+        onProgress: expect.any(Function),
+        onTransfer: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      }),
+    )
+    expect(emit).not.toHaveBeenCalledWith('library-changed')
     expect(center.busyAction.value).toBe('')
+  } finally {
+    wrapper.unmount()
+  }
+})
+
+it('restores community-only selections and reports saved posts even when no resource was added', async () => {
+  const { center, wrapper } = mountCenter()
+  try {
+    await flushPromises()
+    center.restorePicker.value = { item, resources: [] }
+    center.restoreScopeModel.value = { resourceIds: [], scopeIds: ['extra.communitySources'] }
+    expect(center.hasRestoreSelection.value).toBe(true)
+    runtime.confirm.mockResolvedValue(true)
+    runtime.restore.mockImplementationOnce(
+      async (
+        _item,
+        _filter,
+        _keys,
+        _gallery,
+        _scopes,
+        onCommitted: (report: RestoreReport) => void,
+      ) => {
+        onCommitted({
+          restoredResources: 0,
+          skippedDuplicates: 0,
+          preservedConflicts: 0,
+          createdCategories: 0,
+          reusedCategories: 0,
+          resourceIds: [],
+          categoriesChanged: false,
+          restoredCommunitySources: 2,
+          restoredCommunityMessages: 5,
+        })
+        return 0
+      },
+    )
+    await center.restore(item)
+    expect(center.message.value).toContain('Discord 帖子 2 个，消息 5 条')
+    expect(runtime.restore.mock.calls[0]?.[4]).toEqual(['extra.communitySources'])
   } finally {
     wrapper.unmount()
   }

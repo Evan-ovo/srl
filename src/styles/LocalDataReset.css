@@ -1,0 +1,11 @@
+.local-data-reset {
+  box-sizing: border-box;
+  max-width: 38rem;
+  margin: 0 auto;
+  padding: max(1rem, var(--safe-top)) 1rem max(1rem, var(--safe-bottom));
+  overflow-wrap: anywhere;
+}
+.local-data-reset > :is(button, a):not([hidden]) {
+  display: block;
+  margin: 1rem 0;
+}

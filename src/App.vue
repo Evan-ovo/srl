@@ -5,7 +5,13 @@ import './styles/DuplicateCleaner.css'
 import { useCustomUiViews } from './composables/UseCustomUiViews'
 import ProductAssistantGuidance from './components/ProductAssistantGuidance.vue'
 import { startAssistantGuidance } from './core/ProductAssistantGuidance'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { appearanceScopes } from './core/AppearanceScopes'
+import { appearanceTransaction } from './core/AppearanceSafety'
+import { dirtyStateRegistry } from './core/DirtyStateRegistry'
+import { confirmAction, useConfirmDialogState } from './composables/UseConfirmDialog'
+import type { AppearancePreviewRequest } from './types/UiCustomization'
+import type { ResourceSummary } from './types/Resource'
 import { secretResourceService } from './services/SecretResourceService'
 onBeforeUnmount(() => secretResourceService.lock())
 import { secretPasswordRequest } from './composables/UseSecretPasswordPrompt'
@@ -63,6 +69,11 @@ const ResourceOrganizer = createAsyncPanel(
   '资源详情',
   () => import('./components/ResourceOrganizer.vue'),
 )
+const ResourcePicker = createAsyncPanel(
+  '选择预览资源',
+  () => import('./components/ResourcePicker.vue'),
+)
+const previewResourceChoice = ref<{ request: AppearancePreviewRequest; ids: string[] }>()
 const RestorePanel = createAsyncPanel('恢复', () => import('./components/RestorePanel.vue'))
 const VersionImportDialog = createAsyncPanel(
   '版本导入',
@@ -422,6 +433,124 @@ function openImportMenu(): void {
 async function navigateAssistantLibrary(id: string): Promise<void> {
   if (id === 'import') importChooserStep.value = 'home'
   openAssistantDestination(id)
+}
+
+let previewNavigation = 0
+let appLeaving = false
+const previewDialogs = useConfirmDialogState()
+onBeforeUnmount(() => {
+  appLeaving = true
+  previewNavigation++
+  appearanceTransaction.exitPreview()
+})
+async function previewAppearance(request: AppearancePreviewRequest, resource?: ResourceSummary) {
+  assistantHubRetained.value = true
+  const returnTo = request.returnTo ?? 'appearance'
+  const scope = request.scope
+  const descriptor = scope ? appearanceScopes().find((item) => item.value === scope) : undefined
+  if (scope && !descriptor) {
+    request.onExit()
+    return
+  }
+  if (scope === 'details' && !resource && !organizingResource.value) {
+    previewResourceChoice.value = {
+      request,
+      ids: selectedSplitResource.value ? [selectedSplitResource.value.id] : [],
+    }
+    return
+  }
+  appearanceTransaction.exitPreview()
+  const generation = ++previewNavigation
+  const panels = [
+    isSettingsOpen,
+    isImportChooserOpen,
+    isLinkImportOpen,
+    isExportPanelOpen,
+    isRestorePanelOpen,
+    isDataProtectionOpen,
+    isRecycleBinOpen,
+    isDuplicateCleanerOpen,
+    isSimilarNameGroupsOpen,
+    isExtractedCleanerOpen,
+    isParsedTagCleanerOpen,
+    isVersionRecognitionOpen,
+    isVaultPanelOpen,
+    isAiTaggingOpen,
+    controller.isCategoryManagerOpen,
+  ].map((panel) => ({ panel, open: panel.value }))
+  saveCustomUiCss(request.css, {
+    views: request.views,
+    preview: {
+      beforeExit: async () => {
+        if (previewDialogs.activeDialog.value) {
+          previewDialogs.respond('cancel')
+          await nextTick()
+        }
+        appearanceQuickMenuOpen.value = false
+        const dirty = dirtyStateRegistry.dirtyEntries()
+        if (!dirty.length) return true
+        return confirmAction({
+          title: '退出外观预览',
+          message: `${dirty.map((entry) => entry.label).join('、')}有未保存的编辑。退出将返回原页面，未保存的业务编辑会丢失；已保存的数据不会撤销。`,
+          confirmLabel: '放弃编辑并退出',
+          cancelLabel: '继续预览',
+          danger: true,
+        })
+      },
+      onExit: () => {
+        if (appLeaving || generation !== previewNavigation) {
+          request.onExit()
+          return
+        }
+        previewNavigation++
+        for (const { panel, open } of panels) panel.value = open
+        closeResourceDetail()
+        newPersonalKind.value = undefined
+        void navigatePetDestination(returnTo).then(async () => {
+          await nextTick()
+          request.onExit()
+        })
+      },
+    },
+  })
+  if (!appearanceTransaction.isPreviewing()) {
+    request.onExit()
+    return
+  }
+  try {
+    if (scope === 'details') {
+      await navigatePetDestination('library')
+      if (resource) await openResourceDetail(resource)
+    } else {
+      await navigatePetDestination(
+        descriptor?.appId ??
+          (scope === 'settings' ? 'settings' : scope === 'features' ? 'home' : 'library'),
+      )
+    }
+    if (generation !== previewNavigation) {
+      if (!appLeaving) {
+        closeResourceDetail()
+        await navigatePetDestination(returnTo)
+      }
+      return
+    }
+    await nextTick()
+    window.scrollTo({ top: 0, behavior: 'instant' })
+  } catch {
+    appearanceTransaction.exitPreview()
+  }
+}
+function cancelPreviewResourceChoice() {
+  const choice = previewResourceChoice.value
+  previewResourceChoice.value = undefined
+  choice?.request.onExit()
+}
+function selectPreviewResource(ids: string[]) {
+  const choice = previewResourceChoice.value
+  const resource = managedResources.value.find((item) => item.id === ids[0])
+  if (!choice || !resource) return
+  previewResourceChoice.value = undefined
+  void previewAppearance(choice.request, resource)
 }
 
 function closeFeatureHub() {
@@ -1225,6 +1354,7 @@ const isBatchBarVisible = computed(
       @update:no-image-resource-cover-mode="applyNoImageResourceCoverMode"
       @update:ui-font-scale="applyUiFontScale"
       @save-css="saveCustomUiCss"
+      @preview-css="previewAppearance"
       @library-changed="handleLibraryChanged"
       @import-files="
         (files, onComplete) => void importResourceFiles(files).finally(() => onComplete?.())
@@ -1232,6 +1362,24 @@ const isBatchBarVisible = computed(
       @shared-app-files-consumed="handleSharedAppFilesConsumed"
     />
 
+    <div
+      v-if="previewResourceChoice"
+      class="editor-overlay"
+      role="presentation"
+      @click.self="cancelPreviewResourceChoice"
+    >
+      <section class="editor-sheet" role="dialog" aria-modal="true" aria-label="选择预览资源">
+        <ResourcePicker
+          v-model="previewResourceChoice.ids"
+          title="选择要预览详情的资源"
+          :resources="managedResources"
+          :categories="categories"
+          :multiple="false"
+          @confirm="selectPreviewResource"
+          @cancel="cancelPreviewResourceChoice"
+        />
+      </section>
+    </div>
     <ProductAssistantGuidance />
     <ProductAssistantPet
       v-if="
@@ -1399,6 +1547,7 @@ const isBatchBarVisible = computed(
       @open-secret-settings="isSettingsOpen = true"
       @close="closeResourceDetail"
       @personal-saved="personalSaved"
+      @attachments-changed="handleLibraryChanged({ resourceIds: $event, categoriesChanged: false })"
       @personal-busy="isOrganizing = $event"
       @download="handleResourceDownload"
       @download-related="handleRelatedDownload"

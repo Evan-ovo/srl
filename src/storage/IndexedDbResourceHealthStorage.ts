@@ -1,4 +1,5 @@
-import { isResourceGalleryImage } from '../types/ResourceGallery'
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
+import type { IndexableType } from 'dexie'
 import type { ParsedResource } from '../types/Import'
 import { chatLines } from '../parser/ChatResourceParser'
 import type { NativeResourceLinkRecord } from './NativeResourceFileMirror'
@@ -45,6 +46,7 @@ export interface RecoveredNativeResource {
 }
 
 export interface ResourceStorageAccounting {
+  browserStores?: Array<{ store: string; bytes: number; records: number }>
   currentOriginalBytes: number
   versionOriginalBytes: number
   nativeReferenceBytes: number
@@ -57,6 +59,47 @@ export interface ResourceStorageAccounting {
   recoveredPlaceholderCount: number
   recoveredPlaceholderBytes: number
   pendingNativeLinkCount: number
+}
+
+export interface StorageAccountingOptions {
+  browserDetails?: boolean
+  signal?: AbortSignal
+  onProgress?: (completed: number, total: number) => void
+}
+
+// Logical payload estimate, not IndexedDB disk allocation. Never decode binary contents or
+// stringify whole records (APP packages can contain large typed arrays and shared references).
+function payloadBytes(value: unknown, seen = new WeakSet<object>()): number {
+  if (typeof value === 'string') {
+    let bytes = 0
+    for (const character of value) {
+      const point = character.codePointAt(0)!
+      bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4
+    }
+    return bytes
+  }
+  if (typeof value === 'number') return 8
+  if (typeof value === 'boolean') return 1
+  if (typeof value === 'bigint') return payloadBytes(value.toString())
+  if (!value || typeof value !== 'object' || seen.has(value)) return 0
+  seen.add(value)
+  if (value instanceof Blob) return value.size
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength
+  if (value instanceof Date) return 8
+  if (value instanceof Map) {
+    let bytes = 0
+    for (const [key, item] of value) bytes += payloadBytes(key, seen) + payloadBytes(item, seen)
+    return bytes
+  }
+  if (value instanceof Set) {
+    let bytes = 0
+    for (const item of value) bytes += payloadBytes(item, seen)
+    return bytes
+  }
+  return Object.entries(value).reduce(
+    (bytes, [key, item]) => bytes + payloadBytes(key) + payloadBytes(item, seen),
+    0,
+  )
 }
 
 export interface NativeMirrorDuplicationSummary {
@@ -351,7 +394,7 @@ export class IndexedDbResourceHealthStorage {
           mimeType: existing.mimeType,
           resourceType: existing.type,
           hiddenFromDocuments:
-            isUserPersonaAvatarAttachment(existing) || isResourceGalleryImage(existing),
+            isUserPersonaAvatarAttachment(existing) || isResourceOwnedFile(existing),
           contentHash,
           size: candidate.size,
           updatedAt: existing.updatedAt,
@@ -596,8 +639,7 @@ export class IndexedDbResourceHealthStorage {
           fileName: record.fileName,
           mimeType: record.mimeType,
           resourceType: record.type,
-          hiddenFromDocuments:
-            isUserPersonaAvatarAttachment(record) || isResourceGalleryImage(record),
+          hiddenFromDocuments: isUserPersonaAvatarAttachment(record) || isResourceOwnedFile(record),
           contentHash,
           size: candidate.size,
           updatedAt: record.updatedAt,
@@ -731,7 +773,9 @@ export class IndexedDbResourceHealthStorage {
     )
   }
 
-  async storageAccounting(): Promise<ResourceStorageAccounting> {
+  async storageAccounting(
+    options: StorageAccountingOptions = {},
+  ): Promise<ResourceStorageAccounting> {
     const result: ResourceStorageAccounting = {
       currentOriginalBytes: 0,
       versionOriginalBytes: 0,
@@ -745,6 +789,80 @@ export class IndexedDbResourceHealthStorage {
       recoveredPlaceholderCount: 0,
       recoveredPlaceholderBytes: 0,
       pendingNativeLinkCount: 0,
+    }
+    if (options.browserDetails && !isAndroidNativeAppDatabaseActive()) {
+      result.browserStores = []
+      // Read bounded pages: one cursor IPC per row is very slow in WebKit. APP program
+      // records retain a cursor because each may contain a large in-memory typed-array package.
+      // A cancelled/failed inventory never publishes a partial total as a complete result.
+      for (const table of this.database.tables) {
+        const store = table.name
+        options.signal?.throwIfAborted()
+        const part = { store, bytes: 0, records: 0 }
+        const collect = (record: Record<string, unknown>) => {
+          options.signal?.throwIfAborted()
+          part.bytes += payloadBytes(record)
+          part.records++
+          if (store === 'resources' || store === 'resourceVersions') {
+            const resource = record as unknown as StoredResource
+            const key = store === 'resources' ? 'currentOriginalBytes' : 'versionOriginalBytes'
+            if (isEncryptedResource(resource)) result[key] += resource.original.data.size
+            else if (isNativeBackedResource(resource))
+              result.nativeReferenceBytes += resource.nativeOriginal.size
+            else result[key] += storedResourceBinarySize(resource)
+            if (
+              store === 'resources' &&
+              !isEncryptedResource(resource) &&
+              resource.type === RESOURCE_TYPE.OTHER &&
+              resource.metadata?.recoveredFromNativeObject === true
+            ) {
+              result.recoveredPlaceholderCount++
+              result.recoveredPlaceholderBytes += isNativeBackedResource(resource)
+                ? resource.nativeOriginal.size
+                : storedResourceBinarySize(resource)
+            }
+          } else if (store === 'backupRecords')
+            result.localSnapshotBytes += (record.blob as Blob | undefined)?.size ?? 0
+          else if (store === 'restoreStagingChunks')
+            result.restoreStagingBytes +=
+              (record.data as ArrayBuffer | undefined)?.byteLength ??
+              (record.data as Blob | undefined)?.size ??
+              (record.blob as Blob | undefined)?.size ??
+              0
+          else if (store === 'assets') {
+            result.assetBytes += record.size as number
+            result.assetCount++
+            if (record.source === 'thumbnail') {
+              result.thumbnailAssetBytes += record.size as number
+              result.thumbnailAssetCount++
+            }
+          } else if (store === 'settings' && String(record.id).startsWith('native-recovery-link:'))
+            result.pendingNativeLinkCount++
+        }
+        if (store === 'externalAppRuntimes') await table.toCollection().each(collect)
+        else {
+          let after: IndexableType | undefined
+          for (;;) {
+            options.signal?.throwIfAborted()
+            const page: Record<string, unknown>[] = await (
+              after === undefined ? table.orderBy(':id') : table.where(':id').above(after)
+            )
+              .limit(100)
+              .toArray()
+            for (const record of page) collect(record)
+            if (page.length < 100) break
+            const last = page[page.length - 1]!
+            const keyPath = table.schema.primKey.keyPath!
+            after = (
+              Array.isArray(keyPath) ? keyPath.map((key) => last[key]) : last[keyPath]
+            ) as typeof after
+          }
+        }
+        result.browserStores.push(part)
+        options.onProgress?.(result.browserStores.length, this.database.tables.length)
+      }
+      options.signal?.throwIfAborted()
+      return result
     }
     for (const [store, key] of [
       ['resources', 'currentOriginalBytes'],

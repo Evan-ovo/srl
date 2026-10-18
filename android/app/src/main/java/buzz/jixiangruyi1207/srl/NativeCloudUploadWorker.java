@@ -42,6 +42,7 @@ public class NativeCloudUploadWorker extends Worker {
     private static final String CHANNEL = "srl_cloud_backup";
     private static final int NOTIFICATION_ID = 2107;
     private static final long STAGING_IDLE_TIMEOUT_MS = 15L * 60L * 1000L;
+    private static final String RETRY_LIMIT_MESSAGE = "云备份任务的网络重试次数已达到上限（最多运行 3 次）";
     private File root;
     private String jobId;
     private String provider;
@@ -135,16 +136,26 @@ public class NativeCloudUploadWorker extends Worker {
             return Result.success();
         } catch (Exception error) {
             boolean cancelled = false;
+            boolean retryable = isStopped()
+                || (hasCause(error, IOException.class) && !hasCause(error, LocalSourceException.class));
             try {
                 JSONObject latest = NativeCloudTransferPlugin.readJob(root);
                 cancelled = "cancelled".equals(latest.optString("status"));
-                if (!cancelled && (isStopped() || (hasCause(error, IOException.class) && !hasCause(error, LocalSourceException.class)))) {
+                if (!cancelled && retryable && NativeCloudRetryPolicy.shouldRetry(getRunAttemptCount())) {
                     clearJobSecret = false;
                     persistStatus("queued", rootMessage(error), null, null);
                     notifyFinished("云备份等待网络恢复", rootMessage(error));
                     return Result.retry();
                 }
-                if (!cancelled) persistStatus("failed", rootMessage(error), null, null);
+                if (!cancelled) {
+                    String message = retryable
+                        ? RETRY_LIMIT_MESSAGE + "：" + rootMessage(error)
+                        : rootMessage(error);
+                    persistStatus("failed", message, null, null);
+                    notifyFinished("云备份未完成", message);
+                    NativePrivacyShortcuts.updateBackupStatus(getApplicationContext(), false);
+                    return Result.failure();
+                }
             } catch (Exception ignored) {}
             notifyFinished(cancelled ? "云备份已取消" : "云备份未完成", rootMessage(error));
             NativePrivacyShortcuts.updateBackupStatus(getApplicationContext(), false);
@@ -287,15 +298,14 @@ public class NativeCloudUploadWorker extends Worker {
         if (uploadedNow) {
             JSONObject uploadResponse = new JSONObject(uploaded.body);
             id = uploadResponse.get("id").toString();
-            if (uploadResponse.optLong("size", -1L) == entry.getLong("size")
-                && "uploaded".equals(uploadResponse.optString("state", ""))) {
+            if (isCompletedGitHubAsset(uploadResponse, entry.getLong("size"))) {
                 addMetric("verifyMs", elapsedMs(verifyStarted));
                 return new UploadResult(id);
             }
         } else if (uploaded.code == 422) {
             id = findExistingGitHubAsset(api, releaseId, entry.getString("name"), entry.getLong("size"));
             if (id == null) {
-                throw new IllegalStateException("GitHub 同名对象已存在但大小不一致；拒绝覆盖 immutable 对象");
+                throw new IllegalStateException("GitHub 同名对象未完成上传或大小不一致；未计为上传成功，未覆盖远端对象");
             }
         } else {
             throw new IllegalStateException("GitHub 上传失败（" + uploaded.code + "）：" + uploaded.body);
@@ -303,7 +313,7 @@ public class NativeCloudUploadWorker extends Worker {
         try {
             for (int poll = 0; poll < 4; poll++) {
                 HttpResult confirmed = request("GET", api + "/releases/assets/" + id, githubHeaders(), null, 0L, 404);
-                if (confirmed.code == 200 && new JSONObject(confirmed.body).optLong("size", -1) == entry.getLong("size")) return new UploadResult(id);
+                if (confirmed.code == 200 && isCompletedGitHubAsset(new JSONObject(confirmed.body), entry.getLong("size"))) return new UploadResult(id);
                 if (poll < 3) cancellableSleep((poll + 1) * 600L);
             }
         } finally {
@@ -312,7 +322,12 @@ public class NativeCloudUploadWorker extends Worker {
         if (uploadedNow) {
             request("DELETE", api + "/releases/assets/" + id, githubHeaders(), null, 0L, 404);
         }
-        throw new IllegalStateException("GitHub 已接收对象，但远端大小确认失败");
+        throw new IllegalStateException("GitHub 已接收请求，但附件未完成上传或远端大小确认失败；未计为上传成功");
+    }
+
+    static boolean isCompletedGitHubAsset(JSONObject asset, long expectedSize) {
+        return "uploaded".equals(asset.optString("state", ""))
+            && asset.optLong("size", -1L) == expectedSize;
     }
 
     private String findExistingGitHubAsset(
@@ -336,7 +351,7 @@ public class NativeCloudUploadWorker extends Worker {
             JSONArray assets = new JSONArray(response.body);
             for (int index = 0; index < assets.length(); index++) {
                 JSONObject asset = assets.getJSONObject(index);
-                if (name.equals(asset.optString("name")) && asset.optLong("size", -1L) == expectedSize) {
+                if (name.equals(asset.optString("name")) && isCompletedGitHubAsset(asset, expectedSize)) {
                     return asset.get("id").toString();
                 }
             }

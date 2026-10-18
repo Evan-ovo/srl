@@ -15,6 +15,7 @@ import {
   browserStorageService,
   categoryService,
   characterDrawService,
+  communitySourceService,
   database,
   exportService,
   resourceGalleryService,
@@ -39,6 +40,7 @@ export {
   nativeResourceRecoveryService,
   resourceHealthStorage,
   resourceArchiveService,
+  resourceAttachmentService,
   resourceGalleryService,
   resourceService,
   restoreService,
@@ -71,6 +73,10 @@ export const cloudBackupService = new CloudBackupService(
   restoreService,
   async (selection) => ({
     version: 1,
+    ...(await exportPortableApplicationData(selection)),
+    ...(selection.communitySources
+      ? { communitySources: { data: await communitySourceService.exportAll(), attachments: [] } }
+      : {}),
     ...(selection.appearance
       ? { appearance: browserStorageService.exportAppearanceSettings() }
       : {}),
@@ -121,6 +127,7 @@ export const cloudBackupService = new CloudBackupService(
       : {}),
   }),
   async (data) => {
+    await importPortableApplicationData(data)
     if (data.appearance) browserStorageService.importAppearanceSettings(data.appearance)
     if (data.cloudBackup) cloudBackupService.importPortableSettings(data.cloudBackup)
     if (data.characterDraw) {
@@ -141,7 +148,7 @@ export const cloudBackupService = new CloudBackupService(
     if (data.aiTaggingState?.undo) aiTaggingDraftService.saveUndo(data.aiTaggingState.undo)
     if (data.externalApps) await externalAppService.importPortableState(data.externalApps)
     if (data.chatReader) await externalAppService.importReaderData(data.chatReader)
-    if (data.assistantData) await productAssistantStorage.importPortableState(data.assistantData)
+    if (data.assistantData) await importPortableAssistantData(data.assistantData)
     if (data.stitchWork) browserStorageService.importStitchWork(data.stitchWork)
     if (data.frontendWorkshopComponents) {
       const { frontendWorkshopSourceComponentService } = await import('./FrontendWorkshopContainer')
@@ -155,6 +162,9 @@ export const cloudBackupService = new CloudBackupService(
     }
   },
   syncNativeResourceFiles,
+  (assetId) => communitySourceService.getAttachmentBlob(assetId),
+  async (id) =>
+    (await import('./ImageAlbumContainer')).generatedImageAlbumService.getOriginalBlob(id),
 )
 
 export async function initializeCredentialServices(): Promise<void> {
@@ -173,12 +183,57 @@ export async function initializeCredentialServices(): Promise<void> {
   ])
 }
 
+export async function exportPortableApplicationData(
+  selection: Pick<
+    import('../types/Backup').ArchivePortableSelection,
+    'frontendWorkshopProjects' | 'imageGeneration' | 'generatedImageAlbum'
+  >,
+): Promise<Partial<ArchivePortableData>> {
+  const data: Partial<ArchivePortableData> = {}
+  if (selection.frontendWorkshopProjects)
+    data.frontendWorkshopProjects = await (
+      await import('./FrontendWorkshopContainer')
+    ).exportPortableWorkshopProjects()
+  if (selection.generatedImageAlbum)
+    data.generatedImageAlbum = await (
+      await import('./ImageAlbumContainer')
+    ).generatedImageAlbumService.exportPortableState()
+  if (selection.imageGeneration) {
+    const { frontendWorkshopImageGenerationService } = await import('./ImageGenerationContainer')
+    const { frontendWorkshopImageDraftService } =
+      await import('../services/FrontendWorkshopImageDraftService')
+    data.imageGeneration = {
+      configurations: frontendWorkshopImageGenerationService.exportPortableSettings(),
+      work: frontendWorkshopImageDraftService.exportPortableState(),
+    }
+  }
+  return data
+}
+
+export async function importPortableApplicationData(data: ArchivePortableData): Promise<void> {
+  if (data.frontendWorkshopProjects)
+    await (
+      await import('./FrontendWorkshopContainer')
+    ).importPortableWorkshopProjects(data.frontendWorkshopProjects)
+  if (data.imageGeneration) {
+    await (
+      await import('./ImageGenerationContainer')
+    ).frontendWorkshopImageGenerationService.importPortableSettings(
+      data.imageGeneration.configurations,
+    )
+    await (
+      await import('../services/FrontendWorkshopImageDraftService')
+    ).frontendWorkshopImageDraftService.importPortableState(data.imageGeneration.work)
+  }
+}
+
 export async function exportPortableAssistantData() {
   return productAssistantStorage.exportPortableState()
 }
 
 export async function importPortableAssistantData(value: unknown): Promise<void> {
   await productAssistantStorage.importPortableState(value)
+  await productAssistantWorkspaceService.reloadImportedPreferences()
 }
 
 export async function exportPortableCredentialBundle(): Promise<
@@ -190,7 +245,16 @@ export async function exportPortableCredentialBundle(): Promise<
   await frontendWorkshopImageHostingService.initializeCredentials()
   return {
     version: 1,
-    // 生图 API Key 仅保存在当前设备，不参与便携凭据、云备份或模板导出。
+    imageGeneration: await (async () => {
+      const { frontendWorkshopImageGenerationService: service } =
+        await import('./ImageGenerationContainer')
+      await service.initializeCredentials()
+      return service
+        .exportConfigurations()
+        .filter((config) => config.credentialPersistence !== 'session')
+    })(),
+    assistantGitHubReadToken:
+      await productAssistantWorkspaceService.exportPortableGitHubCredential(),
     imageHosting: frontendWorkshopImageHostingService.exportSelfHostedConfiguration(),
     legacyFrontendWorkshopApi:
       frontendWorkshopLegacyApiPreferenceService.exportCustomConfiguration(),
@@ -204,7 +268,10 @@ export async function exportPortableCredentialBundle(): Promise<
 export async function importPortableCredentialBundle(
   value: NonNullable<ArchivePortableData['credentials']>,
 ): Promise<void> {
-  // 继续兼容旧备份中的 imageGeneration 字段，但新备份不再写出该字段。
+  if (value.assistantGitHubReadToken)
+    await productAssistantWorkspaceService.importPortableGitHubCredential(
+      value.assistantGitHubReadToken,
+    )
   if (value.imageGeneration) {
     const { frontendWorkshopImageGenerationService } = await import('./ImageGenerationContainer')
     await frontendWorkshopImageGenerationService.initializeCredentials()

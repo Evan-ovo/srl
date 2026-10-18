@@ -143,26 +143,43 @@ function handleBack(): void {
     <template v-else>
       <p class="similar-name-groups__summary">
         {{
-          mode === 'broad' ? '包含版本号、正式版、番外等名称变体。' : '查找同名与细微名称差异。'
+          mode === 'broad' ? '包含版本号、正式版与番外。' : '查找同名与细微名称差异。'
         }}仅作候选，不自动合并。
       </p>
       <div v-if="groups.length" class="similar-name-groups__selection">
         <span
           >找到 <strong>{{ groups.length }}</strong> 组</span
-        ><span>选择一组查看</span>
+        >
       </div>
       <ul v-if="groups.length" class="similar-name-groups__list">
         <li v-for="group in pageGroups" :key="group.id">
-          <button type="button" @click="selectedGroupId = group.id">
+          <button
+            type="button"
+            :aria-label="`查看分组 ${group.names[0]}，${group.resources.length} 项资源`"
+            @click="selectedGroupId = group.id"
+          >
             <span>
               <strong>{{ group.names[0] }}</strong>
               <small v-if="group.names.length > 1" class="similar-name-groups__variants"
-                >{{ group.names.slice(1, 3).join(' · ')
+                >另含：{{ group.names.slice(1, 3).join('、')
                 }}{{ group.names.length > 3 ? '…' : '' }}</small
               >
-              <small>{{ group.resources.length }} 项资源</small>
             </span>
-            <span class="similar-name-groups__open">查看 ›</span>
+            <span class="similar-name-groups__count">{{ group.resources.length }} 项</span>
+            <svg
+              class="similar-name-groups__open"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="m9 6 6 6-6 6"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
           </button>
         </li>
       </ul>
@@ -182,28 +199,46 @@ function handleBack(): void {
   max-height: min(80dvh, 44rem);
   flex-direction: column;
   gap: 0.75rem;
-  padding: 0.75rem 1rem 1rem;
+  min-width: 0;
   color: var(--color-ink);
   font-family: var(--font-body);
 }
 .similar-name-groups__mode {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.25rem;
-  padding: 0.25rem;
-  border-radius: 0.75rem;
-  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface));
+  flex: 0 0 auto;
+  border: 1px solid var(--color-line);
+  border-radius: var(--control-radius, var(--glass-radius-control));
+  background: var(--glass-panel-muted);
 }
 .similar-name-groups__mode button {
-  min-height: 40px;
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-ink-soft);
   font: 600 0.875rem/1.4 var(--font-body);
   cursor: pointer;
 }
-.similar-name-groups__mode button[aria-pressed='true'] {
+.similar-name-groups__mode button::before {
+  position: absolute;
+  z-index: -1;
+  inset: 4px;
+  border: 1px solid transparent;
+  border-radius: max(0px, calc(var(--control-radius, var(--glass-radius-control)) - 4px));
+  content: '';
+}
+.similar-name-groups__mode button[aria-pressed='true']::before {
   border-color: var(--selection-border, var(--color-accent));
   background: var(--selection-background, var(--color-accent-soft));
+}
+.similar-name-groups__mode button[aria-pressed='true'] {
   color: var(--selection-color, var(--color-ink));
-  box-shadow: 0 1px 3px var(--color-shadow);
 }
 .similar-name-groups__summary,
 .similar-name-groups__empty {
@@ -242,9 +277,14 @@ function handleBack(): void {
   overflow-y: auto;
   margin: 0;
   padding: 0;
-  border: 1px solid var(--color-line);
-  border-radius: 0.75rem;
   list-style: none;
+}
+.similar-name-groups__list {
+  border-block: 1px solid var(--color-line);
+}
+.similar-name-groups__resources {
+  border: 1px solid var(--color-line);
+  border-radius: var(--control-radius, var(--glass-radius-control));
 }
 .similar-name-groups__list > li + li,
 .similar-name-groups__resources > li + li {
@@ -302,6 +342,9 @@ function handleBack(): void {
   min-width: 0;
   gap: 0.2rem;
 }
+.similar-name-groups__list button > span:first-child {
+  flex: 1;
+}
 .similar-name-groups strong {
   font-size: 0.875rem;
   font-weight: 650;
@@ -318,24 +361,33 @@ function handleBack(): void {
   min-height: 64px;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.7rem 0.85rem;
+  gap: 0.5rem;
+  padding: 0.85rem 0.15rem;
   border: 0;
-  background: var(--button-background, transparent);
-  color: var(--button-color, inherit);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-ink);
   text-align: left;
   cursor: pointer;
 }
 .similar-name-groups__variants {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 .similar-name-groups__open {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  color: var(--color-ink-soft);
+}
+.similar-name-groups__count {
   flex: 0 0 auto;
-  color: var(--color-accent);
-  font-size: 0.8rem;
+  color: var(--color-ink-soft);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 .similar-name-groups__apply {
   display: flex;
@@ -367,9 +419,7 @@ function handleBack(): void {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
-@media (max-width: 430px) {
-  .similar-name-groups {
-    padding: 0.5rem 0.75rem 0.75rem;
-  }
+.similar-name-groups__list button:focus-visible {
+  outline-offset: -2px;
 }
 </style>

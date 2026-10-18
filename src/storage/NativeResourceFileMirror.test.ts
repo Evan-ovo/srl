@@ -13,6 +13,7 @@ const nativePlugin = vi.hoisted(() => ({
   remove: vi.fn(),
   removeMany: vi.fn(),
   clear: vi.fn(),
+  releaseReplacedObjects: vi.fn(),
   clearTemporaryCaches: vi.fn(),
   getObjectPath: vi.fn(),
   linkObjects: vi.fn(),
@@ -44,6 +45,8 @@ import {
   readNativeResourceObject,
   stageNativeResourceFile,
   removeNativeResourceFiles,
+  releaseReplacedNativeObjects,
+  retainNativeResourceFiles,
 } from './NativeResourceFileMirror'
 
 function resource(body = 'hello'): Resource {
@@ -67,6 +70,85 @@ function resource(body = 'hello'): Resource {
 }
 
 describe('NativeResourceFileMirror', () => {
+  it.each(['commit', 'abort'] as const)(
+    'settles an already-present staged link only at %s, without retransferring the original',
+    async (action) => {
+      nativePlugin.beginWrite.mockResolvedValueOnce({ alreadyPresent: true, token: 'link-token' })
+      const handle = await stageNativeResourceFile(resource(), 'current')
+      expect(nativePlugin.beginWrite).toHaveBeenCalledWith(
+        expect.objectContaining({ deferCommit: true }),
+      )
+      expect(nativePlugin.commitWrite).not.toHaveBeenCalled()
+      expect(nativePlugin.appendWrite).not.toHaveBeenCalled()
+      await handle[action]()
+      await handle[action]()
+      expect(
+        nativePlugin[action === 'commit' ? 'commitWrite' : 'abortWrite'],
+      ).toHaveBeenCalledExactlyOnceWith({ token: 'link-token' })
+      expect(
+        nativePlugin[action === 'commit' ? 'abortWrite' : 'commitWrite'],
+      ).not.toHaveBeenCalled()
+    },
+  )
+  it('includes known superseded aliases when the next save can reclaim older replacement leftovers', async () => {
+    const item = resource()
+    item.metadata.recognizedFileHashes = ['c'.repeat(64), 'invalid', 'a'.repeat(64)]
+    const handle = await stageNativeResourceFile(item, 'current')
+    expect(handle.replacement?.replacedHashes).toEqual(['c'.repeat(64)])
+  })
+  it('defers replaced files through backup preparation and coalesces edits into one post-reader reference scan', async () => {
+    const first = retainNativeResourceFiles(),
+      second = retainNativeResourceFiles()
+    const record = {
+      scope: 'current' as const,
+      id: 'edited',
+      contentHash: 'b'.repeat(64),
+      size: 5,
+      replacedHashes: ['a'.repeat(64)],
+    }
+    await releaseReplacedNativeObjects([record])
+    await releaseReplacedNativeObjects([
+      { ...record, contentHash: 'c'.repeat(64), replacedHashes: ['b'.repeat(64)] },
+    ])
+    await first()
+    expect(nativePlugin.releaseReplacedObjects).not.toHaveBeenCalled()
+    await second()
+    expect(nativePlugin.releaseReplacedObjects).toHaveBeenCalledExactlyOnceWith({
+      records: [
+        {
+          ...record,
+          contentHash: 'c'.repeat(64),
+          replacedHashes: ['a'.repeat(64), 'b'.repeat(64)],
+        },
+      ],
+    })
+    await second()
+    expect(nativePlugin.releaseReplacedObjects).toHaveBeenCalledOnce()
+  })
+  it.each([true, false])(
+    'carries the exact previous native hash in a replacement receipt (alreadyPresent=%s)',
+    async (alreadyPresent) => {
+      nativePlugin.beginWrite.mockResolvedValueOnce({
+        token: 'token-1',
+        alreadyPresent,
+        replacedHash: 'c'.repeat(64),
+      })
+      const handle = await stageNativeResourceFile(resource(), 'current')
+      expect(handle.replacement).toEqual({
+        scope: 'current',
+        id: 'resource-1',
+        contentHash: 'a'.repeat(64),
+        size: 5,
+        replacedHashes: ['c'.repeat(64)],
+      })
+      expect(nativePlugin.releaseReplacedObjects).not.toHaveBeenCalled()
+      await handle.commit()
+      await releaseReplacedNativeObjects([handle.replacement!])
+      expect(nativePlugin.releaseReplacedObjects).toHaveBeenCalledWith({
+        records: [handle.replacement],
+      })
+    },
+  )
   it('原件已有原生路径时直接流式复制，不再把正文通过 Base64 送回原生', async () => {
     const item = resource()
     rememberNativeFile(item.originalBlob, 'file:///shared/original.json')

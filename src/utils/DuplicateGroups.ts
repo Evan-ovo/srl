@@ -1,4 +1,4 @@
-import { isResourceGalleryImage } from '../types/ResourceGallery'
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
 import {
   isUserPersonaAvatarAttachment,
   RESOURCE_TYPE,
@@ -22,7 +22,7 @@ export function findDuplicateGroups(resources: ResourceSummary[]): DuplicateGrou
   const byHash = new Map<string, ResourceSummary[]>()
   const identities = new RestoreDuplicateIndex([], resources)
   for (const resource of resources) {
-    if (isResourceGalleryImage(resource)) continue
+    if (isResourceOwnedFile(resource)) continue
     if (!resource.contentHash) continue
     const existingId = identities.find(resource)
     const key = isUserPersonaAvatarAttachment(resource)

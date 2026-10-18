@@ -28,6 +28,28 @@ class MemoryCategoryStorage implements CategoryStorageAdapter {
 }
 
 describe('CategoryService', () => {
+  it('writes only changed sort positions and leaves unchanged timestamps intact', async () => {
+    const storage = new MemoryCategoryStorage()
+    for (let index = 0; index < 1000; index++)
+      await storage.save({
+        id: String(index),
+        name: `目录${index}`,
+        color: '#486b5d',
+        sortOrder: index,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+    const update = vi.spyOn(storage, 'update')
+    const service = new CategoryService(storage)
+    await service.reorder(['0', '1'])
+    expect(update).not.toHaveBeenCalled()
+    await service.reorder(['1', '0'])
+    expect(update).toHaveBeenCalledTimes(2)
+    expect(storage.categories.get('0')?.sortOrder).toBe(1)
+    expect(storage.categories.get('1')?.sortOrder).toBe(0)
+    expect(storage.categories.get('2')?.updatedAt).toBe(1)
+  })
+
   it('uses one category snapshot for uniqueness and legacy ordering when creating a folder', async () => {
     const storage = new MemoryCategoryStorage()
     await storage.save({

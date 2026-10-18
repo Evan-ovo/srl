@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
-import { ref } from 'vue'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { Blob } from 'node:buffer'
+import { effectScope, ref } from 'vue'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ResourceSummary } from '../types/Resource'
 
@@ -10,13 +11,26 @@ const storage = {
   clearSearchHistory: vi.fn(),
 }
 const resources = { get: vi.fn() }
+const notice = { push: vi.fn() }
+vi.mock('../core/NoticeCenter', () => ({ noticeCenter: notice }))
 
 vi.mock('../core/AppContainer', () => ({
   browserStorageService: storage,
   resourceService: resources,
 }))
 
-const { useSearchIndex } = await import('./UseSearchIndex')
+const { useSearchIndex: createSearchIndex } = await import('./UseSearchIndex')
+const scopes: ReturnType<typeof effectScope>[] = []
+function useSearchIndex(...args: Parameters<typeof createSearchIndex>) {
+  const scope = effectScope()
+  scopes.push(scope)
+  return scope.run(() => createSearchIndex(...args))!
+}
+afterEach(() => {
+  scopes.splice(0).forEach((scope) => scope.stop())
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 function summary(overrides: Partial<ResourceSummary> = {}): ResourceSummary {
   return {
@@ -48,7 +62,7 @@ describe('useSearchIndex', () => {
     search.searchQuery.value = 'new'
     const next = search.refreshSearchContentIndex(items)
     expect(resources.get).toHaveBeenCalledTimes(1)
-    release({ originalBlob: { size: 7, text: async () => 'old new' } })
+    release({ contentHash: 'hash-1', originalBlob: new Blob(['old new']) })
     await Promise.all([old, next])
     expect(search.contentSearchQuery.value).toBe('new')
     expect(search.contentSearchMatchIds.value.has('r1')).toBe(true)
@@ -67,9 +81,9 @@ describe('useSearchIndex', () => {
     search.searchQuery.value = 'secret'
     const old = search.refreshSearchContentIndex(items)
     search.resetSearchState()
-    release({ originalBlob: { size: 6, text: async () => 'secret' } })
+    release({ contentHash: 'hash-1', originalBlob: new Blob(['secret']) })
     await old
-    resources.get.mockResolvedValue({ originalBlob: { size: 3, text: async () => 'new' } })
+    resources.get.mockResolvedValue({ contentHash: 'hash-1', originalBlob: new Blob(['new']) })
     search.searchQuery.value = 'new'
     await search.refreshSearchContentIndex(items)
     expect(resources.get).toHaveBeenCalledTimes(2)
@@ -91,13 +105,16 @@ describe('useSearchIndex', () => {
     const old = search.refreshSearchContentIndex(items)
     expect(resources.get).toHaveBeenCalledTimes(1)
     search.searchQuery.value = 'new'
-    release({ originalBlob: { text: async () => 'old' } })
+    release({ contentHash: 'hash-1', originalBlob: new Blob(['old']) })
     await old
     expect(resources.get).toHaveBeenCalledTimes(1)
     expect(search.contentSearchQuery.value).toBe('')
     expect(search.isSearchIndexing.value).toBe(false)
     items[0]!.contentHash = 'changed-content'
-    resources.get.mockResolvedValue({ originalBlob: { text: async () => 'new' } })
+    resources.get.mockResolvedValue({
+      contentHash: 'changed-content',
+      originalBlob: new Blob(['new']),
+    })
     await search.refreshSearchContentIndex(items.slice(0, 1))
     expect(search.contentSearchMatchIds.value.has('0')).toBe(true)
   })
@@ -188,7 +205,7 @@ describe('useSearchIndex', () => {
 
   it('上锁时清空关键词、历史与正文索引', async () => {
     const items = ref([summary({ mimeType: 'application/json' })])
-    resources.get.mockResolvedValue({ originalBlob: { text: async () => '内部正文' } })
+    resources.get.mockResolvedValue({ contentHash: 'hash-1', originalBlob: new Blob(['内部正文']) })
     const index = useSearchIndex(items, () => true)
     index.searchQuery.value = '内部'
     await index.refreshSearchContentIndex(items.value)
@@ -205,7 +222,7 @@ describe('useSearchIndex', () => {
 
   it('无 Worker 降级路径不会把正文字符串留在主线程索引', async () => {
     const items = ref([summary({ mimeType: 'application/json' })])
-    resources.get.mockResolvedValue({ originalBlob: { text: async () => '内部正文' } })
+    resources.get.mockResolvedValue({ contentHash: 'hash-1', originalBlob: new Blob(['内部正文']) })
     const index = useSearchIndex(items, () => false)
     index.searchQuery.value = '内部'
     await index.refreshSearchContentIndex(items.value)
@@ -214,7 +231,7 @@ describe('useSearchIndex', () => {
     expect(resources.get).toHaveBeenCalledTimes(1)
   })
 
-  it('单个资源读取失败时索引为空串而不是中断整轮', async () => {
+  it('原件读取失败显式标为未完成并给出稳定代码，而不是假装成功', async () => {
     const items = ref([summary({ mimeType: 'application/json' })])
     resources.get.mockRejectedValue(new Error('blob missing'))
     const index = useSearchIndex(items, () => false)
@@ -222,5 +239,318 @@ describe('useSearchIndex', () => {
     await index.refreshSearchContentIndex(items.value)
     expect(index.contentSearchMatchIds.value.has('r1')).toBe(false)
     expect(index.isSearchIndexing.value).toBe(false)
+    expect(index.contentSearchQuery.value).toBe('')
+    expect(index.contentSearchError.value).toContain('SRL-SEARCH-ORIGINAL-READ')
+    expect(notice.push).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }))
+  })
+
+  it('reuses 10,050 exact answers, safely narrows a query and rereads only a changed identity', async () => {
+    const items = ref(
+      Array.from({ length: 10_050 }, (_, id) =>
+        summary({
+          id: String(id),
+          contentHash: `hash-${id}`,
+          fileName: `${id}.json`,
+        }),
+      ),
+    )
+    const original = (id: string) => `${Number(id) % 3 === 0 ? 'NEEDLE' : 'hay'} other`
+    resources.get.mockImplementation(async (id: string) => ({
+      contentHash: items.value[Number(id)]!.contentHash,
+      originalBlob: new Blob([
+        items.value[Number(id)]!.contentHash === 'changed' ? 'replacement' : original(id),
+      ]),
+    }))
+    const search = useSearchIndex(items, () => false)
+    search.searchQuery.value = 'needle'
+    await search.refreshSearchContentIndex(items.value)
+    const expected = items.value
+      .filter((item) => original(item.id).toLocaleLowerCase().includes('needle'))
+      .map((item) => item.id)
+    expect([...search.contentSearchMatchIds.value]).toEqual(expected)
+    expect(resources.get).toHaveBeenCalledTimes(10_050)
+    await search.refreshSearchContentIndex(items.value)
+    expect([...search.contentSearchMatchIds.value]).toEqual(expected)
+    expect(resources.get).toHaveBeenCalledTimes(10_050)
+    search.searchQuery.value = 'needle extended'
+    await search.refreshSearchContentIndex(items.value)
+    expect(search.contentSearchMatchIds.value.size).toBe(0)
+    expect(resources.get).toHaveBeenCalledTimes(13_400)
+    items.value[0] = { ...items.value[0]!, contentHash: 'changed' }
+    search.searchQuery.value = 'needle'
+    await search.refreshSearchContentIndex(items.value)
+    expect(search.contentSearchMatchIds.value.has('0')).toBe(false)
+    expect(search.contentSearchMatchIds.value.size).toBe(expected.length - 1)
+    expect(resources.get).toHaveBeenCalledTimes(13_401)
+    items.value = items.value.map((item) => ({ ...item, name: 'renamed' }))
+    await search.refreshSearchContentIndex(items.value)
+    expect(resources.get).toHaveBeenCalledTimes(13_401)
+    search.resetSearchState()
+    search.searchQuery.value = 'needle'
+    await search.refreshSearchContentIndex(items.value)
+    expect(resources.get).toHaveBeenCalledTimes(23_451)
+  }, 20_000)
+
+  it.each([
+    undefined,
+    { contentHash: 'different', originalBlob: new Blob(['needle']) },
+    { contentHash: 'hash-1' },
+  ])('missing/mismatched original is an explicit read failure: %j', async (stored) => {
+    resources.get.mockResolvedValue(stored)
+    const items = ref([summary({ fileName: 'a.json' })])
+    const search = useSearchIndex(items, () => false)
+    search.searchQuery.value = 'needle'
+    await search.refreshSearchContentIndex(items.value)
+    expect(search.contentSearchQuery.value).toBe('')
+    expect(search.contentSearchError.value).toContain('SRL-SEARCH-ORIGINAL-READ')
+    expect(search.isSearchIndexing.value).toBe(false)
+  })
+
+  it('distinguishes content decoding failures and allows an explicit successful retry', async () => {
+    const blob = new Blob(['needle'])
+    vi.spyOn(blob, 'text').mockImplementationOnce(() => {
+      throw new Error('private source body')
+    })
+    resources.get.mockResolvedValue({ contentHash: 'hash-1', originalBlob: blob })
+    const items = ref([summary({ fileName: 'a.json' })])
+    const search = useSearchIndex(items, () => false)
+    search.searchQuery.value = 'needle'
+    await search.refreshSearchContentIndex(items.value)
+    expect(search.contentSearchError.value).toContain('SRL-SEARCH-CONTENT-SCAN')
+    expect(search.contentSearchQuery.value).toBe('')
+    await search.retryContentSearch()
+    expect(search.contentSearchError.value).toBe('')
+    expect(search.contentSearchQuery.value).toBe('needle')
+    expect(search.contentSearchMatchIds.value.has('r1')).toBe(true)
+  })
+
+  it('does not notify when a superseded original read rejects after a new query', async () => {
+    let reject!: (error: Error) => void
+    resources.get.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, fail) => {
+          reject = fail
+        }),
+    )
+    const items = ref([summary({ fileName: 'a.json' })])
+    const search = useSearchIndex(items, () => false)
+    search.searchQuery.value = 'old'
+    const pending = search.refreshSearchContentIndex(items.value)
+    search.searchQuery.value = 'new'
+    reject(new Error('late private failure'))
+    await pending
+    expect(search.contentSearchError.value).toBe('')
+    expect(notice.push).not.toHaveBeenCalled()
+  })
+
+  it.each(['error', 'messageerror'])(
+    'clears all resident claims after Worker %s and retries from original content',
+    async (failureEvent) => {
+      const workers: MockWorker[] = []
+      class MockWorker {
+        listeners = new Map<string, Set<(event: unknown) => void>>()
+        terminate = vi.fn()
+        addEventListener(type: string, listener: (event: unknown) => void) {
+          if (!this.listeners.has(type)) this.listeners.set(type, new Set())
+          this.listeners.get(type)!.add(listener)
+        }
+        removeEventListener(type: string, listener: (event: unknown) => void) {
+          this.listeners.get(type)?.delete(listener)
+        }
+        postMessage(message: { type: string; requestId: number }) {
+          if (message.type !== 'search') return
+          queueMicrotask(() => {
+            const type = workers.length === 1 ? failureEvent : 'message'
+            const event =
+              type !== 'message'
+                ? { error: new Error('private Worker failure') }
+                : {
+                    data: {
+                      type: 'result',
+                      requestId: message.requestId,
+                      matchedIds: ['r1'],
+                      indexedHashes: ['hash-1'],
+                    },
+                  }
+            this.listeners.get(type)?.forEach((listener) => listener(event))
+          })
+        }
+        constructor() {
+          workers.push(this)
+        }
+      }
+      vi.stubGlobal('Worker', MockWorker)
+      resources.get.mockResolvedValue({ contentHash: 'hash-1', originalBlob: new Blob(['needle']) })
+      const items = ref([summary({ fileName: 'a.json' })])
+      const search = useSearchIndex(items, () => false)
+      search.searchQuery.value = 'needle'
+      await search.refreshSearchContentIndex(items.value)
+      expect(search.contentSearchError.value).toContain('SRL-SEARCH-WORKER')
+      expect(workers[0]!.terminate).toHaveBeenCalledOnce()
+      await search.retryContentSearch()
+      expect(resources.get).toHaveBeenCalledTimes(2)
+      expect(workers).toHaveLength(2)
+      expect(search.contentSearchQuery.value).toBe('needle')
+      expect(search.contentSearchError.value).toBe('')
+    },
+  )
+
+  it('refreshes active body matches when actual content changes, but not on metadata-only edits', async () => {
+    const items = ref([summary({ fileName: 'a.json' })])
+    resources.get.mockImplementation(async () => ({
+      contentHash: items.value[0]!.contentHash,
+      originalBlob: new Blob([items.value[0]!.contentHash === 'hash-1' ? 'needle' : 'replacement']),
+    }))
+    const search = useSearchIndex(items, () => false)
+    search.searchScope.value = 'content'
+    search.searchQuery.value = 'needle'
+    await search.refreshSearchContentIndex(items.value)
+    items.value = [{ ...items.value[0]!, name: 'renamed' }]
+    expect(resources.get).toHaveBeenCalledTimes(1)
+    items.value = [{ ...items.value[0]!, contentHash: 'changed' }]
+    expect(search.contentSearchQuery.value).toBe('')
+    await vi.waitFor(() => expect(search.contentSearchQuery.value).toBe('needle'))
+    expect(search.contentSearchMatchIds.value.size).toBe(0)
+    expect(resources.get).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects missing content hashes rather than sharing unrelated originals under an empty key', async () => {
+    const items = ref(
+      ['first', 'second'].map((id) => summary({ id, contentHash: '', fileName: `${id}.json` })),
+    )
+    resources.get.mockImplementation(async (id: string) => ({
+      contentHash: '',
+      originalBlob: new Blob([id]),
+    }))
+    const search = useSearchIndex(items, () => false)
+    search.searchQuery.value = 'first'
+    await search.refreshSearchContentIndex(items.value)
+    expect(search.contentSearchError.value).toContain('SRL-SEARCH-ORIGINAL-READ')
+    expect(search.contentSearchQuery.value).toBe('')
+    expect(search.contentSearchMatchIds.value.size).toBe(0)
+    expect(resources.get).not.toHaveBeenCalled()
+  })
+
+  it('keeps the active scan when a metadata refresh only reorders the same content identities', async () => {
+    const items = ref(
+      ['a', 'b'].map((id) => summary({ id, contentHash: id, fileName: `${id}.json` })),
+    )
+    let release!: () => void
+    resources.get.mockImplementation(async (id: string) => {
+      if (id === 'a')
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+      return { contentHash: id, originalBlob: new Blob(['needle']) }
+    })
+    const search = useSearchIndex(items, () => false)
+    search.searchScope.value = 'content'
+    search.searchQuery.value = 'needle'
+    const pending = search.refreshSearchContentIndex(items.value)
+    items.value = [...items.value].reverse().map((item) => ({ ...item, name: 'renamed' }))
+    release()
+    await pending
+    expect(resources.get).toHaveBeenCalledTimes(2)
+    expect(search.contentSearchQuery.value).toBe('needle')
+    expect([...search.contentSearchMatchIds.value]).toEqual(['a', 'b'])
+  })
+
+  it.each(['read', 'scan'])(
+    'source AbortError during an active %s is incomplete, not user cancellation',
+    async (phase) => {
+      const blob = new Blob(['needle'])
+      if (phase === 'read')
+        resources.get.mockRejectedValue(new DOMException('Source aborted', 'AbortError'))
+      else {
+        vi.spyOn(blob, 'text').mockImplementation(() => {
+          throw new DOMException('Source aborted', 'AbortError')
+        })
+        resources.get.mockResolvedValue({ contentHash: 'hash-1', originalBlob: blob })
+      }
+      const items = ref([summary({ fileName: 'a.json' })])
+      const search = useSearchIndex(items, () => false)
+      search.searchQuery.value = 'needle'
+      await search.refreshSearchContentIndex(items.value)
+      expect(search.contentSearchError.value).toContain(
+        phase === 'read' ? 'SRL-SEARCH-ORIGINAL-READ' : 'SRL-SEARCH-CONTENT-SCAN',
+      )
+      expect(search.contentSearchQuery.value).toBe('')
+      expect(notice.push).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('prunes supplied hashes when a Worker result is queued but cancelled before delivery', async () => {
+    type Request = {
+      type: string
+      requestId?: number
+      hashes?: string[]
+      items?: Array<{ id: string; contentHash: string; blob?: Blob }>
+    }
+    const messages: Request[] = []
+    const resident = new Set<string>()
+    const workers: MockWorker[] = []
+    class MockWorker {
+      listeners = new Set<(event: unknown) => void>()
+      terminate = vi.fn()
+      constructor() {
+        workers.push(this)
+      }
+      addEventListener(type: string, listener: (event: unknown) => void) {
+        if (type === 'message') this.listeners.add(listener)
+      }
+      removeEventListener(type: string, listener: (event: unknown) => void) {
+        if (type === 'message') this.listeners.delete(listener)
+      }
+      postMessage(message: Request) {
+        messages.push(message)
+        if (message.type === 'search')
+          for (const item of message.items ?? []) resident.add(item.contentHash)
+        if (message.type === 'prune') for (const hash of message.hashes ?? []) resident.delete(hash)
+      }
+      deliver(request: Request) {
+        for (const listener of this.listeners)
+          listener({
+            data: {
+              type: 'result',
+              requestId: request.requestId,
+              matchedIds: request.items!.map((item) => item.id),
+              indexedHashes: request.items!.map((item) => item.contentHash),
+            },
+          })
+      }
+    }
+    vi.stubGlobal('Worker', MockWorker)
+    resources.get.mockImplementation(async (id: string) => ({
+      contentHash: id,
+      originalBlob: new Blob(['old new']),
+    }))
+    const items = ref([summary({ id: 'old', contentHash: 'old', fileName: 'a.json' })])
+    const search = useSearchIndex(items, () => false)
+    search.searchQuery.value = 'old'
+    const pending = search.refreshSearchContentIndex(items.value)
+    await vi.waitFor(() =>
+      expect(messages.filter((message) => message.type === 'search')).toHaveLength(1),
+    )
+    const oldRequest = messages.find((message) => message.type === 'search')!
+    expect(resident.has('old')).toBe(true)
+    search.searchQuery.value = 'new'
+    await pending
+    expect(resident.has('old')).toBe(false)
+    const prune = messages.findIndex((message) => message.type === 'prune')
+    expect(messages[prune]!.hashes).toEqual(['old'])
+    items.value = [summary({ id: 'new', contentHash: 'new', fileName: 'b.json' })]
+    const next = search.refreshSearchContentIndex(items.value)
+    await vi.waitFor(() =>
+      expect(messages.filter((message) => message.type === 'search')).toHaveLength(2),
+    )
+    const newRequest = messages.filter((message) => message.type === 'search')[1]!
+    expect(messages.indexOf(newRequest)).toBeGreaterThan(prune)
+    workers[0]!.deliver(oldRequest)
+    expect(search.contentSearchQuery.value).toBe('')
+    workers[0]!.deliver(newRequest)
+    await next
+    expect(search.contentSearchQuery.value).toBe('new')
+    expect([...search.contentSearchMatchIds.value]).toEqual(['new'])
+    expect([...resident]).toEqual(['new'])
   })
 })

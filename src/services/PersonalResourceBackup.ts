@@ -5,6 +5,7 @@ import type { CloudBackupConfig } from '../types/CloudBackup'
 import { parsePersonalResource, type PersonalResourceDocument } from '../types/PersonalResource'
 
 export interface PersonalResourceSelection {
+  resourceAttachments?: boolean
   resourceGallery?: boolean
   extraStory?: boolean
   pocketPhone?: boolean
@@ -79,18 +80,41 @@ export async function clearPlainSecretExportGrant(config: CloudBackupConfig): Pr
 export async function cloudPlainSecretCopies(
   config: CloudBackupConfig,
   resources: import('./ResourceService').ResourceService,
+  selection?: PersonalResourceSelection,
 ): Promise<PlainSecretCopy[]> {
+  if (selection && !includePersonalResource({ type: 'secret' }, selection)) return []
+  const ids = selection?.resourceIds ? new Set(selection.resourceIds) : undefined
   const password = await readPlainSecretExportGrant(config)
   if (!password)
     throw new Error('当前备份目标尚未授权明文密钥副本，请在设置中确认，或关闭明文副本保留加密备份')
+  if (ids?.size === 0) return []
+  const summaries =
+    typeof resources.listResourceListSummaries === 'function'
+      ? await resources.listResourceListSummaries({
+          types: ['secret'],
+          ids: ids ? [...ids] : undefined,
+        })
+      : await resources.listSummaries()
   const copies: PlainSecretCopy[] = []
-  for (const summary of await resources.listSummaries()) {
-    if (summary.type !== 'secret' || summary.metadata.cloudBackupExcluded === true) continue
+  const encoder = new TextEncoder()
+  let outputBytes = 2 // JSON array brackets; each subsequent item adds one comma.
+  for (const summary of summaries) {
+    if (
+      summary.type !== 'secret' ||
+      summary.metadata.cloudBackupExcluded === true ||
+      (ids && !ids.has(summary.id))
+    )
+      continue
     const resource = await resources.get(summary.id)
-    if (resource) copies.push(...(await plaintextSecretCopies([resource], password)))
+    if (!resource || resource.type !== 'secret' || resource.metadata.cloudBackupExcluded === true)
+      continue
+    for (const copy of await plaintextSecretCopies([resource], password)) {
+      outputBytes += encoder.encode(JSON.stringify(copy)).length + (copies.length ? 1 : 0)
+      if (outputBytes > 2 * 1024 * 1024)
+        throw new Error('明文密钥副本超过 2 MB；请关闭明文副本，仍可完整备份加密原件')
+      copies.push(copy)
+    }
   }
-  if (new TextEncoder().encode(JSON.stringify(copies)).length > 2 * 1024 * 1024)
-    throw new Error('明文密钥副本超过 2 MB；请关闭明文副本，仍可完整备份加密原件')
   return copies
 }
 
@@ -107,7 +131,12 @@ export function selectCloudResources(
     )
       selectedIds.delete(resource.id)
   }
-  includeResourceGalleryIds(resources, selectedIds, selection?.resourceGallery === true)
+  includeResourceGalleryIds(
+    resources,
+    selectedIds,
+    selection?.resourceGallery === true,
+    selection?.resourceAttachments === true,
+  )
   return resources.filter(
     (resource) =>
       resource.metadata.cloudBackupExcluded !== true &&

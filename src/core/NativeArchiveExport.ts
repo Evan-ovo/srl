@@ -50,17 +50,25 @@ export async function openCheckpointArchiveWriter(
         writtenBytes += bytes
         options.onProgress?.({ writtenBytes })
       }
+      let missingPath: string | undefined
       const paths = await writeArchiveEntries(options, {
         cached: async (path) => {
           const { entry } = await plugin.getArchiveEntry({ id, path })
+          missingPath = entry ? undefined : path
           if (entry?.descriptor) progress(entry.bytes)
           return entry?.descriptor
         },
         write: async (path, blob, info) => {
-          const { entry } = await plugin.getArchiveEntry({ id, path })
-          if (entry) {
-            progress(entry.bytes)
-            return
+          // Traversal is sequential; native compression rechecks the checkpoint
+          // after preparation, including one created since cached() missed it.
+          const missing = missingPath === path
+          missingPath = undefined
+          if (!missing) {
+            const { entry } = await plugin.getArchiveEntry({ id, path })
+            if (entry) {
+              progress(entry.bytes)
+              return
+            }
           }
           const uri = nativeFileSource(blob)
           if (!uri) {

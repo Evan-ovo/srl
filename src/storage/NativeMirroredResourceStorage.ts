@@ -1,3 +1,4 @@
+import { isResourceAttachment, resourceOwnedFileOwnerId } from '../types/ResourceAttachment'
 import type { VaultService } from '../services/VaultService'
 import {
   toResourceListSummary,
@@ -10,7 +11,9 @@ import {
   removeNativeResourceFile,
   removeNativeResourceFiles,
   stageNativeResourceFile,
+  releaseReplacedNativeObjects,
   type NativeMirrorHandle,
+  type NativeObjectReplacement,
 } from './NativeResourceFileMirror'
 import type {
   ResourceListSummaryFilter,
@@ -34,6 +37,7 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
   readonly deleteChatReadPositionCache?: ResourceStorageAdapter['deleteChatReadPositionCache']
   readonly getReadSource?: ResourceStorageAdapter['getReadSource']
   readonly updateMetadataMany?: ResourceStorageAdapter['updateMetadataMany']
+  readonly insertIfAbsent?: ResourceStorageAdapter['insertIfAbsent']
 
   constructor(delegate: ResourceStorageAdapter, vault: VaultService) {
     this.delegate = delegate
@@ -44,6 +48,12 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     this.setChatReadPositionCache = delegate.setChatReadPositionCache?.bind(delegate)
     this.deleteChatReadPositionCache = delegate.deleteChatReadPositionCache?.bind(delegate)
     this.getReadSource = delegate.getReadSource?.bind(delegate)
+    const insertIfAbsent = delegate.insertIfAbsent?.bind(delegate)
+    if (insertIfAbsent)
+      this.insertIfAbsent = (resource) =>
+        this.enqueueMutation(() =>
+          this.saveWithMirror(resource, 'current', () => insertIfAbsent(resource)),
+        )
     if (delegate.updateMetadataMany)
       this.updateMetadataMany = (patches) =>
         this.enqueueMutation(() => delegate.updateMetadataMany!(patches))
@@ -115,6 +125,12 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     return this.delegate.get(id)
   }
 
+  getThumbnail(id: string): Promise<Blob | undefined> {
+    return this.delegate.getThumbnail
+      ? this.delegate.getThumbnail(id)
+      : this.delegate.get(id).then((resource) => resource?.thumbnailBlob)
+  }
+
   getSummary(id: string, historical = false): Promise<ResourceSummary | undefined> {
     return (
       this.delegate.getSummary?.(id, historical) ??
@@ -126,6 +142,27 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     if (this.delegate.getResourceListSummary) return this.delegate.getResourceListSummary(id)
     const summary = await this.getSummary(id)
     return summary ? toResourceListSummary(summary) : undefined
+  }
+
+  async getResourceListSummaries(ids: readonly string[]): Promise<ResourceListSummary[]> {
+    if (this.delegate.getResourceListSummaries) return this.delegate.getResourceListSummaries(ids)
+    const result: ResourceListSummary[] = []
+    const selected = Array.from(new Set(ids))
+    for (let start = 0; start < selected.length; start += 250) {
+      const rows = await Promise.all(
+        selected.slice(start, start + 250).map((id) => this.getResourceListSummary(id)),
+      )
+      result.push(...rows.flatMap((row) => (row ? [row] : [])))
+    }
+    return result
+  }
+
+  async listAttachmentListSummaries(ownerId: string): Promise<ResourceListSummary[]> {
+    if (this.delegate.listAttachmentListSummaries)
+      return this.delegate.listAttachmentListSummaries(ownerId)
+    return (await this.listResourceListSummaries({ types: ['other'] })).filter(
+      (r) => isResourceAttachment(r) && resourceOwnedFileOwnerId(r) === ownerId,
+    )
   }
 
   async findGalleryImage(
@@ -194,7 +231,8 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
   async updateVersion(versionId: string, changes: Partial<Resource>): Promise<void> {
     await this.enqueueMutation(async () => {
       await this.delegate.updateVersion(versionId, changes)
-      if (Object.keys(changes).every((key) => key === 'backupDescriptor')) return
+      if (Object.keys(changes).every((key) => key === 'backupDescriptor' || key === 'versionNote'))
+        return
       const version = await this.getVersion(versionId)
       if (version) await this.mirrorAfterWrite(version, 'versions')
     })
@@ -217,10 +255,14 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     await this.enqueueMutation(() => this.saveManyWithMirror(resources))
   }
 
-  async update(id: string, changes: Partial<Resource>): Promise<void> {
+  async update(
+    id: string,
+    changes: Partial<Resource>,
+    expectedContentHash?: string,
+  ): Promise<void> {
     await this.enqueueMutation(async () => {
       if (!('originalBlob' in changes)) {
-        await this.delegate.update(id, changes)
+        await this.delegate.update(id, changes, expectedContentHash)
         return
       }
       const previous = await this.delegate.get(id)
@@ -228,7 +270,7 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
       await this.saveWithMirror(
         { ...previous, ...changes },
         'current',
-        () => this.delegate.update(id, changes),
+        () => this.delegate.update(id, changes, expectedContentHash),
         () => this.delegate.save(previous),
       )
     })
@@ -249,16 +291,22 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
     await this.enqueueMutation(async () => {
       await this.delegate.updateMany(ids, changes)
       if (!('originalBlob' in changes)) return
+      const replacements: NativeObjectReplacement[] = []
       for (const id of ids) {
         const resource = await this.delegate.get(id)
-        if (resource) await this.mirrorAfterWrite(resource, 'current')
+        if (resource) {
+          const replacement = await this.mirrorAfterWrite(resource, 'current', false)
+          if (replacement) replacements.push(replacement)
+        }
       }
+      if (replacements.length)
+        await releaseReplacedNativeObjects(replacements).catch(() => undefined)
     })
   }
 
   async delete(id: string): Promise<void> {
     await this.enqueueMutation(async () => {
-      const versions = await this.delegate.listVersions(id)
+      const versions = await this.listVersionListSummariesForResources([id])
       await this.delegate.delete(id)
       await removeNativeResourceFile(id, 'current')
       for (const version of versions) await removeNativeResourceFile(version.id, 'versions')
@@ -299,54 +347,74 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
       }
       await this.delegate.saveMany(resources)
       for (const handle of handles) await handle.commit()
-      for (const resource of resources) await this.releaseVerifiedMirror(resource, 'current')
+      const replacements: NativeObjectReplacement[] = []
+      for (const [index, resource] of resources.entries()) {
+        if (await this.releaseVerifiedMirror(resource, 'current')) {
+          const replacement = handles[index]?.replacement
+          if (replacement) replacements.push(replacement)
+        }
+      }
+      if (replacements.length)
+        await releaseReplacedNativeObjects(replacements).catch(() => undefined)
     } catch (error) {
       await Promise.all(handles.map((handle) => handle.abort()))
       throw error
     }
   }
 
-  private async saveWithMirror(
+  private async saveWithMirror<T>(
     resource: Resource,
     scope: 'current' | 'versions',
-    save: () => Promise<void>,
+    save: () => Promise<T>,
     rollback?: () => Promise<void>,
-  ): Promise<void> {
+  ): Promise<T> {
     if (this.vault.isEnabled()) {
-      await save()
-      return
+      return save()
     }
     const handle = await stageNativeResourceFile(resource, scope)
     let saved = false
+    let result: T
     try {
-      await save()
-      saved = true
-      await handle.commit()
-      await this.releaseVerifiedMirror(resource, scope)
+      result = await save()
+      saved = result !== false
+      if (saved) {
+        await handle.commit()
+        if ((await this.releaseVerifiedMirror(resource, scope)) && handle.replacement)
+          await releaseReplacedNativeObjects([handle.replacement]).catch(() => undefined)
+      }
     } catch (error) {
       await handle.abort()
       if (saved && rollback) await rollback()
       throw error
     }
+    if (!saved) await handle.abort()
+    return result
   }
 
-  private async mirrorAfterWrite(resource: Resource, scope: 'current' | 'versions'): Promise<void> {
+  private async mirrorAfterWrite(
+    resource: Resource,
+    scope: 'current' | 'versions',
+    release = true,
+  ): Promise<NativeObjectReplacement | undefined> {
     if (this.vault.isEnabled()) {
       return
     }
     const handle = await stageNativeResourceFile(resource, scope)
     await handle.commit()
-    await this.releaseVerifiedMirror(resource, scope)
+    if (!(await this.releaseVerifiedMirror(resource, scope))) return
+    if (release && handle.replacement)
+      await releaseReplacedNativeObjects([handle.replacement]).catch(() => undefined)
+    return handle.replacement
   }
 
   private async releaseVerifiedMirror(
     resource: Resource,
     scope: 'current' | 'versions',
-  ): Promise<void> {
-    if (!isAndroidNativeResourceMirrorAvailable()) return
+  ): Promise<boolean> {
+    if (!isAndroidNativeResourceMirrorAvailable()) return false
     // A failure here leaves two verified copies rather than risking the only readable original.
     // The explicit health-center cleanup can retry it and makes remaining reclaimable bytes visible.
-    await this.delegate
+    const converted = await this.delegate
       .convertToNativeReference?.(
         resource.id,
         scope,
@@ -354,6 +422,13 @@ export class NativeMirroredResourceStorage implements ResourceStorageAdapter {
         resource.originalBlob.size,
       )
       .catch(() => undefined)
+    if (converted === true) return true
+    if (converted !== false) return false
+    // Already-native records need no conversion, but still require authoritative identity.
+    const summary = await this.delegate
+      .getSummary?.(resource.id, scope === 'versions')
+      .catch(() => undefined)
+    return summary?.contentHash === resource.contentHash && summary.fileSize === resource.fileSize
   }
 
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {

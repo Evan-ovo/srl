@@ -41,6 +41,29 @@ const naiSettings = {
 beforeEach(() => vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn() }))
 
 describe('image generation integration contracts', () => {
+  it.each(['openai', 'novelai'] as const)(
+    'preserves the explicit %s error inside an HTTP 200 response without exposing the key',
+    async (provider) => {
+      const { service, fetcher } = setup()
+      const config = { ...service.defaultConfig(provider), apiKey: 'never-echo-secret' }
+      fetcher.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: { message: `Unsupported model parameter; token ${config.apiKey}` },
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      await expect(service.generate(config, { prompt: 'portrait' })).rejects.toSatisfy(
+        (error: Error) => {
+          expect(error.message).toContain('Unsupported model parameter')
+          expect(JSON.stringify(error)).not.toContain(config.apiKey)
+          return true
+        },
+      )
+      expect(fetcher).toHaveBeenCalledOnce()
+    },
+  )
   it.each(['nai-diffusion-5-full', 'nai-diffusion-5-curated'])(
     'routes %s to modern prompts, including negative character captions and coordinates',
     (model) => {
@@ -253,7 +276,7 @@ describe('image generation integration contracts', () => {
         outputFormat: 'webp',
         outputCompression: 20,
       }).body,
-    ).toEqual({ model: 'relay-image', prompt: 'test', size: '1024x1024', n: 1 })
+    ).toEqual({ model: 'relay-image', prompt: 'test', size: '1024x1024' })
     expect(() =>
       buildOpenAiImageRequest(relay, { prompt: 'edit', openAiInputImages: [{ dataUrl: 'x' }] }),
     ).toThrow('未确认')
@@ -291,7 +314,11 @@ describe('image generation integration contracts', () => {
         }),
       ),
     )
-    const models = await service.listModels({ ...config, provider: 'openai' })
+    const models = await service.listModels({
+      ...config,
+      provider: 'openai',
+      endpoint: 'https://relay.example/v1',
+    })
     expect(fetcher).toHaveBeenCalledTimes(1)
     expect(fetcher.mock.calls[0]?.[1]?.method).toBe('GET')
     expect(models.options[0]?.capabilities).toEqual({

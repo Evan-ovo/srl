@@ -12,8 +12,115 @@ import {
 } from './IndexedDbArchiveStorage'
 import { IndexedDbResourceStorage } from './IndexedDbResourceStorage'
 import type { NativeBackedResourceRecord } from '../types/Vault'
+import * as nativeMirror from './NativeResourceFileMirror'
+import { restoreVersionKey } from '../utils/RestoreIdentity'
 
 describe('IndexedDbArchiveStorage', () => {
+  it.each([1000, 5000, 10000])(
+    'reads only 501 relevant historical metadata rows from %i rows in three batches',
+    async (count) => {
+      const database = new AppDatabase(`scoped-history-${crypto.randomUUID()}`)
+      const storage = new IndexedDbArchiveStorage(database)
+      const body = new Blob(['history original'])
+      const records: Resource[] = Array.from({ length: count }, (_, index) => ({
+        id: `history-${index}`,
+        versionGroupId: index < 501 ? 'selected' : 'unrelated',
+        type: RESOURCE_TYPE.OTHER,
+        name: `history-${index}`,
+        description: '',
+        fileName: 'history.bin',
+        mimeType: 'application/octet-stream',
+        fileSize: body.size,
+        originalBlob: body,
+        contentHash: index.toString(16).padStart(64, '0'),
+        favorite: false,
+        categoryId: null,
+        tags: [],
+        metadata: { custom: index },
+        createdAt: 1,
+        updatedAt: 1,
+      }))
+      try {
+        await database.resourceVersions.bulkPut(records)
+        const get = vi.spyOn(database.resourceVersions, 'get')
+        const batch = vi.spyOn(database.resourceVersions, 'bulkGet')
+        const keys = await storage.listRestoreVersionKeys(['selected', 'selected'])
+        expect(new Set(keys)).toEqual(
+          new Set(
+            records.slice(0, 501).map((record) => restoreVersionKey(toResourceSummary(record))),
+          ),
+        )
+        expect(get).not.toHaveBeenCalled()
+        expect(batch.mock.calls.map(([ids]) => ids.length)).toEqual([250, 250, 1])
+        expect(await storage.listRestoreVersionKeys([])).toEqual([])
+        expect(batch).toHaveBeenCalledTimes(3)
+      } finally {
+        vi.restoreAllMocks()
+        database.close()
+        await database.delete()
+      }
+    },
+  )
+  it('releases replaced native objects only after the restore transaction commits, retaining them on rollback', async () => {
+    const database = new AppDatabase(`restore-replacement-${crypto.randomUUID()}`)
+    const storage = new IndexedDbArchiveStorage(database)
+    const hash = 'b'.repeat(64)
+    const record: NativeBackedResourceRecord = {
+      id: 'restored',
+      type: RESOURCE_TYPE.WORLD_BOOK,
+      name: 'world',
+      description: '',
+      fileName: 'world.json',
+      mimeType: 'application/json',
+      fileSize: 4,
+      contentHash: hash,
+      favorite: false,
+      categoryId: null,
+      tags: [],
+      metadata: {},
+      createdAt: 1,
+      updatedAt: 2,
+      nativeOriginal: { version: 1, contentHash: hash, size: 4 },
+    }
+    const replacement = {
+      scope: 'current' as const,
+      id: record.id,
+      contentHash: hash,
+      size: 4,
+      replacedHashes: ['a'.repeat(64)],
+    }
+    const link = vi
+      .spyOn(nativeMirror, 'linkNativeResourceObjects')
+      .mockImplementation(async (_records, onReplaced) => {
+        onReplaced?.([replacement])
+        return 1
+      })
+    const release = vi
+      .spyOn(nativeMirror, 'releaseReplacedNativeObjects')
+      .mockImplementation(async (records) => {
+        expect((await database.resources.get('restored'))?.contentHash).toBe(hash)
+        expect(records).toEqual([replacement])
+      })
+    try {
+      await storage.restoreNative([], [record])
+      expect(release).toHaveBeenCalledOnce()
+      const put = vi
+        .spyOn(database.resources, 'put')
+        .mockRejectedValueOnce(new Error('commit failed'))
+      try {
+        await expect(storage.restoreNative([], [record])).rejects.toThrow('commit failed')
+      } finally {
+        put.mockRestore()
+      }
+      expect(release).toHaveBeenCalledOnce()
+      expect(link).toHaveBeenCalledTimes(2)
+    } finally {
+      link.mockRestore()
+      release.mockRestore()
+      database.close()
+      await database.delete()
+    }
+  })
   it('lists only archive metadata and keeps legacy size fallback without changing stored blobs', async () => {
     const database = new AppDatabase(`archive-metadata-${crypto.randomUUID()}`)
     const blob = new Blob(['archive bytes'], { type: 'application/zip' })
@@ -192,14 +299,17 @@ describe('IndexedDbArchiveStorage', () => {
       const read = vi
         .spyOn(globalThis, 'fetch')
         .mockImplementationOnce(fetchBlob)
-        .mockRejectedValueOnce(new Error('staged file disappeared'))
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       try {
         await expect(
           storage.restore(
             [],
             records.map((r) => ({ ...r, id: `new-${r.id}` })),
           ),
-        ).rejects.toThrow('staged file disappeared')
+        ).rejects.toMatchObject({
+          message: expect.stringContaining('本机恢复暂存'),
+          cause: { message: 'Failed to fetch' },
+        })
         expect(await database.resources.count()).toBe(before)
         expect(await database.restoreStaging.count()).toBe(0)
       } finally {

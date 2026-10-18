@@ -26,16 +26,24 @@ import {
   RELAY_CAPABILITY_KEYS,
   type NovelAiQualityMode,
   type RelayCapabilityKey,
+  novelAiGridCoordinate,
+  OPENAI_IMAGE_MODEL_PROFILES,
+  isOfficialOpenAiImageEndpoint,
+  isOpenAiImageModelProfile,
+  type OpenAiImageModelProfile,
 } from '../services/ImageGenerationCapabilities'
+import {
+  redactImageRequest,
+  validateImageGenerationConfig,
+} from '../services/ImageGenerationRequest'
 
 export type ImageGenerationAppEvents = { back: []; 'open-album': [] }
 
-export type AppSection = 'generate' | 'result' | 'storage' | 'cloud' | 'connection'
+export type AppSection = 'generate' | 'result' | 'cloud' | 'connection'
 
 export type ProviderTab = 'openai' | 'novelai'
 
-export type InternalTab =
-  'prompt' | 'characters' | 'reference' | 'edit' | 'settings' | 'connection' | 'request'
+export type InternalTab = 'prompt' | 'characters' | 'reference' | 'settings'
 
 export function useImageGenerationApp() {
   const section = ref<AppSection>('generate')
@@ -95,13 +103,21 @@ export function useImageGenerationApp() {
   const novelAiSmeaDyn = ref(false)
 
   const busy = ref(false)
+  const resultBusy = ref(false)
+  let disposed = false
 
   const error = ref('')
 
   const notice = ref('')
 
   const candidates = ref<
-    Array<{ image: FrontendWorkshopGeneratedImage; albumItemId: string; hostedUrl: string }>
+    Array<{
+      image: FrontendWorkshopGeneratedImage
+      albumItemId: string
+      hostedUrl: string
+      name: string
+      category: string
+    }>
   >([])
 
   const candidateIndex = ref(0)
@@ -114,9 +130,18 @@ export function useImageGenerationApp() {
 
   const albumSaved = computed(() => Boolean(currentCandidate.value?.albumItemId))
 
-  const assetName = ref('')
-
-  const category = ref('')
+  const assetName = computed({
+    get: () => currentCandidate.value?.name ?? '',
+    set: (value: string) => {
+      if (currentCandidate.value) currentCandidate.value.name = value
+    },
+  })
+  const category = computed({
+    get: () => currentCandidate.value?.category ?? '',
+    set: (value: string) => {
+      if (currentCandidate.value) currentCandidate.value.category = value
+    },
+  })
 
   const hostedUrl = computed(() => currentCandidate.value?.hostedUrl ?? '')
 
@@ -168,6 +193,35 @@ export function useImageGenerationApp() {
   const additionalJson = ref('')
 
   const currentConfig = computed(() => config.value[provider.value])
+  const officialOpenAiConnection = computed(
+    () =>
+      provider.value === 'openai' && isOfficialOpenAiImageEndpoint(currentConfig.value.endpoint),
+  )
+  const relayModelProfile = computed<OpenAiImageModelProfile | ''>({
+    get: () => {
+      const current = currentConfig.value
+      const evidence = current.relayCapabilities
+      return !officialOpenAiConnection.value &&
+        evidence?.endpoint === current.endpoint.trim() &&
+        evidence.model === current.model.trim() &&
+        isOpenAiImageModelProfile(evidence.modelProfile)
+        ? evidence.modelProfile
+        : ''
+    },
+    set: (value) => {
+      if (provider.value !== 'openai' || officialOpenAiConnection.value) return
+      const current = currentConfig.value
+      applyModelMetadata()
+      current.relayCapabilities = {
+        ...current.relayCapabilities,
+        endpoint: current.endpoint.trim(),
+        model: current.model.trim(),
+        modelProfile: isOpenAiImageModelProfile(value) ? value : undefined,
+        manual: {},
+      }
+      clearFeedback()
+    },
+  })
 
   const visibleModels = computed(() => {
     const options =
@@ -201,21 +255,55 @@ export function useImageGenerationApp() {
     ),
   )
 
+  const imageEditReady = computed(
+    () =>
+      capabilities.value.imageInput === 'supported' && capabilities.value.imageEdit === 'supported',
+  )
+  const resultEditReady = computed(() => {
+    const image = result.value
+    if (!image || image.provider === 'novelai') return false
+    const connection = config.value[image.provider]
+    const caps = getImageGenerationCapabilities(
+      image.provider,
+      image.manifest?.model ?? connection.model,
+      connection.relayCapabilities,
+      connection.endpoint,
+    )
+    return caps.imageEdit === 'supported' && caps.imageInput === 'supported'
+  })
+  const maskReady = computed(
+    () =>
+      imageEditReady.value &&
+      capabilities.value.mask === 'supported' &&
+      inputImages.value[0]?.blob.type === 'image/png',
+  )
+  const modelIssue = computed(() =>
+    capabilities.value.textToImage === 'unsupported' ? capabilities.value.notes[0] : '',
+  )
   const internalTabs = computed<Array<{ id: InternalTab; label: string }>>(() =>
-    provider.value === 'novelai'
-      ? [
-          { id: 'prompt', label: 'Prompt' },
-          { id: 'characters', label: '角色' },
-          { id: 'reference', label: '参考' },
-          { id: 'settings', label: '设置' },
-        ]
-      : [
-          { id: 'prompt', label: 'Prompt' },
-          { id: 'reference', label: '参考' },
-          { id: 'edit', label: '编辑' },
-          { id: 'settings', label: '设置' },
-          { id: 'request', label: '请求' },
-        ],
+    modelIssue.value
+      ? []
+      : provider.value === 'novelai'
+        ? [
+            { id: 'prompt', label: '创作' },
+            ...(capabilities.value.multiCharacter === 'supported'
+              ? [
+                  {
+                    id: 'characters' as const,
+                    label: `角色${characters.value.length ? ` · ${characters.value.length}` : ''}`,
+                  },
+                ]
+              : []),
+            { id: 'settings', label: '更多参数' },
+          ]
+        : [
+            { id: 'prompt', label: '创作' },
+            ...(imageEditReady.value ? [{ id: 'reference' as const, label: '参考 / 改图' }] : []),
+            { id: 'settings', label: '更多参数' },
+          ],
+  )
+  const sizeOptions = computed(() =>
+    provider.value === 'novelai' ? ['832x1216', '1024x1024', '1216x832'] : capabilities.value.sizes,
   )
 
   const capabilityLabels: Record<RelayCapabilityKey, string> = {
@@ -277,28 +365,53 @@ export function useImageGenerationApp() {
             novelAiTransparentBackground.value,
           novelAiCharacters:
             capabilities.value.multiCharacter === 'supported'
-              ? characters.value.map((c) => ({
+              ? characters.value.slice(0, capabilities.value.maxCharacters).map((c) => ({
                   prompt: c.prompt,
                   negativePrompt: c.negativePrompt,
-                  ...(c.positioned ? { position: { x: c.x, y: c.y } } : {}),
+                  ...(c.positioned
+                    ? {
+                        position: {
+                          x: capabilities.value.freeCharacterPositioning
+                            ? c.x
+                            : novelAiGridCoordinate(c.x),
+                          y: capabilities.value.freeCharacterPositioning
+                            ? c.y
+                            : novelAiGridCoordinate(c.y),
+                        },
+                      }
+                    : {}),
                 }))
               : [],
-          novelAiSmea: capabilities.value.smea === 'supported' && novelAiSmea.value,
-          novelAiSmeaDyn: capabilities.value.smea === 'supported' && novelAiSmeaDyn.value,
+          novelAiSmea:
+            capabilities.value.smea === 'supported' &&
+            novelAiSampler.value !== 'ddim' &&
+            novelAiSmea.value,
+          novelAiSmeaDyn:
+            capabilities.value.smea === 'supported' &&
+            novelAiSampler.value !== 'ddim' &&
+            novelAiSmea.value &&
+            novelAiSmeaDyn.value,
         }
       : {
           openAiQuality: openAiQuality.value,
-          openAiBackground: openAiBackground.value,
+          openAiBackground:
+            openAiBackground.value === 'transparent' &&
+            capabilities.value.transparentBackground !== 'supported'
+              ? 'auto'
+              : openAiBackground.value,
           outputFormat: outputFormat.value,
           outputCompression: outputCompression.value,
-          openAiInputImages: inputImages.value.map((image) => ({
+          openAiInputImages: (imageEditReady.value
+            ? inputImages.value.slice(0, capabilities.value.maxInputImages)
+            : []
+          ).map((image) => ({
             blob: image.blob,
             role: image.role,
           })),
-          openAiEditInstruction: editInstruction.value,
-          openAiPreserve: { ...preserve.value },
-          openAiMask: mask.value,
-          parentImageId: parentImageId.value || undefined,
+          openAiEditInstruction: imageEditReady.value ? editInstruction.value : '',
+          openAiPreserve: imageEditReady.value ? { ...preserve.value } : {},
+          openAiMask: maskReady.value ? mask.value : undefined,
+          parentImageId: imageEditReady.value ? parentImageId.value || undefined : undefined,
           additionalJson: additionalJson.value,
         }),
   }))
@@ -319,18 +432,66 @@ export function useImageGenerationApp() {
     }
   })
 
-  const canGenerate = computed(
+  const canGenerate = computed(() => busy.value || (!hostingBusy.value && !resultBusy.value))
+  const feedbackError = computed(
     () =>
-      busy.value ||
-      (!hostingBusy.value &&
-        Boolean(
-          prompt.value.trim() || (provider.value !== 'novelai' && editInstruction.value.trim()),
-        ) &&
-        !requestPreview.value.error),
+      error.value ||
+      (section.value === 'generate' || section.value === 'connection' ? modelIssue.value : '') ||
+      (section.value === 'generate' &&
+      internalTab.value === 'settings' &&
+      additionalJson.value.trim()
+        ? requestPreview.value.error
+        : ''),
   )
+  function clearFeedback(): void {
+    error.value = ''
+    notice.value = ''
+  }
+  function reportError(cause: unknown, action: string): void {
+    notice.value = ''
+    let message = cause instanceof Error ? cause.message : '未知错误，请重试或检查连接设置'
+    for (const secret of [
+      config.value.openai.apiKey,
+      config.value.novelai.apiKey,
+      selfHostedToken.value,
+    ])
+      message = redactImageRequest(message, secret)
+    error.value = `${action}：${message}`
+  }
+  function openSection(next: AppSection): void {
+    clearFeedback()
+    section.value = next
+  }
+  function reportPreviewFailure(): void {
+    reportError(
+      new Error(
+        '图片无法显示，临时链接可能已失效或被浏览器拦截；可尝试保存到生图相册，失败时检查供应商返回内容。',
+      ),
+      '预览失败',
+    )
+  }
 
-  watch([provider, () => currentConfig.value.model], () => {
-    if (provider.value !== 'novelai') return
+  watch([capabilities, openAiBackground, outputFormat], () => {
+    if (
+      (internalTab.value === 'reference' && !imageEditReady.value) ||
+      (internalTab.value === 'characters' && capabilities.value.multiCharacter !== 'supported')
+    )
+      internalTab.value = 'prompt'
+    if (provider.value !== 'novelai') {
+      if (!capabilities.value.sizes.includes(`${width.value}x${height.value}`)) {
+        ;[width.value, height.value] = (capabilities.value.sizes[0] ?? '1024x1024')
+          .split('x')
+          .map(Number)
+      }
+      if (
+        openAiBackground.value === 'transparent' &&
+        capabilities.value.transparentBackground !== 'supported'
+      )
+        openAiBackground.value = 'auto'
+      if (openAiBackground.value === 'transparent' && outputFormat.value === 'jpeg')
+        outputFormat.value = 'png'
+      return
+    }
     if (!capabilities.value.qualityModes.includes(novelAiQualityMode.value)) {
       novelAiQualityMode.value = capabilities.value.qualityModes.includes('standard')
         ? 'standard'
@@ -435,10 +596,16 @@ export function useImageGenerationApp() {
   }
 
   function saveTemplate(): void {
-    if (!templateName.value.trim()) return
-    frontendWorkshopImageDraftService.saveTemplate(templateName.value, currentDraft())
-    templates.value = frontendWorkshopImageDraftService.listTemplates()
-    templateName.value = ''
+    clearFeedback()
+    try {
+      if (!templateName.value.trim()) throw new Error('请填写模板名称')
+      frontendWorkshopImageDraftService.saveTemplate(templateName.value, currentDraft())
+      templates.value = frontendWorkshopImageDraftService.listTemplates()
+      templateName.value = ''
+      notice.value = '模板已保存。'
+    } catch (cause) {
+      reportError(cause, '保存模板失败')
+    }
   }
 
   function useTemplate(template: FrontendWorkshopImageTemplate): void {
@@ -447,8 +614,14 @@ export function useImageGenerationApp() {
   }
 
   function overwriteTemplate(template: FrontendWorkshopImageTemplate): void {
-    frontendWorkshopImageDraftService.overwriteTemplate(template.id, currentDraft())
-    templates.value = frontendWorkshopImageDraftService.listTemplates()
+    clearFeedback()
+    try {
+      frontendWorkshopImageDraftService.overwriteTemplate(template.id, currentDraft())
+      templates.value = frontendWorkshopImageDraftService.listTemplates()
+      notice.value = '模板已更新。'
+    } catch (cause) {
+      reportError(cause, '更新模板失败')
+    }
   }
 
   async function deleteTemplate(template: FrontendWorkshopImageTemplate): Promise<void> {
@@ -461,12 +634,20 @@ export function useImageGenerationApp() {
       }))
     )
       return
-    frontendWorkshopImageDraftService.deleteTemplate(template.id)
-    templates.value = frontendWorkshopImageDraftService.listTemplates()
+    clearFeedback()
+    try {
+      frontendWorkshopImageDraftService.deleteTemplate(template.id)
+      templates.value = frontendWorkshopImageDraftService.listTemplates()
+    } catch (cause) {
+      reportError(cause, '删除模板失败')
+    }
   }
 
   async function saveToPhone(): Promise<void> {
-    if (!result.value || !canSaveToPhone) return
+    if (!result.value || !canSaveToPhone || resultBusy.value || hostingBusy.value || busy.value)
+      return
+    resultBusy.value = true
+    clearFeedback()
     try {
       const image = result.value
       await saveBlobToNativeDestination(
@@ -476,14 +657,16 @@ export function useImageGenerationApp() {
       )
       notice.value = '已保存到手机相册。'
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '保存到手机相册失败。'
+      reportError(cause, '保存到手机相册失败')
+    } finally {
+      resultBusy.value = false
     }
   }
 
   async function loadModels(): Promise<void> {
     if (modelsBusy.value) return
     modelsBusy.value = true
-    error.value = ''
+    clearFeedback()
     const current = { ...currentConfig.value }
     try {
       const models = await frontendWorkshopImageGenerationService.listModels(current)
@@ -494,7 +677,8 @@ export function useImageGenerationApp() {
       applyModelMetadata()
       notice.value = models.message
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '拉取模型失败'
+      if (current.provider === provider.value && current.endpoint === currentConfig.value.endpoint)
+        reportError(cause, '拉取模型失败')
     } finally {
       modelsBusy.value = false
     }
@@ -507,10 +691,17 @@ export function useImageGenerationApp() {
     current.relayCapabilities = {
       endpoint: current.endpoint.trim(),
       model: current.model.trim(),
+      modelProfile:
+        previous?.endpoint === current.endpoint.trim() && previous.model === current.model.trim()
+          ? previous.modelProfile
+          : undefined,
       declared:
         modelOptionsEndpoint.value === current.endpoint.trim()
           ? modelOptions.value.find((option) => option.id === current.model)?.capabilities
-          : undefined,
+          : previous?.endpoint === current.endpoint.trim() &&
+              previous.model === current.model.trim()
+            ? previous.declared
+            : undefined,
       manual:
         previous?.endpoint === current.endpoint.trim() && previous.model === current.model.trim()
           ? previous.manual
@@ -558,7 +749,7 @@ export function useImageGenerationApp() {
     const input = event.target as HTMLInputElement
     const files = Array.from(input.files ?? [])
     input.value = ''
-    error.value = ''
+    clearFeedback()
     const max =
       capabilities.value.multiImage === 'supported' ? capabilities.value.maxInputImages : 1
     if (files.length + inputImages.value.length > max) {
@@ -597,12 +788,24 @@ export function useImageGenerationApp() {
   }
 
   async function continueEditing(): Promise<void> {
-    if (!result.value || result.value.provider === 'novelai') return
+    if (
+      !result.value ||
+      !resultEditReady.value ||
+      busy.value ||
+      hostingBusy.value ||
+      resultBusy.value
+    )
+      return
+    resultBusy.value = true
+    clearFeedback()
     try {
       const image = result.value
       const blob = await frontendWorkshopImageGenerationService.toBlob(image)
       const item = await generatedImageAlbumService.saveGenerated(image)
+      if (disposed) return
+      currentCandidate.value!.albumItemId = item.id
       chooseProvider(image.provider)
+      if (image.manifest?.model) config.value[image.provider].model = image.manifest.model
       while (inputImages.value.length) removeInputImage(0)
       inputImages.value.push({
         blob,
@@ -612,31 +815,31 @@ export function useImageGenerationApp() {
       })
       parentImageId.value = item.id
       section.value = 'generate'
-      internalTab.value = provider.value === 'openai' ? 'edit' : 'prompt'
+      internalTab.value = 'reference'
       editInstruction.value = ''
       notice.value = '原图已保存到相册；请填写下一步修改指令。'
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '无法继续编辑'
+      reportError(cause, '准备编辑失败')
+    } finally {
+      resultBusy.value = false
     }
   }
 
   async function saveConnection(): Promise<void> {
+    clearFeedback()
     try {
+      validateImageGenerationConfig(currentConfig.value)
       config.value[provider.value] = await frontendWorkshopImageGenerationService.saveConfiguration(
         currentConfig.value,
       )
-      notice.value = '连接已保存。'
+      notice.value = '连接已保存；实际可用性以生成结果为准。'
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '连接保存失败'
+      reportError(cause, '连接保存失败')
     }
   }
 
-  function appendPrompt(fragment: string): void {
-    prompt.value = [prompt.value.trim(), fragment].filter(Boolean).join(', ')
-  }
-
   function reuseResult(): void {
-    if (!result.value) return
+    if (!result.value || busy.value || hostingBusy.value || resultBusy.value) return
     chooseProvider(result.value.provider)
     if (result.value.manifest) config.value[provider.value].model = result.value.manifest.model
     prompt.value = result.value.prompt
@@ -649,6 +852,13 @@ export function useImageGenerationApp() {
     section.value = 'generate'
   }
 
+  async function generateAnother(): Promise<void> {
+    if (!result.value || busy.value || hostingBusy.value || resultBusy.value) return
+    reuseResult()
+    novelAiSeed.value = undefined
+    await generate()
+  }
+
   function providerLabel(value: FrontendWorkshopImageProvider): string {
     if (value === 'novelai') return 'NovelAI'
     if (value === 'openai') return 'OpenAI'
@@ -656,11 +866,13 @@ export function useImageGenerationApp() {
   }
 
   function selectTab(tab: InternalTab): void {
+    clearFeedback()
     internalTab.value = tab
     section.value = 'generate'
   }
 
   function chooseProvider(next: ProviderTab): void {
+    if (busy.value || hostingBusy.value || modelsBusy.value) return
     flushDraft()
     if (next !== provider.value) {
       while (inputImages.value.length) removeInputImage(0)
@@ -691,26 +903,47 @@ export function useImageGenerationApp() {
       generationController?.abort()
       return
     }
-    if (!canGenerate.value) {
-      error.value = '请先填写画面描述。'
+    if (!canGenerate.value) return
+    clearFeedback()
+    try {
+      validateImageGenerationConfig(currentConfig.value)
+    } catch (cause) {
+      section.value = 'connection'
+      reportError(cause, '无法开始生成')
+      return
+    }
+    if (modelIssue.value) {
+      error.value = modelIssue.value
+      return
+    }
+    if (
+      !generationRequest.value.prompt.trim() &&
+      !generationRequest.value.openAiEditInstruction?.trim()
+    ) {
+      selectTab('prompt')
+      error.value = '请先填写画面描述，或添加原图并填写修改要求。'
+      return
+    }
+    if (requestPreview.value.error) {
+      error.value = requestPreview.value.error
       return
     }
     busy.value = true
     error.value = ''
     notice.value = ''
-    generationController = new AbortController()
+    const controller = new AbortController()
+    generationController = controller
     try {
       const current = { ...config.value[provider.value] }
       const image = await frontendWorkshopImageGenerationService.generate(
         current,
         generationRequest.value,
-        { signal: generationController.signal, requestId: crypto.randomUUID() },
+        { signal: controller.signal, requestId: crypto.randomUUID() },
       )
-      candidates.value.push({ image, albumItemId: '', hostedUrl: '' })
+      if (disposed || controller.signal.aborted) return
+      candidates.value.push({ image, albumItemId: '', hostedUrl: '', name: '', category: '' })
       candidateIndex.value = candidates.value.length - 1
-      if (image.provider === 'novelai' && provider.value === current.provider)
-        novelAiSeed.value = image.seed
-      section.value = 'generate'
+      section.value = 'result'
       try {
         config.value[current.provider] =
           await frontendWorkshopImageGenerationService.saveConfiguration(current)
@@ -718,19 +951,32 @@ export function useImageGenerationApp() {
         notice.value = '图片已生成；当前连接配置未能持久保存。'
       }
     } catch (cause) {
-      if (cause instanceof DOMException && cause.name === 'AbortError')
-        error.value = '已取消本次生成。'
-      else error.value = cause instanceof Error ? cause.message : '生图失败，请检查连接和参数。'
+      if (
+        controller.signal.aborted ||
+        (cause instanceof DOMException && cause.name === 'AbortError')
+      )
+        notice.value = '已停止等待本次生成；供应商可能仍在处理，请核对任务及计费状态。'
+      else reportError(cause, '生成失败')
     } finally {
+      if (controller.signal.aborted && !disposed)
+        notice.value = '已停止等待本次生成；供应商可能仍在处理，请核对任务及计费状态。'
       busy.value = false
       generationController = undefined
     }
   }
 
   async function saveToAlbum(): Promise<void> {
-    if (!currentCandidate.value || albumSaved.value) return
+    if (
+      !currentCandidate.value ||
+      albumSaved.value ||
+      resultBusy.value ||
+      hostingBusy.value ||
+      busy.value
+    )
+      return
     const candidate = currentCandidate.value
-    error.value = ''
+    resultBusy.value = true
+    clearFeedback()
     try {
       const item = await generatedImageAlbumService.saveGenerated(candidate.image, {
         name: assetName.value.trim() || candidate.image.prompt.slice(0, 42),
@@ -739,12 +985,14 @@ export function useImageGenerationApp() {
       candidate.albumItemId = item.id
       notice.value = '已保存到生图相册。'
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '保存到相册失败。'
+      reportError(cause, '保存到生图相册失败')
+    } finally {
+      resultBusy.value = false
     }
   }
 
   async function saveSelfHostedConnection(): Promise<void> {
-    error.value = ''
+    clearFeedback()
     try {
       const saved = await frontendWorkshopImageHostingService.saveSelfHostedConfiguration({
         origin: selfHostedOrigin.value,
@@ -759,14 +1007,14 @@ export function useImageGenerationApp() {
         : '自建图床仅在本次打开期间连接。'
     } catch (cause) {
       selfHostedReady.value = false
-      error.value = cause instanceof Error ? cause.message : '自建图床连接无效。'
+      reportError(cause, '自建图床连接保存失败')
     }
   }
 
   async function hostResult(): Promise<void> {
-    if (!result.value || hostingBusy.value || busy.value) return
+    if (!result.value || hostingBusy.value || busy.value || resultBusy.value) return
     hostingBusy.value = true
-    error.value = ''
+    clearFeedback()
     try {
       const candidate = currentCandidate.value!
       const image = candidate.image
@@ -784,13 +1032,14 @@ export function useImageGenerationApp() {
       candidate.hostedUrl = hosted.url
       notice.value = '已生成稳定 HTTPS 直链，并同步记录到生图相册。'
     } catch (cause) {
-      error.value = cause instanceof Error ? cause.message : '图片托管失败。'
+      reportError(cause, '获取图片直链失败')
     } finally {
       hostingBusy.value = false
     }
   }
 
   onUnmounted(() => {
+    disposed = true
     generationController?.abort()
     flushDraft()
     for (const image of inputImages.value) URL.revokeObjectURL(image.url)
@@ -801,6 +1050,19 @@ export function useImageGenerationApp() {
     previewMeta,
     provider,
     busy,
+    resultBusy,
+    feedbackError,
+    clearFeedback,
+    openSection,
+    sizeOptions,
+    imageEditReady,
+    officialOpenAiConnection,
+    relayModelProfile,
+    OPENAI_IMAGE_MODEL_PROFILES,
+    resultEditReady,
+    maskReady,
+    reportPreviewFailure,
+    generateAnother,
     chooseProvider,
     providerLabel,
     config,
@@ -811,7 +1073,6 @@ export function useImageGenerationApp() {
     internalTab,
     selectTab,
     prompt,
-    appendPrompt,
     notice,
     capabilities,
     imageText,
@@ -867,7 +1128,6 @@ export function useImageGenerationApp() {
     candidates,
     candidateIndex,
     hostingBusy,
-    getImageGenerationCapabilities,
     assetName,
     category,
     albumSaved,

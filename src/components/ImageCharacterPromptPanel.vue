@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { toRef, type ShallowUnwrapRef } from 'vue'
 import type { useImageGenerationApp } from '../composables/UseImageGenerationApp'
+import {
+  NOVELAI_POSITION_GRID,
+  novelAiGridCoordinate,
+} from '../services/ImageGenerationCapabilities'
 
 type PanelModel = Pick<
   ShallowUnwrapRef<ReturnType<typeof useImageGenerationApp>>,
@@ -20,10 +24,17 @@ const addCharacter = toRef(input.model, 'addCharacter')
           <div class="title">角色 Prompt</div>
           <div class="note">每个角色独立描述、排除内容和位置。</div>
         </div>
-        <span class="chip">{{ characters.length }} / {{ capabilities.maxCharacters }}</span>
+        <span class="chip"
+          >{{ Math.min(characters.length, capabilities.maxCharacters) }} /
+          {{ capabilities.maxCharacters }}</span
+        >
       </div>
+      <p v-if="characters.length > capabilities.maxCharacters" class="note">
+        当前模型仅使用前
+        {{ capabilities.maxCharacters }} 个角色；其余角色保留在草稿中，切回支持的模型可继续使用。
+      </p>
       <section
-        v-for="(character, index) in characters"
+        v-for="(character, index) in characters.slice(0, capabilities.maxCharacters)"
         :key="index"
         class="card image-generation-entry"
       >
@@ -68,14 +79,22 @@ const addCharacter = toRef(input.model, 'addCharacter')
           ></template>
           <template v-else
             ><label
-              >横向位置<select v-model.number="character.x" class="select">
-                <option v-for="point in [0.1, 0.3, 0.5, 0.7, 0.9]" :key="point" :value="point">
+              >横向位置<select
+                :value="novelAiGridCoordinate(character.x)"
+                class="select"
+                @change="character.x = Number(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="point in NOVELAI_POSITION_GRID" :key="point" :value="point">
                   {{ point }}
                 </option>
               </select></label
             ><label
-              >纵向位置<select v-model.number="character.y" class="select">
-                <option v-for="point in [0.1, 0.3, 0.5, 0.7, 0.9]" :key="point" :value="point">
+              >纵向位置<select
+                :value="novelAiGridCoordinate(character.y)"
+                class="select"
+                @change="character.y = Number(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="point in NOVELAI_POSITION_GRID" :key="point" :value="point">
                   {{ point }}
                 </option>
               </select></label

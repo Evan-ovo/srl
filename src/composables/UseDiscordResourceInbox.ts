@@ -1,3 +1,4 @@
+import { requestWebBackgroundAudio } from '../services/WebBackgroundKeepAlive'
 import { Capacitor } from '@capacitor/core'
 import { onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
 import {
@@ -85,7 +86,7 @@ interface ActiveResource {
 export function useDiscordResourceInbox(
   vault: Ref<VaultStatus>,
   receive: (batch: SharedFileBatch) => void,
-  refreshNativeResources?: () => Promise<void>,
+  refreshNativeResources?: (ids?: string[]) => Promise<void>,
 ) {
   const active = new Map<string, ActiveResource>()
   const nativeReads = new Map<string, ReturnType<typeof readCloudDiscordResource>>()
@@ -211,6 +212,15 @@ export function useDiscordResourceInbox(
     void request(entry.automatic)
   }
 
+  function canConsumeNativeReceipt(entry: ActiveResource): boolean {
+    return (
+      !disposed &&
+      !vault.value.locked &&
+      targetCurrent(entry.target) &&
+      !entry.controller.signal.aborted
+    )
+  }
+
   async function finishNativeImport(
     entry: ActiveResource,
     outcome: NonNullable<
@@ -219,6 +229,7 @@ export function useDiscordResourceInbox(
   ): Promise<boolean> {
     if (!['imported', 'duplicate_file', 'duplicate_card'].includes(outcome.state ?? ''))
       return false
+    if (!canConsumeNativeReceipt(entry)) return true
     entry.nativeOutcome = outcome
     if (entry.imported) {
       // A later binding receipt releases the original staging without replaying the import.
@@ -232,14 +243,21 @@ export function useDiscordResourceInbox(
     // Publish committed local data before a slow/offline cloud acknowledgement.
     if (refreshNativeResources) {
       try {
-        await refreshNativeResources()
+        const resourceId = outcome.resourceId?.trim()
+        if (resourceId) await refreshNativeResources([resourceId])
+        else await refreshNativeResources()
       } catch {
-        noticeCenter.push({
-          id: 'discord-native-library-refresh',
-          type: 'warning',
-          message: '后台导入已完成，但资源列表刷新失败；请重新打开资源库查看。',
-        })
+        if (canConsumeNativeReceipt(entry))
+          noticeCenter.push({
+            id: 'discord-native-library-refresh',
+            type: 'warning',
+            message: '后台导入已完成，但资源列表刷新失败；请重新打开资源库查看。',
+          })
       }
+    }
+    if (!canConsumeNativeReceipt(entry)) {
+      entry.imported = false
+      return true
     }
     taskCenter.complete(entry.taskId)
     taskCenter.dismiss(entry.taskId)
@@ -616,6 +634,7 @@ export function useDiscordResourceInbox(
     taskCenter.start({
       operationId: taskId,
       name: `云端资源：${job.name}`,
+      keepAlive: true,
       phase,
       background: true,
       action: {
@@ -743,6 +762,10 @@ export function useDiscordResourceInbox(
       // Native staging checks the stored worker/library and payload size before returning a file.
       // A completed file must not wait for the separate network queue/progress acknowledgement.
       const result = await readNativeResource(id, target)
+      if (disposed || vault.value.locked || !targetCurrent(target)) {
+        if (result.batch) releaseNativeClaim(result.batch)
+        return
+      }
       if (
         result.nativeImportOutcome?.state === 'imported' ||
         result.nativeImportOutcome?.state === 'duplicate_file' ||
@@ -756,10 +779,6 @@ export function useDiscordResourceInbox(
         return
       }
       if (!result.batch?.files.length) return
-      if (disposed || vault.value.locked || !targetCurrent(target)) {
-        releaseNativeClaim(result.batch)
-        return
-      }
       const existing = active.get(id)
       const entry = existing ?? createEntry({ id, name: result.batch.files[0]!.name }, target, true)
       if (entry && targetCurrent(entry.target)) deliver(entry, result.batch)
@@ -818,7 +837,9 @@ export function useDiscordResourceInbox(
     requestedAutomatic = automatic
     if (running || disposed) return
     running = true
+    let releaseAudio = () => undefined as void
     try {
+      if (!automatic) releaseAudio = await requestWebBackgroundAudio('下载收件资源')
       await initializeVaultOnce()
       do {
         requested = false
@@ -920,6 +941,7 @@ export function useDiscordResourceInbox(
         }),
       )
     } finally {
+      releaseAudio()
       running = false
       changed()
     }

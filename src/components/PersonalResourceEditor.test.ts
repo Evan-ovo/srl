@@ -19,6 +19,7 @@ vi.mock('../services/SecretResourceService', () => ({ secretResourceService: moc
 vi.mock('../core/NativeSecurity', () => ({ isNativeSecurityAvailable: () => false }))
 vi.mock('../composables/UseConfirmDialog', () => ({ confirmAction: mocks.confirm }))
 import PersonalResourceEditor from './PersonalResourceEditor.vue'
+import { File as NodeFile } from 'node:buffer'
 enableAutoUnmount(afterEach)
 const resource = { id: 'saved-id', name: '旧资源' } as Resource
 const document = (
@@ -48,6 +49,52 @@ const mountEditor = (kind: PersonalResourceDocument['kind'], existing = true) =>
     props: { kind, resource: existing ? resource : undefined },
     global: { stubs: { Teleport: true } },
   })
+it('imports TXT into an editable draft, fills an empty name, and saves only on explicit save', async () => {
+  const w = mountEditor('extraStory', false)
+  await flushPromises()
+  expect(button(w, '导入 TXT/Word')).toBeTruthy()
+  const input = w.get('input[type="file"][aria-label="导入 TXT/Word 文件"]')
+  expect(input.attributes('accept')).toContain('.docx')
+  expect(input.attributes('accept')).toContain('.doc,')
+  Object.defineProperty(input.element, 'files', {
+    configurable: true,
+    value: [new NodeFile(['导入的正文\n{{user}}'], '示例.txt')],
+  })
+  await input.trigger('change')
+  await flushPromises()
+  expect((w.get('textarea').element as HTMLTextAreaElement).value).toBe('导入的正文\n{{user}}')
+  expect((w.get('input[required]').element as HTMLInputElement).value).toBe('示例')
+  expect(mocks.save).not.toHaveBeenCalled()
+  await w.get('form').trigger('submit')
+  await flushPromises()
+  expect(mocks.save).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'extraStory', text: '导入的正文\n{{user}}', name: '示例' }),
+    expect.any(Map),
+    undefined,
+  )
+})
+it('preserves existing draft on rejected replacement or extraction failure', async () => {
+  const w = mountEditor('extraStory', false)
+  await flushPromises()
+  await w.get('textarea').setValue('原草稿')
+  mocks.confirm.mockResolvedValueOnce(false)
+  const input = w.get('input[type="file"][aria-label="导入 TXT/Word 文件"]')
+  Object.defineProperty(input.element, 'files', {
+    configurable: true,
+    value: [new NodeFile(['新正文'], 'new.txt')],
+  })
+  await input.trigger('change')
+  await flushPromises()
+  expect((w.get('textarea').element as HTMLTextAreaElement).value).toBe('原草稿')
+  Object.defineProperty(input.element, 'files', {
+    configurable: true,
+    value: [new NodeFile(['broken'], 'bad.doc')],
+  })
+  await input.trigger('change')
+  await flushPromises()
+  expect((w.get('textarea').element as HTMLTextAreaElement).value).toBe('原草稿')
+  expect(mocks.save).not.toHaveBeenCalled()
+})
 it('opens reactive pocket-phone metadata and cancels edits without changing its saved source', async () => {
   const saved = reactive(document('pocketPhone'))
   mocks.read.mockResolvedValue(saved)

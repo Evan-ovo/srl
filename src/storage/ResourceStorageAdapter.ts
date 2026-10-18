@@ -37,6 +37,7 @@ export interface ChatReadPositionCache {
 export interface ResourceListSummaryFilter {
   types?: readonly ResourceType[]
   ids?: readonly string[]
+  categoryId?: string
 }
 
 export interface ResourceStorageAdapter {
@@ -51,6 +52,8 @@ export interface ResourceStorageAdapter {
   listResourceListSummaries?(filter?: ResourceListSummaryFilter): Promise<ResourceListSummary[]>
   /** Targeted lightweight reads for settling a completed logical import batch. */
   getResourceListSummary?(id: string): Promise<ResourceListSummary | undefined>
+  /** Committed list rows only, with the same missing-row semantics as the single read. */
+  getResourceListSummaries?(ids: readonly string[]): Promise<ResourceListSummary[]>
   /** Bounded newest-first character-card summaries for inbox auto-binding only. */
   listRecentCharacterCardSummaries?(limit?: number): Promise<ResourceListSummary[]>
   /** Current gallery images; same-type scope also supplies shared category candidates. */
@@ -58,6 +61,7 @@ export interface ResourceStorageAdapter {
     ownerId: string,
     includeSameType?: boolean,
   ): Promise<ResourceListSummary[]>
+  listAttachmentListSummaries?(ownerId: string): Promise<ResourceListSummary[]>
   getThumbnail?(id: string): Promise<Blob | undefined>
   repairThumbnailAssets?(): Promise<number>
   getMissingPngThumbnailRepairStatus?(): Promise<MissingPngThumbnailRepairStatus>
@@ -99,8 +103,10 @@ export interface ResourceStorageAdapter {
   updateVersion(versionId: string, changes: Partial<Resource>): Promise<void>
   deleteVersion(versionId: string): Promise<void>
   save(resource: Resource): Promise<void>
+  /** Atomically insert one resource; false leaves an occupied ID and both indexes unchanged. */
+  insertIfAbsent?(resource: Resource): Promise<boolean>
   saveMany(resources: Resource[]): Promise<void>
-  update(id: string, changes: Partial<Resource>): Promise<void>
+  update(id: string, changes: Partial<Resource>, expectedContentHash?: string): Promise<void>
   updateMany(ids: string[], changes: Partial<Resource>): Promise<void>
   delete(id: string): Promise<void>
   deleteMany(

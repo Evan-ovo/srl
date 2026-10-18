@@ -11,6 +11,7 @@ import { isNativeFileExportAvailable, saveBlobToNativeDestination } from '../cor
 import type {
   GeneratedImageAlbumItem,
   GeneratedImageAlbumPage,
+  GeneratedImageAlbumQuery,
   GeneratedImageHostedStatus,
   GeneratedImageHostingMode,
 } from '../types/GeneratedImageAlbum'
@@ -64,6 +65,13 @@ let searchTimer: number | undefined
 let swipeStartX = 0
 let detailTrigger: HTMLElement | null = null
 const PREVIEW_CONCURRENCY = 4
+let disposed = false
+let detailRequest = 0
+let preparingPreviewUrls: Map<string, string> | undefined
+let pageRequest = 0
+let requestedPage = 1
+let pendingPage: { query: GeneratedImageAlbumQuery; request: number } | undefined
+let pageLoad: Promise<void> | undefined
 
 const selectedItem = computed(() => page.value.items.find((item) => item.id === selectedId.value))
 const selectedIndex = computed(() =>
@@ -75,29 +83,37 @@ const canShowNext = computed(
 )
 const canSaveToPhone = computed(() => isNativeFileExportAvailable())
 
+function revokeUrls(urls: Map<string, string>): void {
+  urls.forEach((url) => URL.revokeObjectURL(url))
+  urls.clear()
+}
+
 function revokePreviewUrls(): void {
-  previewUrls.value.forEach((url) => URL.revokeObjectURL(url))
+  revokeUrls(previewUrls.value)
   previewUrls.value = new Map()
 }
 
 function revokeSelectedUrl(): void {
+  detailRequest++
   if (selectedUrl.value) URL.revokeObjectURL(selectedUrl.value)
   selectedUrl.value = ''
 }
 
-async function loadPreviewUrls(items: GeneratedImageAlbumItem[]): Promise<Map<string, string>> {
+async function loadPreviewUrls(
+  items: GeneratedImageAlbumItem[],
+  current: () => boolean,
+): Promise<Map<string, string>> {
   const urls = new Map<string, string>()
+  preparingPreviewUrls = urls
   let nextIndex = 0
   const worker = async () => {
-    while (nextIndex < items.length) {
+    while (current() && nextIndex < items.length) {
       const item = items[nextIndex]
       nextIndex += 1
       if (!item) continue
       try {
-        urls.set(
-          item.id,
-          URL.createObjectURL(await generatedImageAlbumService.getPreviewBlob(item.id)),
-        )
+        const blob = await generatedImageAlbumService.getPreviewBlob(item.id)
+        if (current()) urls.set(item.id, URL.createObjectURL(blob))
       } catch {
         // 单张损坏时保留其他图片可用，卡片会显示占位信息。
       }
@@ -106,15 +122,16 @@ async function loadPreviewUrls(items: GeneratedImageAlbumItem[]): Promise<Map<st
   await Promise.all(
     Array.from({ length: Math.min(PREVIEW_CONCURRENCY, items.length) }, () => worker()),
   )
+  if (preparingPreviewUrls === urls) preparingPreviewUrls = undefined
   return urls
 }
 
-async function loadPage(targetPage = page.value.page): Promise<void> {
-  if (loading.value) return
-  loading.value = true
-  error.value = ''
-  try {
-    const result = await generatedImageAlbumService.list({
+function loadPage(targetPage = requestedPage): Promise<void> {
+  if (disposed) return Promise.resolve()
+  requestedPage = targetPage
+  pendingPage = {
+    request: ++pageRequest,
+    query: {
       search: search.value,
       mimeType: mimeType.value,
       category: category.value,
@@ -122,34 +139,73 @@ async function loadPage(targetPage = page.value.page): Promise<void> {
       sort: sort.value,
       page: targetPage,
       pageSize: page.value.pageSize,
+    },
+  }
+  if (preparingPreviewUrls) revokeUrls(preparingPreviewUrls)
+  error.value = ''
+  if (!pageLoad) {
+    loading.value = true
+    pageLoad = Promise.resolve().then(async () => {
+      try {
+        while (!disposed && pendingPage) {
+          const next = pendingPage
+          pendingPage = undefined
+          await loadPageRequest(next.query, next.request)
+        }
+      } finally {
+        pageLoad = undefined
+        loading.value = false
+      }
     })
-    revokePreviewUrls()
-    previewUrls.value = await loadPreviewUrls(result.items)
+  }
+  return pageLoad
+}
+
+async function loadPageRequest(query: GeneratedImageAlbumQuery, request: number): Promise<void> {
+  const current = () => !disposed && request === pageRequest
+  try {
+    if (searchTimer !== undefined && search.value === query.search) {
+      window.clearTimeout(searchTimer)
+      searchTimer = undefined
+    }
+    const result = await generatedImageAlbumService.list(query)
+    if (!current()) return
+    const urls = await loadPreviewUrls(result.items, current)
+    if (!current()) {
+      revokeUrls(urls)
+      return
+    }
+    const previousUrls = previewUrls.value
+    previewUrls.value = urls
     page.value = result
+    requestedPage = result.page
+    revokeUrls(previousUrls)
     if (selectedId.value && !result.items.some((item) => item.id === selectedId.value))
       closeDetail()
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '相册暂时无法读取'
-  } finally {
-    loading.value = false
+    if (current()) error.value = cause instanceof Error ? cause.message : '相册暂时无法读取'
   }
 }
 
 async function openDetail(item: GeneratedImageAlbumItem, event?: MouseEvent): Promise<void> {
+  if (disposed) return
   const trigger = event?.currentTarget
   if (trigger instanceof HTMLElement) detailTrigger = trigger
   revokeSelectedUrl()
+  const request = detailRequest
   selectedId.value = item.id
   detailName.value = item.name
   detailCategory.value = item.category
   try {
-    selectedUrl.value = URL.createObjectURL(
-      await generatedImageAlbumService.getOriginalBlob(item.id),
-    )
+    const blob = await generatedImageAlbumService.getOriginalBlob(item.id)
+    if (disposed || request !== detailRequest) return
+    selectedUrl.value = URL.createObjectURL(blob)
     await nextTick()
-    detailCloseButton.value?.focus({ preventScroll: true })
+    if (!disposed && request === detailRequest)
+      detailCloseButton.value?.focus({ preventScroll: true })
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '原图暂时无法打开'
+    if (!disposed && request === detailRequest)
+      error.value = cause instanceof Error ? cause.message : '原图暂时无法打开'
   }
 }
 
@@ -191,7 +247,7 @@ async function saveDetails(): Promise<void> {
   try {
     await generatedImageAlbumService.updateDetails(item.id, detailName.value, detailCategory.value)
     notice.value = '图片名称和分类已保存。'
-    await loadPage(page.value.page)
+    await loadPage()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '保存失败'
   } finally {
@@ -270,7 +326,7 @@ async function deleteSelfHostedCopy(item: GeneratedImageAlbumItem): Promise<void
     })
     await generatedImageAlbumService.clearHostedUrl(item.id)
     notice.value = '自建图床文件已永久删除，本地原图仍保留在相册。'
-    await loadPage(page.value.page)
+    await loadPage()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '自建图床删除失败'
   } finally {
@@ -293,7 +349,7 @@ async function deleteItem(item: GeneratedImageAlbumItem): Promise<void> {
     await generatedImageAlbumService.delete(item.id)
     closeDetail()
     notice.value = '本地相册图片已删除。'
-    await loadPage(page.value.page)
+    await loadPage()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '删除失败'
   } finally {
@@ -388,19 +444,26 @@ function handleSettingsBack(event: Event): void {
 watch([mimeType, category, sort, hostedStatus], () => void loadPage(1))
 watch(search, () => {
   window.clearTimeout(searchTimer)
-  searchTimer = window.setTimeout(() => void loadPage(1), 220)
+  searchTimer = window.setTimeout(() => {
+    searchTimer = undefined
+    void loadPage(1)
+  }, 220)
 })
 
 onMounted(async () => {
   document.addEventListener('keydown', handleEscape)
   window.addEventListener(SRL_BACK_REQUEST_EVENT, handleSettingsBack, true)
   await loadPage(1)
+  if (disposed) return
 })
 
 onUnmounted(() => {
+  disposed = true
+  pendingPage = undefined
   document.removeEventListener('keydown', handleEscape)
   window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleSettingsBack, true)
   window.clearTimeout(searchTimer)
+  if (preparingPreviewUrls) revokeUrls(preparingPreviewUrls)
   revokePreviewUrls()
   revokeSelectedUrl()
 })

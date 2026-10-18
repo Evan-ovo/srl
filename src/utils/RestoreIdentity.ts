@@ -1,5 +1,9 @@
 import { isRecord } from './UnknownValue'
-import { isResourceGalleryImage, galleryOwnerId } from '../types/ResourceGallery'
+import {
+  isResourceAttachment,
+  isResourceOwnedFile,
+  resourceOwnedFileOwnerId,
+} from '../types/ResourceAttachment'
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { canonicalizeCardJson } from './CharacterCardFingerprint'
@@ -18,8 +22,8 @@ function avatarOwners(resources: ResourceSummary[]): Map<string, string[]> {
     owners.set(avatar, hashes)
   }
   for (const resource of resources) {
-    if (isResourceGalleryImage(resource)) {
-      const owner = byId.get(galleryOwnerId(resource))
+    if (isResourceOwnedFile(resource)) {
+      const owner = byId.get(resourceOwnedFileOwnerId(resource))
       if (owner) add(resource.id, owner)
     }
     for (const id of resource.relatedResourceIds ?? []) {
@@ -52,12 +56,14 @@ export class RestoreDuplicateIndex {
 
   private key(resource: ResourceSummary, owners: Map<string, string[]>): string {
     const hash = resource.contentHash.toLowerCase()
-    if (isResourceGalleryImage(resource)) {
+    if (isResourceOwnedFile(resource)) {
       return JSON.stringify([
-        'resource-gallery',
+        isResourceAttachment(resource) ? 'resource-attachment' : 'resource-gallery',
         hash,
-        owners.get(resource.id) ?? galleryOwnerId(resource),
-        resource.metadata.galleryImageIdentity ?? resource.id,
+        owners.get(resource.id) ?? resourceOwnedFileOwnerId(resource),
+        resource.metadata.attachmentIdentity ??
+          resource.metadata.galleryImageIdentity ??
+          resource.id,
       ])
     }
     if (resource.type === RESOURCE_TYPE.CHAT) {

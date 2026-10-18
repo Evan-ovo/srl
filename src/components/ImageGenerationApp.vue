@@ -26,7 +26,6 @@ const {
   internalTab,
   selectTab,
   prompt,
-  appendPrompt,
   notice,
   capabilities,
   imageText,
@@ -71,7 +70,19 @@ const {
   useTemplate,
   overwriteTemplate,
   deleteTemplate,
-  error,
+  feedbackError,
+  clearFeedback,
+  openSection,
+  resultBusy,
+  sizeOptions,
+  imageEditReady,
+  officialOpenAiConnection,
+  relayModelProfile,
+  OPENAI_IMAGE_MODEL_PROFILES,
+  resultEditReady,
+  maskReady,
+  reportPreviewFailure,
+  generateAnother,
   canGenerate,
   generate,
   result,
@@ -80,7 +91,6 @@ const {
   candidates,
   candidateIndex,
   hostingBusy,
-  getImageGenerationCapabilities,
   assetName,
   category,
   albumSaved,
@@ -107,59 +117,58 @@ const {
   >
     <FeatureAppHeader
       title="AI 生图"
-      @back="section === 'generate' ? $emit('back') : (section = 'generate')"
+      layout="panel"
+      @back="
+        section === 'generate'
+          ? $emit('back')
+          : openSection(section === 'cloud' ? 'result' : 'generate')
+      "
     >
       <template #actions
         ><button
           class="btn"
           type="button"
-          @click="section = section === 'generate' ? 'result' : 'generate'"
+          :disabled="busy || hostingBusy || resultBusy || (!result && section === 'generate')"
+          @click="openSection(section === 'generate' ? 'result' : 'generate')"
         >
-          {{ section === 'generate' ? '结果' : '返回' }}</button
+          {{ section === 'generate' ? '看图' : '创作' }}</button
         ><button class="btn" type="button" @click="$emit('open-album')">相册</button></template
       >
     </FeatureAppHeader>
     <main v-if="section === 'generate' || section === 'connection'" class="shell">
-      <section class="panel editor">
-        <div class="mobile-preview">
-          <img v-if="resultUrl" class="mini-art" :src="resultUrl" alt="当前预览" />
-          <div v-else class="mini-art" aria-hidden="true"></div>
-          <div class="mini-copy">
-            <div class="mini-title">当前预览</div>
-            <div class="mini-meta">{{ previewMeta }}</div>
-          </div>
-          <button class="btn" type="button" @click="section = 'result'">展开</button>
-        </div>
+      <section class="panel editor" :class="{ 'is-connection': section === 'connection' }">
         <div class="providerbar">
-          <div class="provider-switch image-generation-provider__switch">
-            <button
-              v-for="item in ['novelai', 'openai'] as const"
-              :key="item"
-              class="provider-btn"
-              type="button"
-              :disabled="busy"
-              :class="{ active: provider === item }"
-              @click="chooseProvider(item)"
-            >
-              {{ providerLabel(item) }}
-            </button>
-          </div>
-          <div class="modelbox">
-            <select
-              v-model="config[provider].model"
-              class="select"
-              aria-label="模型列表"
-              :disabled="busy"
-              @change="applyModelMetadata"
-            >
-              <option v-for="model in visibleModels" :key="model.id" :value="model.id">
-                {{ model.name }}
-              </option>
-            </select>
-            <button class="btn" type="button" @click="section = 'connection'">模型 / 连接</button>
-          </div>
+          <select
+            v-model="config[provider].model"
+            class="select"
+            aria-label="模型列表"
+            :disabled="busy || hostingBusy || resultBusy"
+            @change="applyModelMetadata"
+          >
+            <option v-for="model in visibleModels" :key="model.id" :value="model.id">
+              {{ model.name }}
+            </option>
+          </select>
+          <button
+            class="btn"
+            type="button"
+            :disabled="busy || hostingBusy || resultBusy"
+            @click="openSection(section === 'connection' ? 'generate' : 'connection')"
+          >
+            {{
+              section === 'connection'
+                ? '完成'
+                : config[provider].apiKey.trim()
+                  ? '连接设置'
+                  : '配置连接'
+            }}
+          </button>
         </div>
-        <nav class="tabs" aria-label="供应商功能">
+        <nav
+          v-if="section !== 'connection' && internalTabs.length"
+          class="tabs"
+          aria-label="供应商功能"
+        >
           <button
             v-for="item in internalTabs"
             :key="item.id"
@@ -171,10 +180,14 @@ const {
             {{ item.label }}
           </button>
         </nav>
-        <section class="scroll image-generation-controls">
-          <template v-if="section === 'generate'">
+        <fieldset
+          class="scroll image-generation-controls"
+          :class="{ 'is-prompt': section === 'generate' && internalTab === 'prompt' }"
+          :disabled="busy || hostingBusy || resultBusy"
+        >
+          <template v-if="section === 'generate' && capabilities.textToImage === 'supported'">
             <template v-if="internalTab === 'prompt'">
-              <div class="section">
+              <div class="section prompt-main">
                 <div class="head">
                   <div>
                     <div class="title">画面描述</div>
@@ -193,103 +206,67 @@ const {
                   aria-label="画面描述"
                   placeholder="描述你想生成的画面"
                 ></textarea>
-                <div class="chips">
+                <div class="quick-sizes" aria-label="画面尺寸">
                   <button
-                    v-for="fragment in ['电影感灯光', '半身构图', '低饱和色彩']"
-                    :key="fragment"
-                    class="chip"
+                    v-for="size in sizeOptions"
+                    :key="size"
+                    class="size-choice"
                     type="button"
-                    @click="appendPrompt(fragment)"
+                    :aria-pressed="openAiSize === size"
+                    @click="((openAiSize = size), clearFeedback())"
                   >
-                    + {{ fragment }}</button
-                  ><button
-                    class="chip"
-                    type="button"
-                    @click="
-                      notice = prompt.trim()
-                        ? `当前 Prompt 共 ${prompt.length} 字，请检查主体和构图是否清晰。`
-                        : '请先填写画面描述。'
-                    "
-                  >
-                    检查 Prompt
+                    <span>{{
+                      Number(size.split('x')[0]) < Number(size.split('x')[1])
+                        ? '竖图'
+                        : Number(size.split('x')[0]) > Number(size.split('x')[1])
+                          ? '横图'
+                          : '方图'
+                    }}</span>
+                    <small>{{ size.replace('x', ' × ') }}</small>
                   </button>
                 </div>
               </div>
-              <div v-if="capabilities.textRendering === 'supported'" class="section">
-                <div class="head">
-                  <div>
-                    <div class="title">图片中的文字</div>
-                    <div class="note">
-                      作为提示词编译；填写后 NAI 自动关闭含 no text 的质量预设。
+              <details v-if="capabilities.textRendering === 'supported'" class="section">
+                <summary>图片中的文字</summary>
+                <div class="adv">
+                  <div class="head">
+                    <div>
+                      <div class="note">
+                        作为提示词编译；填写后 NAI 自动关闭含 no text 的质量预设。
+                      </div>
                     </div>
                   </div>
-                </div>
-                <input
-                  v-model="imageText"
-                  class="input"
-                  aria-label="图片中的文字"
-                  placeholder="例如：今夜营业"
-                />
-              </div>
-              <div v-if="provider === 'openai'" class="section">
-                <div class="head">
-                  <div>
-                    <div class="title">结构化辅助</div>
-                    <div class="note">可选，作为 Prompt 编译辅助。</div>
-                  </div>
-                </div>
-                <div class="row2">
                   <input
-                    v-for="(_, key) in promptHints"
-                    :key="key"
-                    v-model="promptHints[key]"
+                    v-model="imageText"
                     class="input"
-                    :aria-label="key"
-                    :placeholder="`${key}：可选补充描述`"
+                    aria-label="图片中的文字"
+                    placeholder="例如：今夜营业"
                   />
                 </div>
-              </div>
-              <div v-if="provider !== 'openai'" class="workspace-notice">
-                {{ capabilities.notes.join(' ') }}
-              </div>
+              </details>
+              <details v-if="provider === 'openai'" class="section">
+                <summary>补充人物、场景与风格</summary>
+                <div class="adv">
+                  <div class="head">
+                    <div>
+                      <div class="note">可选，作为 Prompt 编译辅助。</div>
+                    </div>
+                  </div>
+                  <div class="row2">
+                    <input
+                      v-for="(_, key) in promptHints"
+                      :key="key"
+                      v-model="promptHints[key]"
+                      class="input"
+                      :aria-label="key"
+                      :placeholder="`${key}：可选补充描述`"
+                    />
+                  </div>
+                </div>
+              </details>
             </template>
             <ImageCharacterPromptPanel :model="panelModel" />
-            <template v-if="provider === 'novelai' && internalTab === 'reference'">
-              <div class="section">
-                <div class="head">
-                  <div>
-                    <div class="title">添加参考图</div>
-                    <div class="note">官方模型能力与项目接通状态分别显示。</div>
-                  </div>
-                </div>
-                <div class="dropzone">项目参考图请求链尚未接通，暂不能上传。</div>
-              </div>
-              <div class="ref-grid">
-                <div class="ref">
-                  <div class="thumb"></div>
-                  <strong>Vibe Transfer</strong>
-                  <div class="small">
-                    {{
-                      capabilities.vibeTransfer === 'supported'
-                        ? '官方支持，但项目当前尚未接通'
-                        : '当前模型不支持'
-                    }}
-                  </div>
-                </div>
-                <div class="ref">
-                  <div class="thumb"></div>
-                  <strong>Precise Reference</strong>
-                  <div class="small">
-                    {{
-                      capabilities.preciseReference === 'supported'
-                        ? '官方支持，但项目当前尚未接通'
-                        : '当前模型不支持'
-                    }}
-                  </div>
-                </div>
-              </div>
-            </template>
-            <template v-if="provider === 'openai' && internalTab === 'reference'">
+            <template v-if="provider === 'openai' && imageEditReady && internalTab === 'reference'">
               <div class="section">
                 <div class="head">
                   <div>
@@ -304,7 +281,9 @@ const {
                   "
                   class="dropzone"
                   >上传参考图（{{
-                    capabilities.multiImage === 'supported' ? '最多 16 张' : '单张'
+                    capabilities.multiImage === 'supported'
+                      ? `最多 ${capabilities.maxInputImages} 张`
+                      : '单张'
                   }}）<input
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
@@ -317,7 +296,7 @@ const {
               </div>
               <div class="ref-grid">
                 <article
-                  v-for="(image, index) in inputImages"
+                  v-for="(image, index) in inputImages.slice(0, capabilities.maxInputImages)"
                   :key="image.url"
                   class="ref image-generation-entry"
                 >
@@ -335,13 +314,13 @@ const {
                 </article>
               </div>
             </template>
-            <template v-if="provider === 'openai' && internalTab === 'edit'">
+            <template v-if="provider === 'openai' && imageEditReady && internalTab === 'reference'">
               <template v-if="capabilities.imageEdit === 'supported'">
                 <div class="section">
                   <div class="head">
                     <div>
                       <div class="title">编辑当前图片</div>
-                      <div class="note">告诉 GPT 只修改什么。</div>
+                      <div class="note">先添加上方原图，再填写希望修改的内容。</div>
                     </div>
                   </div>
                   <textarea
@@ -351,41 +330,23 @@ const {
                     placeholder="例如：把人物外套改成白色，其他内容保持不变。"
                   ></textarea>
                 </div>
-                <div class="section">
-                  <div class="head">
-                    <div>
-                      <div class="title">保持不变</div>
-                      <div class="note">编译为提示词约束，不保证像素完全一致。</div>
+                <details class="section">
+                  <summary>保持不变（可选）</summary>
+                  <div class="adv">
+                    <div class="head">
+                      <div>
+                        <div class="title">保持不变（可选）</div>
+                        <div class="note">编译为提示词约束，不保证像素完全一致。</div>
+                      </div>
                     </div>
+                    <label v-for="(label, key) in preserveLabels" :key="key" class="switch-row"
+                      ><span>保持{{ label }}</span
+                      ><input v-model="preserve[key]" class="switch" type="checkbox"
+                    /></label>
                   </div>
-                  <label v-for="(label, key) in preserveLabels" :key="key" class="switch-row"
-                    ><span>保持{{ label }}</span
-                    ><input v-model="preserve[key]" class="switch" type="checkbox"
-                  /></label>
-                </div>
-                <div class="section">
-                  <div class="title">快捷编辑</div>
-                  <div class="chips">
-                    <button
-                      v-for="instruction in [
-                        '改衣服',
-                        '改背景',
-                        '改表情',
-                        '去掉物体',
-                        '添加物体',
-                        '修文字',
-                      ]"
-                      :key="instruction"
-                      class="chip"
-                      type="button"
-                      @click="editInstruction = `${instruction}：`"
-                    >
-                      {{ instruction }}
-                    </button>
-                  </div>
-                </div>
-                <details v-if="capabilities.mask === 'supported'">
-                  <summary>Mask（可选）</summary>
+                </details>
+                <details v-if="maskReady">
+                  <summary>局部修改遮罩（Mask）</summary>
                   <div class="adv">
                     <label
                       >与第一张 PNG 同尺寸、带透明通道<input
@@ -402,6 +363,21 @@ const {
             </template>
             <template v-if="internalTab === 'settings'">
               <template v-if="provider === 'novelai'">
+                <details
+                  v-if="
+                    capabilities.vibeTransfer === 'supported' ||
+                    capabilities.preciseReference === 'supported'
+                  "
+                  class="section"
+                >
+                  <summary>参考图能力说明</summary>
+                  <div class="adv note">
+                    当前项目尚未接通 NovelAI 的 Vibe Transfer{{
+                      capabilities.preciseReference === 'supported' ? ' 与 Precise Reference' : ''
+                    }}
+                    请求，暂不提供上传；可继续使用文字和角色描述生成。
+                  </div>
+                </details>
                 <div class="section">
                   <div class="head">
                     <div>
@@ -423,19 +399,16 @@ const {
                         </option>
                       </select></label
                     ><label v-if="capabilities.qualityMode === 'supported'"
-                      >Quality Mode<select
+                      >质量预设<select
                         v-model="novelAiQualityMode"
                         class="select"
                         :disabled="Boolean(activeImageText)"
                       >
-                        <option value="off">Off</option>
-                        <option
-                          value="light"
-                          :disabled="!capabilities.qualityModes.includes('light')"
-                        >
-                          Light
+                        <option value="off">关闭</option>
+                        <option v-if="capabilities.qualityModes.includes('light')" value="light">
+                          轻量
                         </option>
-                        <option value="standard">Standard</option>
+                        <option value="standard">标准</option>
                       </select></label
                     >
                   </div>
@@ -447,18 +420,18 @@ const {
                   /></label>
                   <div class="row2 field-gap">
                     <label v-if="capabilities.seed === 'supported'"
-                      >Seed<input
+                      >种子（Seed，留空随机）<input
                         v-model.number="novelAiSeed"
                         class="input"
                         type="number"
                         min="0"
                         max="4294967295"
-                        placeholder="随机 Seed" /></label
+                        placeholder="每次随机；填入数值可锁定" /></label
                     ><label v-if="capabilities.ucPreset === 'supported'"
-                      >UC Preset<select v-model="novelAiUcPreset" class="select">
-                        <option value="none">None（手动排除内容）</option>
-                        <option value="heavy">Heavy</option>
-                        <option value="light">Light</option>
+                      >排除内容预设<select v-model="novelAiUcPreset" class="select">
+                        <option value="none">关闭（手动排除内容）</option>
+                        <option value="heavy">较强</option>
+                        <option value="light">较轻</option>
                       </select></label
                     >
                   </div>
@@ -475,6 +448,8 @@ const {
                           <option value="k_dpm_2">DPM2</option>
                           <option value="k_dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
                           <option value="k_dpmpp_sde">DPM++ SDE</option>
+                          <option value="k_dpm_fast">DPM Fast</option>
+                          <option value="ddim">DDIM</option>
                         </select></label
                       ><label v-if="capabilities.steps === 'supported'"
                         >Steps<input
@@ -515,7 +490,7 @@ const {
                         class="textarea"
                         rows="3"
                       ></textarea></label
-                    ><template v-if="capabilities.smea === 'supported'"
+                    ><template v-if="capabilities.smea === 'supported' && novelAiSampler !== 'ddim'"
                       ><label class="check"
                         ><input v-model="novelAiSmea" type="checkbox" />SMEA</label
                       ><label class="check"
@@ -576,29 +551,19 @@ const {
                   </div>
                 </div>
                 <div class="section">
-                  <label v-if="capabilities.background === 'supported'" class="switch-row"
-                    ><span>透明背景</span
-                    ><input
-                      class="switch"
-                      type="checkbox"
-                      :checked="openAiBackground === 'transparent'"
-                      @change="
-                        openAiBackground = ($event.target as HTMLInputElement).checked
-                          ? 'transparent'
-                          : 'auto'
-                      "
-                  /></label>
                   <div class="row2 image-generation-grid">
                     <label v-if="capabilities.outputFormat === 'supported'"
                       >格式<select v-model="outputFormat" class="select">
                         <option value="png">PNG</option>
                         <option value="webp">WebP</option>
                         <option
-                          value="jpeg"
-                          :disabled="
-                            openAiBackground === 'transparent' &&
-                            capabilities.background === 'supported'
+                          v-if="
+                            !(
+                              openAiBackground === 'transparent' &&
+                              capabilities.transparentBackground === 'supported'
+                            )
                           "
+                          value="jpeg"
                         >
                           JPEG
                         </option>
@@ -606,55 +571,74 @@ const {
                     ><label
                       v-if="
                         capabilities.outputCompression === 'supported' &&
-                        capabilities.outputFormat === 'supported'
+                        capabilities.outputFormat === 'supported' &&
+                        outputFormat !== 'png'
                       "
                       >压缩<input
                         v-model.number="outputCompression"
                         class="input"
                         type="number"
                         min="0"
-                        max="100"
-                        :disabled="outputFormat === 'png'" /></label
+                        max="100" /></label
                     ><label v-if="capabilities.background === 'supported'"
                       >背景<select v-model="openAiBackground" class="select">
                         <option value="auto">Auto</option>
                         <option value="opaque">普通</option>
-                        <option value="transparent">透明</option>
+                        <option
+                          v-if="capabilities.transparentBackground === 'supported'"
+                          value="transparent"
+                        >
+                          透明
+                        </option>
                       </select></label
                     >
                   </div>
                   <div v-if="capabilities.background === 'supported'" class="workspace-notice">
-                    透明背景需要 PNG / WebP；JPEG 已禁用。PNG 不发送压缩参数。
+                    透明背景使用 PNG / WebP；PNG 不显示压缩选项。
                   </div>
                 </div>
               </template>
             </template>
-            <template v-if="internalTab === 'request'"
-              ><div class="section">
-                <div class="head">
-                  <div>
-                    <div class="title">请求预览</div>
-                    <div class="note">不显示 Authorization / API Key；与发送使用同一构造器。</div>
+            <details v-if="provider === 'openai' && internalTab === 'settings'" class="section">
+              <summary>接口高级选项与请求预览</summary>
+              <div class="adv">
+                <div class="section">
+                  <div class="head">
+                    <div>
+                      <div class="title">请求预览</div>
+                      <div class="note">不显示 Authorization / API Key；与发送使用同一构造器。</div>
+                    </div>
                   </div>
+                  <label
+                    >附加 JSON（仅私有字段）<textarea
+                      v-model="additionalJson"
+                      class="textarea"
+                      placeholder="例如：填写供应商文档确认的私有参数对象"
+                    ></textarea>
+                  </label>
                 </div>
-                <label
-                  >附加 JSON（仅私有字段）<textarea
-                    v-model="additionalJson"
-                    class="textarea"
-                    placeholder="例如：填写供应商文档确认的私有参数对象"
-                  ></textarea>
-                </label>
+                <pre v-if="!requestPreview.error" class="code">{{ requestPreview.text }}</pre>
               </div>
-              <p v-if="requestPreview.error" class="workspace-notice" role="alert">
-                {{ requestPreview.error }}
-              </p>
-              <pre v-else class="code">{{ requestPreview.text }}</pre>
-            </template>
+            </details>
           </template>
-          <template v-if="section === 'connection' || internalTab === 'connection'">
+          <template v-if="section === 'connection'">
             <div class="section image-generation-connection">
               <div class="head">
-                <div class="title">{{ providerLabel(provider) }} 连接</div>
+                <div class="title">连接设置</div>
+              </div>
+              <div class="provider-switch image-generation-provider__switch">
+                <button
+                  v-for="item in ['novelai', 'openai'] as const"
+                  :key="item"
+                  class="provider-btn"
+                  type="button"
+                  :disabled="busy || modelsBusy || hostingBusy || resultBusy"
+                  :aria-pressed="provider === item"
+                  :class="{ active: provider === item }"
+                  @click="(chooseProvider(item), openSection('connection'))"
+                >
+                  {{ providerLabel(item) }}
+                </button>
               </div>
               <div class="image-generation-connection__fields">
                 <label
@@ -693,6 +677,29 @@ const {
                     </button>
                   </div>
                 </label>
+                <template v-if="provider === 'openai' && !officialOpenAiConnection">
+                  <label
+                    >实际模型类型<select
+                      v-model="relayModelProfile"
+                      class="select"
+                      aria-label="实际模型类型"
+                      :disabled="busy || modelsBusy"
+                    >
+                      <option value="">其他 / 不确定（仅使用已确认能力）</option>
+                      <option
+                        v-for="profile in OPENAI_IMAGE_MODEL_PROFILES"
+                        :key="profile.id"
+                        :value="profile.id"
+                      >
+                        {{ profile.name }}
+                      </option>
+                    </select></label
+                  >
+                  <p class="note">
+                    按所选类型显示功能；发送的模型 ID
+                    保持上方填写的值。接口有差异时可展开下方单独调整。
+                  </p>
+                </template>
                 <details class="image-generation-connection__advanced">
                   <summary>
                     更多设置
@@ -720,16 +727,14 @@ const {
                 <button class="btn primary" type="button" :disabled="busy" @click="saveConnection">
                   保存连接
                 </button>
-                <p v-if="notice" class="workspace-notice" role="status">{{ notice }}</p>
-                <p v-if="error" class="workspace-notice error" role="alert">{{ error }}</p>
               </div>
             </div>
             <details
-              v-if="provider === 'openai'"
+              v-if="provider === 'openai' && !officialOpenAiConnection"
               class="section image-generation-connection__capabilities"
             >
               <summary>
-                兼容能力
+                单独调整能力
                 <span>{{
                   { basic: '基础兼容', enhanced: '增强兼容', editing: '完整图像编辑' }[
                     capabilities.compatibilityLevel
@@ -755,13 +760,17 @@ const {
                   <div>
                     <span>{{ capabilityLabels[key] }}</span
                     ><label
-                      v-if="!capabilities.sources[key] || capabilities.sources[key] === 'manual'"
+                      v-if="
+                        !capabilities.sources[key] ||
+                        capabilities.sources[key] === 'manual' ||
+                        capabilities.sources[key] === 'selection'
+                      "
                       class="check small"
                       ><input
                         type="checkbox"
                         :checked="capabilities[key] === 'supported'"
                         @change="confirmCapability(key, $event)"
-                      />我已确认（实验）</label
+                      />启用此能力</label
                     >
                     <div v-else class="small">
                       {{ capabilities.sources[key] === 'profile' ? '模型约束' : '接口声明' }}
@@ -783,7 +792,12 @@ const {
               </div>
             </details>
             <div class="workspace-notice">
-              {{ capabilities.notes.join(' ') || '模型参数按当前能力显示。' }}
+              {{
+                capabilities.notes.join(' ') ||
+                (officialOpenAiConnection
+                  ? '官方接口已按当前模型自动匹配功能，无需额外选择模型类型。'
+                  : '模型参数按当前能力显示。')
+              }}
             </div>
           </template>
           <details v-if="section !== 'connection' && internalTab === 'prompt'" class="section">
@@ -804,36 +818,31 @@ const {
               <button type="button" @click="deleteTemplate(template)">删除</button>
             </div>
           </details>
-          <p
-            v-if="notice && section !== 'connection' && internalTab !== 'connection'"
-            class="workspace-notice"
-            role="status"
+        </fieldset>
+        <footer v-if="section !== 'connection'" class="footerbar image-generation-generate-bar">
+          <span class="small">{{
+            busy ? '正在等待图片，可取消等待' : '生成会按供应商规则计费'
+          }}</span>
+          <button
+            v-if="capabilities.textToImage === 'supported'"
+            class="generate"
+            type="button"
+            :disabled="!canGenerate"
+            @click="generate"
           >
-            {{ notice }}
-          </p>
-          <p
-            v-if="error && section !== 'connection' && internalTab !== 'connection'"
-            class="workspace-notice error"
-            role="alert"
-          >
-            {{ error }}
-          </p>
-        </section>
-        <footer class="footerbar image-generation-generate-bar">
-          <div class="cost">
-            <strong>预计费用未知</strong
-            ><span class="small">{{
-              provider === 'novelai' ? '以 NovelAI 实际 Anlas 计费为准' : '以供应商实际计费为准'
-            }}</span>
-          </div>
-          <button class="generate" type="button" :disabled="!canGenerate" @click="generate">
-            {{ busy ? '取消生成' : '生成图片' }}
+            {{ busy ? '取消等待' : '生成图片' }}
           </button>
         </footer>
       </section>
       <aside class="panel preview">
         <div class="stage">
-          <img v-if="resultUrl" class="result-art" :src="resultUrl" alt="生成结果" />
+          <img
+            v-if="resultUrl"
+            class="result-art"
+            :src="resultUrl"
+            alt="生成结果"
+            @error="reportPreviewFailure"
+          />
           <div v-else class="art">预览区域</div>
         </div>
         <div class="preview-foot">
@@ -842,22 +851,13 @@ const {
             ><span>最近结果</span>
           </div>
           <div class="preview-actions">
-            <button class="btn" type="button" :disabled="!result" @click="reuseResult">
-              {{ result?.provider === 'novelai' ? '复用提示 / Seed' : '复用提示词' }}</button
-            ><button
+            <button
               class="btn"
               type="button"
-              :disabled="!result"
-              @click="result?.provider === 'novelai' ? reuseResult() : continueEditing()"
+              :disabled="!result || busy || hostingBusy || resultBusy"
+              @click="openSection('result')"
             >
-              {{ result?.provider === 'novelai' ? '继续生成' : '继续编辑' }}</button
-            ><button
-              class="btn primary"
-              type="button"
-              :disabled="!result"
-              @click="section = 'storage'"
-            >
-              保存
+              查看与保存
             </button>
           </div>
         </div>
@@ -865,18 +865,22 @@ const {
     </main>
     <section v-else-if="section === 'result'" class="panel secondary">
       <header>
-        <div><strong>生成结果</strong><small>当前结果可以继续保存或托管。</small></div>
+        <div>
+          <strong>生成结果</strong
+          ><small class="image-generation-result-meta">{{ previewMeta }}</small
+          ><small>未保存的结果仅在本次打开期间保留，请及时保存。</small>
+        </div>
       </header>
       <div v-if="resultUrl" class="stage image-generation-result">
-        <img :src="resultUrl" alt="生成结果" />
+        <img :src="resultUrl" alt="生成结果" @error="reportPreviewFailure" />
       </div>
       <div v-else class="image-generation-empty">还没有生成结果。</div>
       <nav v-if="candidates.length > 1" class="image-generation-actions" aria-label="生成候选">
         <button
           type="button"
           aria-label="上一张生成结果"
-          :disabled="candidateIndex === 0 || hostingBusy"
-          @click="candidateIndex--"
+          :disabled="candidateIndex === 0 || hostingBusy || resultBusy || busy"
+          @click="(candidateIndex--, clearFeedback())"
         >
           上一张
         </button>
@@ -884,60 +888,104 @@ const {
         <button
           type="button"
           aria-label="下一张生成结果"
-          :disabled="candidateIndex === candidates.length - 1 || hostingBusy"
-          @click="candidateIndex++"
+          :disabled="candidateIndex === candidates.length - 1 || hostingBusy || resultBusy || busy"
+          @click="(candidateIndex++, clearFeedback())"
         >
           下一张
         </button>
       </nav>
-      <div class="image-generation-actions">
-        <button type="button" @click="section = 'generate'">返回调整</button
-        ><button
-          v-if="
-            result &&
-            getImageGenerationCapabilities(
-              result.provider,
-              result.manifest?.model ?? '',
-              config[result.provider].relayCapabilities,
-              config[result.provider].endpoint,
-            ).imageEdit === 'supported'
-          "
+      <div v-if="result" class="image-generation-actions result-actions">
+        <button
+          class="btn"
           type="button"
+          :disabled="busy || hostingBusy || resultBusy"
+          @click="openSection('generate')"
+        >
+          调整描述
+        </button>
+        <button
+          class="btn"
+          type="button"
+          :disabled="busy || hostingBusy || resultBusy"
+          @click="reuseResult"
+        >
+          {{ result?.provider === 'novelai' ? '复用描述与种子' : '复用描述' }}
+        </button>
+        <button
+          v-if="resultEditReady"
+          class="btn"
+          type="button"
+          :disabled="busy || hostingBusy || resultBusy"
           @click="continueEditing"
         >
-          继续编辑</button
-        ><button type="button" :disabled="!result" @click="section = 'storage'">保存结果</button>
+          修改这张图
+        </button>
+        <button
+          class="btn primary"
+          type="button"
+          :disabled="albumSaved || resultBusy || hostingBusy || busy"
+          @click="saveToAlbum"
+        >
+          {{ albumSaved ? '已保存到生图相册' : resultBusy ? '处理中…' : '保存到生图相册' }}
+        </button>
       </div>
-    </section>
-
-    <section v-else-if="section === 'storage'" class="panel secondary">
-      <header>
-        <div><strong>存储</strong><small>统一保存到生图相册，供其他功能检索和复用。</small></div>
-      </header>
-      <button class="btn" type="button" @click="section = 'cloud'">云端生成直链</button>
-      <label
-        ><span>名称</span><input v-model="assetName" type="text" placeholder="图片名称"
-      /></label>
-      <label
-        ><span>分类</span
-        ><input v-model="category" type="text" placeholder="例如：背景、立绘、装饰"
-      /></label>
       <button
-        class="btn primary image-generation-primary"
+        v-if="result"
+        class="btn"
         type="button"
-        :disabled="!result || albumSaved"
-        @click="saveToAlbum"
+        :disabled="busy || hostingBusy || resultBusy"
+        @click="generateAnother"
       >
-        {{ albumSaved ? '已保存到生图相册' : '保存到生图相册' }}
+        {{ result?.provider === 'novelai' ? '再生成一张（随机种子）' : '再生成一张' }}
       </button>
-      <button class="btn" type="button" :disabled="!result || !canSaveToPhone" @click="saveToPhone">
-        保存到手机相册
-      </button>
+      <details v-if="result" class="result-more">
+        <summary>名称、分类与导出</summary>
+        <div class="adv">
+          <div class="row2">
+            <label
+              >名称<input
+                v-model="assetName"
+                class="input"
+                :disabled="albumSaved || resultBusy || hostingBusy"
+                placeholder="留空使用画面描述"
+            /></label>
+            <label
+              >分类<input
+                v-model="category"
+                class="input"
+                :disabled="albumSaved || resultBusy || hostingBusy"
+                placeholder="例如：背景、立绘"
+            /></label>
+          </div>
+          <div class="image-generation-actions field-gap">
+            <button
+              v-if="canSaveToPhone"
+              class="btn"
+              type="button"
+              :disabled="resultBusy || hostingBusy || busy"
+              @click="saveToPhone"
+            >
+              保存到手机相册
+            </button>
+            <button
+              class="btn"
+              type="button"
+              :disabled="resultBusy || hostingBusy || busy"
+              @click="openSection('cloud')"
+            >
+              上传图床获取直链
+            </button>
+          </div>
+        </div>
+      </details>
     </section>
 
     <section v-else class="panel secondary">
       <header>
-        <div><strong>云端</strong><small>生成稳定 HTTPS 直链；结果会同步写回生图相册。</small></div>
+        <div>
+          <strong>上传图床获取直链</strong
+          ><small>图片将发送到所选图床，并把链接记录到本机生图相册。</small>
+        </div>
       </header>
       <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-generation-hosting-controls -->
       <div class="image-generation-hosting-form">
@@ -967,9 +1015,18 @@ const {
       /></label>
     </section>
 
-    <div v-if="section !== 'generate' && section !== 'connection'" class="secondary-messages">
-      <p v-if="notice" class="workspace-notice" role="status">{{ notice }}</p>
-      <p v-if="error" class="workspace-notice error" role="alert">{{ error }}</p>
+    <div v-if="feedbackError || notice" class="image-generation-feedback">
+      <p v-if="feedbackError" class="error" role="alert">{{ feedbackError }}</p>
+      <p v-else role="status">{{ notice }}</p>
+      <button
+        v-if="!feedbackError || !requestPreview.error"
+        class="btn"
+        type="button"
+        aria-label="关闭提示"
+        @click="clearFeedback"
+      >
+        ×
+      </button>
     </div>
   </section>
 </template>

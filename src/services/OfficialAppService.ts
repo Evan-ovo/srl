@@ -86,6 +86,7 @@ async function officialAppContentHash(
 }
 
 export class OfficialAppService {
+  private catalogLoad?: Promise<OfficialAppCatalog>
   private registry?: InstalledOfficialApp[]
   private registryLoad?: Promise<InstalledOfficialApp[]>
   private readonly registrySubscribers = new Set<(apps: InstalledOfficialApp[]) => void>()
@@ -289,7 +290,14 @@ export class OfficialAppService {
     return app.assetMode === 'self-contained' ? undefined : app.files.filter((file) => file.bundled)
   }
 
-  async catalog(): Promise<OfficialAppCatalog> {
+  catalog(): Promise<OfficialAppCatalog> {
+    this.catalogLoad ??= this.loadCatalog().finally(() => {
+      this.catalogLoad = undefined
+    })
+    return this.catalogLoad
+  }
+
+  private async loadCatalog(): Promise<OfficialAppCatalog> {
     const response = await this.fetcher(
       new URL(`/official-apps/api-${this.hostApiVersion}/catalog.json`, this.origin),
       { cache: 'no-store' },

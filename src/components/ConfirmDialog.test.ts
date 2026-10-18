@@ -36,6 +36,49 @@ async function drain(): Promise<void> {
 }
 
 describe('ConfirmDialog + confirmAction', () => {
+  it('gates destructive confirmation on full typed text, resets on reopen, and blocks paste/drop', async () => {
+    await drain()
+    const wrapper = mount(ConfirmDialog, { attachTo: document.body })
+    try {
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const pending = confirmAction({
+          message: 'clear',
+          danger: true,
+          requiredText: '我已了解到该操作会清除srl的数据，并确保我的确想这么做。',
+        })
+        await flushPromises()
+        const input = document.querySelector<HTMLTextAreaElement>('.confirm-dialog textarea')!
+        expect(document.querySelector('#confirm-dialog-typing-hint')?.textContent).toContain(
+          '标点、空格、大小写与全半角不影响确认',
+        )
+        expect(input.value).toBe('')
+        expect(confirmButton()!.disabled).toBe(true)
+        for (const type of ['paste', 'drop']) {
+          const event = new Event(type, { bubbles: true, cancelable: true })
+          input.dispatchEvent(event)
+          expect(event.defaultPrevented).toBe(true)
+        }
+        input.value = '我已了解到该操作会清除SRL的数据，并确保我的确想这么做。'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+        await flushPromises()
+        expect(confirmButton()!.disabled).toBe(true)
+        input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+        await flushPromises()
+        expect(confirmButton()!.disabled).toBe(false)
+        if (iteration === 0) {
+          cancelButton()!.click()
+          await expect(pending).resolves.toBe(false)
+        } else {
+          confirmButton()!.click()
+          await expect(pending).resolves.toBe(true)
+        }
+      }
+    } finally {
+      wrapper.unmount()
+      await drain()
+    }
+  })
   it('keeps task continuation disabled until the original unlock form reports readiness, resetting for the next prompt', async () => {
     await drain()
     const wrapper = mount(ConfirmDialog, {

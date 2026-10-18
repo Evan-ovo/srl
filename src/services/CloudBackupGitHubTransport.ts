@@ -1,3 +1,4 @@
+import { waitForCloudRetry } from './CloudBackupHttp'
 import { LEGACY_RELEASE_TAG } from './CloudBackupPolicy'
 import type { CloudBackupItem, GitHubBackupConfig } from '../types/CloudBackup'
 import { isCapacitorApp } from '../utils/CapacitorDetection'
@@ -10,6 +11,7 @@ import {
   structuredSnapshotArchiveName,
   structuredSnapshotName,
   structuredSnapshotParts,
+  structuredSnapshotObjects,
   type CloudObjectPlan,
   type CreatedStructuredSnapshot,
   type StructuredSnapshot,
@@ -106,6 +108,13 @@ export async function githubFetch(
   }
   if (!response.ok) {
     const detail = (await response.json().catch(() => ({}))) as GitHubErrorDetail
+    if (
+      response.headers.get('x-srl-cloud-proxy') === '1' &&
+      response.status === 401 &&
+      (detail as GitHubErrorDetail & { code?: string }).code === 'UNAUTHENTICATED'
+    ) {
+      throw new Error('上传 GitHub 备份需要登录当前资源库网站；请先登录本站，再继续备份。')
+    }
     throw githubError(response.status, detail, path, init.method ?? 'GET', response.headers)
   }
   return response
@@ -150,6 +159,7 @@ export async function getGitHubRelease(
   secret: string,
   create: boolean,
   tag = LEGACY_RELEASE_TAG,
+  signal?: AbortSignal,
 ): Promise<GitHubRelease | undefined> {
   const inventory = githubInventory(context, config)
   const cached = inventory?.releases.get(tag)
@@ -165,6 +175,7 @@ export async function getGitHubRelease(
     context.cloudFetch(
       releaseUrl,
       {
+        ...(signal ? { signal } : {}),
         headers: {
           Accept: 'application/vnd.github+json',
           Authorization: `Bearer ${secret}`,
@@ -276,9 +287,28 @@ export async function uploadGitHubStructuredBackup(
     const existing = byObjectName.get(name)
     if (existing) {
       const { container, asset } = existing
-      if (asset.size !== plan.size)
-        throw new Error(`GitHub 内容寻址对象 ${name} 的远端大小冲突；拒绝覆盖 immutable 对象`)
-      matched = { tag: container.tag, releaseId: container.release.id, asset, plan }
+      if (await githubAssetMatchesPlan(context, config, secret, asset, plan)) {
+        matched = { tag: container.tag, releaseId: container.release.id, asset, plan }
+      } else {
+        const expectedHash = /^srl-chunk--sha256-([a-f0-9]{64})$/iu.exec(name)?.[1]?.toLowerCase()
+        const localBlob = await context.materializeCloudObject(plan)
+        if (
+          !expectedHash ||
+          localBlob.size !== plan.size ||
+          plan.hash.toLowerCase() !== expectedHash ||
+          (await hashCloudBlob(localBlob)) !== expectedHash
+        )
+          throw new Error(
+            `GitHub 内容寻址对象 ${name} 的远端摘要不符；本地对象未通过名称摘要核验，拒绝覆盖`,
+          )
+        context.signal?.throwIfAborted()
+        await deleteGitHubAssetIfPresent(context, config, secret, asset.id)
+        container.assets.delete(name)
+        byObjectName.delete(name)
+        // Existing snapshots locate this hash by container/name, not asset ID.
+        container.assigned += 1
+        matched = { tag: container.tag, releaseId: container.release.id, plan }
+      }
     }
     if (!matched) {
       let container = containers.at(-1)!
@@ -290,8 +320,8 @@ export async function uploadGitHubStructuredBackup(
     }
     placements.set(name, matched)
   }
-  for (const resource of [...snapshot.snapshot.resources, ...snapshot.snapshot.versions]) {
-    for (const part of resource.object.parts) {
+  for (const object of structuredSnapshotObjects(snapshot.snapshot)) {
+    for (const part of object.parts) {
       const placement = placements.get(part.name)
       if (!placement) throw new Error(`V3 清单缺少对象定位：${part.name}`)
       part.storage = {
@@ -377,11 +407,21 @@ export async function uploadGitHubStructuredBackup(
   let completedJobs = 0
   try {
     await mapWithConcurrency(jobs, 3, async ([name, placement]) => {
+      context.signal?.throwIfAborted()
       const blob = await context.materializeCloudObject(placement.plan)
       let completed = false
+      let pendingDeleteAssetId: number | undefined
+      let lastFailure: Error | undefined
       for (let attempt = 1; attempt <= 3; attempt += 1) {
+        context.signal?.throwIfAborted()
         if (attempt > 1) context.activeMetrics?.add('retryCount', 1)
+        let uploadedAssetId: number | undefined
+        let deleteAfterFailedSizeCheck = false
         try {
+          if (pendingDeleteAssetId !== undefined) {
+            await deleteGitHubAssetIfPresent(context, config, secret, pendingDeleteAssetId)
+            pendingDeleteAssetId = undefined
+          }
           const uploaded = await context.uploadGitHubAsset(
             config,
             secret,
@@ -392,30 +432,58 @@ export async function uploadGitHubStructuredBackup(
             undefined,
             1,
           )
+          uploadedAssetId = uploaded.id
           if (
             Number.isSafeInteger(uploaded.id) &&
             uploaded.id > 0 &&
             uploaded.name === name &&
             uploaded.size === blob.size &&
-            uploaded.state === 'uploaded'
+            uploaded.state === 'uploaded' &&
+            (await githubAssetMatchesPlan(context, config, secret, uploaded, placement.plan))
           ) {
             completed = true
             break
           }
-          if (await context.confirmGitHubAssetSize(config, secret, uploaded, blob.size)) {
+          if (
+            await context.confirmGitHubAssetSize(
+              config,
+              secret,
+              uploaded,
+              blob.size,
+              placement.plan.hash,
+            )
+          ) {
             completed = true
             break
           }
-          await context.githubFetch(config, secret, `/releases/assets/${uploaded.id}`, {
-            method: 'DELETE',
-          })
-        } catch {
-          // 只重试当前对象；已 verified 对象不会重新进入 jobs。
+          deleteAfterFailedSizeCheck = true
+          throw new Error(
+            `GitHub 对象远端完整性校验失败：本地 SHA-256 ${placement.plan.hash}，上传响应大小 ${uploaded.size}/${blob.size} 字节（asset ${uploaded.id}）`,
+          )
+        } catch (error) {
+          context.signal?.throwIfAborted()
+          lastFailure = error instanceof Error ? error : new Error('GitHub 上传或校验失败')
+          if (uploadedAssetId !== undefined && deleteAfterFailedSizeCheck) {
+            pendingDeleteAssetId = uploadedAssetId
+            try {
+              await deleteGitHubAssetIfPresent(context, config, secret, uploadedAssetId)
+              pendingDeleteAssetId = undefined
+            } catch (deleteError) {
+              lastFailure = new Error(
+                `${lastFailure.message}；清理不完整对象 ${uploadedAssetId} 失败：${deleteError instanceof Error ? deleteError.message : '未知错误'}`,
+                { cause: deleteError },
+              )
+            }
+          }
+          // Only retry this content-addressed object; verified objects stay complete.
         }
       }
       if (!completed) {
         await context.jobStore.markObject(webJob, name, 'failed')
-        throw new Error(`GitHub 对象块 ${name.slice(-12)} 连续 3 次上传不完整；未提交快照清单`)
+        throw new Error(
+          `GitHub 对象块 ${name.slice(-12)} 连续 3 次上传不完整；未提交快照清单${lastFailure ? `。最后失败原因：${lastFailure.message}` : ''}`,
+          lastFailure ? { cause: lastFailure } : undefined,
+        )
       }
       await context.jobStore.markObject(webJob, name, 'verified')
       completedJobs += 1
@@ -430,6 +498,8 @@ export async function uploadGitHubStructuredBackup(
     const manifestBlob = await encodeStructuredSnapshot(snapshot.snapshot)
     const name = structuredSnapshotName()
     onProgress?.(`快照清单已压缩为 ${(manifestBlob.size / 1024).toFixed(1)} KiB，正在最后提交…`)
+    context.signal?.throwIfAborted()
+    context.beginCommit?.()
     const manifest = await context.uploadGitHubAsset(
       config,
       secret,
@@ -445,6 +515,7 @@ export async function uploadGitHubStructuredBackup(
       secret,
       manifest,
       manifestBlob.size,
+      await hashCloudBlob(manifestBlob),
     )
     if (!confirmedManifest) {
       await context.githubFetch(config, secret, `/releases/assets/${manifest.id}`, {
@@ -481,6 +552,7 @@ export async function uploadGitHubAsset(
 ): Promise<GitHubAsset> {
   let lastError: Error | undefined
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    context.signal?.throwIfAborted()
     if (attempt > 1) context.activeMetrics?.add('retryCount', 1)
     try {
       const query = new URLSearchParams({ name })
@@ -507,20 +579,117 @@ export async function uploadGitHubAsset(
       const detail = (await response.json().catch(() => ({}))) as GitHubErrorDetail
       if (response.status === 422) {
         githubInventory(context, config)?.assets.delete(releaseId)
-        const existing = (await context.listGitHubAssets(config, secret, releaseId)).find(
-          (asset) => asset.name === name && asset.size === blob.size,
+        let existing = (await context.listGitHubAssets(config, secret, releaseId)).find(
+          (asset) => asset.name === name,
         )
-        if (existing) return existing
+        // GitHub can reject a duplicate asset name before its release-asset
+        // listing reflects the asset that caused the conflict. Reconcile only
+        // explicit name conflicts, with bounded read-only checks, before
+        // treating the upload as failed.
+        const isNameConflict = detail.errors?.some(
+          (item) => item.field === 'name' && item.code === 'already_exists',
+        )
+        if (!existing && isNameConflict) {
+          for (const delay of [250, 500, 1_000]) {
+            await waitForCloudRetry(delay, context.signal)
+            githubInventory(context, config)?.assets.delete(releaseId)
+            existing = (await context.listGitHubAssets(config, secret, releaseId)).find(
+              (asset) => asset.name === name,
+            )
+            if (existing) break
+          }
+        }
+        if (existing?.size === blob.size) {
+          const expectedHash = await hashCloudBlob(blob)
+          if (
+            await githubAssetMatchesHash(context, config, secret, existing, blob.size, expectedHash)
+          )
+            return existing
+          const namedHash = /^srl-chunk--sha256-([a-f0-9]{64})$/iu.exec(name)?.[1]?.toLowerCase()
+          if (namedHash && namedHash === expectedHash) {
+            await deleteGitHubAssetIfPresent(context, config, secret, existing.id)
+            throw new Error(
+              `GitHub 同名对象 ${name} 的远端 SHA-256 不符；已删除校验失败的附件，正在重试上传`,
+            )
+          }
+          throw new Error(`GitHub 同名附件 ${name} 的远端 SHA-256 与本地内容不符；未覆盖附件`)
+        }
+        if (existing) {
+          const contentHash = /^srl-chunk--sha256-([a-f0-9]{64})$/u.exec(name)?.[1]
+          if (contentHash && (await hashCloudBlob(blob)) === contentHash) {
+            await deleteGitHubAssetIfPresent(context, config, secret, existing.id)
+            throw new Error(
+              `GitHub 同名对象 ${name} 留有不完整远端附件（${existing.size}/${blob.size} 字节）；已删除残缺附件，正在重试上传`,
+            )
+          }
+          throw new Error(
+            `GitHub 同名对象大小冲突：${name} 的远端大小为 ${existing.size} 字节，本地预期 ${blob.size} 字节（asset ${existing.id}）；未覆盖远端对象`,
+          )
+        }
       }
       lastError = githubError(response.status, detail, 'GitHub 上传失败')
       if (response.status < 500 || attempt === attempts) throw lastError
     } catch (error) {
+      context.signal?.throwIfAborted()
       lastError = error instanceof Error ? error : new Error('GitHub 上传失败')
       if (attempt === attempts) throw lastError
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, attempt * 800))
+    await waitForCloudRetry(attempt * 800, context.signal)
   }
   throw lastError ?? new Error('GitHub 上传失败')
+}
+
+async function deleteGitHubAssetIfPresent(
+  context: CloudBackupTransportContext,
+  config: GitHubBackupConfig,
+  secret: string,
+  assetId: number,
+): Promise<void> {
+  try {
+    await context.githubFetch(config, secret, `/releases/assets/${assetId}`, {
+      method: 'DELETE',
+    })
+  } catch (error) {
+    const status =
+      error && typeof error === 'object' && 'status' in error
+        ? Number((error as { status?: unknown }).status)
+        : undefined
+    if (status !== 404) throw error
+  }
+}
+
+async function githubAssetMatchesPlan(
+  context: CloudBackupTransportContext,
+  config: GitHubBackupConfig,
+  secret: string,
+  asset: GitHubAsset,
+  plan: CloudObjectPlan,
+): Promise<boolean> {
+  return (
+    asset.size === plan.size &&
+    (await githubAssetMatchesHash(context, config, secret, asset, plan.size, plan.hash))
+  )
+}
+
+async function githubAssetMatchesHash(
+  context: CloudBackupTransportContext,
+  config: GitHubBackupConfig,
+  secret: string,
+  asset: GitHubAsset,
+  expectedSize: number,
+  expectedHash: string,
+): Promise<boolean> {
+  if (asset.state && asset.state !== 'uploaded') return false
+  if (asset.size !== expectedSize) return false
+  const digest = /^sha256:([a-f0-9]{64})$/iu.exec(asset.digest ?? '')?.[1]
+  if (digest) return digest.toLowerCase() === expectedHash.toLowerCase()
+
+  // Older GitHub responses may omit `digest`; verify the actual bytes in that case.
+  const response = await context.githubFetch(config, secret, `/releases/assets/${asset.id}`, {
+    headers: { Accept: 'application/octet-stream' },
+  })
+  const blob = await context.readResponseBlob(response, expectedSize)
+  return blob.size === expectedSize && (await hashCloudBlob(blob)) === expectedHash.toLowerCase()
 }
 
 export async function confirmGitHubAssetSize(
@@ -529,12 +698,12 @@ export async function confirmGitHubAssetSize(
   secret: string,
   uploaded: GitHubAsset,
   expectedSize: number,
+  expectedHash?: string,
 ): Promise<GitHubAsset | undefined> {
+  if (uploaded.state && uploaded.state !== 'uploaded') return undefined
   if (
-    Number.isSafeInteger(uploaded.id) &&
-    uploaded.id > 0 &&
-    uploaded.size === expectedSize &&
-    uploaded.state === 'uploaded'
+    expectedHash &&
+    (await githubAssetMatchesHash(context, config, secret, uploaded, expectedSize, expectedHash))
   )
     return uploaded
   const verifyStarted = typeof performance === 'undefined' ? Date.now() : performance.now()
@@ -542,11 +711,18 @@ export async function confirmGitHubAssetSize(
     for (let attempt = 1; attempt <= GITHUB_ASSET_CONFIRM_ATTEMPTS; attempt += 1) {
       const response = await context.githubFetch(config, secret, `/releases/assets/${uploaded.id}`)
       const asset = (await response.json()) as GitHubAsset
-      if (asset.id === uploaded.id && asset.size === expectedSize) return asset
-      if (attempt < GITHUB_ASSET_CONFIRM_ATTEMPTS) {
-        await new Promise<void>((resolve) =>
-          setTimeout(resolve, attempt * GITHUB_ASSET_CONFIRM_DELAY_MS),
+      if (asset.state && asset.state !== 'uploaded') return undefined
+      if (asset.id === uploaded.id && asset.size === expectedSize) {
+        if (!expectedHash) return asset
+        const digest = /^sha256:([a-f0-9]{64})$/iu.exec(asset.digest ?? '')?.[1]
+        if (digest && digest.toLowerCase() !== expectedHash.toLowerCase()) return undefined
+        if (
+          await githubAssetMatchesHash(context, config, secret, asset, expectedSize, expectedHash)
         )
+          return asset
+      }
+      if (attempt < GITHUB_ASSET_CONFIRM_ATTEMPTS) {
+        await waitForCloudRetry(attempt * GITHUB_ASSET_CONFIRM_DELAY_MS, context.signal)
       }
     }
     return undefined
@@ -561,6 +737,7 @@ export async function listGitHubAssets(
   config: GitHubBackupConfig,
   secret: string,
   releaseId: number,
+  signal?: AbortSignal,
 ): Promise<GitHubAsset[]> {
   const inventory = githubInventory(context, config)
   const cached = inventory?.assets.get(releaseId)
@@ -571,6 +748,7 @@ export async function listGitHubAssets(
       config,
       secret,
       `/releases/${releaseId}/assets?per_page=100&page=${page}`,
+      signal ? { signal } : undefined,
     )
     const batch = (await response.json()) as GitHubAsset[]
     assets.push(...batch)
@@ -640,11 +818,13 @@ export async function listGitHub(
     isStructuredSnapshotObjectKey(entry.name),
   )
   let checkedSnapshots = 0
+  const containerInventories = new Map<string, Promise<Map<string, GitHubAsset>>>()
   if (manifests.length) {
     onProgress?.(`正在校验 ${manifests.length} 份快照及其对象定位…`)
   }
   await mapWithConcurrency(manifests, isCapacitorApp() ? 3 : 2, async (asset) => {
     try {
+      assertGitHubDownloadableAsset(asset, asset.size, asset.name)
       const snapshot = await context.readGitHubStructuredSnapshot(config, secret, {
         id: String(asset.id),
         objectKey: asset.name,
@@ -653,15 +833,34 @@ export async function listGitHub(
         kind: 'githubSnapshot',
       })
       const parts = structuredSnapshotParts(snapshot)
-      const inventory = await context.readGitHubPartInventory(config, secret, parts)
-      if (parts.some((part) => inventory.get(structuredPartIdentity(part))?.size !== part.size)) {
-        return
-      }
+      const inventory = new Map<string, GitHubAsset>()
+      await mapWithConcurrency(
+        [...new Set(parts.map(structuredPartContainer))],
+        3,
+        async (container) => {
+          let pending = containerInventories.get(container)
+          if (!pending) {
+            pending = context.readGitHubPartInventory(
+              config,
+              secret,
+              parts.filter((part) => structuredPartContainer(part) === container),
+            )
+            containerInventories.set(container, pending)
+          }
+          for (const [key, asset] of await pending) inventory.set(key, asset)
+        },
+      )
+      for (const part of parts)
+        assertGitHubDownloadableAsset(
+          inventory.get(structuredPartIdentity(part)),
+          part.size,
+          `${structuredPartContainer(part)}/${structuredPartObjectKey(part)}`,
+        )
       backups.push({
         id: String(asset.id),
         objectKey: asset.name,
-        size: [...snapshot.resources, ...snapshot.versions].reduce(
-          (total, resource) => total + resource.fileSize,
+        size: structuredSnapshotObjects(snapshot).reduce(
+          (total, object) => total + object.totalSize,
           0,
         ),
         createdAt: Date.parse(asset.created_at) || Date.parse(snapshot.createdAt) || 0,
@@ -670,7 +869,12 @@ export async function listGitHub(
         archiveName: structuredSnapshotArchiveName(asset.name),
       })
     } catch (error) {
-      if (isCloudRequestTimeout(error)) throw error
+      if (
+        isCloudRequestTimeout(error) ||
+        error instanceof TypeError ||
+        (error && typeof error === 'object' && 'status' in error)
+      )
+        throw error
       // 清单损坏或对象块不完整时不暴露为可恢复备份。
     } finally {
       checkedSnapshots += 1
@@ -698,70 +902,365 @@ export async function readGitHubStructuredSnapshot(
   secret: string,
   item: CloudBackupItem,
 ): Promise<StructuredSnapshot> {
-  const response = await context.githubFetch(config, secret, `/releases/assets/${item.id}`, {
-    headers: { Accept: 'application/octet-stream' },
-  })
-  return decodeStructuredSnapshot(await context.readResponseBlob(response))
+  return context
+    .githubFetch(config, secret, `/releases/assets/${item.id}`, {
+      headers: { Accept: 'application/octet-stream' },
+    })
+    .then(async (response) => decodeStructuredSnapshot(await context.readResponseBlob(response)))
+    .catch((error: unknown) => {
+      throw describeGitHubAssetFailure(error, `快照清单 ${item.objectKey}`, item.id)
+    })
+}
+
+function describeGitHubAssetFailure(error: unknown, object: string, id: string | number): Error {
+  const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined
+  const upstream =
+    error && typeof error === 'object' && 'upstream' in error ? error.upstream : undefined
+  return Object.assign(
+    new Error(
+      `读取 GitHub ${object}失败（附件 ${id}）。${status === 404 && upstream !== 'github-asset' ? '附件可能已被删除或替换，或当前令牌无权访问该仓库；请核对目标和权限并刷新备份列表。' : ''}\n${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    ),
+    { status, upstream },
+  )
+}
+
+const GITHUB_READ_CONCURRENCY = 3
+const GITHUB_READ_BYTE_BUDGET = 32 * 1024 * 1024
+
+/** Metadata can rule out incomplete uploads; it never replaces byte/SHA verification. */
+export function assertGitHubDownloadableAsset(
+  asset: GitHubAsset | undefined,
+  expectedSize: number,
+  description: string,
+): asserts asset is GitHubAsset {
+  if (!asset || asset.size !== expectedSize) throw new Error(`GitHub 对象缺少分块：${description}`)
+  // Older valid inventories may omit state. Explicit unfinished states fail closed.
+  if (asset.state && asset.state !== 'uploaded')
+    throw new Error(
+      `GitHub ${description} 上传未完成（状态 ${asset.state}，附件 ${asset.id}）。请在保留该资源原件的设备上重新备份以补齐分块；仅刷新或重试下载无法修复残件。`,
+    )
+}
+
+/** Shared by every resource read through this reader, including already-ready lookahead. */
+function createGitHubReadBudget(concurrency: number, byteBudget: number) {
+  let count = 0
+  let bytes = 0
+  const queue: Array<{
+    size: number
+    signal: AbortSignal
+    grant: (release: () => void) => void
+    reject: (error: unknown) => void
+    abort: () => void
+  }> = []
+  const advance = () => {
+    while (queue.length && count < concurrency) {
+      const next = queue[0]!
+      // A legacy oversized part runs alone. FIFO avoids starving an ordered head.
+      if (count && bytes + next.size > byteBudget) return
+      queue.shift()
+      next.signal.removeEventListener('abort', next.abort)
+      if (next.signal.aborted) {
+        next.reject(next.signal.reason)
+        continue
+      }
+      count += 1
+      bytes += next.size
+      let released = false
+      next.grant(() => {
+        if (released) return
+        released = true
+        count -= 1
+        bytes -= next.size
+        advance()
+      })
+    }
+  }
+  return (size: number, signal: AbortSignal): Promise<() => void> =>
+    new Promise((grant, reject) => {
+      signal.throwIfAborted()
+      const entry = {
+        size,
+        signal,
+        grant,
+        reject,
+        abort: () => {
+          const index = queue.indexOf(entry)
+          if (index !== -1) queue.splice(index, 1)
+          reject(signal.reason)
+          advance()
+        },
+      }
+      queue.push(entry)
+      signal.addEventListener('abort', entry.abort, { once: true })
+      advance()
+    })
 }
 
 export async function createGitHubObjectReader(
   context: CloudBackupTransportContext,
   config: GitHubBackupConfig,
   secret: string,
+  options: { concurrency?: number; byteBudget?: number } = {},
 ): Promise<(object: GitHubBundleManifest) => Promise<Blob>> {
+  const concurrency = Math.max(
+    1,
+    Math.min(GITHUB_READ_CONCURRENCY, Math.floor(options.concurrency || GITHUB_READ_CONCURRENCY)),
+  )
+  const byteBudget = Math.max(
+    1,
+    Math.min(GITHUB_READ_BYTE_BUDGET, options.byteBudget || GITHUB_READ_BYTE_BUDGET),
+  )
+  const reserve = createGitHubReadBudget(concurrency, byteBudget)
   const inventories = new Map<string, Promise<Map<string, GitHubAsset>>>()
-  const inventory = (container: string) => {
+  const releaseIds = new Map<string, number>()
+  const refreshedContainers = new Map<string, Promise<Map<string, GitHubAsset>>>()
+  const inventory = (container: string, signal: AbortSignal) => {
     let pending = inventories.get(container)
     if (!pending) {
-      pending = context.getGitHubRelease(config, secret, false, container).then(async (release) => {
-        if (!release) throw new Error(`GitHub 对象容器不存在：${container}`)
-        return new Map(
-          (await context.listGitHubAssets(config, secret, release.id)).map((asset) => [
-            asset.name,
-            asset,
-          ]),
-        )
-      })
+      pending = context
+        .getGitHubRelease(config, secret, false, container, signal)
+        .then(async (release) => {
+          if (!release) throw new Error(`GitHub 对象容器不存在：${container}`)
+          releaseIds.set(container, release.id)
+          return new Map(
+            (await context.listGitHubAssets(config, secret, release.id, signal)).map((asset) => [
+              asset.name,
+              asset,
+            ]),
+          )
+        })
       inventories.set(container, pending)
     }
     return pending
   }
-  const partCache = new Map<string, Promise<Blob>>()
+  let cached: { key: string; blob: Blob } | undefined
+  context.signal?.addEventListener(
+    'abort',
+    () => {
+      cached = undefined
+    },
+    { once: true },
+  )
+  let batch:
+    | { controller: AbortController; signal: AbortSignal; readers: number; dispose: () => void }
+    | undefined
+  type DownloadEntry = {
+    promise: Promise<Blob>
+    users: number
+    blob?: Blob
+    release?: () => void
+    settled: boolean
+  }
+  const inFlight = new Map<string, DownloadEntry>()
+  const pendingDownloads = new Set<Promise<Blob>>()
   return async (object) => {
-    const blobs: Blob[] = []
-    for (const part of object.parts) {
+    if (!batch || !batch.readers) {
+      const controller = new AbortController()
+      const abort = () => controller.abort(context.signal?.reason)
+      if (context.signal?.aborted) abort()
+      else context.signal?.addEventListener('abort', abort, { once: true })
+      batch = {
+        controller,
+        signal: controller.signal,
+        readers: 0,
+        dispose: () => context.signal?.removeEventListener('abort', abort),
+      }
+    }
+    const current = batch
+    const { signal } = current
+    current.readers += 1
+    const fail = (error: unknown) => {
+      if (!signal.aborted) current.controller.abort(error)
+      cached = undefined
+    }
+    type Lease = { promise: Promise<Blob>; release: () => void }
+    const leases = new Map<number, Lease>()
+    const acquire = (
+      part: GitHubBundleManifest['parts'][number],
+      initialAsset: GitHubAsset,
+    ): Lease => {
+      signal.throwIfAborted()
       const container = structuredPartContainer(part)
       const objectKey = structuredPartObjectKey(part)
-      const asset = (await inventory(container)).get(objectKey)
       const storedSize = part.storedSize ?? part.size
-      if (!asset || asset.size !== storedSize)
-        throw new Error(`GitHub 对象缺少分块：${container}/${objectKey}`)
-      const cacheKey = `${container}\u0000${objectKey}`
-      let stored = partCache.get(cacheKey)
-      if (!stored) {
-        // Keep at most one V3-sized part, never the entire downloaded library.
-        partCache.clear()
-        stored = context
-          .githubFetch(config, secret, `/releases/assets/${asset.id}`, {
-            headers: { Accept: 'application/octet-stream' },
+      const key = `${container}\u0000${objectKey}\u0000${part.sha256}\u0000${storedSize}`
+      if (cached?.key === key)
+        return {
+          promise: Promise.resolve(cached.blob),
+          release: () => undefined,
+        }
+      let entry = inFlight.get(key)
+      if (!entry) {
+        cached = undefined
+        const created = { users: 0, settled: false } as DownloadEntry
+        let asset = initialAsset
+        created.promise = (async () => {
+          created.release = await reserve(storedSize, signal)
+          signal.throwIfAborted()
+          const download = async (target: GitHubAsset) => {
+            assertGitHubDownloadableAsset(target, storedSize, `${container}/${objectKey}`)
+            return context.githubFetch(config, secret, `/releases/assets/${target.id}`, {
+              headers: { Accept: 'application/octet-stream' },
+              signal,
+            })
+          }
+          const response = await download(asset).catch(async (error: unknown) => {
+            signal.throwIfAborted()
+            if (!(error && typeof error === 'object' && 'status' in error && error.status === 404))
+              throw error
+            if ('upstream' in error && error.upstream === 'github-asset') throw error
+            // Only content-addressed chunks can be rebound after a stale attachment ID.
+            if (
+              !/^srl-chunk--sha256-[a-f0-9]{64}$/u.test(objectKey) ||
+              !objectKey.endsWith(part.sha256)
+            )
+              throw error
+            let refresh = refreshedContainers.get(container)
+            if (!refresh) {
+              const releaseId = releaseIds.get(container)!
+              context.activeGitHubInventory?.assets.delete(releaseId)
+              refresh = context
+                .listGitHubAssets(config, secret, releaseId, signal)
+                .then((assets) => new Map(assets.map((value) => [value.name, value])))
+              refreshedContainers.set(container, refresh)
+              inventories.set(container, refresh)
+            }
+            const refreshedInventory = await refresh
+            signal.throwIfAborted()
+            const refreshed = refreshedInventory.get(objectKey)
+            if (!refreshed || refreshed.id === asset.id || refreshed.size !== storedSize)
+              throw error
+            asset = refreshed
+            return download(refreshed)
           })
-          .then(async (response) => {
-            const blob = await context.readResponseBlob(response, storedSize)
-            if (blob.size !== storedSize || (await hashCloudBlob(blob)) !== part.sha256)
-              throw new Error(`GitHub 对象分块校验失败：${container}/${objectKey}`)
-            return blob
+          const blob = await context.readResponseBlob(response, storedSize, object.fileName)
+          signal.throwIfAborted()
+          if (blob.size !== storedSize || (await hashCloudBlob(blob)) !== part.sha256)
+            throw new Error(`GitHub 对象分块校验失败：${container}/${objectKey}`)
+          signal.throwIfAborted()
+          created.blob = blob
+          return blob
+        })()
+          .catch((error: unknown) => {
+            const failure = signal.aborted
+              ? signal.reason
+              : describeGitHubAssetFailure(
+                  error,
+                  `资源 ${object.fileName} 的分块 ${container}/${objectKey}`,
+                  asset.id,
+                )
+            fail(failure)
+            throw failure
           })
-        if (storedSize <= 32 * 1024 * 1024) partCache.set(cacheKey, stored)
+          .finally(() => {
+            created.settled = true
+            if (!created.users) created.release?.()
+          })
+        // Attach a rejection observer immediately, including out-of-order failures.
+        pendingDownloads.add(created.promise)
+        void created.promise.then(
+          () => pendingDownloads.delete(created.promise),
+          () => pendingDownloads.delete(created.promise),
+        )
+        inFlight.set(key, created)
+        entry = created
       }
-      const storedBlob = await stored
-      const blob = storedBlob.slice(part.offset ?? 0, (part.offset ?? 0) + part.size)
-      if (blob.size !== part.size) throw new Error(`GitHub 对象分块校验失败：${part.name}`)
-      blobs.push(blob)
+      entry.users += 1
+      const held = entry
+      let released = false
+      return {
+        promise: held.promise,
+        release: () => {
+          if (released) return
+          released = true
+          held.users -= 1
+          // The first ordered consumer moves the bytes into its assembled output.
+          // Other consumers share that Blob; holding its permit until all of them
+          // catch up can deadlock cross-resource references behind a larger part.
+          if (held.settled) held.release?.()
+          if (held.users) return
+          if (inFlight.get(key) === held) inFlight.delete(key)
+          if (!signal.aborted && held.blob && storedSize <= GITHUB_READ_BYTE_BUDGET)
+            cached = { key, blob: held.blob }
+        },
+      }
     }
-    const result = new Blob(blobs, { type: 'application/octet-stream' })
-    if (result.size !== object.totalSize || (await hashCloudBlob(result)) !== object.totalSha256)
-      throw new Error(`GitHub 对象完整性校验失败：${object.fileName}`)
-    return result
+    try {
+      signal.throwIfAborted()
+      // Resolve metadata before lookahead so a later part cannot occupy every slot
+      // while an earlier container is still being resolved.
+      const assets: GitHubAsset[] = []
+      for (const part of object.parts) {
+        signal.throwIfAborted()
+        const container = structuredPartContainer(part)
+        const objectKey = structuredPartObjectKey(part)
+        const asset = (await inventory(container, signal)).get(objectKey)
+        signal.throwIfAborted()
+        assertGitHubDownloadableAsset(
+          asset,
+          part.storedSize ?? part.size,
+          `资源 ${object.fileName} 的分块 ${container}/${objectKey}`,
+        )
+        assets.push(asset)
+      }
+      let next = 0
+      const fill = () => {
+        while (next < object.parts.length && leases.size < concurrency) {
+          const index = next++
+          leases.set(index, acquire(object.parts[index]!, assets[index]!))
+        }
+      }
+      const blobs: Blob[] = []
+      fill()
+      for (const [index, part] of object.parts.entries()) {
+        const lease = leases.get(index)!
+        const storedBlob = await lease.promise
+        signal.throwIfAborted()
+        const blob = storedBlob.slice(part.offset ?? 0, (part.offset ?? 0) + part.size)
+        if (blob.size !== part.size) throw new Error(`GitHub 对象分块校验失败：${part.name}`)
+        blobs.push(blob)
+        leases.delete(index)
+        lease.release()
+        fill()
+      }
+      const result = new Blob(blobs, { type: 'application/octet-stream' })
+      const wholePart = object.parts.length === 1 && object.parts[0]!
+      const alreadyVerified =
+        wholePart &&
+        (wholePart.offset ?? 0) === 0 &&
+        (wholePart.storedSize ?? wholePart.size) === object.totalSize &&
+        wholePart.size === object.totalSize &&
+        wholePart.sha256 === object.totalSha256
+      if (
+        result.size !== object.totalSize ||
+        (!alreadyVerified && (await hashCloudBlob(result)) !== object.totalSha256)
+      )
+        throw new Error(`GitHub 对象完整性校验失败：${object.fileName}`)
+      signal.throwIfAborted()
+      return result
+    } catch (error) {
+      fail(error)
+      throw signal.reason
+    } finally {
+      if (signal.aborted) {
+        await Promise.allSettled([...pendingDownloads])
+        cached = undefined
+      }
+      for (const lease of leases.values()) lease.release()
+      current.readers -= 1
+      const failed = signal.aborted
+      if (!current.readers) {
+        current.dispose()
+        // Release linked request-signal listeners after every body has settled.
+        current.controller.abort()
+      }
+      if (!current.readers && failed) {
+        inventories.clear()
+        releaseIds.clear()
+        refreshedContainers.clear()
+      }
+    }
   }
 }
 

@@ -1,3 +1,8 @@
+import { isResourceAttachment } from '../types/ResourceAttachment'
+import {
+  requestWebBackgroundAudio,
+  withWebBackgroundAudio,
+} from '../services/WebBackgroundKeepAlive'
 import {
   offerExportRecovery as offerExportRecoveryOperation,
   offerRestoreRecovery as offerRestoreRecoveryOperation,
@@ -233,7 +238,10 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     resourceContent: 'original' | 'modified'
     portableSelection: ArchivePortableSelection
   }): Promise<void> {
-    return mutationGuard.run('archive:export', () => performExport(details))
+    return mutationGuard.run(
+      'archive:export',
+      withWebBackgroundAudio('导出备份', () => performExport(details)),
+    )
   }
 
   async function performExport(
@@ -256,6 +264,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     }
     const operationId = taskCenter.start({
       name: '导出备份',
+      keepAlive: true,
       phase: '收集可移植设置',
       cancelable: true,
       cancel: () => controller.abort(new DOMException('导出已取消', 'AbortError')),
@@ -279,6 +288,12 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
         version: 1,
       }
       if (!resumed) {
+        Object.assign(
+          portableData,
+          await (
+            await loadArchiveServices()
+          ).exportPortableApplicationData(details.portableSelection),
+        )
         if (details.portableSelection.appearance) {
           portableData.appearance = browserStorageService.exportAppearanceSettings()
         }
@@ -389,7 +404,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
           archiveOptions.communitySourceAttachments!.push({ assetId: entry.assetId, blob })
         }
       } else if (nativeSafStatus?.available) {
-        archiveOptions = await exportService.prepareOptions(archiveOptions)
+        archiveOptions = await exportService.prepareOptions(archiveOptions, transfer.signal, true)
         exportRecovery = await archiveRecoveryService.createExport(
           source,
           context.categories.value,
@@ -496,6 +511,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     const credentialLabels = [
       data.mainApiProfiles?.profiles.some((profile) => profile.apiKey) ? '主 API 密钥' : '',
       data.credentials?.imageGeneration?.length ? '生图 API 密钥' : '',
+      data.credentials?.assistantGitHubReadToken ? '助手 GitHub 读取令牌' : '',
       data.credentials?.imageHosting ? '自建图床 Token' : '',
       data.credentials?.legacyFrontendWorkshopApi?.apiKey ? '旧状态项目专用 API 密钥' : '',
       data.credentials?.productAssistantApi ? 'AI 助手独立 API 配置与密钥' : '',
@@ -516,6 +532,10 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
       recovery.payload.credentials = importCredentials
       await archiveRecoveryService.store.save(recovery)
     }
+    if (data.frontendWorkshopProjects || data.imageGeneration)
+      await apply('创作资料', async () =>
+        (await loadArchiveServices()).importPortableApplicationData(data),
+      )
     if (data.appearance)
       await apply('外观', () => browserStorageService.importAppearanceSettings(data.appearance!))
     if (data.cloudBackup)
@@ -667,6 +687,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     })
     const operationId = taskCenter.start({
       name: '备份预检',
+      keepAlive: true,
       phase: '读取 ZIP 并校验',
       cancelable: true,
       cancel: () => controller.abort(),
@@ -676,7 +697,9 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     context.restoreSourceFile.value = file
     context.preparedRestore.value = undefined
     context.restoreReport.value = undefined
+    let releaseAudio = () => undefined as void
     try {
+      releaseAudio = await requestWebBackgroundAudio('备份预检', controller.signal)
       await beginArchiveProtection(operationId, '备份预检')
       if (controller.signal.aborted) throw restoreInspectionCancelledError()
       restoreRecovery =
@@ -764,6 +787,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
         context.showNotice(error instanceof Error ? error.message : '备份预检失败')
       }
     } finally {
+      releaseAudio()
       context.isRestoring.value = false
       isRestorePreflighting.value = false
       await endArchiveProtection(operationId)
@@ -784,6 +808,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     mode: RestoreMode,
     resourceIds: string[],
     includeGallery = true,
+    includeAttachments = true,
   ): Promise<void> {
     const context = getContext()
     if (context.isRestoring.value || recovering.size) return
@@ -799,6 +824,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     if (
       mode === 'replace' &&
       ((!includeGallery && prepared.resources.some(isResourceGalleryImage)) ||
+        (!includeAttachments && prepared.resources.some(isResourceAttachment)) ||
         !prepared.resources.every((resource) => selectedIds.has(resource.id)))
     ) {
       context.showNotice('整库覆盖必须选择全部资源；部分选择请使用安全新增')
@@ -809,7 +835,9 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
       return
     }
     context.isRestoring.value = true
+    let releaseAudio = () => undefined as void
     try {
+      releaseAudio = await requestWebBackgroundAudio('导入备份')
       if (mode === 'replace') {
         const estimatedCurrentBytes = context.resources.value.reduce(
           (total, resource) => total + Math.max(0, resource.fileSize || 0),
@@ -825,11 +853,20 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
       }
 
       const selected =
-        mode === 'replace' ? prepared : selectPreparedRestore(prepared, selectedIds, includeGallery)
+        mode === 'replace'
+          ? prepared
+          : selectPreparedRestore(
+              prepared,
+              selectedIds,
+              includeGallery,
+              undefined,
+              includeAttachments,
+            )
       await mutationGuard.run(`archive:restore:${mode}`, () =>
         performRestoreConfirm(selected, mode),
       )
     } finally {
+      releaseAudio()
       context.isRestoring.value = false
     }
   }
@@ -843,6 +880,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
 
     const operationId = taskCenter.start({
       name: '恢复备份',
+      keepAlive: true,
       phase: '准备恢复数据',
     })
     waitingForRestoreChoiceInBackground = false
@@ -963,7 +1001,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
     return {
       recovering,
       getContext,
-      performExport,
+      performExport: withWebBackgroundAudio('继续导出备份', performExport),
       resumeRestoreTask,
       get restoreRecovery() {
         return restoreRecovery

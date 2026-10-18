@@ -805,4 +805,41 @@ describe('assistant workspace with actual indexed settings', () => {
     )
     expect(workspace.preferences()).toEqual(initial)
   })
+  it('exports only a saved GitHub read token through the credentials owner and restores it into protected storage', async () => {
+    const { workspace, secrets } = setup()
+    await workspace.initialize()
+    await workspace.savePreferences(
+      { ...workspace.preferences(), githubReadPersistence: 'local' },
+      'ghp_saved',
+    )
+    expect(await workspace.exportPortableGitHubCredential()).toBe('ghp_saved')
+    await workspace.savePreferences(
+      { ...workspace.preferences(), githubReadPersistence: 'session' },
+      'ghp_session',
+    )
+    expect(await workspace.exportPortableGitHubCredential()).toBeUndefined()
+    expect(secrets.has('product-assistant:github-read')).toBe(false)
+    await workspace.importPortableGitHubCredential('ghp_restored')
+    expect(await workspace.readGitHubCredential()).toBe('ghp_restored')
+    expect(secrets.get('product-assistant:github-read')).toBe('ghp_restored')
+    await expect(workspace.importPortableGitHubCredential('bad-token')).rejects.toThrow('令牌格式')
+    expect(await workspace.readGitHubCredential()).toBe('ghp_restored')
+  })
+  it('reloads imported assistant preferences instead of keeping the state initialized by credential restore', async () => {
+    const { workspace, storage } = setup()
+    await workspace.importPortableGitHubCredential('ghp_saved')
+    await storage.importPortableState([
+      {
+        id: 'assistant.preferences',
+        value: { ...workspace.preferences(), name: '原机助手', githubReadPersistence: 'local' },
+        updatedAt: 100,
+      },
+    ])
+    const listener = vi.fn()
+    workspace.onPreferencesChange(listener)
+    await workspace.reloadImportedPreferences()
+    expect(workspace.preferences().name).toBe('原机助手')
+    expect(await workspace.readGitHubCredential()).toBe('ghp_saved')
+    expect(listener).toHaveBeenCalledOnce()
+  })
 })

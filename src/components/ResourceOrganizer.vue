@@ -3,6 +3,7 @@
 // the statistics, tabs, and archive-owned mobile rules used by this screen.
 import '../FeatureStyles.css'
 import ResourceSourceLinks from './ResourceSourceLinks.vue'
+import ResourceAttachmentEntry from './ResourceAttachmentEntry.vue'
 import FeatureBackButton from './FeatureBackButton.vue'
 import ResourcePicker from './ResourcePicker.vue'
 import UserPersonaOverviewBindings from './UserPersonaOverviewBindings.vue'
@@ -27,6 +28,10 @@ const ResourceGalleryPanel = createAsyncPanel(
   () => import('./ResourceGalleryPanel.vue'),
 )
 const galleryCount = ref(0)
+const attachmentEntry = useTemplateRef<{ open: boolean; requestBack: () => void }>(
+  'attachmentEntry',
+)
+const attachmentPanelOpen = ref(false)
 const props = defineProps<ResourceOrganizerProps>()
 const emit = defineEmits<ResourceOrganizerEvents>()
 const controller = useResourceOrganizer(props, emit)
@@ -56,6 +61,10 @@ const personalContent = useTemplateRef<{ editing: boolean; requestBack: () => vo
   'personalContent',
 )
 function requestClose() {
+  if (attachmentEntry.value?.open) {
+    attachmentEntry.value.requestBack()
+    return
+  }
   if (galleryContent.value?.busy || coverContent.value?.busy) return
   if (coverContent.value?.editing) coverContent.value.requestBack()
   else if (galleryContent.value?.editing) galleryContent.value.requestBack()
@@ -155,7 +164,7 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
 <template>
   <Teleport to="body">
     <div
-      v-show="!settingsOpen"
+      v-show="!settingsOpen && !attachmentPanelOpen"
       class="editor-overlay resource-detail-overlay"
       :class="{ 'resource-detail-overlay--content-editor': isContentEditing }"
       role="presentation"
@@ -409,6 +418,13 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
                 </label>
 
                 <ResourceSourceLinks v-model:links="sourceLinks" :resource-id="resource.id" />
+                <ResourceAttachmentEntry
+                  ref="attachmentEntry"
+                  :resource="resource"
+                  :disabled="busy"
+                  @open-change="attachmentPanelOpen = $event"
+                  @changed="emit('attachmentsChanged', $event)"
+                />
               </section>
 
               <section

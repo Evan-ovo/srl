@@ -1,4 +1,4 @@
-import Dexie, { type IndexableType } from 'dexie'
+import Dexie from 'dexie'
 
 import type { AppDatabase } from '../database/AppDatabase'
 import type { AppSetting } from '../types/Resource'
@@ -9,6 +9,7 @@ import type {
   GeneratedImageAlbumQuery,
 } from '../types/GeneratedImageAlbum'
 import type { GeneratedImageAlbumStorage } from './GeneratedImageAlbumStorage'
+import { encodeAppDatabaseKey } from './AndroidAppDatabaseMigration'
 
 const FILE_MIGRATION_SETTING_ID = 'migration.generatedImageFiles.blob.v17'
 const FILE_MIGRATION_BATCH_SIZE = 10
@@ -73,7 +74,8 @@ function cloneItem(item: GeneratedImageAlbumItem): GeneratedImageAlbumItem {
 }
 
 function cloneFile(file: GeneratedImageAlbumFile): GeneratedImageAlbumFile {
-  return structuredClone(file)
+  const { originalBlob, thumbnailBlob, ...metadata } = file
+  return { ...structuredClone(metadata), originalBlob, thumbnailBlob }
 }
 
 export class IndexedDbGeneratedImageAlbumStorage implements GeneratedImageAlbumStorage {
@@ -150,6 +152,49 @@ export class IndexedDbGeneratedImageAlbumStorage implements GeneratedImageAlbumS
     return this.database.generatedImages.count()
   }
 
+  private async distinctStrings(indexName: 'category' | 'mimeType'): Promise<string[]> {
+    const table = this.database.generatedImages
+    return this.database.transaction('r', table, async (transaction) => {
+      const cursor = await table.core.openCursor({
+        trans: transaction.idbtrans,
+        values: false,
+        query: {
+          index: table.core.schema.getIndexByKeyPath(indexName)!,
+          range: { type: 2, lower: '', lowerOpen: true, upper: undefined },
+        },
+      })
+      const keys: string[] = []
+      await cursor?.start(() => {
+        const key: unknown = cursor.key
+        // IndexedDB orders all string keys before binary/array keys. Empty and
+        // non-string legacy values never appeared in the facet list.
+        if (typeof key !== 'string') {
+          cursor.stop()
+          return
+        }
+        if (keys.at(-1) === key) {
+          cursor.continue()
+          return
+        }
+        keys.push(key)
+        // Ordinary `next`, not `nextunique`: seek past this duplicate run.
+        // Appending the smallest UTF-16 unit retains keys such as "a\0".
+        // The native DBCore adapter also implements this seek without values.
+        const nextKey = `${key}\u0000`
+        let canSeek = true
+        try {
+          encodeAppDatabaseKey(nextKey)
+        } catch {
+          // A valid native key can already fill its encoded-key budget. Keep
+          // walking that run normally instead of issuing an oversized seek.
+          canSeek = false
+        }
+        cursor.continue(canSeek ? nextKey : undefined)
+      })
+      return keys
+    })
+  }
+
   async query(query: GeneratedImageAlbumQuery): Promise<GeneratedImageAlbumPage> {
     await this.ensureMigrated()
     const pageSize = Math.min(
@@ -201,7 +246,13 @@ export class IndexedDbGeneratedImageAlbumStorage implements GeneratedImageAlbumS
           })
         : collection
     }
-    const total = await createCollection().count()
+    const filtered = Boolean(
+      query.category ||
+      query.mimeType ||
+      needle ||
+      (query.hostedStatus && query.hostedStatus !== 'all'),
+    )
+    const total = filtered ? await createCollection().count() : albumTotal
     const pageCount = Math.max(1, Math.ceil(total / pageSize))
     const page = Math.min(pageCount, Math.max(1, Math.round(query.page ?? 1)))
     const ordered = query.sort === 'oldest' ? createCollection() : createCollection().reverse()
@@ -212,19 +263,16 @@ export class IndexedDbGeneratedImageAlbumStorage implements GeneratedImageAlbumS
       .offset((page - 1) * pageSize)
       .limit(pageSize)
       .toArray()
-    const categoryKeys = await this.database.generatedImages.orderBy('category').keys()
-    const mimeTypeKeys = await this.database.generatedImages.orderBy('mimeType').keys()
-    const uniqueStrings = (keys: IndexableType[]) => [
-      ...new Set(keys.filter((key): key is string => typeof key === 'string' && Boolean(key))),
-    ]
+    const categories = await this.distinctStrings('category')
+    const mimeTypes = await this.distinctStrings('mimeType')
     return {
       items: items.map(cloneItem),
       total,
       page,
       pageSize,
       pageCount,
-      categories: uniqueStrings(categoryKeys),
-      mimeTypes: uniqueStrings(mimeTypeKeys),
+      categories,
+      mimeTypes,
     }
   }
 

@@ -15,7 +15,8 @@ const state = vi.hoisted(() => ({
   removeTask: vi.fn(),
   createRestore: vi.fn(async () => undefined),
   load: vi.fn(async () => {}),
-  confirm: vi.fn(async () => false),
+  audioConfirm: vi.fn(async () => false),
+  confirm: vi.fn(async (_options?: { title?: string }) => false),
   replace: vi.fn(async () => ({ added: 0 })),
 }))
 vi.mock('vue', async (original) => ({
@@ -29,7 +30,11 @@ vi.mock('../core/NoticeCenter', () => ({
     dismiss: vi.fn(),
   },
 }))
-vi.mock('./UseConfirmDialog', () => ({ confirmAction: state.confirm, chooseAction: vi.fn() }))
+vi.mock('./UseConfirmDialog', () => ({
+  confirmAction: (options: { title?: string }) =>
+    options.title === '本次任务后台保活' ? state.audioConfirm() : state.confirm(options),
+  chooseAction: vi.fn(),
+}))
 vi.mock('../services/NativeImportKeepAlive', () => ({
   isNativeImportKeepAliveAvailable: () => false,
 }))
@@ -80,6 +85,7 @@ beforeEach(() => {
   state.clearCheckpoint.mockReset().mockResolvedValue(undefined)
   state.removeTask.mockReset().mockResolvedValue(undefined)
   state.createRestore.mockReset().mockResolvedValue(undefined)
+  state.audioConfirm.mockReset().mockResolvedValue(false)
   state.confirm.mockResolvedValue(false)
   state.replace.mockReset().mockResolvedValue({ added: 0 })
 })
@@ -174,6 +180,7 @@ it('holds the restore plan during confirmation and prevents a second submission 
   const first = archive.handleRestoreConfirm('replace', [])
   const second = archive.handleRestoreConfirm('replace', [])
   await archive.closeRestorePanel()
+  await vi.waitFor(() => expect(state.confirm).toHaveBeenCalledOnce())
   const count = state.confirm.mock.calls.length
   const disposed = state.disposePrepared.mock.calls.length
   const busy = context.isRestoring.value
@@ -327,4 +334,24 @@ it('stopping restore preflight aborts the active scan and clears its UI state', 
     '已停止识别，并清理分享暂存文件与恢复检查点。',
     7000,
   )
+})
+
+it('holds the existing restore guard while the optional audio question is pending', async () => {
+  const { context, archive } = await fixture()
+  context.preparedRestore.value.preview = { mode: 'full', fileName: 'backup.zip' }
+  let answer!: (enabled: boolean) => void
+  state.audioConfirm.mockClear().mockReturnValueOnce(
+    new Promise<boolean>((resolve) => {
+      answer = resolve
+    }),
+  )
+  const first = archive.handleRestoreConfirm('replace', [])
+  expect(context.isRestoring.value).toBe(true)
+  await archive.handleRestoreConfirm('replace', [])
+  await archive.closeRestorePanel()
+  expect(state.audioConfirm).toHaveBeenCalledOnce()
+  expect(state.disposePrepared).not.toHaveBeenCalled()
+  answer(false)
+  await first
+  expect(context.isRestoring.value).toBe(false)
 })

@@ -780,8 +780,8 @@ async function compressContext() {
         <p v-if="form.toolCallingEnabled" class="chat-settings-hint">
           {{
             form.allowPageScripts
-              ? '已开启：脚本可访问页面、本机存储和网络，也可能接触 API 密钥、登录页面及其他隐私。只在信任当前模型时使用。'
-              : '默认关闭。开启后，脚本可访问页面、本机存储和网络，也可能接触 API 密钥、登录页面及其他隐私。'
+              ? '已开启：脚本可访问页面、本机存储和网络，也可能接触 API 密钥、登录页面及其他隐私。停止助手不能强制终止脚本或撤销其操作，每次运行前另行确认。只在信任当前模型时使用。'
+              : '默认关闭。开启后，脚本可访问页面、本机存储和网络，也可能接触 API 密钥、登录页面及其他隐私。停止助手不能强制终止脚本或撤销其操作，每次运行前另行确认。'
           }}
         </p>
         <label class="chat-settings-field"
@@ -844,6 +844,10 @@ async function compressContext() {
             role="switch"
             aria-label="允许小助手截图"
         /></label>
+        <p class="chat-settings-hint">
+          截图可能发送给当前 AI
+          服务；每次发送前会询问，取消不会截图。关闭后禁止后续截图，已发送图片无法撤回。
+        </p>
         <label class="chat-settings-field chat-settings-toggle"
           ><span>桌宠</span
           ><input

@@ -9,6 +9,8 @@ const {
   getExternalAppSummary,
   requireCustomTool,
   getData,
+  sdkList,
+  accessChanges,
   hasPermission,
   hasPersistentPermission,
   readChat,
@@ -22,6 +24,8 @@ const {
   hasPersistentPermission: vi.fn(),
   readChat: vi.fn(),
   previewAllowed: { value: true },
+  sdkList: vi.fn(async () => ({ items: [] })),
+  accessChanges: { listener: undefined as undefined | ((id: string) => void) },
 }))
 
 vi.mock('../composables/UsePreviewBudget', async () => {
@@ -32,6 +36,12 @@ vi.mock('../composables/UsePreviewBudget', async () => {
 vi.mock('../core/AppContainer', () => ({
   externalAppService: {
     get: getExternalApp,
+    subscribeAccessChanges: (listener: (id: string) => void) => {
+      accessChanges.listener = listener
+      return () => {
+        accessChanges.listener = undefined
+      }
+    },
     getSummary: getExternalAppSummary,
     requireCustomTool,
     getData,
@@ -45,10 +55,11 @@ vi.mock('../core/AppContainer', () => ({
     recordHealthyLaunch: vi.fn(),
     recordRuntimeError: vi.fn(),
   },
-  externalAppSdkService: { readChat, releaseListSession: vi.fn() },
+  externalAppSdkService: { readChat, list: sdkList, releaseListSession: vi.fn() },
 }))
 
 import ExternalAppHost from './ExternalAppHost.vue'
+import { useConfirmDialogState } from '../composables/UseConfirmDialog'
 import { readChatReaderColors, rememberChatReaderColors } from '../utils/ChatReaderAppearance'
 
 describe('ExternalAppHost', () => {
@@ -324,12 +335,13 @@ describe('ExternalAppHost', () => {
           }),
         )
         await flushPromises()
-        const dialog = document.body.querySelector('.external-app-permission')
+        const state = useConfirmDialogState()
+        const dialog = state.activeDialog.value
         expect(Boolean(dialog)).toBe(prompts)
         if (prompts) {
           expect(readChat).not.toHaveBeenCalled()
-          expect(dialog!.textContent).toContain(ordinaryRead ? '定位资源库' : '远程')
-          ;(dialog!.querySelector('button') as HTMLButtonElement).click()
+          expect(dialog!.message).toContain(ordinaryRead ? '定位资源库' : '远程')
+          state.respond('cancel')
           await flushPromises()
         } else if (undeclared) {
           expect(readChat).not.toHaveBeenCalled()
@@ -682,5 +694,156 @@ describe('ExternalAppHost', () => {
     wrapper.unmount()
     window.removeEventListener('keydown', featureHubEscape)
     expect(document.body.classList.contains('external-app-fullscreen')).toBe(false)
+  })
+})
+
+describe('permission request lifecycle', () => {
+  async function openSdk() {
+    hasPermission.mockReset().mockResolvedValue(true)
+    hasPersistentPermission.mockReset().mockResolvedValue(false)
+    sdkList.mockReset().mockResolvedValue({ items: [] })
+    getExternalApp
+      .mockReset()
+      .mockResolvedValue({
+        id: 'audit.app',
+        enabled: true,
+        runtimeMode: 'isolated',
+        packageFingerprint: 'one',
+        runtimeHtml: '<html><body>audit</body></html>',
+        manifest: { id: 'audit.app', name: '权限验证', version: '1' },
+      })
+    const port = {
+      postMessage: vi.fn(),
+      start: vi.fn(),
+      close: vi.fn(),
+      onmessage: undefined as undefined | ((event: MessageEvent) => void),
+    }
+    vi.stubGlobal(
+      'MessageChannel',
+      class {
+        port1 = port
+        port2 = {}
+      },
+    )
+    const wrapper = mount(ExternalAppHost, {
+      props: { appId: 'audit.app' },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    const frame = wrapper.get('iframe').element as HTMLIFrameElement
+    const connect = vi.spyOn(frame.contentWindow!, 'postMessage').mockImplementation(() => {})
+    await wrapper.get('iframe').trigger('load')
+    const nonce = connect.mock.calls.find(([value]) => value.type === 'srl:connect')![0].nonce
+    const send = async (id: number, method = 'resources.list') => {
+      port.onmessage!(
+        new MessageEvent('message', {
+          data: { type: 'srl:request', nonce, id: String(id), sequence: id, method, payload: {} },
+        }),
+      )
+      await flushPromises()
+    }
+    return {
+      wrapper,
+      port,
+      send,
+      state: useConfirmDialogState(),
+      close() {
+        wrapper.unmount()
+        vi.unstubAllGlobals()
+      },
+    }
+  }
+  it('queues simultaneous requests and rejects each independently, then permits an explicit retry', async () => {
+    const host = await openSdk()
+    try {
+      await host.send(1)
+      const first = host.state.activeDialog.value!.id
+      await host.send(2)
+      expect(host.state.activeDialog.value!.id).toBe(first)
+      host.state.respond('cancel')
+      await flushPromises()
+      expect(host.port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: '1', ok: false }),
+      )
+      expect(host.state.activeDialog.value!.id).not.toBe(first)
+      host.state.respond('cancel')
+      await flushPromises()
+      expect(host.port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: '2', ok: false }),
+      )
+      expect(sdkList).not.toHaveBeenCalled()
+      await host.send(3)
+      host.state.respond('confirm')
+      await flushPromises()
+      expect(sdkList).toHaveBeenCalledTimes(1)
+      expect(host.port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: '3', ok: true }),
+      )
+    } finally {
+      host.close()
+    }
+  })
+  it('invalidates queued and active confirmations when access is revoked', async () => {
+    const host = await openSdk()
+    try {
+      await host.send(1)
+      await host.send(2)
+      accessChanges.listener!('audit.app')
+      await flushPromises()
+      host.state.respond('confirm')
+      await flushPromises()
+      expect(host.state.activeDialog.value).toBeUndefined()
+      expect(sdkList).not.toHaveBeenCalled()
+      expect(host.wrapper.find('iframe').exists()).toBe(false)
+    } finally {
+      host.close()
+    }
+  })
+  it('never sends a late successful read back into a revoked runtime', async () => {
+    const host = await openSdk()
+    let finish!: (value: { items: never[] }) => void
+    sdkList.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    try {
+      await host.send(1)
+      host.state.respond('confirm')
+      await flushPromises()
+      expect(sdkList).toHaveBeenCalledTimes(1)
+      accessChanges.listener!('audit.app')
+      await flushPromises()
+      finish({ items: [] })
+      await flushPromises()
+      expect(host.port.postMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: '1', ok: true }),
+      )
+    } finally {
+      host.close()
+    }
+  })
+  it('clears cancelled file selection so the next explicit request can open again', async () => {
+    const host = await openSdk()
+    const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      await host.send(1, 'files.pick')
+      host.state.respond('confirm')
+      await flushPromises()
+      await host.wrapper.get('input[type=file]').trigger('cancel')
+      await flushPromises()
+      expect(host.port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: '1', ok: false }),
+      )
+      await host.send(2, 'files.pick')
+      host.state.respond('confirm')
+      await flushPromises()
+      expect(click).toHaveBeenCalledTimes(2)
+      await host.wrapper.get('input[type=file]').trigger('cancel')
+    } finally {
+      click.mockRestore()
+      host.close()
+    }
   })
 })

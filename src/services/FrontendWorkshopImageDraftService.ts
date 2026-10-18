@@ -60,10 +60,16 @@ export interface FrontendWorkshopImageTemplate {
   updatedAt: number
 }
 
-interface FrontendWorkshopImageDraftStore {
+export interface FrontendWorkshopImageDraftStore {
   version: 2
   activeProvider?: FrontendWorkshopImageProvider
   drafts: Partial<Record<FrontendWorkshopImageProvider, FrontendWorkshopImageDraft>>
+}
+
+export interface ImageGenerationWorkBackup {
+  version: 1
+  store: FrontendWorkshopImageDraftStore
+  templates: FrontendWorkshopImageTemplate[]
 }
 
 const IMAGE_DRAFT_KEY = 'srl.frontendWorkshop.imageGeneration.draft.v1'
@@ -249,6 +255,72 @@ function templateId(): string {
 }
 
 export class FrontendWorkshopImageDraftService {
+  exportPortableState(): ImageGenerationWorkBackup {
+    return { version: 1, store: this.readDraftStore(), templates: this.listTemplates() }
+  }
+
+  async importPortableState(value: ImageGenerationWorkBackup): Promise<void> {
+    if (
+      value.version !== 1 ||
+      !Array.isArray(value.templates) ||
+      !value.store ||
+      value.store.version !== 2
+    )
+      throw new Error('生图工作区备份格式无效')
+    const store = normalizeDraftStore(value.store)
+    const previous = this.readDraftStore()
+    const templates = this.listTemplates()
+    const { hashBytes } = await import('./HashService')
+    for (const provider of PROVIDERS) {
+      const local = previous.drafts[provider],
+        incoming = store.drafts[provider]
+      if (local && incoming && JSON.stringify(local) !== JSON.stringify(incoming)) {
+        const displaced = local.savedAt > incoming.savedAt ? incoming : local
+        const digest = await hashBytes(new TextEncoder().encode(JSON.stringify(displaced)))
+        const id = 'restored-draft-' + digest.slice(0, 16)
+        if (!templates.some((row) => row.id === id))
+          templates.push({
+            id,
+            name: '恢复时保留的 ' + provider + ' 草稿',
+            draft: displaced,
+            createdAt: displaced.savedAt,
+            updatedAt: displaced.savedAt,
+          })
+      }
+      if (local && (!incoming || local.savedAt > incoming.savedAt)) store.drafts[provider] = local
+    }
+    for (const template of value.templates) {
+      const draft = normalizeDraft(template.draft)
+      if (!draft || !template.id || !template.name) throw new Error('生图模板备份无效')
+      let id = template.id
+      const local = templates.find((row) => row.id === id)
+      if (local && JSON.stringify(local) !== JSON.stringify(template)) {
+        const digest = await hashBytes(new TextEncoder().encode(JSON.stringify(template)))
+        id += '-restored-' + digest.slice(0, 16)
+      }
+      if (!templates.some((row) => row.id === id)) templates.push({ ...template, id, draft })
+    }
+    if (templates.length > TEMPLATE_LIMIT)
+      throw new Error(`合并后生图模板超过 ${TEMPLATE_LIMIT} 份；请先导出或整理本机模板后重试`)
+    const beforeDraft = localStorage.getItem(IMAGE_DRAFT_KEY),
+      beforeTemplates = localStorage.getItem(IMAGE_TEMPLATES_KEY)
+    try {
+      localStorage.setItem(IMAGE_DRAFT_KEY, JSON.stringify(store))
+      localStorage.setItem(IMAGE_TEMPLATES_KEY, JSON.stringify(templates))
+      if (
+        localStorage.getItem(IMAGE_DRAFT_KEY) !== JSON.stringify(store) ||
+        localStorage.getItem(IMAGE_TEMPLATES_KEY) !== JSON.stringify(templates)
+      )
+        throw new Error('生图工作区保存后读回失败')
+    } catch (cause) {
+      if (beforeDraft === null) localStorage.removeItem(IMAGE_DRAFT_KEY)
+      else localStorage.setItem(IMAGE_DRAFT_KEY, beforeDraft)
+      if (beforeTemplates === null) localStorage.removeItem(IMAGE_TEMPLATES_KEY)
+      else localStorage.setItem(IMAGE_TEMPLATES_KEY, beforeTemplates)
+      throw cause
+    }
+  }
+
   loadDraft(provider?: FrontendWorkshopImageProvider): FrontendWorkshopImageDraft | undefined {
     const store = this.readDraftStore()
     if (provider) return store.drafts[provider]
@@ -361,9 +433,13 @@ export class FrontendWorkshopImageDraftService {
 
   private writeTemplates(value: FrontendWorkshopImageTemplate[]): void {
     try {
-      localStorage.setItem(IMAGE_TEMPLATES_KEY, JSON.stringify(value.slice(0, TEMPLATE_LIMIT)))
-    } catch {
-      // 模板写入失败时不影响当前生成会话。
+      const text = JSON.stringify(value.slice(0, TEMPLATE_LIMIT))
+      localStorage.setItem(IMAGE_TEMPLATES_KEY, text)
+      if (localStorage.getItem(IMAGE_TEMPLATES_KEY) !== text) throw new Error('保存后读回不一致')
+    } catch (cause) {
+      throw new Error('模板未能保存到本机，请检查存储空间或浏览器存储权限；当前画面描述仍保留', {
+        cause,
+      })
     }
   }
 

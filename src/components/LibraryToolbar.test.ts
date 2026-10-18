@@ -10,6 +10,8 @@ it('renders the live result count and sort control without requesting the comple
     commitSearch: vi.fn(),
     searchScope: 'name' as const,
     isSearchIndexing: false,
+    contentSearchError: '',
+    retryContentSearch: vi.fn(),
     searchQuery: '',
     handleSearchFocus: vi.fn(),
     handleSearchBlur: vi.fn(),

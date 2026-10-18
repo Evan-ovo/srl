@@ -135,11 +135,7 @@ summary:focus-visible {
 .resource-card,
 .layout-option,
 .settings-section,
-.editor-form,
-.resource-detail__content,
 .resource-detail__summary,
-.resource-detail__tabs,
-.appearance-scope-tabs,
 .ai-tagging-panel__result {
   border-color: var(--glass-border);
   box-shadow: var(--control-shadow);
@@ -157,7 +153,6 @@ summary:focus-visible {
 .resource-card__relation,
 .resource-detail__summary-tags span,
 .export-chip,
-.resource-detail__tabs button,
 .mobile-bottom-nav button {
   border-color: var(
     --button-border,
@@ -171,8 +166,7 @@ summary:focus-visible {
 .nav-item--active,
 .category-nav--active,
 .tag-nav--active,
-.mobile-bottom-nav__item--active,
-.resource-detail__tab--active {
+.mobile-bottom-nav__item--active {
   border-color: var(
     --selection-border,
     color-mix(in srgb, var(--color-accent) 46%, var(--glass-border))

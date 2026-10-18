@@ -12,7 +12,7 @@ import type { ImportResult, ParsedResource } from '../types/Import'
 import type { CharacterCardContentEdit } from '../types/CharacterCardContentEdit'
 import {
   getRelatedResourceIds,
-  normalizeResource,
+  getResourceCategoryIds,
   RESOURCE_TYPE,
   isUserPersonaAvatarAttachment,
   toResourceListSummary,
@@ -198,11 +198,14 @@ export class ResourceService {
     const summaries = this.storage.listResourceListSummaries
       ? await this.storage.listResourceListSummaries(filter)
       : (await this.storage.listSummaries()).map(toResourceListSummary)
-    if (!filter?.ids && !filter?.types) return summaries
+    if (!filter?.ids && !filter?.types && !filter?.categoryId) return summaries
     const ids = filter?.ids ? new Set(filter.ids) : undefined
     const types = filter?.types ? new Set(filter.types) : undefined
     return summaries.filter(
-      (resource) => (!ids || ids.has(resource.id)) && (!types || types.has(resource.type)),
+      (resource) =>
+        (!ids || ids.has(resource.id)) &&
+        (!types || types.has(resource.type)) &&
+        (!filter?.categoryId || getResourceCategoryIds(resource).includes(filter.categoryId)),
     )
   }
 
@@ -210,6 +213,19 @@ export class ResourceService {
     if (this.storage.getResourceListSummary) return this.storage.getResourceListSummary(id)
     const summary = await (this.storage.getSummary?.(id) ?? this.storage.get(id))
     return summary ? toResourceListSummary(summary) : undefined
+  }
+
+  async getResourceListSummaries(ids: readonly string[]): Promise<ResourceListSummary[]> {
+    if (this.storage.getResourceListSummaries) return this.storage.getResourceListSummaries(ids)
+    const result: ResourceListSummary[] = []
+    const selected = Array.from(new Set(ids))
+    for (let start = 0; start < selected.length; start += 250) {
+      const rows = await Promise.all(
+        selected.slice(start, start + 250).map((id) => this.getResourceListSummary(id)),
+      )
+      result.push(...rows.flatMap((row) => (row ? [row] : [])))
+    }
+    return result
   }
 
   listRecentCharacterCards(limit = 100): Promise<ResourceListSummary[]> {
@@ -690,45 +706,9 @@ export class ResourceService {
     )
   }
 
-  /** 把新资源与来源资源建立双向关联；来源已删除的 id 会被静默跳过。 */
-  private async linkRelatedResources(resourceId: string, relatedIds: string[]): Promise<string[]> {
-    const now = Date.now()
-    const targets = (
-      await Promise.all(
-        Array.from(new Set(relatedIds))
-          .filter((id) => id && id !== resourceId)
-          .map((id) => this.storage.get(id)),
-      )
-    ).flatMap((resource) => (resource ? [resource] : []))
-    if (targets.length) {
-      await this.storage.saveMany(
-        targets.map((target) =>
-          normalizeResource({
-            ...target,
-            relatedResourceIds: Array.from(new Set([...getRelatedResourceIds(target), resourceId])),
-            updatedAt: now,
-          }),
-        ),
-      )
-    }
-    return targets.map((target) => target.id)
-  }
-
   /** 把两个或更多已入库资源设为双向关联，供成套但仍保持原生格式的资源使用。 */
   async linkResources(resourceIds: string[]): Promise<void> {
-    const ids = Array.from(new Set(resourceIds.filter(Boolean)))
-    if (ids.length < 2) return
-
-    const source = await this.storage.get(ids[0]!)
-    if (!source) throw new Error('无法关联：主资源不存在或已被删除')
-
-    const linkedIds = await this.linkRelatedResources(source.id, ids.slice(1))
-    await this.storage.update(source.id, {
-      relatedResourceIds: Array.from(
-        new Set([...getRelatedResourceIds(source), ...linkedIds]),
-      ).filter((id) => id !== source.id),
-      updatedAt: Date.now(),
-    })
+    return operationsResourceOrganizationOperations.linkResources(this.storage, resourceIds)
   }
 
   /**
@@ -762,7 +742,11 @@ export class ResourceService {
       resource = await this.createImportedResource(file, undefined, contentHash)
       await this.storage.save(resource)
     }
-    const linkedIds = await this.linkRelatedResources(resource.id, options.relatedResourceIds)
+    const linkedIds = await operationsResourceOrganizationOperations.linkRelatedResources(
+      this.storage,
+      resource.id,
+      options.relatedResourceIds,
+    )
     await this.storage.update(resource.id, {
       relatedResourceIds: Array.from(
         new Set([...getRelatedResourceIds(resource), ...linkedIds]),
@@ -812,7 +796,9 @@ export class ResourceService {
     snapshot?: ResourceSummary[],
   ): Promise<number> {
     await checkpoint()
-    const resources = snapshot ?? (await this.storage.listSummaries())
+    const resources =
+      snapshot ??
+      (await (this.storage.listResourceListSummaries?.() ?? this.storage.listSummaries()))
     let upgradedCount = 0
 
     let processed = 0
@@ -834,7 +820,8 @@ export class ResourceService {
         await this.storage.update(summary.id, {
           name: legacyGlobalRegexName,
           metadata: {
-            ...(await this.storage.get(summary.id))?.metadata,
+            ...(await (this.storage.getSummary?.(summary.id) ?? this.storage.get(summary.id)))
+              ?.metadata,
             legacyGlobalRegexNameRepaired: true,
           },
         })

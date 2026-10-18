@@ -90,6 +90,25 @@ describe('可编辑界面项目', () => {
   })
 })
 describe('界面与原功能的边界', () => {
+  it('显式原生工作区保留Shadow实例，正文和内部操作不进入作者快照', () => {
+    const root = document.createElement('section')
+    const workspace = document.createElement('div')
+    workspace.setAttribute('data-srl-native-root', '')
+    workspace.setAttribute('aria-label', '读了么阅读工作区')
+    const shadow = workspace.attachShadow({ mode: 'open' })
+    shadow.innerHTML = '<button>内部翻页</button><p>不能复制的正文</p>'
+    root.append(workspace)
+    document.body.append(root)
+    const session = createUiDomSession(root, UI_PRIVATE_SELECTOR)
+    const state = session.read()
+    expect(state.nativeRegions).toEqual([
+      expect.objectContaining({ tag: 'div', label: '读了么阅读工作区' }),
+    ])
+    expect(state.html).not.toMatch(/不能复制的正文|内部翻页/u)
+    expect(state.controls).toEqual([])
+    expect(session.native(state.nativeRegions![0]!.id)).toBe(workspace)
+    expect(workspace.shadowRoot).toBe(shadow)
+  })
   it('原控件执行真实点击、输入；禁用、只读、已移除控件拒绝执行', () => {
     const root = document.createElement('section')
     root.innerHTML =

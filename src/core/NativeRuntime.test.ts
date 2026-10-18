@@ -63,7 +63,7 @@ describe('NativeRuntime back handling', () => {
       window.removeEventListener('srl:community-sources-changed', changed)
     }
   })
-  it('shows committed native binding results in the existing notice center and updates pending sources', async () => {
+  it('briefly shows committed native binding results and updates pending sources', async () => {
     const changed = vi.fn()
     window.addEventListener('srl:community-sources-changed', changed)
     installNativeRuntime()
@@ -86,16 +86,22 @@ describe('NativeRuntime back handling', () => {
         expect.objectContaining({
           id: 'discord-auto-binding:native-post:native-card',
           message: '帖子“帖子 A”已绑定角色卡“卡 A”',
-          persistent: true,
+          persistent: false,
         }),
       )
       expect(changed).toHaveBeenCalledOnce()
-      vi.advanceTimersByTime(5000)
+      vi.advanceTimersByTime(4999)
       expect(
         noticeCenter
           .list()
           .some((notice) => notice.id === 'discord-auto-binding:native-post:native-card'),
       ).toBe(true)
+      vi.advanceTimersByTime(1)
+      expect(
+        noticeCenter
+          .list()
+          .some((notice) => notice.id === 'discord-auto-binding:native-post:native-card'),
+      ).toBe(false)
     } finally {
       vi.useRealTimers()
       window.removeEventListener('srl:community-sources-changed', changed)

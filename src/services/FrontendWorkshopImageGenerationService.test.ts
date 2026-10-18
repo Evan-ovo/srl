@@ -45,6 +45,34 @@ class MemoryCredentials implements LocalCredentialRepository {
 describe('FrontendWorkshopImageGenerationService', () => {
   beforeEach(() => vi.stubGlobal('localStorage', new MemoryStorage()))
 
+  it('persists the selected relay model profile and includes it in non-secret configuration backup', async () => {
+    const service = new FrontendWorkshopImageGenerationService(vi.fn(), new MemoryCredentials())
+    const endpoint = 'https://relay.example/v1/images/generations'
+    const relayCapabilities = {
+      endpoint,
+      model: 'vendor-alias',
+      modelProfile: 'gpt-image-2' as const,
+      declared: { mask: false },
+    }
+    await service.saveConfiguration({
+      ...service.defaultConfig('openai'),
+      endpoint,
+      model: 'vendor-alias',
+      apiKey: 'private-key',
+      credentialPersistence: 'session',
+      relayCapabilities,
+    })
+    const reopened = new FrontendWorkshopImageGenerationService(vi.fn(), new MemoryCredentials())
+    expect(reopened.getSavedConfig('openai').relayCapabilities).toEqual(relayCapabilities)
+    const portable = service.exportPortableSettings()
+    expect(portable[0]?.relayCapabilities).toEqual(relayCapabilities)
+    expect(JSON.stringify(portable)).not.toContain('private-key')
+    localStorage.clear()
+    const imported = new FrontendWorkshopImageGenerationService(vi.fn(), new MemoryCredentials())
+    await imported.importPortableSettings(portable)
+    expect(imported.getSavedConfig('openai').relayCapabilities).toEqual(relayCapabilities)
+  })
+
   it.each([
     'nai-diffusion-3',
     'nai-diffusion-4-full',
@@ -156,7 +184,7 @@ describe('FrontendWorkshopImageGenerationService', () => {
   it('按 OpenAI Image API 结构发起单次生成并读取 base64 图片', async () => {
     const request = vi.fn(
       async () =>
-        new Response(JSON.stringify({ data: [{ b64_json: 'cG5n' }] }), {
+        new Response(JSON.stringify({ data: [{ b64_json: 'UklGRgQAAABXRUJQ' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -175,7 +203,7 @@ describe('FrontendWorkshopImageGenerationService', () => {
       outputCompression: 82,
     })
 
-    expect(result.dataUrl).toBe('data:image/webp;base64,cG5n')
+    expect(result.dataUrl).toBe('data:image/webp;base64,UklGRgQAAABXRUJQ')
     expect(result.mimeType).toBe('image/webp')
     const options = (request.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1]
     expect(options).toBeDefined()
@@ -347,6 +375,31 @@ describe('FrontendWorkshopImageGenerationService', () => {
     )
   })
 
+  it('does not send incompatible SMEA flags with the V3 DDIM sampler', async () => {
+    const request = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ image: 'bmFp' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    const service = new FrontendWorkshopImageGenerationService(request)
+    const result = await service.generate(
+      { ...service.defaultConfig('novelai'), apiKey: 'token', model: 'nai-diffusion-3' },
+      {
+        prompt: 'portrait',
+        novelAiSampler: 'ddim',
+        novelAiSmea: true,
+        novelAiSmeaDyn: true,
+      },
+    )
+    const body = JSON.parse(
+      String((request.mock.calls as unknown as Array<[string, RequestInit]>)[0]?.[1].body),
+    )
+    expect(body.parameters).toMatchObject({ sampler: 'ddim', sm: false, sm_dyn: false })
+    expect(result.parameters).toMatchObject({ smea: false, smeaDyn: false, smeaSuppressed: true })
+  })
+
   it('读取 NovelAI 实际返回的 ZIP 图片附件', async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
     const request = vi.fn(
@@ -418,10 +471,47 @@ describe('FrontendWorkshopImageGenerationService', () => {
     expect(result.message).toContain('仍可手动填写')
   })
 
+  it('filters text and retired DALL-E models from the official image model list', async () => {
+    const request = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: 'gpt-5' },
+              { id: 'dall-e-3' },
+              { id: 'gpt-image-2' },
+              { id: 'chatgpt-image-latest' },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+    )
+    const service = new FrontendWorkshopImageGenerationService(request)
+    const result = await service.listModels({ ...service.defaultConfig('openai'), apiKey: 'token' })
+    expect(result.options.map((option) => option.id).sort()).toEqual([
+      'chatgpt-image-latest',
+      'gpt-image-2',
+    ])
+  })
+
+  it('reports missing image model access when an official list contains only text models', async () => {
+    const request = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [{ id: 'gpt-5' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    const service = new FrontendWorkshopImageGenerationService(request)
+    await expect(
+      service.listModels({ ...service.defaultConfig('openai'), apiKey: 'token' }),
+    ).rejects.toThrow('图像模型权限')
+  })
+
   it('OpenAI-compatible 生图保留 OpenAI Provider 来源', async () => {
     const request = vi.fn(
       async () =>
-        new Response(JSON.stringify({ data: [{ b64_json: 'cG5n' }] }), {
+        new Response(JSON.stringify({ data: [{ b64_json: 'UklGRgQAAABXRUJQ' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -434,5 +524,182 @@ describe('FrontendWorkshopImageGenerationService', () => {
     const result = await service.generate(config, { prompt: 'test' })
 
     expect(result.provider).toBe('openai')
+  })
+  it('migrates connection settings without keys, reopens, and does not pair a local key with a different endpoint', async () => {
+    const credentials = new MemoryCredentials()
+    const service = new FrontendWorkshopImageGenerationService(vi.fn(), credentials)
+    await service.saveConfiguration({
+      ...service.defaultConfig('openai'),
+      endpoint: 'https://original.example/images',
+      model: 'saved-model',
+      apiKey: 'private-key',
+    })
+    const settings = service.exportPortableSettings()
+    expect(settings[0]?.apiKey).toBe('')
+    expect(JSON.stringify(settings)).not.toContain('private-key')
+    const savedConfig = service.exportConfigurations()
+    localStorage.clear()
+    const emptyCredentials = new MemoryCredentials()
+    await new FrontendWorkshopImageGenerationService(
+      vi.fn(),
+      emptyCredentials,
+    ).importPortableSettings(settings)
+    const restored = new FrontendWorkshopImageGenerationService(vi.fn(), emptyCredentials)
+    expect(restored.getSavedConfig('openai')).toMatchObject({
+      endpoint: 'https://original.example/images',
+      model: 'saved-model',
+      apiKey: '',
+    })
+    expect(emptyCredentials.values.size).toBe(0)
+    await restored.importConfigurations(savedConfig)
+    await restored.importPortableSettings([
+      { ...settings[0]!, endpoint: 'https://different.example/images', apiKey: 'injected-key' },
+    ])
+    expect(restored.getSavedConfig('openai')).toMatchObject({
+      endpoint: 'https://original.example/images',
+      apiKey: 'private-key',
+    })
+    expect(emptyCredentials.values.get('image-generation:openai')).toBe('private-key')
+  })
+  it.each(['novelai', 'openai'] as const)(
+    '%s classifies HTTP failures with an actionable message and redacted server detail, with one request',
+    async (provider) => {
+      for (const [status, hint] of [
+        [400, '请求参数'],
+        [401, 'API 密钥'],
+        [402, '额度不足'],
+        [403, '权限'],
+        [404, '接口或模型不存在'],
+        [413, '过大'],
+        [429, '请求受限'],
+        [503, 'HTTP 503'],
+      ] as const) {
+        const request = vi.fn<typeof fetch>(
+          async () =>
+            new Response(JSON.stringify({ error: { message: 'fixture-secret upstream detail' } }), {
+              status,
+            }),
+        )
+        const service = new FrontendWorkshopImageGenerationService(request)
+        const failure = await service
+          .generate(
+            { ...service.defaultConfig(provider), apiKey: 'fixture-secret' },
+            { prompt: 'portrait' },
+          )
+          .catch((error) => error)
+        expect(failure).toBeInstanceOf(FrontendWorkshopImageGenerationError)
+        expect(failure.message).toContain(hint)
+        expect(failure.message).toContain('upstream detail')
+        expect(JSON.stringify(failure.diagnostic)).not.toContain('fixture-secret')
+        expect(request).toHaveBeenCalledTimes(1)
+      }
+    },
+  )
+  it.each([
+    null,
+    {},
+    { error: { message: 'not an image model' } },
+    { data: [] },
+    { data: [{ url: 123 }] },
+    { data: [{ b64_json: { invalid: true } }] },
+    { data: [{ b64_json: 'cG5n' }] },
+  ])(
+    'rejects malformed or empty image results without leaking a raw TypeError: %j',
+    async (payload) => {
+      const request = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload)))
+      const service = new FrontendWorkshopImageGenerationService(request)
+      await expect(
+        service.generate(
+          { ...service.defaultConfig('openai'), apiKey: 'test-key' },
+          { prompt: 'portrait' },
+        ),
+      ).rejects.toMatchObject({
+        name: 'FrontendWorkshopImageGenerationError',
+        diagnostic: expect.objectContaining({ category: 'response_parse' }),
+      })
+      expect(request).toHaveBeenCalledTimes(1)
+    },
+  )
+  it('reports gateway HTML and malformed error JSON as one useful provider error', async () => {
+    for (const body of [
+      '<html><body>gateway error</body></html>',
+      'null',
+      '{"error":{"message":{"unexpected":true}}}',
+    ]) {
+      const request = vi.fn<typeof fetch>(async () => new Response(body, { status: 502 }))
+      const service = new FrontendWorkshopImageGenerationService(request)
+      const failure = await service
+        .generate(
+          { ...service.defaultConfig('openai'), apiKey: 'test-key' },
+          { prompt: 'portrait' },
+        )
+        .catch((error) => error)
+      expect(failure).toBeInstanceOf(FrontendWorkshopImageGenerationError)
+      expect(failure.message).toContain('HTTP 502')
+      expect(failure.message).not.toContain('<html>')
+    }
+  })
+  it('does not contact a provider when configuration is invalid or the request was already cancelled', async () => {
+    const request = vi.fn<typeof fetch>()
+    const service = new FrontendWorkshopImageGenerationService(request)
+    for (const change of [
+      { apiKey: '' },
+      { model: '' },
+      { endpoint: 'invalid' },
+      { endpoint: 'http://example.com' },
+      { endpoint: 'https://user:pass@example.com' },
+    ]) {
+      await expect(
+        service.generate(
+          { ...service.defaultConfig('openai'), apiKey: 'test-key', ...change },
+          { prompt: 'portrait' },
+        ),
+      ).rejects.toThrow()
+    }
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      service.generate(
+        { ...service.defaultConfig('openai'), apiKey: 'test-key' },
+        { prompt: 'portrait' },
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(request).not.toHaveBeenCalled()
+  })
+  it('validates a connection before writing any credential', async () => {
+    const credentials = new MemoryCredentials()
+    const service = new FrontendWorkshopImageGenerationService(vi.fn(), credentials)
+    await expect(
+      service.saveConfiguration({
+        ...service.defaultConfig('novelai'),
+        apiKey: 'secret',
+        endpoint: 'invalid',
+      }),
+    ).rejects.toThrow('地址无效')
+    expect(credentials.values.size).toBe(0)
+    expect(service.getSavedConfig('novelai').apiKey).toBe('')
+  })
+  it('keeps fetch failures diagnostic and never automatically repeats a paid request', async () => {
+    const request = vi.fn<typeof fetch>(async () => {
+      throw new TypeError('Failed to fetch')
+    })
+    const service = new FrontendWorkshopImageGenerationService(request)
+    const failure = await service
+      .generate({ ...service.defaultConfig('openai'), apiKey: 'test-key' }, { prompt: 'portrait' })
+      .catch((error) => error)
+    expect(failure.diagnostic.category).toBe('network')
+    expect(failure.message).toContain('确认供应商任务状态')
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+  it('retains the actual HTTP error when model discovery uses a default endpoint', async () => {
+    const request = vi.fn<typeof fetch>(
+      async () => new Response('{"error":{"message":"invalid key"}}', { status: 401 }),
+    )
+    const service = new FrontendWorkshopImageGenerationService(request)
+    await expect(
+      service.listModels({ ...service.defaultConfig('openai'), endpoint: '', apiKey: 'test-key' }),
+    ).rejects.toThrow('HTTP 401')
+    expect(request).toHaveBeenCalledTimes(1)
   })
 })

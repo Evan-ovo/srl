@@ -1,4 +1,6 @@
 import recoveryCss from '../styles/RecoveryControls.css?inline'
+import { CUSTOM_UI_VIEWS_CHANGED, type CustomUiViews } from '../types/UiCustomization'
+import type { CustomCssScope } from '../types/BrowserPreferences'
 const GUARD_HOST_ID = 'srl-appearance-safe-layer'
 import {
   PENDING_APPEARANCE_KEY,
@@ -40,7 +42,9 @@ export function createProtectedHost(id: string): { host: HTMLDivElement; root: S
   // Both protected hosts use the top layer index; trial confirmation must stay
   // above the per-view recovery button even when that button mounts later.
   document.body.insertBefore(host, document.getElementById(GUARD_HOST_ID))
-  return { host, root: host.attachShadow({ mode: 'open' }) }
+  const root = host.attachShadow({ mode: 'open' })
+  appearanceTransaction.observeProtectedRoot(root)
+  return { host, root }
 }
 
 class AppearanceTransactionManager {
@@ -48,6 +52,163 @@ class AppearanceTransactionManager {
   private keepActive?: () => void
   private undoConfirmed?: () => void
   private pendingViewTrial = false
+  private previewViews?: CustomUiViews
+  private finishPreview?: () => void
+  private observePreviewRoot?: (root: ShadowRoot) => void
+
+  observeProtectedRoot(root: ShadowRoot): void {
+    this.observePreviewRoot?.(root)
+  }
+
+  getPreviewViews(): CustomUiViews | undefined {
+    return this.previewViews
+  }
+
+  isPreviewing(): boolean {
+    return Boolean(this.finishPreview)
+  }
+
+  exitPreview(): void {
+    this.finishPreview?.()
+  }
+
+  disablePreviewView(scope: CustomCssScope): boolean {
+    if (!this.previewViews) return false
+    const view = this.previewViews[scope]
+    if (view) this.previewViews = { ...this.previewViews, [scope]: { ...view, enabled: false } }
+    window.dispatchEvent(new Event(CUSTOM_UI_VIEWS_CHANGED))
+    return true
+  }
+
+  preview(options: {
+    previousCss: string
+    nextCss: string
+    views: CustomUiViews
+    apply(css: string): void
+    onExit(): void
+    beforeExit?(): Promise<boolean>
+  }): void {
+    this.exitPreview()
+    this.rollback()
+    const { host, root } = createProtectedHost('srl-appearance-preview-layer')
+    root.innerHTML = `<style>${recoveryCss}</style><aside class="appearance-preview-controls" popover="manual" aria-label="外观预览"><div class="appearance-preview-actions"><button type="button" data-exit-preview title="退出预览（Esc）"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H5v14h4m5-12 5 5-5 5m-5-5h10" /></svg><span>退出预览</span></button><button type="button" data-preview-info aria-label="预览说明" aria-expanded="false" aria-controls="srl-preview-help"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 11v5m0-9v1"/></svg></button></div><div id="srl-preview-help" class="appearance-preview-help" role="note" hidden><strong>外观仅临时生效</strong><p>退出后恢复原外观，编辑草稿保留。</p><p>保存、删除会影响真实数据，退出预览不会撤销。</p></div></aside>`
+    const controls = root.querySelector<HTMLElement>('.appearance-preview-controls')!
+    const help = root.querySelector<HTMLElement>('#srl-preview-help')!
+    const info = root.querySelector<HTMLButtonElement>('[data-preview-info]')!
+    const setHelp = (open: boolean) => {
+      help.hidden = !open
+      info.setAttribute('aria-expanded', String(open))
+    }
+    info.addEventListener('click', () => setHelp(help.hidden === true))
+    const syncTheme = () => {
+      host.dataset.previewTheme =
+        document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'
+    }
+    syncTheme()
+    const protectedRoots = new Set<ShadowRoot>()
+    const modals: HTMLDialogElement[] = []
+    const exit = () => {
+      if (this.finishPreview !== exit) return
+      this.finishPreview = undefined
+      this.previewViews = undefined
+      this.observePreviewRoot = undefined
+      document.removeEventListener('keydown', escape, true)
+      document.removeEventListener('toggle', raiseControls, true)
+      for (const other of protectedRoots) other.removeEventListener('toggle', raiseControls, true)
+      observer.disconnect()
+      host.remove()
+      try {
+        options.apply(options.previousCss)
+      } finally {
+        window.dispatchEvent(new Event(CUSTOM_UI_VIEWS_CHANGED))
+        options.onExit()
+      }
+    }
+    let deciding = false
+    const requestExit = async () => {
+      if (deciding) return
+      deciding = true
+      try {
+        if (options.beforeExit && !(await options.beforeExit())) return
+        exit()
+      } finally {
+        deciding = false
+      }
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (deciding || event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (!help.hidden) {
+        setHelp(false)
+        info.focus()
+        return
+      }
+      void requestExit()
+    }
+    // Keep the escape control above native dialogs/popovers opened during the session.
+    const placeControls = () => {
+      // A top-layer popover outside the active modal is still inert. Keep the
+      // protected Shadow host inside that modal until it closes or is removed.
+      let parent: HTMLElement = document.body
+      for (let index = modals.length - 1; index >= 0; index--) {
+        const modal = modals[index]!
+        if (modal.isConnected && modal.open) {
+          parent = modal
+          break
+        }
+      }
+      controls.hidePopover?.()
+      if (host.parentNode !== parent) parent.append(host)
+      controls.showPopover?.()
+    }
+    const raiseControls = (event: Event) => {
+      if (event.target === controls) return
+      if (event.target instanceof HTMLDialogElement) {
+        const index = modals.indexOf(event.target)
+        if (index !== -1) modals.splice(index, 1)
+        if (event.target.open && event.target.matches(':modal')) modals.push(event.target)
+      }
+      placeControls()
+    }
+    const observer = new MutationObserver(() => {
+      syncTheme()
+      for (let index = modals.length - 1; index >= 0; index--) {
+        if (!modals[index]!.isConnected || !modals[index]!.open) modals.splice(index, 1)
+      }
+      for (const other of protectedRoots) {
+        if (!other.host.isConnected) {
+          other.removeEventListener('toggle', raiseControls, true)
+          protectedRoots.delete(other)
+        }
+      }
+      if (this.finishPreview === exit && !host.isConnected) {
+        placeControls()
+      }
+    })
+    root.querySelector('[data-exit-preview]')!.addEventListener('click', () => void requestExit())
+    document.addEventListener('keydown', escape, true)
+    document.addEventListener('toggle', raiseControls, true)
+    this.observePreviewRoot = (other) => {
+      protectedRoots.add(other)
+      other.addEventListener('toggle', raiseControls, true)
+    }
+    observer.observe(document.body, { childList: true, subtree: true })
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    })
+    this.previewViews = options.views
+    this.finishPreview = exit
+    try {
+      controls.showPopover?.()
+      options.apply(options.nextCss)
+      window.dispatchEvent(new Event(CUSTOM_UI_VIEWS_CHANGED))
+    } catch (error) {
+      exit()
+      throw error
+    }
+  }
 
   hasPendingViewTrial(): boolean {
     return this.pendingViewTrial
@@ -69,10 +230,12 @@ class AppearanceTransactionManager {
   }
 
   rollback(): void {
+    this.exitPreview()
     this.rollbackActive?.()
   }
 
   begin(options: AppearanceTransactionOptions): void {
+    this.exitPreview()
     this.rollbackActive?.()
     const durationMs = Math.max(1000, options.durationMs ?? 15_000)
     const pending: PendingAppearance = {
@@ -145,6 +308,7 @@ class AppearanceTransactionManager {
   }
 
   clear(css: string, apply: (value: string) => void, persist: (value: string) => void): void {
+    this.exitPreview()
     this.rollbackActive?.()
     this.undoConfirmed = undefined
     localStorage.removeItem(PENDING_APPEARANCE_KEY)

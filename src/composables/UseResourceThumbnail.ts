@@ -1,12 +1,7 @@
 import { onMounted, onScopeDispose, shallowRef, watch, type Ref } from 'vue'
 
 import { assetStore, resourceGalleryService } from '../core/AppContainer'
-import {
-  galleryImageUrl,
-  galleryOwnerId,
-  isResourceGalleryImage,
-  resourceCoverId,
-} from '../types/ResourceGallery'
+import { galleryOwnerId, isResourceGalleryImage, resourceCoverId } from '../types/ResourceGallery'
 import type { ResourceReference } from '../types/Resource'
 
 const nearViewport = new Map<Element, (near: boolean) => void>()
@@ -219,12 +214,10 @@ export function useResourceThumbnail(
         stopObserving()
         try {
           if (coverId) {
-            const cover = await resourceGalleryService.getImage(resource.id, coverId)
+            const cover = await resourceGalleryService.getImagePreview(resource.id, coverId)
             if (currentGeneration !== generation) return
-            if (remoteCoverUrl) remoteCoverUrl.value = galleryImageUrl(cover)
-            thumbnail.value =
-              cover.thumbnailBlob ??
-              (cover.mimeType.startsWith('image/') ? cover.originalBlob : undefined)
+            if (remoteCoverUrl) remoteCoverUrl.value = cover.url
+            thumbnail.value = cover.blob
             return
           }
           if (assetId && nativeDisplay && failedAssetId !== assetId) {
@@ -235,11 +228,13 @@ export function useResourceThumbnail(
               return
             }
           }
-          const loaded = assetId
-            ? await assetStore.getBlob(assetId)
-            : (await resourceGalleryService.getImage(galleryOwnerId(resource), resource.id))
-                .thumbnailBlob
-          if (currentGeneration === generation) thumbnail.value = loaded
+          const preview = assetId
+            ? { blob: await assetStore.getBlob(assetId), url: '' }
+            : await resourceGalleryService.getImagePreview(galleryOwnerId(resource), resource.id)
+          if (currentGeneration === generation) {
+            thumbnail.value = preview.blob
+            if (remoteCoverUrl) remoteCoverUrl.value = preview.url
+          }
         } catch {
           // A missing cover must not prevent browsing or surface as an unhandled app error.
         }

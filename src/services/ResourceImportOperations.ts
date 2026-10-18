@@ -26,7 +26,7 @@ import {
 
 import { isRecord } from '../utils/UnknownValue'
 
-import { isResourceGalleryImage } from '../types/ResourceGallery'
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
 
 import { hashFile } from './HashService'
 
@@ -585,7 +585,7 @@ export async function importFilesSerial(
   const versionsByHash = new Map<string, ResourceSummary>()
   const knownResourceIds = new Set<string>()
   const rememberActive = (resource: ResourceSummary): void => {
-    if (resource.contentHash && !isResourceGalleryImage(resource)) {
+    if (resource.contentHash && !isResourceOwnedFile(resource)) {
       if (!activeByHash.has(resource.contentHash)) activeByHash.set(resource.contentHash, resource)
     }
     if (!knownResourceIds.has(resource.id)) {
@@ -599,7 +599,7 @@ export async function importFilesSerial(
     for (const resource of knownResources) {
       if (
         resource.contentHash &&
-        !isResourceGalleryImage(resource) &&
+        !isResourceOwnedFile(resource) &&
         !activeByHash.has(resource.contentHash)
       ) {
         activeByHash.set(resource.contentHash, resource)

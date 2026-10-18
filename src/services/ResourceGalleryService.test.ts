@@ -411,17 +411,17 @@ describe('resource gallery lifecycle and backup', () => {
     )
     expect(new Set(images.map((image) => image.id)).size).toBe(1)
     expect((await gallery.list('a')).items[0]?.tags).toHaveLength(8)
-    vi.spyOn(storage, 'save').mockRejectedValueOnce(new Error('quota exceeded'))
+    const realInsert = storage.insertIfAbsent.bind(storage)
+    vi.spyOn(storage, 'insertIfAbsent').mockRejectedValueOnce(new Error('quota exceeded'))
     await expect(gallery.addUrl('a', 'https://example.com/fail.png', false)).rejects.toThrow(
       'quota',
     )
     await expect(
       gallery.addUrl('a', 'https://example.com/recovered.png', false),
     ).resolves.toBeDefined()
-    const realSave = storage.save.bind(storage)
-    vi.spyOn(storage, 'save').mockImplementationOnce(async (image) => {
+    vi.mocked(storage.insertIfAbsent).mockImplementationOnce(async (image) => {
       await storage.delete('b')
-      await realSave(image)
+      return realInsert(image)
     })
     await expect(gallery.addFile('b', file())).rejects.toThrow('不存在')
     expect((await gallery.list('b')).total).toBe(0)
@@ -435,10 +435,15 @@ describe('resource gallery lifecycle and backup', () => {
     const gallery = new ResourceGalleryService(encryptedStorage)
     const image = await gallery.addFile('a', file(), ['私人截图'])
     await gallery.setCover('a', image.id)
+    vi.mocked(createImageThumbnail).mockClear()
+    expect((await gallery.addFile('a', file(), ['私人截图'])).id).toBe(image.id)
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
     expect(await db.resources.get(image.id)).toHaveProperty('encrypted', true)
     expect(JSON.stringify(await db.resourceSummaries.get(image.id))).not.toContain('私人截图')
     vault.lock()
     await expect(gallery.list('a')).rejects.toThrow()
+    await expect(gallery.addFile('a', file())).rejects.toThrow()
+    expect(createImageThumbnail).toHaveBeenCalledTimes(2)
     await vault.unlock('gallery-test-password')
     const encryptedFallback = vi.spyOn(encryptedStorage, 'listResourceListSummaries')
     expect((await gallery.list('a')).items[0]?.tags).toEqual(['私人截图'])
@@ -517,6 +522,326 @@ describe('resource gallery lifecycle and backup', () => {
     )
     expect((await gallery.list('a', { pageSize: 60, page: 2 })).page).toBe(1)
   })
+  it('validates serial original imports while preserving other owners and new bytes', async () => {
+    const { gallery } = await fixture()
+    const image = await gallery.addFile('a', file())
+    vi.mocked(createImageThumbnail).mockClear()
+    const duplicate = await gallery.addFile('a', file(), ['new tag'])
+    expect(duplicate.id).toBe(image.id)
+    expect(duplicate.tags).toContain('new tag')
+    expect(await duplicate.originalBlob.text()).toBe('pixels')
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    await gallery.addFile('b', file())
+    await gallery.addFile('a', new File(['different pixels'], 'other.png', { type: 'image/png' }))
+    expect(createImageThumbnail).toHaveBeenCalledTimes(3)
+  })
+
+  it('does one authoritative lookup per serial original import without a preflight query', async () => {
+    const { gallery, storage } = await fixture()
+    const lookup = vi.spyOn(storage, 'findGalleryImage')
+    const first = await gallery.addFile('a', file())
+    expect(lookup).toHaveBeenCalledTimes(1)
+    const second = await gallery.addFile('a', file(), ['again'])
+    expect(lookup).toHaveBeenCalledTimes(2)
+    expect(second.id).toBe(first.id)
+    expect(second.tags).toContain('again')
+  })
+
+  it('validates concurrent duplicate originals and merges them through the existing commit queue', async () => {
+    const { gallery } = await fixture()
+    vi.mocked(createImageThumbnail).mockClear()
+    const images = await Promise.all(
+      Array.from({ length: 4 }, (_, i) => gallery.addFile('a', file(), ['tag-' + i])),
+    )
+    expect(createImageThumbnail).toHaveBeenCalledTimes(4)
+    expect(new Set(images.map((image) => image.id)).size).toBe(1)
+    expect((await gallery.getImage('a', images[0]!.id)).tags).toHaveLength(4)
+  })
+
+  it('prepares different new originals concurrently before their serialized commits', async () => {
+    const { gallery } = await fixture()
+    let started!: () => void
+    const bothStarted = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const finish: ((blob: Blob) => void)[] = []
+    vi.mocked(createImageThumbnail)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish.push(resolve)
+            if (finish.length === 2) started()
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish.push(resolve)
+            if (finish.length === 2) started()
+          }),
+      )
+    const pending = Promise.all([
+      gallery.addFile('a', file()),
+      gallery.addFile('a', new File(['other'], 'other.png', { type: 'image/png' })),
+    ])
+    await bothStarted
+    for (const complete of finish) complete(new Blob(['thumbnail'], { type: 'image/webp' }))
+    expect(new Set((await pending).map((image) => image.id)).size).toBe(2)
+  })
+
+  it('rejects invalid concurrent inputs and permits a later explicit import', async () => {
+    const { gallery } = await fixture()
+    vi.mocked(createImageThumbnail).mockClear().mockResolvedValue(undefined)
+    const results = await Promise.allSettled(
+      Array.from({ length: 4 }, () => gallery.addFile('a', file())),
+    )
+    expect(results.every((result) => result.status === 'rejected')).toBe(true)
+    expect(createImageThumbnail).toHaveBeenCalledTimes(4)
+    vi.mocked(createImageThumbnail).mockResolvedValue(
+      new Blob(['thumbnail'], { type: 'image/webp' }),
+    )
+    await gallery.addFile('a', file())
+    expect(createImageThumbnail).toHaveBeenCalledTimes(5)
+  })
+
+  it('does not retain a completed preparation after the saved item is removed', async () => {
+    const { gallery, storage } = await fixture()
+    const image = await gallery.addFile('a', file())
+    await storage.delete(image.id)
+    vi.mocked(createImageThumbnail).mockClear()
+    await gallery.addFile('a', file())
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
+  })
+
+  it('validates the incoming original if the known stored copy disappears before commit', async () => {
+    const { gallery, storage } = await fixture()
+    const image = await gallery.addFile('a', file())
+    vi.mocked(createImageThumbnail)
+      .mockClear()
+      .mockImplementationOnce(async () => {
+        await storage.delete(image.id)
+        return new Blob(['thumbnail'], { type: 'image/webp' })
+      })
+    const saved = await gallery.addFile('a', file())
+    expect(saved.id).toBe(image.id)
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    expect(await saved.originalBlob.text()).toBe('pixels')
+  })
+
+  it('repairs a missing saved thumbnail once instead of decoding both the new input and saved original', async () => {
+    const { gallery, storage } = await fixture()
+    const image = await gallery.addFile('a', file())
+    await storage.updateMetadata(image.id, {
+      thumbnailBlob: undefined,
+      thumbnailAssetId: undefined,
+    })
+    vi.mocked(createImageThumbnail).mockClear()
+    const duplicate = await gallery.addFile('a', file())
+    expect(duplicate.id).toBe(image.id)
+    expect(duplicate.thumbnailBlob).toBeInstanceOf(Blob)
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    expect(await duplicate.originalBlob.text()).toBe('pixels')
+  })
+
+  it('still validates bytes that match a link document instead of treating that document as a local image', async () => {
+    const { gallery } = await fixture()
+    const url = 'https://example.com/image.png'
+    const link = await gallery.addUrl('a', url, false)
+    vi.mocked(createImageThumbnail).mockClear().mockResolvedValueOnce(undefined)
+    const invalid = new File([JSON.stringify({ version: 1, imageUrl: url })], 'invalid.png', {
+      type: 'image/png',
+    })
+    await expect(gallery.addFile('a', invalid, ['must not add'])).rejects.toThrow('无法读取图片')
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    expect((await gallery.getImage('a', link.id)).tags).not.toContain('must not add')
+  })
+
+  it('keeps transformed thumbnail identity and validates each requested conversion', async () => {
+    const { gallery } = await fixture()
+    vi.mocked(createImageThumbnail).mockClear()
+    const first = await gallery.addFile('a', file(), [], true, 'thumbnail')
+    const second = await gallery.addFile('a', file(), [], true, 'thumbnail')
+    expect(first.id).toBe(second.id)
+    expect(createImageThumbnail).toHaveBeenCalledTimes(2)
+    expect(await second.originalBlob.text()).toBe('thumbnail')
+  })
+
+  it('validates a legacy local item with non-image metadata instead of trusting its bytes as an image', async () => {
+    const { gallery, db } = await fixture()
+    const image = await gallery.addFile('a', file())
+    await db.resources.update(image.id, (record) => {
+      if ('mimeType' in record) record.mimeType = 'application/json'
+    })
+    vi.mocked(createImageThumbnail).mockClear().mockResolvedValueOnce(undefined)
+    await expect(gallery.addFile('a', file(), ['must not add'])).rejects.toThrow('无法读取图片')
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    expect((await gallery.getImage('a', image.id)).tags).not.toContain('must not add')
+  })
+
+  it('recovers the same owner queue after a new original fails decoding', async () => {
+    const { gallery } = await fixture()
+    vi.mocked(createImageThumbnail).mockClear().mockResolvedValueOnce(undefined)
+    await expect(gallery.addFile('a', file())).rejects.toThrow('无法读取图片')
+    expect((await gallery.list('a')).total).toBe(0)
+    const saved = await gallery.addFile('a', file())
+    expect(createImageThumbnail).toHaveBeenCalledTimes(2)
+    expect(await saved.originalBlob.text()).toBe('pixels')
+  })
+
+  it('does not leave an orphan if the owner disappears while a new original is decoded', async () => {
+    const { gallery, storage } = await fixture()
+    vi.mocked(createImageThumbnail).mockImplementationOnce(async () => {
+      await storage.delete('a')
+      return new Blob(['thumbnail'], { type: 'image/webp' })
+    })
+    await expect(gallery.addFile('a', file())).rejects.toThrow('不存在')
+    expect((await storage.listSummaries()).some((row) => galleryOwnerId(row) === 'a')).toBe(false)
+  })
+
+  it('releases pending preparation when the vault locks before commit', async () => {
+    const { db } = await fixture()
+    const vault = new VaultService(db)
+    await vault.initialize()
+    await vault.enable('gallery-test-password')
+    const storage = new IndexedDbResourceStorage(db, vault)
+    const gallery = new ResourceGalleryService(storage)
+    let started!: () => void
+    const decoding = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    let finish!: (blob: Blob) => void
+    vi.mocked(createImageThumbnail).mockImplementationOnce(() => {
+      started()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    const pending = gallery.addFile('a', file())
+    const rejected = expect(pending).rejects.toThrow()
+    await decoding
+    vault.lock()
+    finish(new Blob(['thumbnail'], { type: 'image/webp' }))
+    await rejected
+    await vault.unlock('gallery-test-password')
+    expect((await gallery.list('a')).total).toBe(0)
+    vi.mocked(createImageThumbnail).mockClear()
+    const saved = await gallery.addFile('a', file())
+    expect(createImageThumbnail).toHaveBeenCalledOnce()
+    expect(await saved.originalBlob.text()).toBe('pixels')
+  })
+
+  it.each(['original', 'thumbnail', 'url'] as const)(
+    'preserves migrated images when the old owner is restored and imports the same %s again',
+    async (quality) => {
+      const { gallery, storage, create } = await fixture()
+      const add = (tags: string[]) =>
+        quality === 'url'
+          ? gallery.addUrl('a', 'https://example.com/migrated.png', false, tags)
+          : gallery.addFile('a', file(), tags, true, quality)
+      const first = await add(['migrated'])
+      await moveResourceGallery(storage, 'a', 'b')
+      await storage.delete('a')
+      await create('a')
+      const restored = await add(['restored'])
+      expect(restored.id).not.toBe(first.id)
+      expect((await gallery.getImage('b', first.id)).tags).toEqual(['migrated'])
+      expect((await gallery.list('a')).galleryCount).toBe(1)
+      expect((await gallery.list('b')).galleryCount).toBe(1)
+    },
+  )
+
+  it('walks occupied deterministic slots without taking images back from other owners', async () => {
+    const { gallery, storage, create } = await fixture()
+    await create('c')
+    const first = await gallery.addFile('a', file(), ['first'])
+    await moveResourceGallery(storage, 'a', 'b')
+    const second = await gallery.addFile('a', file(), ['second'])
+    await moveResourceGallery(storage, 'a', 'c')
+    const insert = vi.spyOn(storage, 'insertIfAbsent')
+    const third = await gallery.addFile('a', file(), ['third'])
+    expect(insert).toHaveBeenCalledTimes(2)
+    expect(new Set([first.id, second.id, third.id]).size).toBe(3)
+    expect((await gallery.getImage('b', first.id)).tags).toEqual(['first'])
+    expect((await gallery.getImage('c', second.id)).tags).toEqual(['second'])
+    expect((await gallery.getImage('a', third.id)).tags).toEqual(['third'])
+  })
+
+  it('preserves encrypted migrated images and their original bytes on reimport', async () => {
+    const { db } = await fixture(),
+      vault = new VaultService(db)
+    await vault.initialize()
+    await vault.enable('gallery-test-password')
+    const storage = new IndexedDbResourceStorage(db, vault),
+      gallery = new ResourceGalleryService(storage)
+    const first = await gallery.addFile('a', file(), ['private'])
+    await moveResourceGallery(storage, 'a', 'b')
+    const second = await gallery.addFile('a', file(), ['new'])
+    expect(second.id).not.toBe(first.id)
+    expect((await gallery.getImage('b', first.id)).tags).toEqual(['private'])
+    expect(await (await gallery.getImage('b', first.id)).originalBlob.text()).toBe('pixels')
+    expect(await db.resources.get(second.id)).toHaveProperty('encrypted', true)
+  })
+
+  it('keeps migrated cover references and supports adapters without atomic insert', async () => {
+    const { gallery, storage } = await fixture()
+    const first = await gallery.addFile('a', file(), ['migrated'])
+    await moveResourceGallery(storage, 'a', 'b')
+    await gallery.setCover('b', first.id)
+    Object.defineProperty(storage, 'insertIfAbsent', { value: undefined })
+    const second = await gallery.addFile('a', file(), ['new'])
+    expect(second.id).not.toBe(first.id)
+    expect((await storage.getSummary('b'))?.metadata.resourceCoverId).toBe(first.id)
+    expect((await gallery.getImage('b', first.id)).tags).toEqual(['migrated'])
+  })
+
+  it('shares the alternate slot across service instances without overwriting the migrated image', async () => {
+    const { gallery, storage } = await fixture()
+    const first = await gallery.addFile('a', file(), ['migrated'])
+    await moveResourceGallery(storage, 'a', 'b')
+    let arrived = 0,
+      release!: () => void
+    const ready = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const insert = storage.insertIfAbsent.bind(storage)
+    vi.spyOn(storage, 'insertIfAbsent').mockImplementation(async (image) => {
+      if (image.id !== first.id) {
+        if (++arrived === 2) release()
+        await ready
+      }
+      return insert(image)
+    })
+    const other = new ResourceGalleryService(storage)
+    const images = await Promise.all([
+      gallery.addFile('a', file(), ['one'], false),
+      other.addFile('a', file(), ['two']),
+    ])
+    expect(images[0]!.id).toBe(images[1]!.id)
+    const saved = await gallery.getImage('a', images[0]!.id)
+    expect([...saved.tags].sort()).toEqual(['one', 'two'])
+    expect(saved.metadata.galleryVisible).toBe(true)
+    expect((await gallery.getImage('b', first.id)).tags).toEqual(['migrated'])
+  })
+
+  it('rejects a slot occupied by another writer immediately before the atomic insert', async () => {
+    const { gallery, storage } = await fixture()
+    let occupied: Resource | undefined
+    const insert = storage.insertIfAbsent.bind(storage)
+    vi.spyOn(storage, 'insertIfAbsent').mockImplementationOnce(async (image) => {
+      occupied = {
+        ...image,
+        tags: ['other writer'],
+        metadata: { ...image.metadata, galleryOwnerId: 'b' },
+      }
+      await storage.save(occupied)
+      return insert(image)
+    })
+    const saved = await gallery.addFile('a', file(), ['current'])
+    expect(saved.id).not.toBe(occupied!.id)
+    expect((await gallery.getImage('b', occupied!.id)).tags).toEqual(['other writer'])
+    expect(saved.tags).toEqual(['current'])
+  })
+
   it('deduplicates within one gallery while preserving same pixels attached to different owners', async () => {
     const { gallery } = await fixture()
     const a = await gallery.addFile('a', file(), ['同人'])

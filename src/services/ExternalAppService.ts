@@ -32,6 +32,7 @@ import {
   iconDataUrl,
   externalAppPresentationIcon,
   buildRuntimeHtml,
+  restrictExternalAppNetwork,
   inspectCompatibility,
   RUNTIME_BRIDGE_MARKER,
 } from './ExternalAppRuntime'
@@ -70,6 +71,37 @@ function byteLength(value: unknown): number {
 }
 
 export class ExternalAppService {
+  private readonly accessListeners = new Set<(id: string) => void>()
+  private accessChannel?: BroadcastChannel
+  subscribeAccessChanges(listener: (id: string) => void): () => void {
+    this.accessListeners.add(listener)
+    if (
+      !this.accessChannel &&
+      typeof window !== 'undefined' &&
+      typeof BroadcastChannel !== 'undefined'
+    ) {
+      this.accessChannel = new BroadcastChannel('srl-external-app-access')
+      this.accessChannel.onmessage = (event) => {
+        if (typeof event.data?.id === 'string')
+          for (const current of this.accessListeners) current(event.data.id)
+      }
+    }
+    return () => {
+      this.accessListeners.delete(listener)
+      if (!this.accessListeners.size) {
+        this.accessChannel?.close()
+        this.accessChannel = undefined
+      }
+    }
+  }
+  private accessChanged(id: string): void {
+    if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+      const channel = this.accessChannel ?? new BroadcastChannel('srl-external-app-access')
+      channel.postMessage({ id })
+      if (channel !== this.accessChannel) channel.close()
+    }
+    for (const listener of this.accessListeners) listener(id)
+  }
   private builtinReaderPreview?: ExternalAppPreview
 
   /** Called only by the build-shipped reader entry after normal package inspection. */
@@ -215,6 +247,13 @@ export class ExternalAppService {
 
   async get(id: string): Promise<InstalledExternalApp | undefined> {
     const app = await this.storage.get(id)
+    if (
+      app?.runtimeMode === EXTERNAL_APP_RUNTIME_MODE.TRUSTED_COMPATIBLE &&
+      app.manifest.permissions?.includes(EXTERNAL_APP_PERMISSION.NETWORK_HTTPS) &&
+      !getGrantedExternalAppPermissions(app).includes(EXTERNAL_APP_PERMISSION.NETWORK_HTTPS)
+    ) {
+      return { ...app, runtimeHtml: restrictExternalAppNetwork(app.runtimeHtml) }
+    }
     if (!app?.packageFiles || app.runtimeHtml.includes(RUNTIME_BRIDGE_MARKER)) return app
 
     // 已安装 APP 会保存隔离运行时；升级宿主桥接后，从原始包无损重建一次，避免要求用户重装。
@@ -408,6 +447,13 @@ export class ExternalAppService {
       updatedAt: now,
     }
     await this.storage.save(installed)
+    if (
+      previous &&
+      (!packageUnchanged ||
+        JSON.stringify(getGrantedExternalAppPermissions(previous)) !==
+          JSON.stringify(allowedPermissions))
+    )
+      this.accessChanged(installed.id)
     return installed
   }
 
@@ -447,6 +493,7 @@ export class ExternalAppService {
       updatedAt: Date.now(),
     }
     await this.storage.save(updated)
+    this.accessChanged(id)
     return updated
   }
 
@@ -479,6 +526,7 @@ export class ExternalAppService {
         updatedAt: Date.now(),
       }
     })
+    this.accessChanged(id)
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<void> {
@@ -490,6 +538,7 @@ export class ExternalAppService {
         ? { health: { ...app.health, consecutiveFailures: 0, disabledByWatchdog: false } }
         : {}),
     }))
+    this.accessChanged(id)
   }
 
   async setRuntimeMode(id: string, mode: ExternalAppRuntimeMode): Promise<void> {
@@ -506,6 +555,7 @@ export class ExternalAppService {
       permissionAudit: [],
       updatedAt: Date.now(),
     })
+    this.accessChanged(id)
   }
 
   async listRetainedData(): Promise<RetainedExternalAppData[]> {
@@ -542,6 +592,7 @@ export class ExternalAppService {
 
   async uninstall(id: string): Promise<void> {
     await this.storage.delete(id)
+    this.accessChanged(id)
   }
 
   async clearData(appId: string): Promise<void> {
@@ -569,8 +620,20 @@ export class ExternalAppService {
     return Boolean(app?.enabled && app.persistentPermissionGrants?.includes(permission))
   }
 
-  async grantPersistentPermission(appId: string, permission: ExternalAppPermission): Promise<void> {
+  async grantPersistentPermission(
+    appId: string,
+    permission: ExternalAppPermission,
+    expected?: InstalledExternalAppSummary,
+    signal?: AbortSignal,
+  ): Promise<void> {
     await this.storage.mutateMetadata(appId, (app) => {
+      signal?.throwIfAborted()
+      if (
+        expected &&
+        (expected.packageFingerprint !== app.packageFingerprint ||
+          expected.runtimeMode !== app.runtimeMode)
+      )
+        throw new Error('APP 版本或运行模式已变化，旧授权未保存')
       if (!app.enabled) throw new Error('APP 已被禁用')
       if (!(app.manifest.permissions ?? []).includes(permission))
         throw new Error('APP 未在清单中声明此权限')
@@ -595,6 +658,7 @@ export class ExternalAppService {
         : [],
       updatedAt: Date.now(),
     }))
+    this.accessChanged(appId)
   }
 
   async recordPermissionDecision(

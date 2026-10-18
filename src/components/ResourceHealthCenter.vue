@@ -85,8 +85,19 @@ for (const event of ['ResourceImported', 'ResourceUpdated', 'ResourceDeleted'] a
 const nativeStorage = ref<Awaited<ReturnType<typeof getNativeResourceStorageInfo>>>(null)
 const browserStorage = ref<Awaited<ReturnType<typeof browserStorageService.getHealth>>>()
 const inspectionError = ref('')
+const deletingCandidates = ref(false)
+const candidateDeletion = ref<AbortController>()
+const candidateDeletionTaskId = ref<string>()
+let healthClosed = false
+onUnmounted(() => {
+  healthClosed = true
+  candidateDeletion.value?.abort()
+})
 const storageMeasuredAt = ref(0)
 let storageRequest = 0
+const browserInspection = ref<AbortController>()
+const browserInspectionProgress = ref('')
+onUnmounted(() => browserInspection.value?.abort())
 onUnmounted(
   domainEvents.on('NativeTemporaryCachesCleared', ({ storage, measuredAt }) => {
     // Reuse the completed measurement; do not reread originals or rerun the health audit.
@@ -117,6 +128,7 @@ const postMedia = ref<{ count: number; bytes: number }>()
 const postMediaError = ref('')
 const cleanupBusy = computed(
   () =>
+    deletingCandidates.value ||
     optimizingSummaries.value ||
     clearingPostMedia.value ||
     intakeBusy.value ||
@@ -135,14 +147,110 @@ const retiredModel = computed(() =>
     : undefined,
 )
 const summaryBytes = computed(() =>
-  nativeStorage.value?.nativeDatabase?.stores
-    .filter(
-      (item) => item.store === 'resourceSummaries' || item.store === 'resourceVersionSummaries',
-    )
-    .reduce((total, item) => total + item.jsonBytes, 0),
+  accounting.value?.browserStores
+    ? accounting.value.browserStores
+        .filter((item) =>
+          ['resourceSummaries', 'resourceListSummaries', 'resourceVersionSummaries'].includes(
+            item.store,
+          ),
+        )
+        .reduce((total, item) => total + item.bytes, 0)
+    : nativeStorage.value?.nativeDatabase?.stores
+        .filter(
+          (item) => item.store === 'resourceSummaries' || item.store === 'resourceVersionSummaries',
+        )
+        .reduce((total, item) => total + item.jsonBytes, 0),
 )
+const browserParts = computed(() => {
+  const stores = accounting.value?.browserStores
+  if (!stores || nativeStorage.value) return []
+  const groups = [
+    {
+      id: 'resources',
+      label: '当前资源',
+      stores: ['resources'],
+      color: 'var(--usage-color-originals, var(--color-accent))',
+    },
+    {
+      id: 'versions',
+      label: '历史版本',
+      stores: ['resourceVersions'],
+      color: 'var(--usage-color-database, #7684c6)',
+    },
+    {
+      id: 'assets',
+      label: '素材与缩略图',
+      stores: ['assets', 'assetFiles'],
+      color: 'var(--usage-color-assets, #cf8f62)',
+    },
+    {
+      id: 'apps',
+      label: 'APP 程序',
+      stores: ['externalApps', 'externalAppRuntimes'],
+      color: 'var(--usage-color-apps, #63a69a)',
+    },
+    {
+      id: 'app-data',
+      label: 'APP 使用数据与草稿',
+      stores: ['externalAppData', 'externalAppDrafts'],
+      color: '#ba7b9c',
+    },
+    {
+      id: 'workshop',
+      label: '前端工坊项目与草稿',
+      stores: [
+        'frontendWorkshopProjects',
+        'frontendWorkshopProjectLastGood',
+        'frontendWorkshopSourceDocuments',
+        'frontendWorkshopSourceDocumentLastGood',
+        'frontendWorkshopSourceComponents',
+      ],
+      color: '#8f9d5a',
+    },
+    {
+      id: 'images',
+      label: '生图相册',
+      stores: ['generatedImages', 'generatedImageFiles'],
+      color: '#b098ce',
+    },
+    { id: 'backups', label: '回收站与恢复副本', stores: ['backupRecords'], color: '#b6914f' },
+    {
+      id: 'staging',
+      label: '导入恢复暂存',
+      stores: ['restoreStaging', 'restoreStagingChunks'],
+      color: '#6c9db9',
+    },
+    {
+      id: 'community',
+      label: '帖子与来源记录',
+      stores: ['communitySources', 'communitySourceMessages', 'resourceSourceBindings'],
+      color: '#b57968',
+    },
+  ]
+  const assigned = new Set(groups.flatMap((group) => group.stores))
+  return [
+    ...groups,
+    {
+      id: 'other',
+      label: '索引、设置与任务记录',
+      stores: stores.filter((part) => !assigned.has(part.store)).map((part) => part.store),
+      color: 'var(--usage-color-other, var(--color-ink-soft))',
+    },
+  ].map((group) => ({
+    id: `browser-${group.id}`,
+    label: group.label,
+    color: group.color,
+    bytes: stores
+      .filter((part) => group.stores.includes(part.store))
+      .reduce((sum, part) => sum + part.bytes, 0),
+    records: stores
+      .filter((part) => group.stores.includes(part.store))
+      .reduce((sum, part) => sum + part.records, 0),
+  }))
+})
 const storageSlices = computed<StorageUsageSlice[]>(() => {
   const info = nativeStorage.value
+  if (!info && browserParts.value.length) return browserParts.value.filter((part) => part.bytes > 0)
   if (!info)
     return browserStorage.value?.usage
       ? [
@@ -224,6 +332,16 @@ const storageSlices = computed<StorageUsageSlice[]>(() => {
 async function showStoragePart(id: string): Promise<void> {
   const part = storageSlices.value.find((item) => item.id === id)
   if (!part) return
+  if (id.startsWith('browser-')) {
+    const records = browserParts.value.find((item) => item.id === id)?.records ?? 0
+    await confirmAction({
+      title: `${part.label} · ${formatBytes(part.bytes)}`,
+      message: `本次统计 ${records} 条数据库记录，包含这一类的文字、元数据和附件。文字按 UTF-8 估算，附件只读取大小，不读取内容。\n\n这是已保存数据的逻辑大小，不是浏览器实际磁盘占用；跨记录的相同内容可能重复计入。此处不会删除数据。`,
+      confirmLabel: '知道了',
+      cancelLabel: '关闭',
+    })
+    return
+  }
   const details: Record<string, { text: string; action?: () => Promise<void> }> = {
     originals: {
       text: `这里是导入资源的完整文件、历史版本的原件，以及找回或恢复所需的文件。它们不是缓存。\n\n${mirrorDuplication.value?.reclaimableBytes ? '已发现另一处存放的重复副本，可以先比较文件内容再释放副本；这里的原件会保留。' : '想减少这部分：到资源列表删除不需要的资源，确认不再需要恢复后再清空回收站。此处不会整批删除原件。'}`,
@@ -328,7 +446,7 @@ function formatBytes(value: number): string {
 }
 
 async function scanNativeRecovery(reset = true, includeAccounting = false): Promise<void> {
-  if (recoveryScanBusy.value) return
+  if (recoveryScanBusy.value || deletingCandidates.value) return
   recoveryScanBusy.value = true
   inspectionError.value = ''
   try {
@@ -362,8 +480,45 @@ async function scanNativeRecovery(reset = true, includeAccounting = false): Prom
       browserStorage.value = await browserStorageService.getHealth()
       storageMeasuredAt.value = Date.now()
       if (includeAccounting) {
-        accounting.value = await nativeResourceRecoveryService.storageAccounting()
-        accountingStale.value = false
+        if (accounting.value) accountingStale.value = true
+        const controller = new AbortController()
+        browserInspection.value = controller
+        const operationId = taskCenter.start({
+          name: '网页存储用途统计',
+          phase: '正在统计已保存数据',
+          cancelable: true,
+          cancel: () => controller.abort(),
+        })
+        try {
+          const result = await nativeResourceRecoveryService.storageAccounting({
+            browserDetails: true,
+            signal: controller.signal,
+            onProgress: (completed, total) => {
+              if (controller.signal.aborted) return
+              browserInspectionProgress.value = `已统计 ${completed}/${total} 类存储记录`
+              taskCenter.update(operationId, {
+                phase: browserInspectionProgress.value,
+                progress: completed / total,
+              })
+            },
+          })
+          controller.signal.throwIfAborted()
+          accounting.value = result
+          accountingStale.value = false
+          storageMeasuredAt.value = Date.now()
+          taskCenter.complete(operationId)
+        } catch (error) {
+          if (controller.signal.aborted) {
+            inspectionError.value = '用途统计已停止，未修改数据；已有分项仍为上次盘点值。'
+            taskCenter.cancelled(operationId)
+          } else {
+            taskCenter.fail(operationId, error)
+            throw error
+          }
+        } finally {
+          browserInspection.value = undefined
+          browserInspectionProgress.value = ''
+        }
       }
       return
     }
@@ -572,7 +727,7 @@ function toggleRecovery(hash: string): void {
 }
 
 async function recoverSelected(): Promise<void> {
-  if (recovering.value || !selectedRecoveryHashes.value.length) return
+  if (recovering.value || deletingCandidates.value || !selectedRecoveryHashes.value.length) return
   recovering.value = true
   try {
     const report = await nativeResourceRecoveryService.recover(
@@ -602,6 +757,103 @@ async function recoverSelected(): Promise<void> {
   } finally {
     recovering.value = false
   }
+}
+
+async function deleteSelectedRecoveryCandidates(): Promise<void> {
+  if (cleanupBusy.value || !selectedRecoveryHashes.value.length) return
+  const selected = recoveryCandidates.value.filter((item) =>
+    selectedRecoveryHashes.value.includes(item.contentHash),
+  )
+  if (!selected.length) return
+  deletingCandidates.value = true
+  const controller = new AbortController()
+  candidateDeletion.value = controller
+  let operationId: string | undefined
+  let acknowledgeStop!: () => void
+  const stopped = new Promise<void>((resolve) => {
+    acknowledgeStop = resolve
+  })
+  try {
+    if (
+      !(await confirmAction(
+        {
+          title: `永久删除 ${selected.length} 个待找回原件？`,
+          message: `所选约 ${formatBytes(selected.reduce((bytes, item) => bytes + item.size, 0))}：\n${selected
+            .slice(0, 5)
+            .map((item) => item.name || item.fileName || item.contentHash.slice(0, 12))
+            .join(
+              '\n',
+            )}${selected.length > 5 ? '\n…' : ''}\n\n这是尚待找回的本地原件。删除后不能再从这里找回，不进入回收站。删除前会重新检查引用；仍被当前资源、历史、恢复或传输任务使用，以及无法确认安全的文件会保留。\n\n可停止后续批次，当前批次允许完成；已删除部分不能撤销。`,
+          confirmLabel: '永久删除所选',
+          danger: true,
+          centered: true,
+        },
+        controller.signal,
+      ))
+    )
+      return
+    controller.signal.throwIfAborted()
+    operationId = taskCenter.start({
+      name: '删除待找回原件',
+      phase: '正在核对引用并删除',
+      cancelable: true,
+      cancel: () => {
+        stopCandidateDeletion()
+        return stopped
+      },
+    })
+    candidateDeletionTaskId.value = operationId
+    const report = await nativeResourceRecoveryService.deleteCandidates(selected, {
+      signal: controller.signal,
+      onProgress: (completed, total) => {
+        if (operationId && !controller.signal.aborted)
+          taskCenter.update(operationId, {
+            phase: `已核对 ${completed}/${total} 个原件`,
+            progress: completed / total,
+          })
+      },
+    })
+    noticeCenter.push({
+      type: 'success',
+      message: `已删除 ${report.deletedHashes.length} 个原件，释放 ${formatBytes(report.clearedBytes)}；另有 ${report.retainedHashes.length} 个仍有引用、正在使用或未能安全删除，已保留。`,
+    })
+    if (controller.signal.aborted) taskCenter.cancelled(operationId)
+    else taskCenter.complete(operationId)
+    selectedRecoveryHashes.value = []
+  } catch (error) {
+    if (controller.signal.aborted) {
+      if (operationId) taskCenter.cancelled(operationId)
+      if (operationId)
+        noticeCenter.push({
+          type: 'info',
+          message: '删除已停止，已完成部分无法撤销；请查看刷新后的原件列表。',
+        })
+    } else {
+      if (operationId) taskCenter.fail(operationId, error)
+      noticeCenter.push({
+        type: 'error',
+        message: error instanceof Error ? error.message : '原件删除未完成，请重新检查',
+      })
+    }
+  } finally {
+    deletingCandidates.value = false
+    candidateDeletion.value = undefined
+    candidateDeletionTaskId.value = undefined
+    acknowledgeStop()
+    if (operationId && !healthClosed) {
+      accountingStale.value = true
+      await scanNativeRecovery(true)
+    }
+  }
+}
+
+function stopCandidateDeletion(): void {
+  candidateDeletion.value?.abort()
+  if (candidateDeletionTaskId.value)
+    taskCenter.update(candidateDeletionTaskId.value, {
+      phase: '正在停止，等待当前批次完成',
+      cancelable: false,
+    })
 }
 
 async function scan(deep = false): Promise<void> {
@@ -697,7 +949,7 @@ async function exportDiagnostics(): Promise<void> {
       <button
         class="button button--quiet"
         type="button"
-        :disabled="scanning || recovering || recoveryScanBusy"
+        :disabled="scanning || cleanupBusy"
         @click="scanNativeRecovery(true, true)"
       >
         {{ recoveryScanBusy ? '正在检查…' : '检查原件与空间' }}
@@ -705,7 +957,7 @@ async function exportDiagnostics(): Promise<void> {
       <button
         class="button button--quiet"
         type="button"
-        :disabled="scanning || recovering || recoveryScanBusy"
+        :disabled="scanning || cleanupBusy"
         @click="scan()"
       >
         扫描
@@ -727,6 +979,17 @@ async function exportDiagnostics(): Promise<void> {
       </button>
     </details>
     <p v-if="inspectionError" role="alert">{{ inspectionError }}</p>
+    <div v-if="browserInspection" class="resource-health__actions">
+      <span role="status">{{ browserInspectionProgress || '正在统计已保存数据…' }}</span>
+      <button
+        class="button button--quiet"
+        type="button"
+        :disabled="browserInspection.signal.aborted"
+        @click="browserInspection.abort()"
+      >
+        停止统计
+      </button>
+    </div>
 
     <section v-if="browserStorage && !nativeStorage" class="resource-health__native">
       <div class="resource-health__native-head">
@@ -746,6 +1009,19 @@ async function exportDiagnostics(): Promise<void> {
         原件保存在当前浏览器数据库中；下方核对已登记载荷大小，不逐文件校验内容。Android
         孤立文件找回与镜像清理不适用于网页。
       </p>
+      <section v-if="browserParts.length" aria-label="网页数据用途分类">
+        <strong>按用途统计的数据大小（估算）</strong>
+        <p>
+          统计资源库数据库中的文字、元数据和附件；浏览器缓存、少量页面偏好和数据库空闲页等未计入。相同内容跨记录可能重复计入，不能与站点已用相加，也不能据此计算可清理空间。
+        </p>
+        <p v-if="accountingStale">资源已经变化；以下为上次盘点值，可用“检查原件与空间”刷新。</p>
+        <dl class="resource-health__sizes">
+          <template v-for="part in browserParts" :key="part.id">
+            <dt>{{ part.label }}</dt>
+            <dd>{{ formatBytes(part.bytes) }} · {{ part.records }} 条</dd>
+          </template>
+        </dl>
+      </section>
     </section>
 
     <section v-if="nativeStorage" class="resource-health__native">
@@ -772,6 +1048,7 @@ async function exportDiagnostics(): Promise<void> {
         <label v-for="item in recoveryCandidates" :key="item.contentHash">
           <input
             type="checkbox"
+            :disabled="deletingCandidates || recovering"
             :checked="selectedRecoveryHashes.includes(item.contentHash)"
             @change="toggleRecovery(item.contentHash)"
           />
@@ -797,6 +1074,7 @@ async function exportDiagnostics(): Promise<void> {
           type="button"
           :disabled="
             recovering ||
+            deletingCandidates ||
             recoveryScanBusy ||
             !nativeStorage.recoveryMetadataVersion ||
             !selectedRecoveryHashes.length
@@ -804,6 +1082,23 @@ async function exportDiagnostics(): Promise<void> {
           @click="recoverSelected"
         >
           {{ recovering ? '正在找回' : `找回所选（${selectedRecoveryHashes.length}）` }}
+        </button>
+        <button
+          class="button button--quiet resource-health__delete"
+          type="button"
+          :disabled="cleanupBusy || !selectedRecoveryHashes.length"
+          @click="deleteSelectedRecoveryCandidates"
+        >
+          {{ deletingCandidates ? '正在删除…' : `删除所选（${selectedRecoveryHashes.length}）` }}
+        </button>
+        <button
+          v-if="candidateDeletion && deletingCandidates"
+          class="button button--quiet"
+          type="button"
+          :disabled="candidateDeletion.signal.aborted"
+          @click="stopCandidateDeletion"
+        >
+          {{ candidateDeletion.signal.aborted ? '正在停止…' : '停止删除' }}
         </button>
       </div>
       <small v-else-if="recoveryScanned"
@@ -833,7 +1128,7 @@ async function exportDiagnostics(): Promise<void> {
     <StorageUsageChart
       v-if="accounting && storageSlices.length"
       :slices="storageSlices"
-      :total-label="`本次盘点 ${formatBytes(storageSlices.reduce((sum, item) => sum + item.bytes, 0))}`"
+      :total-label="`${browserParts.length ? '已统计数据（估算）' : '本次盘点'} ${formatBytes(storageSlices.reduce((sum, item) => sum + item.bytes, 0))}`"
       @select="showStoragePart"
     />
     <section v-if="accounting" class="resource-health__cleanup" aria-label="数据清理">
@@ -1124,6 +1419,10 @@ async function exportDiagnostics(): Promise<void> {
 </template>
 
 <style scoped>
+.resource-health__delete {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
 .resource-health {
   display: grid;
   box-sizing: border-box;

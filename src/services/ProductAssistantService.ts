@@ -1266,7 +1266,7 @@ export class ProductAssistantService {
       if (!receipts.length) throw error
       const problem = summarizeAssistantProblem(error)
       const warning = signal.aborted
-        ? '已停止后续操作。已完成的修改可撤销，已保存预设保留。'
+        ? '已停止后续操作。已保存内容保留；页面脚本及已发生的外部操作不保证终止或撤销。'
         : `后续处理未完成：${problem.label}${problem.httpStatus ? `（HTTP ${problem.httpStatus}）` : ''}。${problem.nextStep}`
       return output(
         `${receipts

@@ -1,7 +1,6 @@
 /** @vitest-environment jsdom */
-import { readFileSync } from 'node:fs'
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   FrontendWorkshopImageDraftService,
@@ -38,6 +37,7 @@ function novelAiDraft(): FrontendWorkshopImageDraft {
 
 describe('FrontendWorkshopImageDraftService', () => {
   beforeEach(() => localStorage.clear())
+  afterEach(() => vi.restoreAllMocks())
 
   it.each([
     ['off', 'none', false],
@@ -212,22 +212,49 @@ describe('FrontendWorkshopImageDraftService', () => {
     expect(JSON.stringify(service.loadDraft('novelai'))).not.toContain('must-not-survive')
   })
 
-  it('新备份不导出生图 Key，但旧备份字段仍路由到凭据 Owner 恢复', () => {
-    const source = readFileSync('src/core/AppContainer.ts', 'utf8')
-    const exportContract = source.slice(
-      source.indexOf('export async function exportPortableCredentialBundle'),
-      source.indexOf('export async function importPortableCredentialBundle'),
+  it('portable work preserves both provider drafts, templates, identities and timestamps after reopening', async () => {
+    const source = new FrontendWorkshopImageDraftService()
+    source.saveDraft(novelAiDraft())
+    source.saveDraft({ ...novelAiDraft(), provider: 'openai', prompt: 'other provider' })
+    source.saveTemplate('保存模板', novelAiDraft())
+    const backup = source.exportPortableState()
+    localStorage.clear()
+    await new FrontendWorkshopImageDraftService().importPortableState(
+      JSON.parse(JSON.stringify(backup)),
     )
-    const importContract = source.slice(
-      source.indexOf('export async function importPortableCredentialBundle'),
-      source.indexOf('/** 首次切换到内置 Vue APK'),
-    )
-
-    expect(exportContract).not.toContain('exportConfigurations()')
-    expect(exportContract).not.toMatch(/imageGeneration\s*:/u)
-    expect(importContract).toContain('value.imageGeneration')
-    expect(importContract).toContain(
-      'frontendWorkshopImageGenerationService.importConfigurations(value.imageGeneration)',
-    )
+    expect(new FrontendWorkshopImageDraftService().exportPortableState()).toEqual(backup)
+    await new FrontendWorkshopImageDraftService().importPortableState(backup)
+    expect(new FrontendWorkshopImageDraftService().listTemplates()).toHaveLength(1)
+  })
+  it('preserves an older colliding provider draft as a template and does not silently truncate a full template library', async () => {
+    const service = new FrontendWorkshopImageDraftService()
+    const local = service.saveDraft(novelAiDraft())
+    const backup = service.exportPortableState()
+    backup.store.drafts.novelai = { ...local, prompt: 'older from previous phone', savedAt: 1 }
+    await service.importPortableState(backup)
+    expect(service.loadDraft('novelai')?.prompt).toBe(local.prompt)
+    expect(
+      service.listTemplates().some((row) => row.draft.prompt === 'older from previous phone'),
+    ).toBe(true)
+    await service.importPortableState(backup)
+    expect(service.listTemplates()).toHaveLength(1)
+    for (let i = 0; i < 29; i++) service.saveTemplate('template-' + i, novelAiDraft())
+    const before = service.exportPortableState()
+    const extra = { ...before, templates: [{ ...before.templates[0]!, id: 'additional' }] }
+    await expect(service.importPortableState(extra)).rejects.toThrow('超过 30')
+    expect(service.exportPortableState()).toEqual(before)
+  })
+  it('rejects template storage failure instead of claiming success', () => {
+    const service = new FrontendWorkshopImageDraftService()
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    expect(() => service.saveTemplate('portrait', novelAiDraft())).toThrow('模板未能保存到本机')
+    expect(service.listTemplates()).toHaveLength(0)
+  })
+  it('requires template readback to match the requested content', () => {
+    const service = new FrontendWorkshopImageDraftService()
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {})
+    expect(() => service.saveTemplate('portrait', novelAiDraft())).toThrow('模板未能保存到本机')
   })
 })

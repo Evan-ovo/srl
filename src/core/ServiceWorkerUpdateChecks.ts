@@ -1,5 +1,18 @@
 export const SERVICE_WORKER_UPDATE_INTERVAL_MS = 10 * 60 * 1000
 
+const pendingChecks = new WeakMap<ServiceWorkerRegistration, Promise<unknown>>()
+
+/** Manual and lifecycle callers share only the current check for this registration. */
+export function requestServiceWorkerUpdate(
+  registration: ServiceWorkerRegistration,
+): Promise<unknown> {
+  const pending = pendingChecks.get(registration)
+  if (pending) return pending
+  const request = registration.update().finally(() => pendingChecks.delete(registration))
+  pendingChecks.set(registration, request)
+  return request
+}
+
 /**
  * 为已注册的 Service Worker 补充主动更新检查。
  *
@@ -10,15 +23,8 @@ export const SERVICE_WORKER_UPDATE_INTERVAL_MS = 10 * 60 * 1000
 export function startServiceWorkerUpdateChecks(
   registration: ServiceWorkerRegistration,
 ): () => void {
-  let pending: Promise<unknown> | undefined
   const checkForUpdate = (): void => {
-    if (pending) return
-    pending = registration
-      .update()
-      .catch(() => undefined)
-      .finally(() => {
-        pending = undefined
-      })
+    void requestServiceWorkerUpdate(registration).catch(() => undefined)
   }
   const checkWhenVisible = (): void => {
     if (document.visibilityState === 'visible') checkForUpdate()

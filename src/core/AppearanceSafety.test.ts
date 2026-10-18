@@ -13,6 +13,145 @@ import {
   isSafeModeActive,
   markStartupReady,
 } from './SafeStartup'
+import { createUiView } from './UiCustomization'
+
+describe('memory-only live appearance preview', () => {
+  afterEach(() => {
+    appearanceTransaction.exitPreview()
+    vi.useRealTimers()
+    localStorage.clear()
+    document.body.replaceChildren()
+  })
+
+  it('stays active beyond 15 seconds and exits with the exact previous CSS and no storage writes', async () => {
+    vi.useFakeTimers()
+    localStorage.setItem('srl.ui.customCss', '.saved{}')
+    const stored = { ...localStorage }
+    const apply = vi.fn()
+    const onExit = vi.fn()
+    const views = { library: { ...createUiView(), enabled: true } }
+    appearanceTransaction.preview({
+      previousCss: '.saved{}',
+      nextCss: '.draft{}',
+      views,
+      apply,
+      onExit,
+    })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(appearanceTransaction.isPreviewing()).toBe(true)
+    expect(appearanceTransaction.getPreviewViews()).toEqual(views)
+    expect(apply).toHaveBeenLastCalledWith('.draft{}')
+    expect({ ...localStorage }).toEqual(stored)
+    const host = document.getElementById('srl-appearance-preview-layer')!
+    expect(host.shadowRoot!.textContent).toContain('保存、删除会影响真实数据')
+    host.shadowRoot!.querySelector<HTMLButtonElement>('[data-exit-preview]')!.click()
+    expect(apply).toHaveBeenLastCalledWith('.saved{}')
+    expect(appearanceTransaction.getPreviewViews()).toBeUndefined()
+    expect(onExit).toHaveBeenCalledTimes(1)
+    expect(host.isConnected).toBe(false)
+    expect({ ...localStorage }).toEqual(stored)
+  })
+
+  it('follows the host theme and discloses preview details without ending the session', async () => {
+    document.documentElement.dataset.theme = 'dark'
+    appearanceTransaction.preview({
+      previousCss: '',
+      nextCss: '.draft{}',
+      views: {},
+      apply: vi.fn(),
+      onExit: vi.fn(),
+    })
+    const host = document.getElementById('srl-appearance-preview-layer')!
+    const info = host.shadowRoot!.querySelector<HTMLButtonElement>('[data-preview-info]')!
+    const help = host.shadowRoot!.querySelector<HTMLElement>('#srl-preview-help')!
+    expect(host.dataset.previewTheme).toBe('dark')
+    expect(help.hidden).toBe(true)
+    info.click()
+    expect(info.getAttribute('aria-expanded')).toBe('true')
+    expect(help.hidden).toBe(false)
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    expect(help.hidden).toBe(true)
+    expect(appearanceTransaction.isPreviewing()).toBe(true)
+    document.documentElement.dataset.theme = 'light'
+    await Promise.resolve()
+    expect(host.dataset.previewTheme).toBe('light')
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    expect(appearanceTransaction.isPreviewing()).toBe(false)
+    delete document.documentElement.dataset.theme
+  })
+
+  it('keeps a canceled dirty-editor exit active, then accepts Escape and removes its listeners', async () => {
+    const beforeExit = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true)
+    const onExit = vi.fn()
+    appearanceTransaction.preview({
+      previousCss: '',
+      nextCss: '.draft{}',
+      views: {},
+      apply: vi.fn(),
+      onExit,
+      beforeExit,
+    })
+    document
+      .getElementById('srl-appearance-preview-layer')!
+      .shadowRoot!.querySelector<HTMLButtonElement>('button')!
+      .click()
+    await Promise.resolve()
+    expect(appearanceTransaction.isPreviewing()).toBe(true)
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await Promise.resolve()
+    expect(appearanceTransaction.isPreviewing()).toBe(false)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(onExit).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables a failing preview Vue only in memory and restores when applying another appearance', () => {
+    const view = { ...createUiView(), enabled: true }
+    const original = { library: view }
+    const apply = vi.fn()
+    const onExit = vi.fn()
+    appearanceTransaction.preview({
+      previousCss: '.saved{}',
+      nextCss: '.draft{}',
+      views: original,
+      apply,
+      onExit,
+    })
+    expect(appearanceTransaction.disablePreviewView('library')).toBe(true)
+    expect(original.library.enabled).toBe(true)
+    expect(appearanceTransaction.getPreviewViews()!.library!.enabled).toBe(false)
+    appearanceTransaction.clear('.applied{}', apply, vi.fn())
+    expect(appearanceTransaction.getPreviewViews()).toBeUndefined()
+    expect(apply.mock.calls.map(([css]) => css)).toEqual(['.draft{}', '.saved{}', '.applied{}'])
+    expect(onExit).toHaveBeenCalledTimes(1)
+    expect(appearanceTransaction.disablePreviewView('library')).toBe(false)
+  })
+
+  it('cleans up and restores CSS when preview application fails', () => {
+    const onExit = vi.fn()
+    const apply = vi.fn((css: string) => {
+      if (css === '.broken{}') throw new Error('failed')
+    })
+    expect(() =>
+      appearanceTransaction.preview({
+        previousCss: '.saved{}',
+        nextCss: '.broken{}',
+        views: {},
+        apply,
+        onExit,
+      }),
+    ).toThrow('failed')
+    expect(apply).toHaveBeenLastCalledWith('.saved{}')
+    expect(appearanceTransaction.isPreviewing()).toBe(false)
+    expect(document.getElementById('srl-appearance-preview-layer')).toBeNull()
+    expect(onExit).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('AppearanceSafety', () => {
   it('后创建的Vue恢复按钮不遮挡试用确认和立即恢复', () => {

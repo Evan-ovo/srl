@@ -3,6 +3,7 @@ import type { FrontendWorkshopImageFormat } from '../types/ImageGeneration'
 import { getCapacitorPlatform } from '../utils/CapacitorDetection'
 import type { NovelAiTransport } from './NovelAiBinaryTransport'
 import { asImageDataUrl, bytesToBase64, imageFormatFromBytes } from './GeneratedImageData'
+import { responseErrorDetail } from './ImageGenerationError'
 
 function novelAiJsonImage(value: unknown): string | undefined {
   const payload = value as { image?: unknown; images?: Array<{ image?: string } | string> }
@@ -157,7 +158,12 @@ export async function readNovelAiImage(
     }
   }
   const encoded = [...payloads].reverse().map(novelAiJsonImage).find(Boolean)
-  if (!encoded) throw parseError('NovelAI 没有返回可用图片')
+  if (!encoded) {
+    const detail = [...payloads].reverse().map(responseErrorDetail).find(Boolean)
+    throw parseError(
+      detail ? `NovelAI 未返回图片，服务端说明：${detail}` : 'NovelAI 没有返回可用图片',
+    )
+  }
   const dataUrl = asImageDataUrl(encoded, 'image/png')!
   const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp));/u)
   const mimeType = match?.[1] ?? 'image/png'

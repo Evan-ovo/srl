@@ -153,11 +153,15 @@ final class NativeArchiveExport {
             }
         }
         // A provider can change its URI during rename. The unique task suffix closes that crash window.
+        boolean foundByName=false;
         if (target==null || !target.exists()) {
             target=tree.findFile(name);
-            if(target!=null && !verify(context,target,archive.length(),state.getString("archiveHash"))) throw new IOException("目标名称已被其它文件使用，未覆盖该文件");
+            foundByName=target!=null;
         }
-        if (target!=null && target.exists() && verify(context,target,archive.length(),state.getString("archiveHash"))) {
+        boolean targetExists=target!=null && target.exists();
+        boolean verified=(targetExists || foundByName) && verify(context,target,archive.length(),state.getString("archiveHash"));
+        if (foundByName && !verified) throw new IOException("目标名称已被其它文件使用，未覆盖该文件");
+        if (targetExists && verified) {
             if (!name.equals(target.getName()) && !target.renameTo(name)) throw new IOException("备份已写入但重命名未完成，请继续任务");
             state.put("saved",true); state.put("targetUri",target.getUri().toString());
             NativeArchiveTasks.writeJson(context,stateFile(dir),state); return state;

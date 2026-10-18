@@ -16,6 +16,8 @@ import {
   type Resource,
 } from '../types/Resource'
 import { hashCloudBlob } from './CloudArchiveCodec'
+import { SecretResourceService } from './SecretResourceService'
+import { parsePersonalResource } from '../types/PersonalResource'
 
 function resource(id: string, body: string): Resource {
   return {
@@ -142,6 +144,51 @@ describe('CloudStructuredSnapshot', () => {
       )
     })
     expect(await restored[0]?.originalBlob.text()).toBe('{"a":1}')
+  })
+
+  it('round-trips an encrypted secret resource through a structured cloud snapshot', async () => {
+    const credentials = new Map<string, string>()
+    const secrets = new SecretResourceService({
+      save: async (key, value) => void credentials.set(key, value),
+      read: async (key) => credentials.get(key) ?? '',
+      clear: async (key) => void credentials.delete(key),
+    })
+    const password = 'fixture-secret-password'
+    const document = {
+      format: 'srl-personal-resource' as const,
+      version: 1 as const,
+      kind: 'secret' as const,
+      name: 'fixture secret',
+      text: '',
+      url: '',
+      attachments: [],
+      fields: [{ id: 'token', label: 'Token', value: 'fixture-private-value', private: true }],
+    }
+    await secrets.setPassword(password)
+    try {
+      const protectedDocument = await secrets.protect(document)
+      const original = resource('encrypted-secret', JSON.stringify(protectedDocument))
+      original.type = RESOURCE_TYPE.SECRET
+      original.fileName = 'secret.json'
+      original.contentHash = await hashCloudBlob(original.originalBlob)
+      const created = await createStructuredSnapshot([original], [], [], { version: 1 })
+      const snapshot = parseStructuredSnapshot(JSON.parse(JSON.stringify(created.snapshot)))
+      const restored = await materializeStructuredResources(
+        snapshot.resources,
+        async (object) =>
+          new Blob(
+            object.parts.map((part) => {
+              const stored = created.chunks.get(part.name)!
+              return stored.slice(part.offset ?? 0, (part.offset ?? 0) + part.size)
+            }),
+          ),
+      )
+      const roundTripped = parsePersonalResource(JSON.parse(await restored[0]!.originalBlob.text()))
+
+      await expect(secrets.reveal(roundTripped, password)).resolves.toEqual(document.fields)
+    } finally {
+      secrets.lock()
+    }
   })
 
   it('creates immutable per-resource objects so changing one of 100 cards adds only one object', async () => {

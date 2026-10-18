@@ -1,8 +1,71 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { TaskCenter } from './TaskCenter'
 
 describe('TaskCenter', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('expires a successful task with an optional view action after five seconds', async () => {
+    vi.useFakeTimers()
+    const center = new TaskCenter()
+    const open = vi.fn()
+    const id = center.start({
+      name: 'backup',
+      action: { label: '查看云备份', run: open, required: false },
+    })
+    center.complete(id)
+    await expect(center.open(id)).resolves.toBe(true)
+    expect(open).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(4_999)
+    expect(center.list()).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(center.list()).toEqual([])
+  })
+
+  it('retains required actions, waiting imports, failures and active tasks', () => {
+    vi.useFakeTimers()
+    const center = new TaskCenter()
+    const pending = center.start({ name: 'pending', action: { label: '继续', run: vi.fn() } })
+    center.complete(pending)
+    const download = center.start({ name: 'download', phase: '下载完成，可继续导入' })
+    center.complete(download)
+    const failed = center.start({
+      name: 'failed',
+      action: { label: '查看', run: vi.fn(), required: false },
+    })
+    center.fail(failed, new Error('offline'))
+    center.start({ name: 'running', action: { label: '查看', run: vi.fn(), required: false } })
+    center.dismissCompleted()
+    vi.advanceTimersByTime(60_000)
+    expect(center.list()).toHaveLength(4)
+  })
+
+  it('reschedules cleanup when a required action becomes optional and cancels it if required again', () => {
+    vi.useFakeTimers()
+    const center = new TaskCenter()
+    const id = center.start({ name: 'backup', action: { label: '继续', run: vi.fn() } })
+    center.complete(id)
+    center.setAction(id, { label: '查看', run: vi.fn(), required: false })
+    vi.advanceTimersByTime(4_000)
+    center.setAction(id, { label: '继续处理', run: vi.fn() })
+    vi.advanceTimersByTime(10_000)
+    expect(center.list()).toHaveLength(1)
+    center.setAction(id, { label: '查看', run: vi.fn(), required: false })
+    vi.advanceTimersByTime(5_000)
+    expect(center.list()).toEqual([])
+  })
+
+  it('does not expire a replacement task with the same operation ID', () => {
+    vi.useFakeTimers()
+    const center = new TaskCenter()
+    const id = center.start({ operationId: 'same', name: 'old' })
+    center.complete(id)
+    center.start({ operationId: id, name: 'new' })
+    vi.advanceTimersByTime(5_000)
+    expect(center.list()[0]?.name).toBe('new')
+    expect(center.list()[0]?.status).toBe('running')
+  })
+
   it('opens completed work once while unrelated actions remain independent', async () => {
     const center = new TaskCenter()
     let finish!: () => void

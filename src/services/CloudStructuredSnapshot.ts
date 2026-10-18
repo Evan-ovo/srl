@@ -19,9 +19,18 @@ import {
   type GitHubBundlePart,
 } from './GitHubBackupBundle'
 import { hashCloudBlob } from './CloudArchiveCodec'
+import { nativeFileSource } from '../core/NativeFileSource'
+import { collectCommunitySourceLocalAssetIds } from './CommunitySourceAttachmentArchive'
+import { parseAlbumBackup } from './GeneratedImageAlbumBackup'
+import { parseFrontendWorkshopBackup } from '../storage/FrontendWorkshopProjectStorage'
+import { parseCommunitySourceBackupData } from './CommunitySourceBackupService'
 
 export const STRUCTURED_SNAPSHOT_FORMAT = 'srl-structured-cloud-snapshot'
 export const STRUCTURED_SNAPSHOT_VERSION = 3
+// Keep the V3 object namespace/filename visible to old retention inventories, but make
+// their strict manifest decoder reject new attachment references before any deletion.
+export const STRUCTURED_SNAPSHOT_COMMUNITY_VERSION = 4
+export const STRUCTURED_SNAPSHOT_APPLICATION_VERSION = 5
 const LEGACY_STRUCTURED_SNAPSHOT_VERSION = 1
 const LEGACY_STRUCTURED_SNAPSHOT_VERSION_2 = 2
 const SMALL_OBJECT_LIMIT = 4 * 1024 * 1024
@@ -39,6 +48,7 @@ export function structuredSnapshotArchiveName(objectKey: string): string {
 }
 
 export type CloudObjectSource =
+  | { kind: 'file'; uri: string; offset: number; size: number }
   | { kind: 'range'; contentHash: string; offset: number; size: number }
   | {
       kind: 'concat'
@@ -73,6 +83,8 @@ export interface StructuredSnapshot {
   format: typeof STRUCTURED_SNAPSHOT_FORMAT
   version:
     | typeof STRUCTURED_SNAPSHOT_VERSION
+    | typeof STRUCTURED_SNAPSHOT_COMMUNITY_VERSION
+    | typeof STRUCTURED_SNAPSHOT_APPLICATION_VERSION
     | typeof LEGACY_STRUCTURED_SNAPSHOT_VERSION
     | typeof LEGACY_STRUCTURED_SNAPSHOT_VERSION_2
   createdAt: string
@@ -381,6 +393,11 @@ export async function createStructuredSnapshot(
   versions: Iterable<StructuredResourceInput> | AsyncIterable<StructuredResourceInput>,
   categories: Category[],
   portableData: ArchivePortableData,
+  community: {
+    readAttachment?: (assetId: string) => Promise<Blob | undefined>
+    readAlbumFile?: (id: string) => Promise<Blob>
+    signal?: AbortSignal
+  } = {},
 ): Promise<CreatedStructuredSnapshot> {
   const chunks = new Map<string, Blob>()
   const nativeSources = new Map<string, CloudObjectSource>()
@@ -409,6 +426,66 @@ export async function createStructuredSnapshot(
       descriptorUpdates,
       true,
     )
+  const addPortableParts = (original: Blob, manifest: GitHubBundleManifest, blobs: Blob[]) => {
+    const uri = nativeFileSource(original)
+    let offset = 0
+    for (const [index, part] of manifest.parts.entries()) {
+      const source: CloudObjectSource = uri
+        ? { kind: 'file', uri, offset, size: part.size }
+        : { kind: 'inline', blob: blobs[index]! }
+      if (!objectPlans.has(part.name)) {
+        if (!uri) chunks.set(part.name, blobs[index]!)
+        nativeSources.set(part.name, source)
+        objectPlans.set(part.name, {
+          name: part.name,
+          hash: part.sha256,
+          size: part.size,
+          blob: uri ? undefined : blobs[index]!,
+          source,
+          contentType: 'application/octet-stream',
+        })
+      }
+      offset += part.size
+    }
+  }
+  if (portableData.generatedImageAlbum) {
+    const album = []
+    for (const entry of portableData.generatedImageAlbum) {
+      community.signal?.throwIfAborted()
+      const original = await community.readAlbumFile?.(entry.item.id)
+      community.signal?.throwIfAborted()
+      if (!original || original.size !== entry.item.sizeBytes)
+        throw new Error(`相册原图缺失或已变化，未提交备份：${entry.item.name}`)
+      const { manifest, blobs } = await createGitHubBundle(original, entry.item.name)
+      community.signal?.throwIfAborted()
+      addPortableParts(original, manifest, blobs)
+      album.push({ item: entry.item, object: manifest })
+      localReadBytes += original.size
+    }
+    portableData = { ...portableData, generatedImageAlbum: parseAlbumBackup(album) }
+  }
+  if (portableData.communitySources) {
+    const data = parseCommunitySourceBackupData(portableData.communitySources.data)
+    const attachments: NonNullable<ArchivePortableData['communitySources']>['attachments'] = []
+    for (const assetId of collectCommunitySourceLocalAssetIds(data)) {
+      community.signal?.throwIfAborted()
+      const original = await community.readAttachment?.(assetId)
+      community.signal?.throwIfAborted()
+      if (!original) throw new Error(`Discord 本地附件缺失，未提交备份：${assetId}`)
+      const { manifest, blobs } = await createGitHubBundle(original, assetId)
+      community.signal?.throwIfAborted()
+      if (assetId !== `asset-${manifest.totalSha256}`)
+        throw new Error(`Discord 本地附件完整性校验失败：${assetId}`)
+      addPortableParts(original, manifest, blobs)
+      attachments.push({
+        assetId,
+        mimeType: original.type || 'application/octet-stream',
+        object: manifest,
+      })
+      localReadBytes += original.size
+    }
+    portableData = { ...portableData, communitySources: { data, attachments } }
+  }
   const parts: GitHubBundlePart[] = [...objectPlans.values()].map((plan) => ({
     name: plan.name,
     size: plan.size,
@@ -417,7 +494,14 @@ export async function createStructuredSnapshot(
   return {
     snapshot: {
       format: STRUCTURED_SNAPSHOT_FORMAT,
-      version: STRUCTURED_SNAPSHOT_VERSION,
+      version:
+        portableData.generatedImageAlbum ||
+        portableData.frontendWorkshopProjects ||
+        portableData.imageGeneration
+          ? STRUCTURED_SNAPSHOT_APPLICATION_VERSION
+          : portableData.communitySources
+            ? STRUCTURED_SNAPSHOT_COMMUNITY_VERSION
+            : STRUCTURED_SNAPSHOT_VERSION,
       createdAt: new Date().toISOString(),
       categories,
       resources: current,
@@ -432,7 +516,14 @@ export async function createStructuredSnapshot(
     chunks,
     nativeSources,
     objectPlans: [...objectPlans.values()],
-    totalSize: [...current, ...historic].reduce((total, resource) => total + resource.fileSize, 0),
+    totalSize:
+      [...current, ...historic].reduce((total, resource) => total + resource.fileSize, 0) +
+      (portableData.communitySources?.attachments.reduce(
+        (sum, entry) => sum + entry.object.totalSize,
+        0,
+      ) ?? 0) +
+      (portableData.generatedImageAlbum?.reduce((sum, entry) => sum + entry.object!.totalSize, 0) ??
+        0),
     partCount: parts.length,
     localReadBytes,
     descriptorUpdates,
@@ -448,6 +539,8 @@ export function isStructuredSnapshot(value: unknown): value is StructuredSnapsho
       LEGACY_STRUCTURED_SNAPSHOT_VERSION,
       LEGACY_STRUCTURED_SNAPSHOT_VERSION_2,
       STRUCTURED_SNAPSHOT_VERSION,
+      STRUCTURED_SNAPSHOT_COMMUNITY_VERSION,
+      STRUCTURED_SNAPSHOT_APPLICATION_VERSION,
     ].includes(snapshot.version ?? 0) &&
     Array.isArray(snapshot.resources) &&
     Array.isArray(snapshot.versions) &&
@@ -475,13 +568,62 @@ export function parseStructuredSnapshot(value: unknown): StructuredSnapshot {
       throw new Error(`对象级云备份资源校验信息不一致：${resource.fileName}`)
     }
   }
+  if (snapshot.portableData.communitySources !== undefined) {
+    if (snapshot.version < STRUCTURED_SNAPSHOT_COMMUNITY_VERSION)
+      throw new Error('Discord 云备份需要清单修订 4，不能将附件引用写入旧清单修订')
+    const community = snapshot.portableData.communitySources
+    if (!isRecord(community) || !Array.isArray(community.attachments))
+      throw new Error('Discord 云备份附件清单无效')
+    community.data = parseCommunitySourceBackupData(community.data)
+    const referenced = collectCommunitySourceLocalAssetIds(community.data)
+    const seen = new Set<string>()
+    for (const entry of community.attachments) {
+      if (
+        !isRecord(entry) ||
+        typeof entry.assetId !== 'string' ||
+        typeof entry.mimeType !== 'string' ||
+        !referenced.has(entry.assetId) ||
+        seen.has(entry.assetId)
+      )
+        throw new Error('Discord 云备份附件引用无效')
+      entry.object = parseGitHubBundleManifest(entry.object)
+      if (entry.assetId !== `asset-${entry.object.totalSha256.toLowerCase()}`)
+        throw new Error('Discord 云备份附件哈希不一致')
+      seen.add(entry.assetId)
+    }
+    if (seen.size !== referenced.size) throw new Error('Discord 云备份缺少已保存附件')
+  }
+  if (
+    snapshot.portableData.generatedImageAlbum ||
+    snapshot.portableData.frontendWorkshopProjects ||
+    snapshot.portableData.imageGeneration
+  ) {
+    if (snapshot.version < STRUCTURED_SNAPSHOT_APPLICATION_VERSION)
+      throw new Error('创作资料备份需要清单修订 5')
+    if (snapshot.portableData.generatedImageAlbum)
+      snapshot.portableData.generatedImageAlbum = parseAlbumBackup(
+        snapshot.portableData.generatedImageAlbum,
+      )
+    if (snapshot.portableData.frontendWorkshopProjects)
+      parseFrontendWorkshopBackup(snapshot.portableData.frontendWorkshopProjects)
+  }
   return snapshot
+}
+
+/** Every consumer (upload, retention, native restore) must see the same binary objects. */
+export function structuredSnapshotObjects(snapshot: StructuredSnapshot): GitHubBundleManifest[] {
+  return [
+    ...snapshot.resources.map((resource) => resource.object),
+    ...snapshot.versions.map((resource) => resource.object),
+    ...(snapshot.portableData.communitySources?.attachments.map((entry) => entry.object) ?? []),
+    ...(snapshot.portableData.generatedImageAlbum?.map((entry) => entry.object!) ?? []),
+  ]
 }
 
 export function structuredSnapshotParts(snapshot: StructuredSnapshot): GitHubBundlePart[] {
   const unique = new Map<string, GitHubBundlePart>()
-  for (const resource of [...snapshot.resources, ...snapshot.versions]) {
-    for (const part of resource.object.parts) {
+  for (const object of structuredSnapshotObjects(snapshot)) {
+    for (const part of object.parts) {
       unique.set(part.name, {
         ...part,
         size: part.storedSize ?? part.size,

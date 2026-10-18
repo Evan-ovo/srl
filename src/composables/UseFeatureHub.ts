@@ -104,8 +104,11 @@ export type FeatureHubEvents = {
   'update:noImageResourceCoverMode': [value: NoImageResourceCoverMode]
   'update:uiFontScale': [value: UiFontScale]
   'save-css': [value: string, options?: import('../types/UiCustomization').UiApplyOptions]
+  'preview-css': [request: import('../types/UiCustomization').AppearancePreviewRequest]
   'save-assistant-css': [value: string, options?: import('../types/UiCustomization').UiApplyOptions]
-  'library-changed': []
+  'library-changed': [
+    changes?: Pick<import('../types/Backup').RestoreReport, 'resourceIds' | 'categoriesChanged'>,
+  ]
   'import-files': [files: File[], onComplete?: () => void]
   'feature-app-active': [active: boolean]
   'shared-app-files-consumed': []
@@ -220,6 +223,10 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
     () => drawResources.value.filter((resource) => resource.type === RESOURCE_TYPE.PRESET).length,
   )
 
+  const userPersonaCount = computed(
+    () => props.resources.filter((resource) => resource.type === RESOURCE_TYPE.USER_PERSONA).length,
+  )
+
   const enabledExternalApps = computed(() => externalApps.value.filter((app) => app.enabled))
 
   const visibleBuiltInFeatureApps = computed(() =>
@@ -273,20 +280,26 @@ export function useFeatureHub(props: Readonly<FeatureHubProps>, emit: EmitFn<Fea
     return '筛选'
   })
 
-  function getFeatureAppDescriptorContext(): FeatureAppDescriptorContext {
-    return {
-      drawCount: drawState.value.totalDraws,
-      folderCount: props.categories.length,
-      presetCount: presetCount.value,
-      userPersonaCount: props.resources.filter(
-        (resource) => resource.type === RESOURCE_TYPE.USER_PERSONA,
-      ).length,
-      enabledExternalAppCount: enabledExternalApps.value.length,
-    }
+  const descriptorContext: FeatureAppDescriptorContext = {
+    get drawCount() {
+      return drawState.value.totalDraws
+    },
+    get folderCount() {
+      return props.categories.length
+    },
+    get presetCount() {
+      return presetCount.value
+    },
+    get userPersonaCount() {
+      return userPersonaCount.value
+    },
+    get enabledExternalAppCount() {
+      return enabledExternalApps.value.length
+    },
   }
 
   function getBuiltInFeatureAppBadge(descriptor: FeatureAppDescriptor): string {
-    return getFeatureAppBadge(descriptor, getFeatureAppDescriptorContext())
+    return getFeatureAppBadge(descriptor, descriptorContext)
   }
 
   function openBuiltInFeatureApp(id: BuiltInFeatureAppId): void {

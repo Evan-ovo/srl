@@ -12,6 +12,7 @@ const mirror = vi.hoisted(() => ({
   remove: vi.fn(),
   removeMany: vi.fn(),
   available: vi.fn(),
+  release: vi.fn(),
 }))
 
 vi.mock('./NativeResourceFileMirror', () => ({
@@ -20,6 +21,7 @@ vi.mock('./NativeResourceFileMirror', () => ({
   clearNativeResourceFiles: mirror.clear,
   removeNativeResourceFile: mirror.remove,
   removeNativeResourceFiles: mirror.removeMany,
+  releaseReplacedNativeObjects: mirror.release,
 }))
 
 import { NativeMirroredResourceStorage } from './NativeMirroredResourceStorage'
@@ -68,6 +70,122 @@ function delegate(save: (resource: Resource) => Promise<void>): ResourceStorageA
 }
 
 describe('NativeMirroredResourceStorage', () => {
+  it.each([false, true])(
+    'commits only a successful atomic insertion (inserted=%s)',
+    async (inserted) => {
+      const backing = delegate(vi.fn(async () => undefined))
+      backing.insertIfAbsent = vi.fn(async () => inserted)
+      backing.convertToNativeReference = vi.fn(async () => true)
+      const storage = new NativeMirroredResourceStorage(backing, {
+        isEnabled: () => false,
+      } as VaultService)
+      expect(await storage.insertIfAbsent?.(resource())).toBe(inserted)
+      expect(backing.save).not.toHaveBeenCalled()
+      expect(mirror.commit).toHaveBeenCalledTimes(inserted ? 1 : 0)
+      expect(mirror.abort).toHaveBeenCalledTimes(inserted ? 0 : 1)
+      expect(backing.convertToNativeReference).toHaveBeenCalledTimes(inserted ? 1 : 0)
+    },
+  )
+
+  it('keeps atomic insertion optional and preserves vault and staging failure behavior', async () => {
+    const backing = delegate(async () => undefined)
+    expect(
+      new NativeMirroredResourceStorage(backing, { isEnabled: () => false } as VaultService)
+        .insertIfAbsent,
+    ).toBeUndefined()
+    backing.insertIfAbsent = vi.fn(async () => true)
+    const encrypted = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => true,
+    } as VaultService)
+    expect(await encrypted.insertIfAbsent?.(resource())).toBe(true)
+    expect(mirror.stage).not.toHaveBeenCalled()
+    vi.mocked(backing.insertIfAbsent).mockClear()
+    mirror.stage.mockRejectedValueOnce(new Error('stage failed'))
+    const ordinary = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    await expect(ordinary.insertIfAbsent?.(resource())).rejects.toThrow('stage failed')
+    expect(backing.insertIfAbsent).not.toHaveBeenCalled()
+  })
+
+  it('does not retry aborting an occupied insertion when abort itself fails', async () => {
+    const backing = delegate(async () => undefined)
+    backing.insertIfAbsent = vi.fn(async () => false)
+    mirror.abort.mockRejectedValueOnce(new Error('abort failed'))
+    const storage = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    await expect(storage.insertIfAbsent?.(resource())).rejects.toThrow('abort failed')
+    expect(mirror.abort).toHaveBeenCalledOnce()
+    expect(mirror.commit).not.toHaveBeenCalled()
+  })
+  it('forwards thumbnail-only reads and keeps a full-read fallback only for old delegates', async () => {
+    const backing = delegate(async () => undefined)
+    const thumbnail = new Blob(['thumbnail'])
+    backing.getThumbnail = vi.fn(async () => thumbnail)
+    const storage = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    expect(await storage.getThumbnail('image')).toBe(thumbnail)
+    expect(backing.getThumbnail).toHaveBeenCalledExactlyOnceWith('image')
+    expect(backing.get).not.toHaveBeenCalled()
+    delete backing.getThumbnail
+    vi.mocked(backing.get).mockResolvedValue({ ...resource(), thumbnailBlob: thumbnail })
+    expect(await storage.getThumbnail('image')).toBe(thumbnail)
+    expect(backing.get).toHaveBeenCalledExactlyOnceWith('image')
+    expect(mirror.stage).not.toHaveBeenCalled()
+  })
+
+  it('deletes a single resource using scoped historical IDs without loading historical originals', async () => {
+    const backing = delegate(async () => undefined)
+    backing.listVersions = vi.fn(async () => [
+      { ...resource(), id: 'history', versionGroupId: 'resource-1' },
+    ])
+    backing.listVersionListSummariesForResources = vi.fn(async () => [
+      { ...resource(), id: 'history', versionGroupId: 'resource-1' },
+    ])
+    const storage = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    await storage.delete('resource-1')
+    expect(backing.listVersions).not.toHaveBeenCalled()
+    expect(backing.listVersionListSummariesForResources).toHaveBeenCalledExactlyOnceWith([
+      'resource-1',
+    ])
+    expect(mirror.remove.mock.calls).toEqual([
+      ['resource-1', 'current'],
+      ['history', 'versions'],
+    ])
+    expect(backing.delete).toHaveBeenCalledExactlyOnceWith('resource-1')
+  })
+
+  it('forwards committed batch reads and bounds the targeted fallback for older delegates', async () => {
+    const backing = delegate(async () => undefined)
+    const row = resource()
+    backing.getResourceListSummaries = vi.fn(async () => [row])
+    const storage = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    expect(await storage.getResourceListSummaries([row.id])).toEqual([row])
+    expect(backing.getResourceListSummaries).toHaveBeenCalledExactlyOnceWith([row.id])
+    delete backing.getResourceListSummaries
+    let active = 0,
+      maximum = 0
+    backing.getResourceListSummary = vi.fn(async (id) => {
+      maximum = Math.max(maximum, ++active)
+      await Promise.resolve()
+      active--
+      return id === 'missing' ? undefined : { ...row, id }
+    })
+    const ids = Array.from({ length: 501 }, (_, index) => `r-${index}`)
+    const result = await storage.getResourceListSummaries([...ids, ids[0]!, 'missing'])
+    expect(result.map((item) => item.id)).toEqual(ids)
+    expect(backing.getResourceListSummary).toHaveBeenCalledTimes(502)
+    expect(maximum).toBeLessThanOrEqual(250)
+    expect(backing.listSummaries).not.toHaveBeenCalled()
+    expect(mirror.stage).not.toHaveBeenCalled()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mirror.stage.mockResolvedValue({ commit: mirror.commit, abort: mirror.abort })
@@ -75,7 +193,126 @@ describe('NativeMirroredResourceStorage', () => {
     mirror.abort.mockResolvedValue(undefined)
     mirror.clear.mockResolvedValue(undefined)
     mirror.available.mockReturnValue(true)
+    mirror.release.mockResolvedValue(undefined)
   })
+
+  it.each(Object.values(RESOURCE_TYPE))(
+    'reclaims replaced %s bytes only after commit and authoritative readback',
+    async (type) => {
+      const previous = { ...resource(), type } as Resource
+      const changes = { originalBlob: new Blob(['next']), contentHash: 'b'.repeat(64), fileSize: 4 }
+      const current = { ...previous, ...changes }
+      const backing = delegate(vi.fn(async () => undefined))
+      backing.get = vi.fn(async () => previous)
+      const replacement = {
+        scope: 'current',
+        id: current.id,
+        contentHash: current.contentHash,
+        size: current.fileSize,
+        replacedHashes: [previous.contentHash],
+      }
+      mirror.stage.mockResolvedValueOnce({
+        commit: mirror.commit,
+        abort: mirror.abort,
+        replacement,
+      })
+      const order: string[] = []
+      backing.update = vi.fn(async () => {
+        order.push('database')
+      })
+      backing.convertToNativeReference = vi.fn(async () => {
+        order.push('verified')
+        return true
+      })
+      mirror.commit.mockImplementationOnce(async () => {
+        order.push('mirror')
+      })
+      mirror.release.mockImplementationOnce(async () => {
+        order.push('cleanup')
+      })
+      const storage = new NativeMirroredResourceStorage(backing, {
+        isEnabled: () => false,
+      } as VaultService)
+      await storage.update(previous.id, changes)
+      expect(order).toEqual(['database', 'mirror', 'verified', 'cleanup'])
+      expect(mirror.release).toHaveBeenCalledWith([replacement])
+      expect(backing.convertToNativeReference).toHaveBeenCalledExactlyOnceWith(
+        previous.id,
+        'current',
+        current.contentHash,
+        4,
+      )
+    },
+  )
+
+  it('retains old files on failed commits or stale readback, and a cleanup error never rolls back saved data', async () => {
+    const previous = resource()
+    const changes = { originalBlob: new Blob(['next']), contentHash: 'b'.repeat(64), fileSize: 4 }
+    const backing = delegate(vi.fn(async () => undefined))
+    backing.get = vi.fn(async () => previous)
+    const replacement = {
+      scope: 'current',
+      id: previous.id,
+      contentHash: changes.contentHash,
+      size: changes.fileSize,
+      replacedHashes: [previous.contentHash],
+    }
+    mirror.stage.mockResolvedValue({ commit: mirror.commit, abort: mirror.abort, replacement })
+    backing.convertToNativeReference = vi.fn(async () => false)
+    const storage = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    await storage.update(previous.id, changes)
+    expect(mirror.release).not.toHaveBeenCalled()
+    mirror.commit.mockRejectedValueOnce(new Error('commit failed'))
+    await expect(storage.update(previous.id, changes)).rejects.toThrow('commit failed')
+    expect(mirror.release).not.toHaveBeenCalled()
+    vi.mocked(backing.convertToNativeReference).mockResolvedValue(true)
+    mirror.release.mockRejectedValueOnce(new Error('old APK'))
+    await expect(storage.update(previous.id, changes)).resolves.toBeUndefined()
+  })
+
+  it.each(['save', 'saveVersion', 'updateVersion', 'updateMany', 'saveMany'] as const)(
+    'reclaims replacement receipts through the shared %s entry and batches multi-item cleanup',
+    async (entry) => {
+      const previous = resource()
+      const current = { ...previous, contentHash: 'b'.repeat(64) }
+      const backing = delegate(vi.fn(async () => undefined))
+      backing.get = vi.fn(async () => current)
+      backing.getVersion = vi.fn(async () => current)
+      backing.convertToNativeReference = vi.fn(async () => true)
+      mirror.stage.mockImplementation(async (value: Resource, scope: 'current' | 'versions') => ({
+        commit: mirror.commit,
+        abort: mirror.abort,
+        replacement: {
+          id: value.id,
+          scope,
+          contentHash: value.contentHash,
+          size: value.fileSize,
+          replacedHashes: [previous.contentHash],
+        },
+      }))
+      const storage = new NativeMirroredResourceStorage(backing, {
+        isEnabled: () => false,
+      } as VaultService)
+      if (entry === 'save' || entry === 'saveVersion') await storage[entry](current)
+      else if (entry === 'updateVersion') await storage.updateVersion(current.id, current)
+      else if (entry === 'updateMany') {
+        backing.get = vi.fn(async (id) => ({ ...current, id }))
+        await storage.updateMany(['one', 'two'], current)
+      } else
+        await storage.saveMany([
+          { ...current, id: 'one' },
+          { ...current, id: 'two' },
+        ])
+      expect(mirror.release).toHaveBeenCalledOnce()
+      const records = mirror.release.mock.calls[0]![0]
+      expect(records).toHaveLength(entry === 'saveMany' || entry === 'updateMany' ? 2 : 1)
+      expect(records[0].scope).toBe(
+        entry === 'saveVersion' || entry === 'updateVersion' ? 'versions' : 'current',
+      )
+    },
+  )
 
   it('forwards the optional gallery query and leaves older delegates on the service fallback', async () => {
     const backing = delegate(async () => undefined)
@@ -270,6 +507,7 @@ describe('historical backup descriptor updates', () => {
     )
   })
   it('does not re-read or re-mirror all history for a descriptor-only change', async () => {
+    mirror.stage.mockClear()
     const storage = {
       updateVersion: vi.fn(async () => undefined),
       listAllVersions: vi.fn(async () => {
@@ -290,7 +528,36 @@ describe('historical backup descriptor updates', () => {
     }
     await adapter.updateVersion('history', { backupDescriptor: descriptor })
     expect(storage.updateVersion).toHaveBeenCalledWith('history', { backupDescriptor: descriptor })
+    await adapter.updateVersion('history', { versionNote: 'changed note' })
+    expect(storage.updateVersion).toHaveBeenCalledWith('history', { versionNote: 'changed note' })
     expect(storage.listAllVersions).not.toHaveBeenCalled()
     expect(storage.getVersion).not.toHaveBeenCalled()
+    expect(mirror.stage).not.toHaveBeenCalled()
+  })
+  it('keeps the original mirror path for changed file bytes and native display metadata', async () => {
+    mirror.stage.mockReset().mockResolvedValue({ commit: mirror.commit, abort: mirror.abort })
+    mirror.commit.mockReset().mockResolvedValue(undefined)
+    let saved: Resource = { ...resource(), id: 'history', versionGroupId: 'current' }
+    const backing = delegate(async () => undefined)
+    backing.updateVersion = vi.fn(async (_id, changes) => {
+      saved = { ...saved, ...changes }
+    })
+    backing.getVersion = vi.fn(async () => saved)
+    const adapter = new NativeMirroredResourceStorage(backing, {
+      isEnabled: () => false,
+    } as VaultService)
+    await adapter.updateVersion(saved.id, { metadata: { assetKind: 'userPersonaAvatar' } })
+    expect(mirror.stage).toHaveBeenLastCalledWith(saved, 'versions')
+    const originalBlob = new Blob(['replacement'])
+    await adapter.updateVersion(saved.id, {
+      originalBlob,
+      contentHash: 'new-hash',
+      fileSize: originalBlob.size,
+    })
+    expect(mirror.stage).toHaveBeenCalledTimes(2)
+    expect(mirror.stage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ originalBlob, contentHash: 'new-hash' }),
+      'versions',
+    )
   })
 })

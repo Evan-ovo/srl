@@ -1,9 +1,12 @@
+import { isResourceAttachment, resourceOwnedFileOwnerId } from '../types/ResourceAttachment'
 import type { ResourceGalleryCategoryStorage } from '../storage/ResourceGalleryCategoryStorage'
 import type { ResourceStorageAdapter } from '../storage/ResourceStorageAdapter'
+import type { IndexedDbAssetStore } from '../storage/IndexedDbAssetStore'
 import { RESOURCE_TYPE, type Resource, type ResourceSummary } from '../types/Resource'
 import {
   RESOURCE_GALLERY_ASSET_KIND,
   galleryOwnerId,
+  galleryImageUrl,
   isResourceGalleryImage,
   normalizeGalleryUrl,
   resourceCoverId,
@@ -17,6 +20,17 @@ function categories(values: readonly string[]): string[] {
   return [...new Set(values.map((s) => s.trim().slice(0, 60)).filter(Boolean))].slice(0, 32)
 }
 
+function sameTags(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((tag, index) => tag === right[index])
+}
+
+function isLocalImage(image: ResourceSummary | undefined): boolean {
+  return (
+    image?.metadata.galleryStorage === 'local' &&
+    /^image\/(png|jpeg|webp|gif|avif|bmp)$/i.test(image.mimeType)
+  )
+}
+
 /** Merge/move images before removing a resource so its gallery survives version consolidation. */
 export async function moveResourceGallery(
   storage: ResourceStorageAdapter,
@@ -26,15 +40,24 @@ export async function moveResourceGallery(
 ): Promise<void> {
   const summaries =
     snapshot ??
-    (await (storage.listGalleryListSummaries?.(from) ??
-      storage.listResourceListSummaries?.() ??
-      storage.listSummaries()))
+    (storage.listGalleryListSummaries && storage.listAttachmentListSummaries
+      ? (
+          await Promise.all([
+            storage.listGalleryListSummaries(from),
+            storage.listAttachmentListSummaries(from),
+          ])
+        ).flat()
+      : await (storage.listResourceListSummaries?.({ types: [RESOURCE_TYPE.OTHER] }) ??
+          storage.listSummaries()))
   for (const summary of summaries) {
-    if (galleryOwnerId(summary) !== from) continue
-    const image = await storage.get(summary.id)
-    if (!image) continue
+    if (resourceOwnedFileOwnerId(summary) !== from) continue
+    const image = await (storage.getSummary?.(summary.id) ?? storage.get(summary.id))
+    if (!image || resourceOwnedFileOwnerId(image) !== from) continue
+    if (from === to && image.metadata.galleryVisible === true) continue
     const changes = {
-      metadata: { ...image.metadata, galleryOwnerId: to, galleryVisible: true },
+      metadata: isResourceAttachment(image)
+        ? { ...image.metadata, attachmentOwnerId: to }
+        : { ...image.metadata, galleryOwnerId: to, galleryVisible: true },
       updatedAt: Date.now(),
     }
     if (storage.updateMetadata) await storage.updateMetadata(image.id, changes)
@@ -45,10 +68,16 @@ export async function moveResourceGallery(
 export class ResourceGalleryService {
   private readonly categoryStorage?: ResourceGalleryCategoryStorage
   private readonly storage: ResourceStorageAdapter
+  private readonly previewAssets?: Pick<IndexedDbAssetStore, 'getBlob'>
   private readonly imports = new Map<string, Promise<Resource>>()
-  constructor(storage: ResourceStorageAdapter, categoryStorage?: ResourceGalleryCategoryStorage) {
+  constructor(
+    storage: ResourceStorageAdapter,
+    categoryStorage?: ResourceGalleryCategoryStorage,
+    previewAssets?: Pick<IndexedDbAssetStore, 'getBlob'>,
+  ) {
     this.storage = storage
     this.categoryStorage = categoryStorage
+    this.previewAssets = previewAssets
   }
 
   private summaries(): Promise<ResourceSummary[]> {
@@ -134,15 +163,55 @@ export class ResourceGalleryService {
     return owner
   }
 
-  private async requireOwner(id: string): Promise<void> {
+  private async ownerSummary(id: string): Promise<ResourceSummary> {
     const owner = await (this.storage.getSummary?.(id) ?? this.storage.get(id))
     if (!owner || isResourceGalleryImage(owner)) throw new Error('资源已经不存在，请返回资源库')
+    return owner
+  }
+
+  private async requireOwner(id: string): Promise<void> {
+    await this.ownerSummary(id)
+  }
+
+  private async imageMetadata(ownerId: string, imageId: string): Promise<ResourceSummary> {
+    const image = await (this.storage.getSummary?.(imageId) ?? this.storage.get(imageId))
+    if (!image || galleryOwnerId(image) !== ownerId)
+      throw new Error('这张图片已移除或不属于当前资源')
+    return image
+  }
+
+  async getImagePreview(ownerId: string, imageId: string): Promise<{ blob?: Blob; url: string }> {
+    const summary = await this.imageMetadata(ownerId, imageId)
+    const url = galleryImageUrl(summary)
+    if (url) return { url }
+    if (summary.thumbnailBlob instanceof Blob) return { blob: summary.thumbnailBlob, url: '' }
+    if (summary.thumbnailAssetId) {
+      const blob = this.previewAssets
+        ? await this.previewAssets.getBlob(summary.thumbnailAssetId)
+        : await this.storage.getThumbnail?.(imageId)
+      if (blob) return { blob, url: '' }
+    }
+    // Missing derivatives and old adapters keep the established original/repair route.
+    const image =
+      'originalBlob' in summary && summary.originalBlob instanceof Blob
+        ? await this.prepareImageThumbnail(summary as Resource)
+        : await this.getImage(ownerId, imageId)
+    return {
+      blob:
+        image.thumbnailBlob ??
+        (image.mimeType.startsWith('image/') ? image.originalBlob : undefined),
+      url: '',
+    }
   }
 
   async getImage(ownerId: string, imageId: string): Promise<Resource> {
     const image = await this.storage.get(imageId)
     if (!image || galleryOwnerId(image) !== ownerId)
       throw new Error('这张图片已移除或不属于当前资源')
+    return this.prepareImageThumbnail(image)
+  }
+
+  private async prepareImageThumbnail(image: Resource): Promise<Resource> {
     if (!image.thumbnailBlob && image.metadata.galleryStorage === 'local') {
       const thumbnailBlob = await createImageThumbnail(image.originalBlob, {
         allowImageElement: true,
@@ -179,6 +248,14 @@ export class ResourceGalleryService {
       file = new File([thumbnailBlob], name, { type: thumbnailBlob.type })
     }
     return this.storeImage(ownerId, file, thumbnailBlob, tags, visible, undefined, quality)
+  }
+
+  private async findImage(ownerId: string, hash: string): Promise<ResourceSummary | undefined> {
+    return this.storage.findGalleryImage
+      ? this.storage.findGalleryImage(ownerId, hash)
+      : (await this.summaries()).find(
+          (image) => galleryOwnerId(image) === ownerId && image.contentHash === hash,
+        )
   }
 
   async addUrl(
@@ -243,65 +320,105 @@ export class ResourceGalleryService {
   ): Promise<Resource> {
     await this.requireOwner(ownerId)
     const hash = await hashBlob(file)
-    const existing = this.storage.findGalleryImage
-      ? await this.storage.findGalleryImage(ownerId, hash)
-      : (await this.summaries()).find(
-          (r) => galleryOwnerId(r) === ownerId && r.contentHash === hash,
-        )
-    if (existing) {
-      const image = await this.getImage(ownerId, existing.id)
-      const metadata = {
-        ...image.metadata,
-        galleryVisible: visible || image.metadata.galleryVisible !== false,
+    const existing = await this.findImage(ownerId, hash)
+    if (existing) return this.reuseImage(ownerId, existing.id, tags, visible, thumbnailBlob)
+    // Use the same deterministic slot in every tab. A migrated image may still
+    // occupy it, so only an atomic insertion may claim the slot for this owner.
+    let id = `gallery-${await hashBlob(new Blob([JSON.stringify([ownerId, hash])]))}`
+    for (;;) {
+      const now = Date.now()
+      const image: Resource = {
+        id,
+        type: RESOURCE_TYPE.OTHER,
+        name: url ? new URL(url).pathname.split('/').pop() || '链接图片' : file.name,
+        description: '',
+        fileName: file.name,
+        mimeType: file.type,
+        fileSize: file.size,
+        contentHash: hash,
+        favorite: false,
+        categoryId: null,
+        categoryIds: [],
+        tags: categories(tags),
+        metadata: {
+          assetKind: RESOURCE_GALLERY_ASSET_KIND,
+          galleryOwnerId: ownerId,
+          galleryImageIdentity: id,
+          galleryVisible: visible,
+          galleryStorage: url ? 'url' : 'local',
+          ...(quality ? { galleryQuality: quality } : {}),
+          ...(url ? { galleryUrl: url } : {}),
+        },
+        originalBlob: file,
+        thumbnailBlob,
+        createdAt: now,
+        updatedAt: now,
       }
-      const changes = {
-        tags: categories([...image.tags, ...tags]),
-        metadata,
-        updatedAt: Date.now(),
+      if (await this.insertImage(image)) {
+        // A resource can disappear while image decoding/persistence is pending.
+        try {
+          await this.requireOwner(ownerId)
+        } catch (cause) {
+          await this.storage.delete(image.id)
+          throw cause
+        }
+        return image
       }
-      if (this.storage.updateMetadata) await this.storage.updateMetadata(image.id, changes)
-      else await this.storage.update(image.id, changes)
-      return this.getImage(ownerId, image.id)
+      const next = await this.nextImageSlot(ownerId, hash, id)
+      if (next.existing) return this.reuseImage(ownerId, next.id, tags, visible, thumbnailBlob)
+      id = next.id
     }
-    const now = Date.now()
-    // Deterministic IDs also prevent duplicate records when two tabs import the same image.
-    const id = `gallery-${await hashBlob(new Blob([JSON.stringify([ownerId, hash])]))}`
-    const image: Resource = {
-      id,
-      type: RESOURCE_TYPE.OTHER,
-      name: url ? new URL(url).pathname.split('/').pop() || '链接图片' : file.name,
-      description: '',
-      fileName: file.name,
-      mimeType: file.type,
-      fileSize: file.size,
-      contentHash: hash,
-      favorite: false,
-      categoryId: null,
-      categoryIds: [],
-      tags: categories(tags),
-      metadata: {
-        assetKind: RESOURCE_GALLERY_ASSET_KIND,
-        galleryOwnerId: ownerId,
-        galleryImageIdentity: id,
-        galleryVisible: visible,
-        galleryStorage: url ? 'url' : 'local',
-        ...(quality ? { galleryQuality: quality } : {}),
-        ...(url ? { galleryUrl: url } : {}),
-      },
-      originalBlob: file,
-      thumbnailBlob,
-      createdAt: now,
-      updatedAt: now,
+  }
+
+  private async nextImageSlot(
+    ownerId: string,
+    hash: string,
+    id: string,
+  ): Promise<{ id: string; existing?: ResourceSummary }> {
+    for (;;) {
+      const existing = await (this.storage.getSummary?.(id) ?? this.storage.get(id))
+      if (!existing) return { id }
+      if (galleryOwnerId(existing) === ownerId && existing.contentHash === hash)
+        return { id, existing }
+      id = `gallery-${await hashBlob(new Blob([JSON.stringify([ownerId, hash, id])]))}`
     }
+  }
+
+  private async insertImage(image: Resource): Promise<boolean> {
+    if (this.storage.insertIfAbsent) return this.storage.insertIfAbsent(image)
+    // Legacy adapters retain the targeted guard; production adapters are atomic.
+    if (await (this.storage.getSummary?.(image.id) ?? this.storage.get(image.id))) return false
     await this.storage.save(image)
-    // A resource can be deleted in another window while image decoding/persistence is pending.
-    try {
-      await this.requireOwner(ownerId)
-    } catch (cause) {
-      await this.storage.delete(image.id)
-      throw cause
+    return true
+  }
+
+  private async reuseImage(
+    ownerId: string,
+    id: string,
+    tags: string[],
+    visible: boolean,
+    thumbnailBlob?: Blob,
+  ) {
+    const image = await this.imageMetadata(ownerId, id)
+    const nextTags = categories([...image.tags, ...tags])
+    const galleryVisible = visible || image.metadata.galleryVisible !== false
+    const repairThumbnail =
+      thumbnailBlob && isLocalImage(image) && !image.thumbnailAssetId && !image.thumbnailBlob
+    if (
+      !repairThumbnail &&
+      sameTags(image.tags, nextTags) &&
+      image.metadata.galleryVisible === galleryVisible
+    )
+      return this.getImage(ownerId, image.id)
+    const changes = {
+      tags: nextTags,
+      metadata: { ...image.metadata, galleryVisible },
+      updatedAt: Date.now(),
+      ...(repairThumbnail ? { thumbnailBlob } : {}),
     }
-    return image
+    if (this.storage.updateMetadata) await this.storage.updateMetadata(image.id, changes)
+    else await this.storage.update(image.id, changes)
+    return this.getImage(ownerId, image.id)
   }
 
   async edit(
@@ -309,13 +426,18 @@ export class ResourceGalleryService {
     id: string,
     values: { name: string; description: string; tags: string[] },
   ): Promise<void> {
-    const image = await this.getImage(ownerId, id)
+    const image = await this.imageMetadata(ownerId, id)
     const name = values.name.trim()
     if (!name) throw new Error('请输入图片名称')
+    const nextName = name.slice(0, 160),
+      description = values.description.slice(0, 5_000),
+      tags = categories(values.tags)
+    if (image.name === nextName && image.description === description && sameTags(image.tags, tags))
+      return
     const changes = {
-      name: name.slice(0, 160),
-      description: values.description.slice(0, 5_000),
-      tags: categories(values.tags),
+      name: nextName,
+      description,
+      tags,
       updatedAt: Date.now(),
     }
     if (this.storage.updateMetadata) await this.storage.updateMetadata(image.id, changes)
@@ -329,12 +451,15 @@ export class ResourceGalleryService {
     append = false,
   ): Promise<void> {
     for (const id of new Set(ids)) {
-      const image = await this.getImage(ownerId, id)
-      await this.edit(ownerId, id, {
-        name: image.name,
-        description: image.description,
-        tags: append ? [...image.tags, ...tags] : tags,
-      })
+      const image = await this.imageMetadata(ownerId, id)
+      const nextTags = categories(append ? [...image.tags, ...tags] : tags)
+      if (sameTags(image.tags, nextTags)) continue
+      const changes = {
+        tags: nextTags,
+        updatedAt: Date.now(),
+      }
+      if (this.storage.updateMetadata) await this.storage.updateMetadata(image.id, changes)
+      else await this.storage.update(image.id, changes)
     }
   }
 
@@ -357,8 +482,9 @@ export class ResourceGalleryService {
   }
 
   async renameCategory(ownerId: string, from: string, to: string): Promise<void> {
-    const owner = await this.owner(ownerId)
+    const owner = await this.ownerSummary(ownerId)
     const replacement = to.trim().slice(0, 60)
+    if (from === replacement) return
     for (const image of (await this.imagesOfType(ownerId, true)).filter((r) =>
       r.tags.includes(from),
     )) {
@@ -377,8 +503,9 @@ export class ResourceGalleryService {
   }
 
   async setCover(ownerId: string, id: string): Promise<Resource> {
-    const owner = await this.owner(ownerId)
-    await this.getImage(ownerId, id)
+    const owner = await this.ownerSummary(ownerId)
+    await this.imageMetadata(ownerId, id)
+    if (resourceCoverId(owner) === id) return this.owner(ownerId)
     const changes = { metadata: { resourceCoverId: id }, updatedAt: Date.now() }
     if (this.storage.updateMetadata) await this.storage.updateMetadata(ownerId, changes)
     else
@@ -388,7 +515,7 @@ export class ResourceGalleryService {
       })
     const previousId = resourceCoverId(owner)
     if (previousId && previousId !== id) {
-      const previous = await this.storage.get(previousId)
+      const previous = await (this.storage.getSummary?.(previousId) ?? this.storage.get(previousId))
       if (
         previous &&
         galleryOwnerId(previous) === ownerId &&
@@ -400,8 +527,9 @@ export class ResourceGalleryService {
   }
 
   async restoreDefaultCover(ownerId: string): Promise<Resource> {
-    const owner = await this.owner(ownerId)
+    const owner = await this.ownerSummary(ownerId)
     const oldId = resourceCoverId(owner)
+    if (owner.metadata.resourceCoverId === undefined) return this.owner(ownerId)
     const metadata = { resourceCoverId: undefined }
     if (this.storage.updateMetadata)
       await this.storage.updateMetadata(ownerId, { metadata, updatedAt: Date.now() })
@@ -411,7 +539,7 @@ export class ResourceGalleryService {
         updatedAt: Date.now(),
       })
     if (oldId) {
-      const previous = await this.storage.get(oldId)
+      const previous = await (this.storage.getSummary?.(oldId) ?? this.storage.get(oldId))
       if (
         previous &&
         galleryOwnerId(previous) === ownerId &&
@@ -423,10 +551,11 @@ export class ResourceGalleryService {
   }
 
   async remove(ownerId: string, ids: string[]): Promise<void> {
-    const owner = await this.owner(ownerId)
+    const owner = await this.ownerSummary(ownerId)
     for (const id of new Set(ids)) {
-      const image = await this.getImage(ownerId, id)
+      const image = await this.imageMetadata(ownerId, id)
       if (resourceCoverId(owner) === id) {
+        if (image.metadata.galleryVisible === false) continue
         const changes = {
           metadata: { ...image.metadata, galleryVisible: false },
           updatedAt: Date.now(),

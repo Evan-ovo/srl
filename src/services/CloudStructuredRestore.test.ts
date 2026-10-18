@@ -10,11 +10,20 @@ import { MemoryRestoreStagingStore } from '../storage/RestoreStagingStore'
 import { VaultService } from './VaultService'
 import { createStructuredSnapshot } from './CloudStructuredSnapshot'
 import { hashCloudBlob } from './CloudArchiveCodec'
-import { createGitHubObjectReader } from './CloudBackupGitHubTransport'
+import * as cloudCodec from './CloudArchiveCodec'
+import {
+  createGitHubObjectReader,
+  listGitHub,
+  readGitHubStructuredSnapshot,
+  uploadGitHubStructuredBackup,
+  confirmGitHubAssetSize,
+} from './CloudBackupGitHubTransport'
 import { createWebDavObjectReader } from './CloudBackupWebDavTransport'
-import type { CloudBackupTransportContext } from './CloudBackupTransportContext'
+import type { CloudBackupTransportContext, GitHubAsset } from './CloudBackupTransportContext'
 import type { GitHubBundleManifest } from './GitHubBackupBundle'
 import { CHAT_READER_APP_ID } from '../core/ChatReaderIdentity'
+import { structuredPartIdentity } from './CloudBackupPolicy'
+import { friendlyNetworkError, githubError } from './CloudBackupHttp'
 
 async function resource(id: string): Promise<Resource> {
   const blob = new Blob([
@@ -40,6 +49,603 @@ async function resource(id: string): Promise<Resource> {
 }
 
 describe('structured cloud restore', () => {
+  it('reads a shared container inventory once per listing and never hides HTTP failures as an empty library', async () => {
+    const a = await resource('listed')
+    const snapshot = (await createStructuredSnapshot([a], [], [], { version: 1 })).snapshot
+    const part = snapshot.resources[0]!.object.parts[0]!
+    const readInventory = vi.fn(
+      async () =>
+        new Map([[structuredPartIdentity(part), { id: 101, name: part.name, size: a.fileSize }]]),
+    )
+    const read = vi.fn(async () => snapshot)
+    const context = {
+      getGitHubRelease: async (_c: unknown, _s: string, _create: boolean, tag: string) =>
+        tag === 'srl-cloud-snapshots' ? { id: 10 } : undefined,
+      listGitHubAssets: async () =>
+        [1, 2, 3].map((id) => ({
+          id,
+          name: `snapshot-${id}.srlmanifest.v3.json.gz`,
+          size: 1,
+          created_at: '2026-10-17T00:00:00Z',
+        })),
+      readGitHubStructuredSnapshot: read,
+      readGitHubPartInventory: readInventory,
+    } as unknown as CloudBackupTransportContext
+    const config = {
+      provider: 'github' as const,
+      owner: 'owner',
+      repository: 'repo',
+      retention: 2,
+      autoBackup: false,
+    }
+    expect(await listGitHub(context, config, 'fixture')).toHaveLength(3)
+    expect(readInventory).toHaveBeenCalledOnce()
+    read.mockRejectedValue(Object.assign(new Error('manifest read denied'), { status: 404 }))
+    await expect(listGitHub(context, config, 'fixture')).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('names the failed manifest and retains the upstream 404 for diagnosis without guessing a replacement', async () => {
+    const fetch = vi.fn(async () => {
+      throw Object.assign(new Error('GET /releases/assets/570692951 → 404'), { status: 404 })
+    })
+    await expect(
+      readGitHubStructuredSnapshot(
+        { githubFetch: fetch } as unknown as CloudBackupTransportContext,
+        { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+        'fixture',
+        { id: '570692951', objectKey: 'snapshot.srlmanifest.v3.json.gz', size: 1, createdAt: 1 },
+      ),
+    ).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringContaining('快照清单 snapshot.srlmanifest.v3.json.gz'),
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+  it('retains resource and chunk context when the response body disconnects', async () => {
+    const a = await resource('body-disconnected')
+    const object = (await createStructuredSnapshot([a], [], [], { version: 1 })).snapshot
+      .resources[0]!.object
+    const networkError = new TypeError('Failed to fetch')
+    const download = vi.fn(async () => new Response('headers received'))
+    const reader = await createGitHubObjectReader(
+      {
+        getGitHubRelease: async () => ({ id: 1 }),
+        listGitHubAssets: async () => [{ id: 101, name: object.parts[0]!.name, size: a.fileSize }],
+        githubFetch: download,
+        readResponseBlob: async () => {
+          throw networkError
+        },
+      } as unknown as CloudBackupTransportContext,
+      { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+      'fixture',
+    )
+    const error = await reader(object).catch((error: unknown) => error)
+    expect(error).toMatchObject({
+      message: expect.stringContaining(a.fileName),
+      cause: networkError,
+    })
+    expect((error as Error).message).toContain('附件 101')
+    expect(friendlyNetworkError(error, 'github')).toBe(error)
+    expect(download).toHaveBeenCalledOnce()
+  })
+
+  it('preserves manifest context if its body fails after receiving headers', async () => {
+    const error = await readGitHubStructuredSnapshot(
+      {
+        githubFetch: async () => new Response('headers received'),
+        readResponseBlob: async () => {
+          throw new TypeError('Load failed')
+        },
+      } as unknown as CloudBackupTransportContext,
+      { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+      'fixture',
+      { id: '17', objectKey: 'snapshot.srlmanifest.v3.json.gz', size: 1, createdAt: 1 },
+    ).catch((error: unknown) => error)
+    expect(error).toMatchObject({ message: expect.stringContaining('快照清单 snapshot') })
+    expect(friendlyNetworkError(error, 'github')).toBe(error)
+  })
+
+  it('distinguishes a download-host 404 from a GitHub API 404', () => {
+    const error = githubError(
+      404,
+      {},
+      '/releases/assets/101',
+      'GET',
+      new Headers({
+        'x-srl-cloud-upstream': 'github-asset',
+      }),
+    )
+    expect(error.message).toContain('附件下载服务器')
+    expect(error.message).toContain('不代表附件已被删除')
+    expect(friendlyNetworkError(new TypeError('Failed to fetch'), 'github').message).not.toContain(
+      '直连',
+    )
+  })
+
+  it('does not refresh attachment IDs when the API already returned a download address', async () => {
+    const a = await resource('download-host-404')
+    const object = (await createStructuredSnapshot([a], [], [], { version: 1 })).snapshot
+      .resources[0]!.object
+    const assets = vi.fn(async () => [{ id: 101, name: object.parts[0]!.name, size: a.fileSize }])
+    const reader = await createGitHubObjectReader(
+      {
+        getGitHubRelease: async () => ({ id: 1 }),
+        listGitHubAssets: assets,
+        githubFetch: async () => {
+          throw githubError(
+            404,
+            {},
+            '/releases/assets/101',
+            'GET',
+            new Headers({
+              'x-srl-cloud-upstream': 'github-asset',
+            }),
+          )
+        },
+      } as unknown as CloudBackupTransportContext,
+      { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+      'fixture',
+    )
+    await expect(reader(object)).rejects.toMatchObject({
+      status: 404,
+      upstream: 'github-asset',
+      message: expect.not.stringContaining('请核对目标和权限'),
+    })
+    expect(assets).toHaveBeenCalledOnce()
+  })
+
+  it.each([null, 'matching-digest'])(
+    'repairs a starter chunk in its original container and preserves unrelated uploaded chunks: %s',
+    async (digest) => {
+      const created = await createStructuredSnapshot([await resource('repair')], [], [], {
+        version: 1,
+      })
+      const plan = created.objectPlans[0]!
+      const blob = created.chunks.get(plan.name)!
+      const healthy = await createStructuredSnapshot([await resource('healthy')], [], [], {
+        version: 1,
+      })
+      const healthyPlan = healthy.objectPlans[0]!
+      created.objectPlans.push(healthyPlan)
+      created.snapshot.resources.push(...healthy.snapshot.resources)
+      const old = {
+        id: 101,
+        name: plan.name,
+        size: plan.size,
+        state: 'starter',
+        digest: digest ? `sha256:${plan.hash}` : null,
+      }
+      const calls: string[] = []
+      const fetch = vi.fn(async (_config, _secret, path: string, init?: RequestInit) => {
+        calls.push(`${init?.method ?? 'GET'} ${path}`)
+        if (init?.method !== 'DELETE')
+          throw Object.assign(new Error('starter download 404'), { status: 404 })
+        return new Response(null, { status: 204 })
+      })
+      const upload = vi.fn(
+        async (_config, _secret, releaseId: number, name: string, body: Blob) => {
+          calls.push(`POST ${releaseId} ${name}`)
+          return {
+            id: 202,
+            name,
+            size: body.size,
+            state: 'uploaded',
+            digest: `sha256:${await hashCloudBlob(body)}`,
+          }
+        },
+      )
+      const context = {
+        getGitHubRelease: async () => ({ id: 10 }),
+        listGitHubObjectContainers: async () => [
+          { id: 1, tag_name: 'srl-cloud-objects-0001' },
+          { id: 2, tag_name: 'srl-cloud-objects-0002' },
+        ],
+        listGitHubAssets: async (_config: unknown, _secret: unknown, id: number) =>
+          id === 1
+            ? [old]
+            : [
+                {
+                  id: 303,
+                  name: healthyPlan.name,
+                  size: healthyPlan.size,
+                  digest: `sha256:${healthyPlan.hash}`,
+                  state: 'uploaded',
+                },
+              ],
+        githubFetch: fetch,
+        materializeCloudObject: async () => blob,
+        uploadGitHubAsset: upload,
+        confirmGitHubAssetSize: async (_config: unknown, _secret: unknown, asset: GitHubAsset) =>
+          asset,
+        jobStore: {
+          begin: async () => ({}),
+          markObject: async () => {},
+          complete: async () => {},
+          fail: async () => {},
+        },
+      } as unknown as CloudBackupTransportContext
+      await uploadGitHubStructuredBackup(
+        context,
+        { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+        'fixture',
+        created,
+      )
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(calls[0]).toBe('DELETE /releases/assets/101')
+      expect(upload.mock.calls[0]?.[2]).toBe(1)
+      expect(upload).toHaveBeenCalledTimes(2)
+      expect(created.snapshot.resources[0]!.object.parts[0]!.storage?.container).toBe(
+        'srl-cloud-objects-0001',
+      )
+      const reader = await createGitHubObjectReader(
+        {
+          getGitHubRelease: async () => ({ id: 1 }),
+          listGitHubAssets: async () => [{ ...old, id: 202, state: 'uploaded' }],
+          githubFetch: async () => new Response(blob),
+          readResponseBlob: (response: Response) => response.blob(),
+        } as unknown as CloudBackupTransportContext,
+        { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+        'fixture',
+      )
+      expect(await (await reader(created.snapshot.resources[0]!.object)).text()).toBe(
+        await blob.text(),
+      )
+    },
+  )
+
+  it.each(['invalid-original', 'stopped'])(
+    'does not delete a starter when its replacement is unavailable or stopped: %s',
+    async (mode) => {
+      const created = await createStructuredSnapshot([await resource('protect')], [], [], {
+        version: 1,
+      })
+      const plan = created.objectPlans[0]!
+      const controller = new AbortController()
+      const fetch = vi.fn()
+      const upload = vi.fn()
+      const context = {
+        signal: controller.signal,
+        getGitHubRelease: async () => ({ id: 10 }),
+        listGitHubObjectContainers: async () => [{ id: 1, tag_name: 'srl-cloud-objects-0001' }],
+        listGitHubAssets: async () => [
+          { id: 101, name: plan.name, size: plan.size, state: 'starter' },
+        ],
+        githubFetch: fetch,
+        uploadGitHubAsset: upload,
+        materializeCloudObject: async () => {
+          if (mode === 'stopped') controller.abort(new DOMException('stopped', 'AbortError'))
+          return mode === 'stopped' ? created.chunks.get(plan.name)! : new Blob(['invalid'])
+        },
+      } as unknown as CloudBackupTransportContext
+      await expect(
+        uploadGitHubStructuredBackup(
+          context,
+          {
+            provider: 'github',
+            owner: 'owner',
+            repository: 'repo',
+            retention: 2,
+            autoBackup: false,
+          },
+          'fixture',
+          created,
+        ),
+      ).rejects.toThrow(mode === 'stopped' ? 'stopped' : '拒绝覆盖')
+      expect(fetch).not.toHaveBeenCalled()
+      expect(upload).not.toHaveBeenCalled()
+    },
+  )
+
+  it('identifies incomplete chunks before downloading and leaves other selections readable', async () => {
+    const a = await resource('incomplete')
+    const good = await resource('complete')
+    const goodObject = (await createStructuredSnapshot([good], [], [], { version: 1 })).snapshot
+      .resources[0]!.object
+    const object = (await createStructuredSnapshot([a], [], [], { version: 1 })).snapshot
+      .resources[0]!.object
+    const download = vi.fn(async () => new Response(good.originalBlob))
+    const reader = await createGitHubObjectReader(
+      {
+        getGitHubRelease: async () => ({ id: 1 }),
+        listGitHubAssets: async () => [
+          { id: 101, name: object.parts[0]!.name, size: a.fileSize, state: 'starter' },
+          { id: 202, name: goodObject.parts[0]!.name, size: good.fileSize, state: 'uploaded' },
+        ],
+        githubFetch: download,
+        readResponseBlob: (response: Response) => response.blob(),
+      } as unknown as CloudBackupTransportContext,
+      { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+      'fixture',
+    )
+    await expect(reader(object)).rejects.toThrow(/starter/)
+    await expect(reader(object)).rejects.toThrow(a.fileName)
+    expect(download).not.toHaveBeenCalled()
+    expect(await (await reader(goodObject)).text()).toBe(await good.originalBlob.text())
+    expect(download).toHaveBeenCalledOnce()
+  })
+
+  it('does not confirm a same-size starter asset even when it carries a matching digest', async () => {
+    const network = vi.fn()
+    const confirmed = await confirmGitHubAssetSize(
+      { githubFetch: network } as unknown as CloudBackupTransportContext,
+      { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+      'fixture',
+      {
+        id: 101,
+        name: 'chunk',
+        size: 4,
+        state: 'starter',
+        digest: `sha256:${'a'.repeat(64)}`,
+        url: '',
+        created_at: '',
+      },
+      4,
+      'a'.repeat(64),
+    )
+    expect(confirmed).toBeUndefined()
+    expect(network).not.toHaveBeenCalled()
+  })
+
+  it('never submits a manifest or reports success if every chunk upload remains starter', async () => {
+    const created = await createStructuredSnapshot([await resource('unfinished-upload')], [], [], {
+      version: 1,
+    })
+    const plan = created.objectPlans[0]!
+    const complete = vi.fn()
+    const failed = vi.fn()
+    const remove = vi.fn(async () => new Response(null, { status: 204 }))
+    const upload = vi.fn(async (_config, _secret, _release, name: string, blob: Blob) => ({
+      id: 101,
+      name,
+      size: blob.size,
+      state: 'starter',
+      digest: `sha256:${plan.hash}`,
+    }))
+    const context = {
+      getGitHubRelease: async () => ({ id: 10 }),
+      listGitHubObjectContainers: async () => [{ id: 1, tag_name: 'srl-cloud-objects-0001' }],
+      listGitHubAssets: async () => [],
+      githubFetch: remove,
+      materializeCloudObject: async () => created.chunks.get(plan.name)!,
+      uploadGitHubAsset: upload,
+      confirmGitHubAssetSize: (
+        ...args: Parameters<CloudBackupTransportContext['confirmGitHubAssetSize']>
+      ) => confirmGitHubAssetSize(context as unknown as CloudBackupTransportContext, ...args),
+      jobStore: { begin: async () => ({}), markObject: async () => {}, complete, fail: failed },
+    }
+    await expect(
+      uploadGitHubStructuredBackup(
+        context as unknown as CloudBackupTransportContext,
+        { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+        'fixture',
+        created,
+      ),
+    ).rejects.toThrow('未提交快照清单')
+    expect(upload).toHaveBeenCalledTimes(3)
+    expect(upload.mock.calls.every((call) => call[3] === plan.name)).toBe(true)
+    expect(remove).toHaveBeenCalledTimes(3)
+    expect(complete).not.toHaveBeenCalled()
+    expect(failed).toHaveBeenCalledOnce()
+  })
+
+  it.each([1, 3, 'byte-budget'] as const)(
+    'prepares cloud resources with bounded concurrency %s and ordered staging progress',
+    async (mode) => {
+      const concurrency = mode === 'byte-budget' ? 1 : mode
+      const records = await Promise.all(
+        Array.from({ length: 6 }, (_, i) => resource(`pipeline-${i}`)),
+      )
+      const snapshot = (await createStructuredSnapshot(records, [], [], { version: 1 })).snapshot
+      let release!: () => void
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let active = 0
+      let peak = 0
+      const reader = vi.fn(async (object: GitHubBundleManifest) => {
+        active++
+        peak = Math.max(peak, active)
+        await barrier
+        active--
+        return records.find((r) => r.fileName === object.fileName)!.originalBlob
+      })
+      const bodies: string[] = []
+      const progress = vi.fn()
+      const service = new RestoreService({
+        replace: vi.fn(),
+        restore: async (_categories, resources, _versions, hydrate, report) => {
+          for (let i = 0; i < resources.length; i++) {
+            report?.({ phase: 'prepare', completed: i, total: resources.length })
+            bodies.push(await (await hydrate!(resources[i]!)).originalBlob.text())
+            report?.({ phase: 'prepare', completed: i + 1, total: resources.length })
+          }
+          report?.({ phase: 'commit', completed: resources.length, total: resources.length })
+        },
+      })
+      const operation = service.restoreStructured(snapshot, reader, [], [], 'pipeline', {
+        concurrency: mode === 1 ? 1 : undefined,
+        maxPreparedBytes: mode === 'byte-budget' ? records[0]!.fileSize : undefined,
+        onProgress: progress,
+      })
+      try {
+        await vi.waitFor(() => expect(active).toBe(concurrency))
+      } finally {
+        release()
+      }
+      await operation
+      expect(peak).toBe(concurrency)
+      expect(reader).toHaveBeenCalledTimes(6)
+      expect(bodies).toEqual(await Promise.all(records.map((r) => r.originalBlob.text())))
+      expect(progress).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: 'prepare', completed: 6, total: 6 }),
+      )
+      expect(progress).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: 'commit', completed: 6, total: 6 }),
+      )
+    },
+  )
+
+  it('stops scheduling on the first preparation failure, aborts peers and preserves the original cause', async () => {
+    const records = await Promise.all(Array.from({ length: 6 }, (_, i) => resource(`stop-${i}`)))
+    const snapshot = (await createStructuredSnapshot(records, [], [], { version: 1 })).snapshot
+    const controller = new AbortController()
+    const failure = new Error('fixture download interrupted')
+    const reader = vi.fn(async (object: GitHubBundleManifest) => {
+      if (object.fileName === records[1]!.fileName) throw failure
+      return new Promise<Blob>((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {
+          once: true,
+        })
+      })
+    })
+    const service = new RestoreService({
+      replace: vi.fn(),
+      restore: async (_categories, resources, _versions, hydrate) => {
+        await hydrate!(resources[0]!)
+      },
+    })
+    await expect(
+      service.restoreStructured(snapshot, reader, [], [], 'stop', {
+        signal: controller.signal,
+        onFailure: (error) => controller.abort(error),
+      }),
+    ).rejects.toBe(failure)
+    expect(controller.signal.aborted).toBe(true)
+    expect(reader).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not scan local history when restoring settings or resources without versions', async () => {
+    const storage = { restore: vi.fn(), replace: vi.fn(), listRestoreVersionKeys: vi.fn() }
+    const service = new RestoreService(storage)
+    const existing = await resource('existing')
+    await service.prepareStructured([], [], [], { version: 1 }, [existing], [], 'settings')
+    await service.prepareStructured([existing], [], [], { version: 1 }, [existing], [], 'resource')
+    expect(storage.listRestoreVersionKeys).not.toHaveBeenCalled()
+    storage.listRestoreVersionKeys.mockResolvedValue([])
+    await service.prepareStructured(
+      [existing],
+      [{ ...existing, id: 'history', versionGroupId: existing.id }],
+      [],
+      { version: 1 },
+      [existing],
+      [],
+      'history',
+    )
+    expect(storage.listRestoreVersionKeys).toHaveBeenCalledExactlyOnceWith([existing.id])
+  })
+
+  it.each(['github', 'webdav'] as const)(
+    '%s hashes an intact single-part original once and invalidates changed declarations',
+    async (provider) => {
+      const a = await resource('one')
+      const object = (await createStructuredSnapshot([a], [], [], { version: 1 })).snapshot
+        .resources[0]!.object
+      const network = vi.fn(async () => new Response(a.originalBlob))
+      const context = {
+        getGitHubRelease: async () => ({ id: 1 }),
+        listGitHubAssets: async () => [{ id: 101, name: object.parts[0]!.name, size: a.fileSize }],
+        githubFetch: network,
+        cloudFetch: network,
+        readResponseBlob: (response: Response) => response.blob(),
+      } as unknown as CloudBackupTransportContext
+      const reader =
+        provider === 'github'
+          ? await createGitHubObjectReader(
+              context,
+              { provider, owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+              'token',
+            )
+          : createWebDavObjectReader(
+              context,
+              {
+                provider,
+                baseUrl: 'https://dav.example',
+                folder: 'test',
+                username: 'test',
+                retention: 2,
+                autoBackup: false,
+              },
+              'token',
+            )
+      const hash = vi.spyOn(cloudCodec, 'hashCloudBlob')
+      try {
+        expect(await (await reader(object)).text()).toBe(await a.originalBlob.text())
+        expect(hash).toHaveBeenCalledOnce()
+        await reader(object)
+        expect(network).toHaveBeenCalledOnce()
+        expect(hash).toHaveBeenCalledOnce()
+        await expect(
+          reader({
+            ...object,
+            parts: [{ ...object.parts[0]!, sha256: '0'.repeat(64) }],
+            totalSha256: '0'.repeat(64),
+          }),
+        ).rejects.toThrow('分块校验失败')
+        expect(network).toHaveBeenCalledTimes(2)
+      } finally {
+        hash.mockRestore()
+      }
+    },
+  )
+
+  it('refreshes a stale GitHub chunk ID once without relaxing SHA validation', async () => {
+    const a = await resource('stale')
+    const object = (await createStructuredSnapshot([a], [], [], { version: 1 })).snapshot
+      .resources[0]!.object
+    const assets = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: 101, name: object.parts[0]!.name, size: a.fileSize }])
+      .mockResolvedValue([{ id: 202, name: object.parts[0]!.name, size: a.fileSize }])
+    const download = vi.fn(async (_config, _secret, path: string) => {
+      if (path.endsWith('/101'))
+        throw Object.assign(new Error('GET /releases/assets/101 → 404'), { status: 404 })
+      return new Response(a.originalBlob)
+    })
+    const reader = await createGitHubObjectReader(
+      {
+        getGitHubRelease: async () => ({ id: 1 }),
+        listGitHubAssets: assets,
+        githubFetch: download,
+        readResponseBlob: (r: Response) => r.blob(),
+      } as unknown as CloudBackupTransportContext,
+      { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+      'token',
+    )
+    expect(await (await reader(object)).text()).toBe(await a.originalBlob.text())
+    expect(assets).toHaveBeenCalledTimes(2)
+    expect(download.mock.calls.map((call) => call[2])).toEqual([
+      '/releases/assets/101',
+      '/releases/assets/202',
+    ])
+  })
+
+  it.each([404, 401, 500])(
+    'does not loop on an unresolved GitHub %i and reports the resource',
+    async (status) => {
+      const a = await resource('missing-card')
+      const object = (await createStructuredSnapshot([a], [], [], { version: 1 })).snapshot
+        .resources[0]!.object
+      const assets = vi.fn(async () => [{ id: 101, name: object.parts[0]!.name, size: a.fileSize }])
+      const download = vi.fn(async () => {
+        throw Object.assign(new Error('upstream failed'), { status })
+      })
+      const reader = await createGitHubObjectReader(
+        {
+          getGitHubRelease: async () => ({ id: 1 }),
+          listGitHubAssets: assets,
+          githubFetch: download,
+        } as unknown as CloudBackupTransportContext,
+        { provider: 'github', owner: 'owner', repository: 'repo', retention: 2, autoBackup: false },
+        'token',
+      )
+      await expect(reader(object)).rejects.toMatchObject({
+        status,
+        message: expect.stringContaining(a.fileName),
+      })
+      expect(download).toHaveBeenCalledOnce()
+      expect(assets).toHaveBeenCalledTimes(status === 404 ? 2 : 1)
+    },
+  )
   it('returns reader data bound to the imported resource after an ID conflict', async () => {
     const database = new AppDatabase(`structured-reader-conflict-${crypto.randomUUID()}`)
     const storage = new IndexedDbArchiveStorage(database)
@@ -172,6 +778,7 @@ describe('structured cloud restore', () => {
         [{ ...a, id: 'existing-a' }],
         [],
         'snapshot',
+        { concurrency: 1 },
       )
       expect(report).toMatchObject({
         restoredResources: 1,

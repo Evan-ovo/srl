@@ -1,8 +1,13 @@
+import {
+  isResourceAttachment,
+  isResourceOwnedFile,
+  resourceOwnedFileOwnerId,
+} from '../types/ResourceAttachment'
+import { retainNativeResourceFiles } from '../storage/NativeResourceFileMirror'
 import { includePersonalResource } from './PersonalResourceBackup'
 import {
   includeResourceGalleryIds,
   isResourceGalleryImage,
-  galleryOwnerId,
   galleryImageUrl,
   resourceCoverId,
 } from '../types/ResourceGallery'
@@ -17,6 +22,7 @@ import {
 import {
   ARCHIVE_FORMAT,
   ARCHIVE_VERSION,
+  ARCHIVE_APPLICATION_VERSION,
   COMMUNITY_SOURCE_ARCHIVE_PATH,
   COMMUNITY_SOURCE_ATTACHMENT_ARCHIVE_PREFIX,
   type ArchiveManifest,
@@ -154,15 +160,15 @@ function splitResources(resources: Resource[], splitSizeBytes?: number): Resourc
   const consumedAttachmentIds = new Set<string>()
   const galleryByOwner = new Map<string, Resource[]>()
   for (const image of resources) {
-    if (!isResourceGalleryImage(image)) continue
-    const ownerId = galleryOwnerId(image)
+    if (!isResourceOwnedFile(image)) continue
+    const ownerId = resourceOwnedFileOwnerId(image)
     const images = galleryByOwner.get(ownerId) ?? []
     images.push(image)
     galleryByOwner.set(ownerId, images)
   }
   const units: Resource[][] = []
   for (const resource of resources) {
-    if (isUserPersonaAvatarAttachment(resource) || isResourceGalleryImage(resource)) continue
+    if (isUserPersonaAvatarAttachment(resource) || isResourceOwnedFile(resource)) continue
     const attachments =
       resource.type === RESOURCE_TYPE.USER_PERSONA
         ? getRelatedResourceIds(resource).flatMap((resourceId) => {
@@ -175,7 +181,10 @@ function splitResources(resources: Resource[], splitSizeBytes?: number): Resourc
     units.push([resource, ...attachments, ...(galleryByOwner.get(resource.id) ?? [])])
   }
   for (const resource of resources) {
-    if (isUserPersonaAvatarAttachment(resource) && !consumedAttachmentIds.has(resource.id)) {
+    if (
+      (isUserPersonaAvatarAttachment(resource) && !consumedAttachmentIds.has(resource.id)) ||
+      (isResourceAttachment(resource) && !resourcesById.has(resourceOwnedFileOwnerId(resource)))
+    ) {
       units.push([resource])
     }
   }
@@ -197,6 +206,57 @@ function splitResources(resources: Resource[], splitSizeBytes?: number): Resourc
   return groups.length ? groups : [[]]
 }
 
+/** Keep parent/derived images together; each saved image belongs to exactly one ZIP volume. */
+function splitAlbum(
+  album: NonNullable<import('../types/Backup').ArchivePortableData['generatedImageAlbum']>,
+  limit: number,
+) {
+  const roots = new Map(album.map((entry) => [entry.item.id, entry.item.id]))
+  const root = (id: string): string => {
+    let current = id
+    while (roots.get(current) !== current) current = roots.get(current)!
+    while (roots.get(id) !== id) {
+      const next = roots.get(id)!
+      roots.set(id, current)
+      id = next
+    }
+    return current
+  }
+  for (const entry of album) {
+    const parent = entry.item.generationManifest?.parentImageId
+    if (parent && roots.has(parent)) roots.set(root(entry.item.id), root(parent))
+  }
+  const families = new Map<string, typeof album>()
+  for (const entry of album) {
+    const id = root(entry.item.id),
+      family = families.get(id) ?? []
+    family.push(entry)
+    families.set(id, family)
+  }
+  const result: Array<typeof album> = []
+  let current: typeof album = [],
+    size = 0
+  for (const family of families.values()) {
+    const bytes = family.reduce((sum, entry) => sum + entry.item.sizeBytes, 0)
+    if (current.length && size + bytes > limit) {
+      result.push(current)
+      current = []
+      size = 0
+    }
+    current.push(...family)
+    size += bytes
+  }
+  if (current.length) result.push(current)
+  return result
+}
+
+function hasPortableContent(options: ArchiveOptions): boolean {
+  return Boolean(
+    options.communitySourceData ||
+    Object.keys(options.portableData ?? {}).some((key) => key !== 'version'),
+  )
+}
+
 function selectResourcesForArchive(resources: Resource[], options: ArchiveOptions): Resource[] {
   if (options.personalResources)
     resources = resources.filter((resource) =>
@@ -207,18 +267,38 @@ function selectResourcesForArchive(resources: Resource[], options: ArchiveOption
       ? resources.map((r) => r.id)
       : options.resourceIds,
   )
-  includeChatCompanionIds(resources, selectedIds)
-  for (const resource of resources) {
-    if (resource.type !== RESOURCE_TYPE.USER_PERSONA || !selectedIds.has(resource.id)) continue
-    for (const relatedId of getRelatedResourceIds(resource)) {
-      const related = resources.find((candidate) => candidate.id === relatedId)
-      if (related && isUserPersonaAvatarAttachment(related)) selectedIds.add(related.id)
+  if (!selectedIds.size) return []
+  const includesAll =
+    options.mode === 'full' ||
+    !options.resourceIds ||
+    resources.every((resource) => selectedIds.has(resource.id))
+  if (!includesAll) {
+    if (
+      resources.some(
+        (resource) => resource.type === RESOURCE_TYPE.CHAT && selectedIds.has(resource.id),
+      )
+    )
+      includeChatCompanionIds(resources, selectedIds)
+    let byId: Map<string, Resource> | undefined
+    for (const resource of resources) {
+      if (resource.type !== RESOURCE_TYPE.USER_PERSONA || !selectedIds.has(resource.id)) continue
+      for (const relatedId of getRelatedResourceIds(resource)) {
+        if (!byId) {
+          byId = new Map()
+          for (const candidate of resources)
+            if (!byId.has(candidate.id)) byId.set(candidate.id, candidate)
+        }
+        const related = byId.get(relatedId)
+        if (related && isUserPersonaAvatarAttachment(related)) selectedIds.add(related.id)
+      }
     }
   }
   includeResourceGalleryIds(
     resources,
     selectedIds,
     options.portableSelection?.resourceGallery !== false,
+    options.portableSelection?.resourceAttachments !== false,
+    options.preserveExternalRelatedResourceIds === true,
   )
   return resources.filter((resource) => selectedIds.has(resource.id))
 }
@@ -285,7 +365,7 @@ export interface StreamedArchive {
   bytes: number
 }
 
-/** Summaries plan selection; read loads exactly one complete resource at a time. */
+/** Summaries plan selection; each read loads one complete resource. */
 export interface ArchiveSource {
   resources: ResourceSummary[]
   versions: ResourceSummary[]
@@ -295,6 +375,7 @@ export interface ArchiveSource {
 export async function createResourceArchiveSource(
   service: import('./ResourceService').ResourceService,
   selectedIds?: string[],
+  allowDetachedAttachments = false,
 ): Promise<ArchiveSource> {
   const selection = selectedIds ? new Set(selectedIds) : undefined
   let resources = await service.listResourceListSummaries(
@@ -320,25 +401,40 @@ export async function createResourceArchiveSource(
       ? await service.listResourceListSummaries({ ids: missing })
       : []
     const candidates = [...resources, ...companions]
-    includeChatCompanionIds(candidates, selection)
+    if (
+      candidates.some(
+        (resource) => resource.type === RESOURCE_TYPE.CHAT && selection.has(resource.id),
+      )
+    )
+      includeChatCompanionIds(candidates, selection)
+    const avatars = new Map<string, { id: string; index: number }>()
+    for (const [index, companion] of companions.entries()) {
+      const id = companion.id
+      if (isUserPersonaAvatarAttachment(companion) && !avatars.has(id))
+        avatars.set(id, { id, index })
+    }
     for (const resource of resources) {
       if (resource.type !== RESOURCE_TYPE.USER_PERSONA) continue
-      const related = new Set(getRelatedResourceIds(resource))
-      for (const companion of companions)
-        if (related.has(companion.id) && isUserPersonaAvatarAttachment(companion))
-          selection.add(companion.id)
+      const related = getRelatedResourceIds(resource)
+        .flatMap((id) => {
+          const avatar = avatars.get(id)
+          return avatar ? [avatar] : []
+        })
+        .sort((left, right) => left.index - right.index)
+      for (const avatar of related) selection.add(avatar.id)
     }
     resources = candidates.filter((resource) => selection.has(resource.id))
     // Gallery ownership lives in metadata, so only OTHER summaries need a scan.
     // Unselected character/chat bodies and metadata never enter a single-item archive plan.
-    const owners = new Set(resources.filter((r) => !isResourceGalleryImage(r)).map((r) => r.id))
+    const owners = new Set(resources.filter((r) => !isResourceOwnedFile(r)).map((r) => r.id))
     const images = (
       await service.listResourceListSummaries({ types: [RESOURCE_TYPE.OTHER] })
-    ).filter((r) => isResourceGalleryImage(r) && owners.has(galleryOwnerId(r)))
+    ).filter((r) => isResourceOwnedFile(r) && owners.has(resourceOwnedFileOwnerId(r)))
     const byId = new Map([...resources, ...images].map((r) => [r.id, r]))
     resources = [...byId.values()]
   }
-  if (selection) includeResourceGalleryIds(resources, selection, true)
+  if (selection)
+    includeResourceGalleryIds(resources, selection, true, true, allowDetachedAttachments)
   return {
     resources: selection ? resources.filter((resource) => selection.has(resource.id)) : resources,
     versions: selection
@@ -372,10 +468,14 @@ export class ExportService {
   private readonly communitySourceExportProvider?: CommunitySourceExportProvider
   private readonly communitySourceAttachmentExportProvider?: CommunitySourceAttachmentExportProvider
 
+  private readonly readAlbumFile?: (id: string) => Promise<Blob>
+
   constructor(
     communitySourceExportProvider?: CommunitySourceExportProvider,
     communitySourceAttachmentExportProvider?: CommunitySourceAttachmentExportProvider,
+    readAlbumFile?: (id: string) => Promise<Blob>,
   ) {
+    this.readAlbumFile = readAlbumFile
     this.communitySourceExportProvider = communitySourceExportProvider
     this.communitySourceAttachmentExportProvider = communitySourceAttachmentExportProvider
   }
@@ -612,7 +712,32 @@ export class ExportService {
     return exported
   }
 
-  async prepareOptions(options: ArchiveOptions): Promise<ArchiveOptions> {
+  async prepareOptions(
+    options: ArchiveOptions,
+    signal?: AbortSignal,
+    freezeAlbum = false,
+  ): Promise<ArchiveOptions> {
+    if (freezeAlbum && options.portableData?.generatedImageAlbum?.length) {
+      const { createGitHubBundle } = await import('./GitHubBackupBundle')
+      const album = []
+      for (const entry of options.portableData.generatedImageAlbum) {
+        throwIfArchiveAborted(signal)
+        let object = entry.object
+        if (!object) {
+          const blob = await (options.readAlbumFile ?? this.readAlbumFile)?.(entry.item.id)
+          throwIfArchiveAborted(signal)
+          if (!blob || blob.size !== entry.item.sizeBytes)
+            throw new Error(`相册原图缺失或已变化：${entry.item.name}`)
+          object = (await createGitHubBundle(blob, entry.item.name)).manifest
+        }
+        throwIfArchiveAborted(signal)
+        album.push({ item: entry.item, object })
+      }
+      options = {
+        ...options,
+        portableData: { ...options.portableData, generatedImageAlbum: album },
+      }
+    }
     if (!options.portableSelection?.communitySources) return options
     const communitySourceData =
       options.communitySourceData ?? (await this.communitySourceExportProvider?.())
@@ -695,9 +820,10 @@ export class ExportService {
     transfer?: ArchiveTransferOptions,
   ): Promise<Array<Omit<InternalCreatedArchive, 'manifest'> & { resourceCount: number }>> {
     throwIfArchiveAborted(transfer?.signal)
+    let placeholderBlob: Blob | undefined
     const placeholder = (resource: ResourceSummary): Resource => ({
       ...resource,
-      originalBlob: new Blob(),
+      originalBlob: (placeholderBlob ??= new Blob()),
     })
     const archives = await this.createArchivesInternal(
       source.resources.map(placeholder),
@@ -715,6 +841,17 @@ export class ExportService {
   }
 
   private async createArchivesInternal(
+    ...args: Parameters<ExportService['buildArchivesInternal']>
+  ): Promise<InternalCreatedArchive[]> {
+    const release = retainNativeResourceFiles()
+    try {
+      return await this.buildArchivesInternal(...args)
+    } finally {
+      await release()
+    }
+  }
+
+  private async buildArchivesInternal(
     resources: Resource[],
     categories: Category[],
     options: ArchiveOptions,
@@ -726,11 +863,75 @@ export class ExportService {
     throwIfArchiveAborted(transfer?.signal)
     const selectedResources = selectResourcesForArchive(resources, options)
 
-    if (options.mode === 'partial' && selectedResources.length === 0) {
+    if (
+      options.mode === 'partial' &&
+      selectedResources.length === 0 &&
+      !hasPortableContent(options)
+    ) {
       throw new Error('请至少选择一项资源')
     }
 
-    const groups = splitResources(selectedResources, options.splitSizeBytes)
+    let groups = splitResources(selectedResources, options.splitSizeBytes)
+    let albumsByGroup = groups.map(() => options.portableData?.generatedImageAlbum)
+    if (
+      options.splitSizeBytes &&
+      options.splitSizeBytes > 0 &&
+      options.portableData?.generatedImageAlbum?.length
+    ) {
+      groups = groups.filter((group) => group.length > 0)
+      albumsByGroup = groups.map(() => undefined)
+      for (const album of splitAlbum(
+        options.portableData.generatedImageAlbum,
+        options.splitSizeBytes,
+      )) {
+        groups.push([])
+        albumsByGroup.push(album)
+      }
+    }
+    const versionsByGroup = groups.map(() => [] as Resource[])
+    if (versions.length) {
+      const memberGroups = new Map<string, number[]>()
+      for (const [index, group] of groups.entries()) {
+        for (const resource of group) {
+          const id = resource.id,
+            indexes = memberGroups.get(id)
+          if (!indexes) memberGroups.set(id, [index])
+          else if (indexes[indexes.length - 1] !== index) indexes.push(index)
+        }
+      }
+      // Append in input order; the same owner can occur in more than one part.
+      for (const version of versions) {
+        const owner = version.versionGroupId
+        if (owner === undefined) continue
+        for (const index of memberGroups.get(owner) ?? []) versionsByGroup[index]!.push(version)
+      }
+    }
+    let relatedById: Map<string, ResourceSummary | undefined> | undefined
+    let allRelatedIndexed = false
+    const relatedSummaries = source?.resources
+    const findRelatedSummary =
+      relatedSummaries && options.resourceContent === 'modified'
+        ? (id: string) => {
+            if (!relatedById) {
+              relatedById = new Map()
+            }
+            if (!allRelatedIndexed && !relatedById.has(id)) {
+              // One card has at most two replacements. Resolve just those until
+              // a batch requests more distinct IDs, then index the snapshot once.
+              if (relatedById.size < 2)
+                relatedById.set(
+                  id,
+                  relatedSummaries.find((summary) => summary.id === id),
+                )
+              else {
+                for (const summary of relatedSummaries)
+                  if (!relatedById.has(summary.id)) relatedById.set(summary.id, summary)
+                allRelatedIndexed = true
+              }
+            }
+            return relatedById.get(id)
+          }
+        : undefined
     const archives: InternalCreatedArchive[] = []
     for (const [index, group] of groups.entries()) {
       archives.push(
@@ -739,17 +940,19 @@ export class ExportService {
           categories,
           {
             ...options,
+            portableData: options.portableData
+              ? { ...options.portableData, generatedImageAlbum: albumsByGroup[index] }
+              : undefined,
             resourceIds: group.map((resource) => resource.id),
             splitSizeBytes: undefined,
           },
           groups.length > 1 ? { index: index + 1, total: groups.length } : undefined,
-          versions.filter((version) =>
-            group.some((resource) => resource.id === version.versionGroupId),
-          ),
+          versionsByGroup[index],
           resources,
           writerFactory,
           source,
           transfer,
+          findRelatedSummary,
         ),
       )
     }
@@ -757,6 +960,17 @@ export class ExportService {
   }
 
   private async createSingleArchive(
+    ...args: Parameters<ExportService['buildSingleArchive']>
+  ): Promise<InternalCreatedArchive> {
+    const release = retainNativeResourceFiles()
+    try {
+      return await this.buildSingleArchive(...args)
+    } finally {
+      await release()
+    }
+  }
+
+  private async buildSingleArchive(
     resources: Resource[],
     categories: Category[],
     options: ArchiveOptions,
@@ -766,11 +980,16 @@ export class ExportService {
     writerFactory?: ArchiveWriterFactory,
     source?: ArchiveSource,
     transfer?: ArchiveTransferOptions,
+    findRelatedSummary?: (id: string) => ResourceSummary | undefined,
   ): Promise<InternalCreatedArchive> {
     throwIfArchiveAborted(transfer?.signal)
     const selectedResources = selectResourcesForArchive(resources, options)
 
-    if (options.mode === 'partial' && selectedResources.length === 0) {
+    if (
+      options.mode === 'partial' &&
+      selectedResources.length === 0 &&
+      !hasPortableContent(options)
+    ) {
       throw new Error('请至少选择一项资源')
     }
 
@@ -781,31 +1000,38 @@ export class ExportService {
         ? categories
         : categories.filter((category) => referencedCategoryIds.has(category.id))
     const archivedResources: ArchivedResource[] = []
+    const descriptorPositions = !source
+      ? ([new Map<string, number>(), new Map<string, number>()] as const)
+      : undefined
     const archivedResourceIds = new Set(exportedResources.map((resource) => resource.id))
 
     for (const resource of exportedResources) {
       const archivePath = createArchivePath(resource)
-      archivedResources.push(
-        withoutBlobs(
-          resource,
-          archivePath,
-          archivedResourceIds,
-          options.preserveExternalRelatedResourceIds,
-        ),
+      const descriptor = withoutBlobs(
+        resource,
+        archivePath,
+        archivedResourceIds,
+        options.preserveExternalRelatedResourceIds,
       )
+      if (descriptorPositions && !descriptorPositions[0].has(descriptor.id))
+        descriptorPositions[0].set(descriptor.id, archivedResources.length)
+      archivedResources.push(descriptor)
     }
     const selectedVersions = versions.filter((version) =>
       archivedResourceIds.has(version.versionGroupId ?? ''),
     )
     const exportedVersions = selectedVersions
-    const archivedVersions = exportedVersions.map((version) =>
-      withoutBlobs(
+    const archivedVersions = exportedVersions.map((version, index) => {
+      const descriptor = withoutBlobs(
         version,
         createArchivePath(version, true),
         archivedResourceIds,
         options.preserveExternalRelatedResourceIds,
-      ),
-    )
+      )
+      if (descriptorPositions && !descriptorPositions[1].has(descriptor.id))
+        descriptorPositions[1].set(descriptor.id, index)
+      return descriptor
+    })
 
     const selectedCommunitySourceData = selectCommunitySourcesForArchive(
       options.communitySourceData,
@@ -821,7 +1047,12 @@ export class ExportService {
     const createdAt = new Date(transfer?.createdAt ?? Date.now())
     const manifest: ArchiveManifest = {
       format: ARCHIVE_FORMAT,
-      version: ARCHIVE_VERSION,
+      version:
+        options.portableData?.generatedImageAlbum ||
+        options.portableData?.frontendWorkshopProjects ||
+        options.portableData?.imageGeneration
+          ? ARCHIVE_APPLICATION_VERSION
+          : ARCHIVE_VERSION,
       mode: options.mode,
       resourceContent: options.resourceContent ?? 'original',
       createdAt: createdAt.toISOString(),
@@ -863,7 +1094,9 @@ export class ExportService {
     }
     const fileName = archiveFileName(options.mode, createdAt, part)
     const encoding: ArchiveEncoding = {
+      readAlbumFile: options.readAlbumFile ?? this.readAlbumFile,
       signal: transfer?.signal,
+      readAhead: transfer?.readAhead,
       onProgress: ({ writtenBytes }) => transfer?.onProgress?.({ writtenBytes, fileName }),
       resources: exportedResources,
       versions: exportedVersions,
@@ -887,7 +1120,8 @@ export class ExportService {
               overrides.worldBookResourceId,
               overrides.greetingResourceId,
             ])) {
-              const summary = source.resources.find((candidate) => candidate.id === id)
+              if (!id) continue
+              const summary = findRelatedSummary?.(id)
               if (summary) {
                 const value = await source.read(summary, false)
                 if (
@@ -917,9 +1151,9 @@ export class ExportService {
         )
         // Eager API callers retain the complete manifest. Lazy export callers receive only
         // the file/result; the complete on-disk manifest is serialized one record at a time.
-        if (!source) {
+        if (descriptorPositions) {
           const records = historical ? archivedVersions : archivedResources
-          records[records.findIndex((record) => record.id === resource.id)] = descriptor
+          records[descriptorPositions[historical ? 1 : 0].get(descriptor.id) ?? -1] = descriptor
         }
         return descriptor
       },

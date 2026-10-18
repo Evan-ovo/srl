@@ -8,6 +8,7 @@ import {
   type ResourceCommunitySourceSummary,
 } from '../types/CommunitySource'
 import ResourceSourceLinks from './ResourceSourceLinks.vue'
+import { readDiscordSourceFromUrl } from '../services/DiscordSourceRefreshService'
 
 const runtime = vi.hoisted(() => ({
   listSummariesForResource: vi.fn(),
@@ -123,7 +124,7 @@ describe('ResourceSourceLinks Discord directory lifecycle', () => {
     wrapper.unmount()
   })
 
-  it('stores GitHub metadata when a GitHub source link is added', async () => {
+  it('defaults to saving a link, explains inbox capture and retains GitHub metadata', async () => {
     const wrapper = mount(ResourceSourceLinks, {
       props: { resourceId: 'resource-1', links: [] },
       global: {
@@ -138,8 +139,11 @@ describe('ResourceSourceLinks Discord directory lifecycle', () => {
     await flushPromises()
 
     await wrapper.get('.resource-sources__add').trigger('click')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('仅保存来源链接，不会读取帖子正文')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('功能 → 收件箱')
+    expect(wrapper.find('input[type="radio"]').exists()).toBe(false)
+    expect(wrapper.get('.resource-source-add-actions__primary').text()).toBe('保存链接')
     await wrapper.get('input[type="url"]').setValue('https://github.com/octocat/Hello-World')
-    await wrapper.get('input[type="radio"][value="link"]').setValue(true)
     await wrapper.get('.resource-source-add-actions__primary').trigger('click')
 
     const updates = wrapper.emitted('update:links') ?? []
@@ -152,6 +156,34 @@ describe('ResourceSourceLinks Discord directory lifecycle', () => {
       type: 'github',
       github: { owner: 'octocat', repo: 'Hello-World' },
     })
+    wrapper.unmount()
+  })
+
+  it('saves a Discord URL without requesting or saving a remote post', async () => {
+    const wrapper = mount(ResourceSourceLinks, {
+      props: { resourceId: 'resource-1', links: [] },
+      global: {
+        stubs: {
+          DiscordCommunitySources: true,
+          ResourceLinkAdvancedSettings: true,
+          ResourceLinkRow: true,
+          Teleport: true,
+        },
+      },
+    })
+    await wrapper.get('.resource-sources__add').trigger('click')
+    const url = 'https://discord.com/channels/11111/22222/33333'
+    await wrapper.get('input[type="url"]').setValue(url)
+    await wrapper.get('.resource-source-add-actions__primary').trigger('click')
+    expect(wrapper.emitted('update:links')?.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ url, type: 'discord', trustMode: 'linkOnly' }),
+    ])
+    expect(readDiscordSourceFromUrl).not.toHaveBeenCalled()
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('来源链接已添加')
+    await wrapper.get('.resource-sources__add').trigger('click')
+    expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.find('input[type="radio"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

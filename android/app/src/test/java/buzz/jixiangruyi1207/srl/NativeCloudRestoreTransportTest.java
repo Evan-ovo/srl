@@ -11,6 +11,13 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutionException;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -144,10 +151,13 @@ public class NativeCloudRestoreTransportTest {
         List<RestoreResource> plans = Collections.singletonList(resource(full,
             new RestoreSegment(a.hash, 0, 3), new RestoreSegment(b.hash, 0, 3)));
         AtomicInteger firstDownloads = new AtomicInteger();
+        CountDownLatch firstWritten = new CountDownLatch(1);
         try {
             restoreFiles(pending, Arrays.asList(a, b), plans, h -> file(root, h), (o, target) -> {
                 firstDownloads.incrementAndGet();
+                if (o.hash.equals(b.hash)) assertTrue(firstWritten.await(5, TimeUnit.SECONDS));
                 Files.write(target.toPath(), o.hash.equals(a.hash) ? aBytes : bytes("b"));
+                if (o.hash.equals(a.hash)) firstWritten.countDown();
                 if (o.hash.equals(b.hash)) throw new IOException("offline");
             }, true, (completed, total) -> {});
             fail("network must interrupt the first invocation");
@@ -172,6 +182,157 @@ public class NativeCloudRestoreTransportTest {
             try { restoreResponseOffset(206, range, 4, 10); fail("must reject mismatched suffix"); }
             catch (IllegalStateException expected) {}
         }
+    }
+
+    @Test public void boundedPrefetchOverlapsThreeChunksAndAssemblesInDescriptorOrder() throws Exception {
+        File root = temporary.newFolder();
+        byte[][] contents = { bytes("aaa"), bytes("bbb"), bytes("ccc"), bytes("ddd") };
+        List<RestoreObject> objects = Arrays.asList(object(contents[0]), object(contents[1]), object(contents[2]), object(contents[3]));
+        RestoreResource plan = resource(bytes("aaabbbcccddd"), objects.stream()
+            .map(o -> new RestoreSegment(o.hash, 0, o.size)).toArray(RestoreSegment[]::new));
+        CountDownLatch windowStarted = new CountDownLatch(3), releaseFirst = new CountDownLatch(1), firstStarted = new CountDownLatch(1);
+        AtomicInteger started = new AtomicInteger(), active = new AtomicInteger(), peak = new AtomicInteger();
+        ExecutorService owner = Executors.newSingleThreadExecutor();
+        try {
+            Future<RestoreCounts> result = owner.submit(() -> restoreFiles(new File(root, "pending"), objects,
+                Collections.singletonList(plan), h -> file(root, h), (o, target) -> {
+                    int count = active.incrementAndGet(); peak.accumulateAndGet(count, Math::max);
+                    int index = objects.indexOf(o);
+                    started.incrementAndGet(); windowStarted.countDown();
+                    try {
+                        if (index == 0) { firstStarted.countDown(); assertTrue(releaseFirst.await(5, TimeUnit.SECONDS)); }
+                        else assertTrue(firstStarted.await(5, TimeUnit.SECONDS));
+                        Files.write(target.toPath(), contents[index]);
+                    } finally { active.decrementAndGet(); }
+                }));
+            assertTrue(windowStarted.await(5, TimeUnit.SECONDS));
+            assertEquals("completed later chunks must keep their window reservations", 3, started.get());
+            releaseFirst.countDown();
+            assertEquals(4, result.get(5, TimeUnit.SECONDS).downloaded);
+            assertTrue(peak.get() > 1); assertTrue(peak.get() <= 3);
+            assertEquals(0, active.get());
+            assertArrayEquals(bytes("aaabbbcccddd"), Files.readAllBytes(file(root, plan.hash).toPath()));
+            assertFalse(new File(root, "pending").exists());
+        } finally { releaseFirst.countDown(); owner.shutdownNow(); assertTrue(owner.awaitTermination(5, TimeUnit.SECONDS)); }
+    }
+
+    @Test public void byteBudgetBoundsPendingChunksAndOversizedLegacyChunkRunsAlone() throws Exception {
+        for (boolean oversized : new boolean[] { false, true }) {
+            File root = temporary.newFolder();
+            byte[] first = bytes(oversized ? "1234567" : "1234"), second = bytes("5678"), full = bytes(oversized ? "12345675678" : "12345678");
+            RestoreObject a = object(first), b = object(second);
+            CountDownLatch firstStarted = new CountDownLatch(1), releaseFirst = new CountDownLatch(1), secondStarted = new CountDownLatch(1);
+            ExecutorService owner = Executors.newSingleThreadExecutor();
+            try {
+                Future<RestoreCounts> result = owner.submit(() -> restoreFiles(new File(root, "pending"), Arrays.asList(a, b),
+                    Collections.singletonList(resource(full, new RestoreSegment(a.hash, 0, a.size), new RestoreSegment(b.hash, 0, b.size))),
+                    h -> file(root, h), (o, target) -> {
+                        if (o == a) { firstStarted.countDown(); assertTrue(releaseFirst.await(5, TimeUnit.SECONDS)); }
+                        else { secondStarted.countDown(); assertEquals(0L, releaseFirst.getCount()); }
+                        Files.write(target.toPath(), o == a ? first : second);
+                    }, false, (completed, total) -> {}, 3, 6));
+                assertTrue(firstStarted.await(5, TimeUnit.SECONDS));
+                assertFalse("next chunk exceeds the remaining byte budget", secondStarted.await(100, TimeUnit.MILLISECONDS));
+                releaseFirst.countDown();
+                assertEquals(2, result.get(5, TimeUnit.SECONDS).downloaded);
+                assertArrayEquals(full, Files.readAllBytes(file(root, hash(full)).toPath()));
+            } finally { releaseFirst.countDown(); owner.shutdownNow(); assertTrue(owner.awaitTermination(5, TimeUnit.SECONDS)); }
+        }
+    }
+
+    @Test public void laterChunkFailureCancelsAndDrainsEarlierBlockedDownloadBeforeCleanup() throws Exception {
+        File root = temporary.newFolder(), pending = new File(root, "pending");
+        RestoreObject a = object(bytes("aaa")), b = object(bytes("bbb")), c = object(bytes("ccc"));
+        CountDownLatch firstStarted = new CountDownLatch(1), firstFinished = new CountDownLatch(1);
+        ExecutorService owner = Executors.newSingleThreadExecutor();
+        try {
+            Future<RestoreCounts> result = owner.submit(() -> restoreFiles(pending, Arrays.asList(a, b, c),
+                Collections.singletonList(resource(bytes("aaabbbccc"), new RestoreSegment(a.hash, 0, 3),
+                    new RestoreSegment(b.hash, 0, 3), new RestoreSegment(c.hash, 0, 3))),
+                h -> file(root, h), (o, target) -> {
+                    if (o == a) {
+                        firstStarted.countDown();
+                        try { new CountDownLatch(1).await(); }
+                        finally { Files.write(target.toPath(), bytes("late")); firstFinished.countDown(); }
+                    } else if (o == b) {
+                        assertTrue(firstStarted.await(5, TimeUnit.SECONDS));
+                        throw new IOException("second chunk failed");
+                    } else Files.write(target.toPath(), bytes("ccc"));
+                }));
+            try { result.get(5, TimeUnit.SECONDS); fail("must reject"); }
+            catch (ExecutionException expected) { assertEquals("second chunk failed", expected.getCause().getMessage()); }
+            assertEquals(0L, firstFinished.getCount());
+            assertEquals("cleanup must happen after the late writer exits", 0, root.listFiles().length);
+        } finally { owner.shutdownNow(); assertTrue(owner.awaitTermination(5, TimeUnit.SECONDS)); }
+    }
+
+    @Test public void ownerCancellationStopsAllPrefetchAndPreservesOnlyResumableCheckpoints() throws Exception {
+        for (boolean resumable : new boolean[] { false, true }) {
+            File root = temporary.newFolder(), pending = new File(root, "pending"); pending.mkdir();
+            File unknown = new File(pending, "unknown.part"); Files.write(unknown.toPath(), bytes("keep"));
+            List<RestoreObject> objects = Arrays.asList(object(bytes("aaa")), object(bytes("bbb")), object(bytes("ccc")), object(bytes("ddd")));
+            RestoreResource plan = resource(bytes("aaabbbcccddd"), objects.stream()
+                .map(o -> new RestoreSegment(o.hash, 0, o.size)).toArray(RestoreSegment[]::new));
+            CountDownLatch started = new CountDownLatch(3), finished = new CountDownLatch(1);
+            AtomicReference<Thread> ownerThread = new AtomicReference<>();
+            AtomicInteger active = new AtomicInteger(), downloads = new AtomicInteger();
+            ExecutorService owner = Executors.newSingleThreadExecutor();
+            try {
+                Future<RestoreCounts> result = owner.submit(() -> {
+                    ownerThread.set(Thread.currentThread());
+                    try {
+                        return restoreFiles(pending, objects, Collections.singletonList(plan), h -> file(root, h), (o, target) -> {
+                            active.incrementAndGet(); downloads.incrementAndGet(); started.countDown();
+                            try { new CountDownLatch(1).await(); }
+                            finally { Files.write(target.toPath(), bytes("x")); active.decrementAndGet(); }
+                        }, resumable, (completed, total) -> {});
+                    } finally { finished.countDown(); }
+                });
+                assertTrue(started.await(5, TimeUnit.SECONDS));
+                ownerThread.get().interrupt();
+                assertTrue(finished.await(5, TimeUnit.SECONDS));
+                try { result.get(5, TimeUnit.SECONDS); fail("must cancel"); }
+                catch (ExecutionException expected) { assertTrue(expected.getCause() instanceof InterruptedException); }
+                assertEquals(3, downloads.get()); assertEquals(0, active.get());
+                assertFalse(file(root, plan.hash).exists());
+                assertEquals(resumable ? 4 : 1, pending.listFiles().length);
+                assertArrayEquals(bytes("keep"), Files.readAllBytes(unknown.toPath()));
+            } finally { owner.shutdownNow(); assertTrue(owner.awaitTermination(5, TimeUnit.SECONDS)); }
+        }
+    }
+
+    @Test public void corruptCachedCheckpointIsRevalidatedAndSharedPackLivesUntilLastInstalledResource() throws Exception {
+        File root = temporary.newFolder(), pending = new File(root, "pending"); pending.mkdir();
+        byte[] pack = bytes("aaabbb"); RestoreObject object = object(pack);
+        File checkpoint = new File(pending, object.hash + ".chunk.part");
+        Files.write(checkpoint.toPath(), bytes("xxxxxx"));
+        AtomicInteger downloads = new AtomicInteger();
+        RestoreCounts result = restoreFiles(pending, Collections.singletonList(object), Arrays.asList(
+            resource(bytes("aaa"), new RestoreSegment(object.hash, 0, 3)),
+            resource(bytes("bbb"), new RestoreSegment(object.hash, 3, 3))), h -> file(root, h), (o, target) -> {
+                downloads.incrementAndGet(); Files.write(target.toPath(), pack);
+            }, true, (completed, total) -> {
+                if (completed == 1) assertTrue(checkpoint.isFile());
+                if (completed == 2) assertFalse(checkpoint.exists());
+            });
+        assertEquals(1, downloads.get()); assertEquals(1, result.downloaded); assertEquals(2, result.assembled);
+        assertArrayEquals(bytes("aaa"), Files.readAllBytes(file(root, hash(bytes("aaa"))).toPath()));
+        assertArrayEquals(bytes("bbb"), Files.readAllBytes(file(root, hash(bytes("bbb"))).toPath()));
+        assertFalse(pending.exists());
+    }
+
+    @Test public void serialPrefetchFallbackKeepsTheSameVerifiedOutput() throws Exception {
+        File root = temporary.newFolder(); byte[] first = bytes("first"), second = bytes("second"), full = bytes("firstsecond");
+        RestoreObject a = object(first), b = object(second);
+        AtomicInteger ordinal = new AtomicInteger();
+        RestoreCounts result = restoreFiles(new File(root, "pending"), Arrays.asList(a, b),
+            Collections.singletonList(resource(full, new RestoreSegment(a.hash, 0, a.size), new RestoreSegment(b.hash, 0, b.size))),
+            h -> file(root, h), (o, target) -> {
+                assertSame(ordinal.getAndIncrement() == 0 ? a : b, o);
+                Files.write(target.toPath(), o == a ? first : second);
+            }, false, (completed, total) -> {}, 1, 1);
+        assertEquals(2, result.downloaded);
+        assertArrayEquals(full, Files.readAllBytes(file(root, hash(full)).toPath()));
     }
 
     private static final class HttpFixture implements AutoCloseable {
@@ -218,4 +379,116 @@ public class NativeCloudRestoreTransportTest {
             assertArrayEquals(full, Files.readAllBytes(target.toPath()));
         }
     }
+    @Test public void nativeVerifiedDownloaderStillRejectsCorruptNetworkBytesBeforeInstall() throws Exception {
+        File root = temporary.newFolder(); byte[] full = bytes("good");
+        try (HttpFixture server = new HttpFixture(200, null, bytes("evil"))) {
+            RestoreObject object = new RestoreObject(hash(full), full.length, server.url());
+            try {
+                restoreFiles(new File(root, "pending"), Collections.singletonList(object),
+                    Collections.singletonList(resource(full, new RestoreSegment(object.hash, 0, object.size))),
+                    h -> file(root, h), nativeDownloader("github", "test-token", "", call -> {}));
+                fail("native download must check SHA before returning a verified result");
+            } catch (IllegalStateException expected) { assertTrue(expected.getMessage().contains("SHA-256")); }
+            assertEquals(0, root.listFiles().length);
+        }
+    }
+
+    @Test public void missingNativeHttpObjectPreservesItsStatusAndInstallsNothing() throws Exception {
+        File root = temporary.newFolder(); byte[] full = bytes("good");
+        try (HttpFixture server = new HttpFixture(404, null, bytes("missing"))) {
+            RestoreObject object = new RestoreObject(hash(full), full.length, server.url());
+            try {
+                restoreFiles(new File(root, "pending"), Collections.singletonList(object),
+                    Collections.singletonList(resource(full, new RestoreSegment(object.hash, 0, object.size))),
+                    h -> file(root, h), nativeDownloader("github", "test-token", "", call -> {}));
+                fail("missing object must fail closed");
+            } catch (CloudHttpStatusException expected) { assertEquals(404, expected.status); }
+            assertEquals(0, root.listFiles().length);
+        }
+    }
+
+    @Test public void nativeVerifiedDownloaderResumesThenAssemblesThePersistedRange() throws Exception {
+        File root = temporary.newFolder(), pending = new File(root, "pending"); pending.mkdir();
+        byte[] full = bytes("firstsecond");
+        File checkpoint = new File(pending, hash(full) + ".chunk.part");
+        Files.write(checkpoint.toPath(), bytes("first"));
+        try (HttpFixture server = new HttpFixture(206, "bytes 5-10/11", bytes("second"))) {
+            RestoreObject object = new RestoreObject(hash(full), full.length, server.url());
+            RestoreCounts result = restoreFiles(pending, Collections.singletonList(object),
+                Collections.singletonList(resource(bytes("second"), new RestoreSegment(object.hash, 5, 6))),
+                h -> file(root, h), nativeDownloader("github", "test-token", "", call -> {}), true, (completed, total) -> {});
+            assertEquals(1, result.downloaded); assertEquals("bytes=5-", server.range);
+            assertArrayEquals(bytes("second"), Files.readAllBytes(file(root, hash(bytes("second"))).toPath()));
+            assertFalse(pending.exists());
+        }
+    }
+
+    private static final class BlockingHttpFixture implements AutoCloseable {
+        final java.net.ServerSocket server = new java.net.ServerSocket(0, 3, java.net.InetAddress.getLoopbackAddress());
+        final CountDownLatch started = new CountDownLatch(3), disconnected = new CountDownLatch(3);
+        final ExecutorService handlers = Executors.newFixedThreadPool(4);
+        final java.util.List<java.net.Socket> sockets = Collections.synchronizedList(new java.util.ArrayList<>());
+        final Future<?> accepting;
+        BlockingHttpFixture() throws Exception {
+            accepting = handlers.submit(() -> {
+                try {
+                    for (int index = 0; index < 3; index++) {
+                        java.net.Socket client = server.accept(); sockets.add(client);
+                        handlers.submit(() -> {
+                            try (java.net.Socket connection = client) {
+                                java.io.BufferedReader input = new java.io.BufferedReader(new java.io.InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
+                                String line;
+                                while ((line = input.readLine()) != null && !line.isEmpty()) {}
+                                connection.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nx").getBytes(StandardCharsets.UTF_8));
+                                connection.getOutputStream().flush();
+                                started.countDown();
+                                while (input.read() != -1) {}
+                                disconnected.countDown();
+                            } catch (IOException error) { throw new java.io.UncheckedIOException(error); }
+                        });
+                    }
+                } catch (IOException error) { throw new java.io.UncheckedIOException(error); }
+            });
+        }
+        String url() { return "http://127.0.0.1:" + server.getLocalPort() + "/object"; }
+        @Override public void close() throws Exception {
+            server.close();
+            synchronized (sockets) { for (java.net.Socket socket : sockets) socket.close(); }
+            handlers.shutdownNow();
+            assertTrue(handlers.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test public void cancellingNativePrefetchClosesEveryBlockedHttpCall() throws Exception {
+        File root = temporary.newFolder(), pending = new File(root, "pending");
+        ExecutorService owner = Executors.newSingleThreadExecutor();
+        AtomicReference<Thread> ownerThread = new AtomicReference<>();
+        try (BlockingHttpFixture server = new BlockingHttpFixture()) {
+            RestoreObject a = new RestoreObject(hash(bytes("aaa")), 3, server.url());
+            RestoreObject b = new RestoreObject(hash(bytes("bbb")), 3, server.url());
+            RestoreObject c = new RestoreObject(hash(bytes("ccc")), 3, server.url());
+            Future<RestoreCounts> result = owner.submit(() -> {
+                ownerThread.set(Thread.currentThread());
+                return restoreFiles(pending, Arrays.asList(a, b, c),
+                    Collections.singletonList(resource(bytes("aaabbbccc"), new RestoreSegment(a.hash, 0, 3),
+                        new RestoreSegment(b.hash, 0, 3), new RestoreSegment(c.hash, 0, 3))),
+                    h -> file(root, h), nativeDownloader("github", "test-token", "", call -> {}), true, (completed, total) -> {});
+            });
+            assertTrue(server.started.await(5, TimeUnit.SECONDS));
+            ownerThread.get().interrupt();
+            try { result.get(5, TimeUnit.SECONDS); fail("must interrupt"); }
+            catch (ExecutionException expected) { assertTrue(expected.getCause() instanceof InterruptedException); }
+            assertTrue("all three sockets must close, not just the last active call", server.disconnected.await(5, TimeUnit.SECONDS));
+            File[] remaining = pending.listFiles();
+            // Cancellation may win before the client opens any checkpoint. If bytes reached
+            // disk, only resumable chunks may remain; the generic cancellation test forces
+            // late checkpoint writes and verifies those files are always retained.
+            if (remaining != null) for (File checkpoint : remaining) {
+                assertTrue(checkpoint.getName().endsWith(".chunk.part"));
+                assertTrue(checkpoint.length() < 3);
+            }
+            assertFalse(file(root, hash(bytes("aaabbbccc"))).exists());
+        } finally { owner.shutdownNow(); assertTrue(owner.awaitTermination(5, TimeUnit.SECONDS)); }
+    }
+
 }

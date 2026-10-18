@@ -45,7 +45,11 @@ import {
   useAssistantUiCustomization,
   snapshotUiViews,
 } from '../composables/UseAssistantUiCustomization'
-import type { CustomUiViews, UiApplyOptions } from '../types/UiCustomization'
+import type {
+  AppearancePreviewRequest,
+  CustomUiViews,
+  UiApplyOptions,
+} from '../types/UiCustomization'
 import {
   BrowserStorageService,
   CABINET_COLUMN_OPTIONS,
@@ -106,6 +110,7 @@ const emit = defineEmits<{
   'update:noImageResourceCoverMode': [value: NoImageResourceCoverMode]
   'update:uiFontScale': [value: UiFontScale]
   'save-css': [value: string, options?: UiApplyOptions]
+  'preview-css': [request: AppearancePreviewRequest]
   'save-assistant-css': [value: string, options?: UiApplyOptions]
   'assistant-visibility': [value: boolean]
   'assistant-activity': [value: boolean]
@@ -295,10 +300,20 @@ const activePresetId = ref(initialPreset.id)
 const draft = ref(clonePreset(initialPreset))
 const activeScope = ref<CustomCssScope>(presetCssScope(initialPreset))
 const scopedEditorOpen = ref(hasScopedContent(initialPreset))
+const previewScope = ref<CustomCssScope | undefined>(
+  scopedEditorOpen.value ? activeScope.value : undefined,
+)
+function selectPreviewScope(scope: CustomCssScope) {
+  activeScope.value = scope
+  previewScope.value = scope
+}
+const previewConsent = new AbortController()
+onBeforeUnmount(() => previewConsent.abort())
 
 function showPresetCss(preset: CustomCssPreset): void {
   activeScope.value = presetCssScope(preset)
   scopedEditorOpen.value = hasScopedContent(preset)
+  previewScope.value = scopedEditorOpen.value ? activeScope.value : undefined
 }
 
 const activeScopedCss = computed({
@@ -1058,10 +1073,35 @@ async function deletePreset(): Promise<void> {
   flash('预设已删除')
 }
 
-async function preview(): Promise<void> {
-  if (!(await confirmViewScripts(draft.value.views))) return
-  applyPreset(draft.value, compilePreset(draft.value))
-  flash('已在真实界面试用草稿；可切换到目标页面查看，在保护提示中保留或恢复。预设尚未保存')
+async function preview(scope = previewScope.value, source = false): Promise<void> {
+  if (scope && !activeScopes.value.some((item) => item.value === scope)) {
+    flash('当前界面尚未安装或不可用；草稿保留，请先安装对应 APP')
+    return
+  }
+  const views = normalizeUiViews(draft.value.views)
+  // Source preview runs an unchecked draft without changing its saved enable flag.
+  if (source && scope && views[scope]) views[scope]!.enabled = true
+  const css = compilePreset(draft.value)
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const scroll = window.scrollY
+  if (
+    !(await confirmViewScripts(views, previewConsent.signal)) ||
+    previewConsent.signal.aborted ||
+    !props.active
+  )
+    return
+  emit('preview-css', {
+    css,
+    views,
+    scope,
+    onExit: () => {
+      void nextTick(() => {
+        if (previewConsent.signal.aborted) return
+        focused?.focus({ preventScroll: true })
+        window.scrollTo({ top: scroll, behavior: 'instant' })
+      })
+    },
+  })
 }
 
 async function clearDraft(): Promise<void> {
@@ -1376,6 +1416,7 @@ async function importPresets(event: Event): Promise<void> {
             v-model="draft.globalCss"
             spellcheck="false"
             placeholder="例如：:root { --color-accent: #7d4be2; }"
+            @focus="previewScope = undefined"
           ></textarea>
         </label>
 
@@ -1400,7 +1441,7 @@ async function importPresets(event: Event): Promise<void> {
               role="tab"
               :aria-selected="activeScope === scope.value"
               :class="{ 'is-active': activeScope === scope.value }"
-              @click="activeScope = scope.value"
+              @click="selectPreviewScope(scope.value)"
             >
               {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i
               ><small v-if="draft.views?.[scope.value]">Vue</small>
@@ -1428,7 +1469,7 @@ async function importPresets(event: Event): Promise<void> {
                 role="tab"
                 :aria-selected="activeScope === scope.value"
                 :class="{ 'is-active': activeScope === scope.value }"
-                @click="activeScope = scope.value"
+                @click="selectPreviewScope(scope.value)"
               >
                 {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i
                 ><small v-if="draft.views?.[scope.value]">Vue</small>
@@ -1447,6 +1488,7 @@ async function importPresets(event: Event): Promise<void> {
               v-model="activeScopedCss"
               spellcheck="false"
               placeholder="在此填写本界面的自定义 CSS"
+              @focus="previewScope = activeScope"
             ></textarea>
           </label>
           <AppearanceUiEditor
@@ -1454,15 +1496,15 @@ async function importPresets(event: Event): Promise<void> {
             :scope="activeScope"
             :title="selectedScope.title"
             :views="draft.views ?? {}"
-            :css="compilePreset(draft)"
             @update:views="draft.views = $event"
+            @preview="preview(activeScope, true)"
           />
         </details>
 
         <div class="appearance-code-actions">
           <span role="status">{{ copyStatus }}</span>
-          <button type="button" class="appearance-action-hit" @click="preview">
-            <span class="appearance-action-face">预览并试用</span>
+          <button type="button" class="appearance-action-hit" @click="preview()">
+            <span class="appearance-action-face">全屏预览</span>
           </button>
           <button type="button" class="appearance-action-hit" @click="clearDraft">
             <span class="appearance-action-face">清空草稿</span>

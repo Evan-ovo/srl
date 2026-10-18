@@ -1,3 +1,4 @@
+import { waitForCloudRetry } from './CloudBackupHttp'
 import type { CloudBackupItem, WebDavBackupConfig } from '../types/CloudBackup'
 import { hashCloudBlob } from './CloudArchiveCodec'
 import { parseGitHubBundleManifest, type GitHubBundleManifest } from './GitHubBackupBundle'
@@ -8,6 +9,7 @@ import {
   structuredSnapshotArchiveName,
   structuredSnapshotName,
   structuredSnapshotParts,
+  structuredSnapshotObjects,
   type CreatedStructuredSnapshot,
   type StructuredSnapshot,
 } from './CloudStructuredSnapshot'
@@ -70,8 +72,8 @@ export async function uploadWebDavStructuredBackup(
   const existing = new Map(
     (await context.listWebDavObjects(config, secret)).map((item) => [item.objectKey, item]),
   )
-  for (const resource of [...snapshot.snapshot.resources, ...snapshot.snapshot.versions]) {
-    for (const part of resource.object.parts) {
+  for (const object of structuredSnapshotObjects(snapshot.snapshot)) {
+    for (const part of object.parts) {
       part.storage = {
         kind: 'koofr-path',
         container: 'objects',
@@ -154,11 +156,13 @@ export async function uploadWebDavStructuredBackup(
   let completedJobs = 0
   try {
     await mapWithConcurrency(jobs, 2, async (plan) => {
+      context.signal?.throwIfAborted()
       const name = plan.name
       const blob = await context.materializeCloudObject(plan)
       const objectKey = `objects/${name}`
       let lastError: Error | undefined
       for (let attempt = 1; attempt <= 3; attempt += 1) {
+        context.signal?.throwIfAborted()
         if (attempt > 1) context.activeMetrics?.add('retryCount', 1)
         try {
           await context.uploadWebDavObject(
@@ -171,9 +175,10 @@ export async function uploadWebDavStructuredBackup(
           lastError = undefined
           break
         } catch (error) {
+          context.signal?.throwIfAborted()
           lastError = error instanceof Error ? error : new Error('Koofr 对象块上传失败')
           if (attempt < 3) {
-            await new Promise<void>((resolve) => setTimeout(resolve, attempt * 800))
+            await waitForCloudRetry(attempt * 800, context.signal)
           }
         }
       }
@@ -197,6 +202,8 @@ export async function uploadWebDavStructuredBackup(
       `Koofr 快照清单已压缩为 ${(manifestBlob.size / 1024).toFixed(1)} KiB，正在最后提交…`,
     )
     const manifestKey = `snapshots/${name}`
+    context.signal?.throwIfAborted()
+    context.beginCommit?.()
     await context.uploadWebDavObject(
       config,
       secret,
@@ -475,8 +482,8 @@ export async function listWebDav(
       backups.push({
         id: item.objectKey,
         objectKey: item.objectKey,
-        size: [...snapshot.resources, ...snapshot.versions].reduce(
-          (total, resource) => total + resource.fileSize,
+        size: structuredSnapshotObjects(snapshot).reduce(
+          (total, object) => total + object.totalSize,
           0,
         ),
         createdAt: item.createdAt || Date.parse(snapshot.createdAt) || 0,
@@ -548,7 +555,8 @@ export function createWebDavObjectReader(
     for (const part of object.parts) {
       const storedSize = part.storedSize ?? part.size
       const objectKey = structuredPartObjectKey(part)
-      let stored = partCache.get(objectKey)
+      const cacheKey = `${objectKey}\u0000${part.sha256}\u0000${storedSize}`
+      let stored = partCache.get(cacheKey)
       if (!stored) {
         // Keep at most one V3-sized part, never the entire downloaded library.
         partCache.clear()
@@ -560,20 +568,36 @@ export function createWebDavObjectReader(
           )
           .then(async (response) => {
             if (!response.ok) throw new Error(`Koofr 对象缺少分块：${objectKey}`)
-            const blob = await context.readResponseBlob(response)
+            const blob = await context.readResponseBlob(response, storedSize, object.fileName)
             if (blob.size !== storedSize || (await hashCloudBlob(blob)) !== part.sha256)
               throw new Error(`Koofr 对象分块校验失败：${objectKey}`)
             return blob
           })
-        if (storedSize <= 32 * 1024 * 1024) partCache.set(objectKey, stored)
+        if (storedSize <= 32 * 1024 * 1024) partCache.set(cacheKey, stored)
       }
-      const storedBlob = await stored
+      let storedBlob: Blob
+      try {
+        storedBlob = await stored
+      } catch (error) {
+        partCache.delete(cacheKey)
+        throw error
+      }
       const blob = storedBlob.slice(part.offset ?? 0, (part.offset ?? 0) + part.size)
       if (blob.size !== part.size) throw new Error(`Koofr 对象分块校验失败：${part.name}`)
       blobs.push(blob)
     }
     const result = new Blob(blobs, { type: 'application/octet-stream' })
-    if (result.size !== object.totalSize || (await hashCloudBlob(result)) !== object.totalSha256)
+    const wholePart = object.parts.length === 1 && object.parts[0]!
+    const alreadyVerified =
+      wholePart &&
+      (wholePart.offset ?? 0) === 0 &&
+      (wholePart.storedSize ?? wholePart.size) === object.totalSize &&
+      wholePart.size === object.totalSize &&
+      wholePart.sha256 === object.totalSha256
+    if (
+      result.size !== object.totalSize ||
+      (!alreadyVerified && (await hashCloudBlob(result)) !== object.totalSha256)
+    )
       throw new Error(`Koofr 对象完整性校验失败：${object.fileName}`)
     return result
   }

@@ -89,6 +89,7 @@ class NativeCloudBackupService(
         onProgress: (NativeCloudProgress) -> Unit,
     ): NativeCloudBackup {
         selection.requireContent()
+        recordBackupAttempt(providerName)
         val provider = provider(providerName)
         onProgress(NativeCloudProgress("正在读取本机资源并计算内容摘要…"))
         val sources = store.loadCloudSources().filter { if (it.isVersion) selection.versions else selection.resources }
@@ -205,6 +206,11 @@ class NativeCloudBackupService(
         provider(backup.provider).delete(backup.objectKey)
     }
 
+    fun recordBackupAttempt(providerName: String, attemptedAt: Long = clock()) {
+        require(providerName == "github" || providerName == "webdav") { "不支持的云备份方式" }
+        preferences.edit().putLong("lastAttempt-$providerName", attemptedAt).apply()
+    }
+
     fun automaticProvidersDue(isUnmetered: Boolean, isCharging: Boolean, now: Long = System.currentTimeMillis()): List<String> {
         val minimumInterval = 24L * 60L * 60L * 1000L
         return listOfNotNull(
@@ -212,7 +218,10 @@ class NativeCloudBackupService(
             loadWebDavConfig()?.let { "webdav" to it },
         ).filter { (name, config) ->
             config.autoBackup && (!config.wifiOnly || isUnmetered) && (!config.chargingOnly || isCharging) &&
-                now - preferences.getLong("lastBackup-$name", 0L) >= minimumInterval
+                now - maxOf(
+                    preferences.getLong("lastBackup-$name", 0L),
+                    preferences.getLong("lastAttempt-$name", 0L),
+                ) >= minimumInterval
         }.map { it.first }
     }
 

@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { taskCenter } from '../core/TaskCenter'
 
 const transfer = vi.hoisted(() => ({
   webDavRequest: vi.fn(),
@@ -7,6 +8,7 @@ const transfer = vi.hoisted(() => ({
   beginObject: vi.fn(),
   stageObjectFromLibrary: vi.fn(),
   stageObjectFromSources: vi.fn(),
+  stageObjectFromFile: vi.fn(),
   probeLibraryObject: vi.fn(),
   probeLibraryObjects: vi.fn(),
   appendObject: vi.fn(),
@@ -47,11 +49,13 @@ import {
 
 describe('NativeCloudTransfer', () => {
   beforeEach(() => {
+    for (const task of taskCenter.list()) taskCenter.dismiss(task.operationId)
     vi.clearAllMocks()
     transfer.beginJob.mockResolvedValue({ jobId: 'job-1', pipeline: true })
     transfer.beginObject.mockResolvedValue({ token: 'token-1' })
     transfer.stageObjectFromLibrary.mockResolvedValue({ staged: true })
     transfer.stageObjectFromSources.mockResolvedValue({ staged: true })
+    transfer.stageObjectFromFile.mockResolvedValue({ staged: true })
     transfer.probeLibraryObject.mockResolvedValue({
       available: true,
       size: 256 * 1024 * 1024,
@@ -283,6 +287,44 @@ describe('NativeCloudTransfer', () => {
         retryCount: 0,
       }),
     })
+  })
+
+  it('snapshots local Discord asset ranges natively and does not bridge attachment bytes', async () => {
+    const object = {
+      name: `srl-chunk--sha256-${'c'.repeat(64)}`,
+      size: 12,
+      contentType: 'application/octet-stream',
+      nativeSource: { kind: 'file' as const, uri: 'file:///app/asset.bin', offset: 2, size: 12 },
+    }
+    await uploadNativeStructuredSnapshot({
+      config: {
+        provider: 'webdav',
+        baseUrl: 'https://example.test/dav',
+        folder: 'backup',
+        username: 'fixture',
+        retention: 1,
+        autoBackup: false,
+      },
+      secret: 'fixture',
+      objects: [object],
+      manifest: {
+        name: 'snapshot.srlmanifest.v3.json.gz',
+        blob: new Blob(['manifest']),
+        contentType: 'application/gzip',
+      },
+    })
+    expect(transfer.stageObjectFromFile).toHaveBeenCalledWith({
+      jobId: 'job-1',
+      name: object.name,
+      contentType: object.contentType,
+      uri: object.nativeSource.uri,
+      offset: 2,
+      size: 12,
+      existingId: undefined,
+      releaseId: undefined,
+    })
+    expect(transfer.beginObject.mock.calls.every(([value]) => value.manifest === true)).toBe(true)
+    expect(transfer.stageObjectFromLibrary).not.toHaveBeenCalled()
   })
 
   it('将超过旧 4 MiB 限制的清单按原生流分段暂存', async () => {
@@ -539,7 +581,76 @@ describe('NativeCloudTransfer', () => {
     })
 
     expect(transfer.beginJob).toHaveBeenCalledWith(
-      expect.objectContaining({ wifiOnly: false, chargingOnly: false }),
+      expect.objectContaining({ wifiOnly: false, chargingOnly: false, automatic: false }),
     )
+    expect(taskCenter.list()).toEqual([
+      expect.objectContaining({
+        operationId: 'native-cloud-backup:job-1',
+        name: 'GitHub 云备份',
+        background: false,
+        status: 'completed',
+      }),
+    ])
+  })
+
+  it('自动 APK 备份作为后台任务进入共用任务中心', async () => {
+    await uploadNativeStructuredSnapshot({
+      config: {
+        provider: 'webdav',
+        baseUrl: 'https://example.test/dav',
+        folder: 'backup',
+        username: 'user',
+        retention: 7,
+        autoBackup: true,
+      },
+      secret: 'secret',
+      objects: [],
+      manifest: {
+        name: 'snapshot.json.gz',
+        blob: new Blob(['x']),
+        contentType: 'application/gzip',
+      },
+      respectConstraints: true,
+    })
+
+    expect(transfer.beginJob).toHaveBeenCalledWith(expect.objectContaining({ automatic: true }))
+    expect(taskCenter.list()).toEqual([
+      expect.objectContaining({
+        name: 'Koofr 云备份',
+        background: true,
+        status: 'completed',
+      }),
+    ])
+  })
+
+  it('APK 原生备份失败后在任务中心保留错误', async () => {
+    transfer.beginObject.mockRejectedValueOnce(new Error('对象暂存失败'))
+
+    await expect(
+      uploadNativeStructuredSnapshot({
+        config: {
+          provider: 'github',
+          owner: 'owner',
+          repository: 'repo',
+          retention: 1,
+          autoBackup: false,
+        },
+        secret: 'token',
+        objects: [],
+        manifest: {
+          name: 'snapshot.json.gz',
+          blob: new Blob(['x']),
+          contentType: 'application/gzip',
+        },
+      }),
+    ).rejects.toThrow('对象暂存失败')
+
+    expect(taskCenter.list()).toEqual([
+      expect.objectContaining({
+        operationId: 'native-cloud-backup:job-1',
+        status: 'failed',
+        error: '对象暂存失败',
+      }),
+    ])
   })
 })

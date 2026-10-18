@@ -1,10 +1,9 @@
+import { isResourceOwnedFile, resourceOwnedFileOwnerId } from '../types/ResourceAttachment'
 import { RestoreDuplicateIndex, restoreVersionKey } from '../utils/RestoreIdentity'
-import {
-  remapGalleryMetadata,
-  isResourceGalleryImage,
-  galleryOwnerId,
-} from '../types/ResourceGallery'
+import { remapGalleryMetadata } from '../types/ResourceGallery'
 import { remapReaderPortableData } from './ChatReaderPortableData'
+import { parseFrontendWorkshopBackup } from '../storage/FrontendWorkshopProjectStorage'
+import { parseAlbumBackup, albumArchivePath } from './GeneratedImageAlbumBackup'
 import { strFromU8 } from 'fflate'
 import { stageArchive, type ArchiveStageProgress } from './ArchiveExtraction'
 
@@ -22,6 +21,7 @@ import { MemoryRestoreStagingStore, type RestoreStagingStore } from '../storage/
 import {
   ARCHIVE_FORMAT,
   ARCHIVE_VERSION,
+  ARCHIVE_APPLICATION_VERSION,
   COMMUNITY_SOURCE_ARCHIVE_PATH,
   type ArchiveManifest,
   type ArchivePortableData,
@@ -45,15 +45,32 @@ import { openArchiveFiles, readCommunitySourceSidecar } from './RestoreFileSessi
 import { isValidFolderCoverDataUrl } from '../utils/FolderCover'
 import { isRecord } from '../utils/UnknownValue'
 import type { NativeBackedResourceRecord } from '../types/Vault'
+
+export interface StructuredRestoreOptions {
+  onProgress?: (progress: ArchiveRestoreProgress) => void
+  signal?: AbortSignal
+  /** Operation-local lower setting; the default is three preparations within 32 MiB. */
+  concurrency?: number
+  maxPreparedBytes?: number
+  onFailure?: (error: unknown) => void
+}
 import { readNativeRestoredCardMetadata, type NativeRestoreMetadata } from './NativeCloudTransfer'
 import { remapCommunitySourceBackupBindings } from './CommunitySourceBackupService'
 import type { CommunitySourceService } from './CommunitySourceService'
 import type { CommunitySourceBackupData } from '../types/CommunitySource'
 
 const RESOURCE_TYPES = new Set<ResourceType>(Object.values(RESOURCE_TYPE))
-function structuredPlaceholder(record: StructuredResource): Resource {
-  const { object: _object, ...resource } = record
-  return { ...resource, originalBlob: new Blob([], { type: resource.mimeType }) }
+function structuredPlaceholderMapper(): (record: StructuredResource) => Resource {
+  const blobs = new Map<string, Blob>()
+  return (record) => {
+    const { object: _object, ...resource } = record
+    let blob = blobs.get(resource.mimeType)
+    if (!blob) {
+      blob = new Blob([], { type: resource.mimeType })
+      blobs.set(resource.mimeType, blob)
+    }
+    return { ...resource, originalBlob: blob }
+  }
 }
 
 export interface PreparedNativeStructuredRestore extends Omit<
@@ -138,7 +155,7 @@ function parseManifest(manifestBytes: Uint8Array): ArchiveManifest {
     throw new Error('不是酒馆资源库备份包')
   }
   const archiveVersion = typeof parsed.version === 'number' ? parsed.version : Number.NaN
-  if (![1, 2, 3, ARCHIVE_VERSION].includes(archiveVersion)) {
+  if (![1, 2, 3, ARCHIVE_VERSION, ARCHIVE_APPLICATION_VERSION].includes(archiveVersion)) {
     throw new Error(`暂不支持备份版本 ${String(parsed.version)}`)
   }
   if (parsed.mode !== 'full' && parsed.mode !== 'partial') throw new Error('备份模式无效')
@@ -240,10 +257,10 @@ function existingGalleryOwners(
   ids: Map<string, string>,
 ): ResourceSummary[] {
   const restoredIds = new Set(restored.map((r) => r.id))
-  const owners = new Set(restored.filter(isResourceGalleryImage).map(galleryOwnerId))
+  const owners = new Set(restored.filter(isResourceOwnedFile).map(resourceOwnedFileOwnerId))
   return incoming.flatMap((resource) => {
     const id = ids.get(resource.id)
-    return id && owners.has(id) && !restoredIds.has(id) && !isResourceGalleryImage(resource)
+    return id && owners.has(id) && !restoredIds.has(id) && !isResourceOwnedFile(resource)
       ? [{ ...resource, id, metadata: remapGalleryMetadata(resource.metadata, ids) }]
       : []
   })
@@ -254,11 +271,21 @@ export class RestoreService {
   protected readonly staging: RestoreStagingStore
   private readonly communitySources?: Pick<CommunitySourceService, 'restoreBackup'>
 
+  private readonly albumOwner?: Pick<
+    import('./GeneratedImageAlbumService').GeneratedImageAlbumService,
+    'importPortableState'
+  >
+
   constructor(
     storage: ArchiveStorageAdapter,
     staging: RestoreStagingStore = new MemoryRestoreStagingStore(),
     communitySources?: Pick<CommunitySourceService, 'restoreBackup'>,
+    albumOwner?: Pick<
+      import('./GeneratedImageAlbumService').GeneratedImageAlbumService,
+      'importPortableState'
+    >,
   ) {
+    this.albumOwner = albumOwner
     this.storage = storage
     this.staging = staging
     this.communitySources = communitySources
@@ -279,10 +306,15 @@ export class RestoreService {
   revivePrepared(prepared: PreparedRestore): PreparedRestore {
     if (!prepared.staging) throw new Error('恢复任务缺少已校验文件引用')
     const { jobId, paths } = prepared.staging
+    let emptyBlob: Blob | undefined
+    const placeholder = (resource: Resource): Resource => ({
+      ...resource,
+      originalBlob: (emptyBlob ??= new Blob()),
+    })
     return {
       ...prepared,
-      resources: prepared.resources.map((resource) => ({ ...resource, originalBlob: new Blob() })),
-      versions: prepared.versions.map((resource) => ({ ...resource, originalBlob: new Blob() })),
+      resources: prepared.resources.map(placeholder),
+      versions: prepared.versions.map(placeholder),
       openFiles: () => openArchiveFiles(this.staging, jobId, new Map(paths), prepared.resources),
       dispose: () => this.staging.deleteJob(jobId),
     }
@@ -306,6 +338,24 @@ export class RestoreService {
       const manifestEntry = await this.staging.get(jobId, 'manifest.json')
       if (!manifestEntry) throw new Error('备份包缺少 manifest.json')
       const manifest = parseManifest(new Uint8Array(await manifestEntry.blob.arrayBuffer()))
+      if (manifest.portableData?.frontendWorkshopProjects)
+        parseFrontendWorkshopBackup(manifest.portableData.frontendWorkshopProjects)
+      if (manifest.portableData?.generatedImageAlbum) {
+        const album = parseAlbumBackup(manifest.portableData.generatedImageAlbum)
+        for (const entry of album) {
+          const file = await this.staging.getMetadata(
+            jobId,
+            albumArchivePath(entry.object!.totalSha256),
+          )
+          if (
+            !file ||
+            file.size !== entry.item.sizeBytes ||
+            file.sha256.toLowerCase() !== entry.object!.totalSha256.toLowerCase()
+          )
+            throw new Error(`相册原图缺失或校验失败：${entry.item.name}`)
+        }
+        if (album.length) deferFiles = true
+      }
       const communitySourceData = await readCommunitySourceSidecar(jobId, manifest, this.staging)
       const prepared = await this.prepareStaged(
         file.name,
@@ -476,8 +526,21 @@ export class RestoreService {
       return cover?.thumbnailBlob ? { ...resource, thumbnailBlob: cover.thumbnailBlob } : resource
     })
 
+    const existingResourceIds = new Set(existingResources.map((resource) => resource.id))
+    const versionGroups = [
+      ...new Set(
+        (manifest.versions ?? []).flatMap((version) => {
+          const group =
+            version.versionGroupId &&
+            (resourceIdMap.get(version.versionGroupId) ?? version.versionGroupId)
+          return group && existingResourceIds.has(group) ? [group] : []
+        }),
+      ),
+    ]
     const versionKeys = new Set(
-      existingResources.length ? await this.storage.listRestoreVersionKeys?.() : [],
+      !replacement && versionGroups.length
+        ? await this.storage.listRestoreVersionKeys?.(versionGroups)
+        : [],
     )
     const versionsToRestore: Resource[] = []
     for (const archived of manifest.versions ?? []) {
@@ -543,6 +606,19 @@ export class RestoreService {
         ? () => openArchiveFiles(this.staging, jobId, files, normalizedResources)
         : undefined,
       dispose: deferFiles ? () => this.staging.deleteJob(jobId) : undefined,
+      replan: deferFiles
+        ? (resources, categories) =>
+            this.prepareStaged(
+              fileName,
+              jobId,
+              manifest,
+              communitySourceData,
+              resources,
+              categories,
+              true,
+            )
+        : undefined,
+      sourceResourceIds: [...resourceIdMap],
       preview: {
         fileName,
         mode: manifest.mode,
@@ -571,7 +647,7 @@ export class RestoreService {
       galleryOwners: existingGalleryOwners(manifest.resources, normalizedResources, resourceIdMap),
       versions: versionsToRestore,
       categories: categoriesToCreate,
-      portableData: remapReaderPortableData(manifest.portableData, resourceIdMap),
+      portableData: remapReaderPortableData(manifest.portableData, resourceIdMap, categoryIdMap),
       communitySourceData: mappedCommunitySourceData,
     }
     return prepared
@@ -692,8 +768,19 @@ export class RestoreService {
       return cover?.thumbnailBlob ? { ...resource, thumbnailBlob: cover.thumbnailBlob } : resource
     })
 
+    const existingResourceIds = new Set(existingResources.map((resource) => resource.id))
+    const versionGroups = [
+      ...new Set(
+        versions.flatMap((version) => {
+          const group =
+            version.versionGroupId &&
+            (resourceIdMap.get(version.versionGroupId) ?? version.versionGroupId)
+          return group && existingResourceIds.has(group) ? [group] : []
+        }),
+      ),
+    ]
     const versionKeys = new Set(
-      existingResources.length ? await this.storage.listRestoreVersionKeys?.() : [],
+      versionGroups.length ? await this.storage.listRestoreVersionKeys?.(versionGroups) : [],
     )
     const versionsToRestore: Resource[] = []
     for (const version of versions) {
@@ -746,7 +833,10 @@ export class RestoreService {
       galleryOwners: existingGalleryOwners(resources, normalizedResources, resourceIdMap),
       versions: versionsToRestore,
       categories: categoriesToCreate,
-      portableData: remapReaderPortableData(portableData, resourceIdMap),
+      portableData: remapReaderPortableData(portableData, resourceIdMap, categoryIdMap),
+      communitySourceData: portableData.communitySources
+        ? remapCommunitySourceBackupBindings(portableData.communitySources.data, resourceIdMap)
+        : undefined,
     }
   }
 
@@ -759,9 +849,10 @@ export class RestoreService {
     existingCategories: Category[],
     fileName: string,
   ): Promise<PreparedNativeStructuredRestore> {
+    const placeholder = structuredPlaceholderMapper()
     const prepared = await this.prepareStructured(
-      resources.map(structuredPlaceholder),
-      versions.map(structuredPlaceholder),
+      resources.map(placeholder),
+      versions.map(placeholder),
       categories,
       portableData,
       existingResources,
@@ -792,10 +883,12 @@ export class RestoreService {
     existingResources: ResourceSummary[],
     existingCategories: Category[],
     fileName: string,
+    options: StructuredRestoreOptions = {},
   ): Promise<RestoreReport & { portableData?: ArchivePortableData }> {
+    const placeholder = structuredPlaceholderMapper()
     const prepared = await this.prepareStructured(
-      snapshot.resources.map(structuredPlaceholder),
-      snapshot.versions.map(structuredPlaceholder),
+      snapshot.resources.map(placeholder),
+      snapshot.versions.map(placeholder),
       snapshot.categories,
       snapshot.portableData,
       existingResources,
@@ -824,8 +917,57 @@ export class RestoreService {
       }
       return hydrated
     }
-    const report = await this.restore(prepared, async (resource) => {
-      const hydrated = await materialize(resource)
+    const queue = [...prepared.resources, ...prepared.versions]
+    const queueIndexes = new Map(queue.map((record, index) => [record, index]))
+    const concurrency = Math.max(1, Math.min(3, Math.floor(options.concurrency ?? 3)))
+    const byteLimit = Math.max(1, options.maxPreparedBytes ?? 32 * 1024 * 1024)
+    const pending = new Map<
+      Resource,
+      { promise: Promise<Resource>; bytes: number; index: number }
+    >()
+    let next = 0
+    let retainedBytes = 0
+    let stopped = false
+    let firstFailure: unknown
+    const prepare = async (resource: Resource): Promise<Resource> => {
+      options.signal?.throwIfAborted()
+      if (firstFailure) throw firstFailure
+      const index = queueIndexes.get(resource)
+      if (index === undefined) throw new Error('云恢复准备项不在当前计划中')
+      // A new hydration request means the preceding body has been cloned to staging.
+      for (const [record, entry] of pending) {
+        if (entry.index < index) {
+          retainedBytes -= entry.bytes
+          pending.delete(record)
+        }
+      }
+      while (!stopped && next < queue.length && pending.size < concurrency) {
+        options.signal?.throwIfAborted()
+        const record = queue[next]!
+        const bytes = Math.max(0, record.fileSize)
+        // Persona cover preparation has a dependent avatar; keep that step alone.
+        if (
+          pending.size &&
+          (retainedBytes + bytes > byteLimit ||
+            record.type === RESOURCE_TYPE.USER_PERSONA ||
+            [...pending.keys()].some((r) => r.type === RESOURCE_TYPE.USER_PERSONA))
+        )
+          break
+        const promise = materialize(record).catch((error: unknown) => {
+          stopped = true
+          firstFailure ??= error
+          options.onFailure?.(error)
+          throw error
+        })
+        void promise.catch(() => undefined)
+        pending.set(record, { promise, bytes, index: next++ })
+        retainedBytes += bytes
+      }
+      const entry = pending.get(resource)
+      if (!entry) throw firstFailure ?? new Error('云恢复准备队列与写入顺序不一致')
+      const hydrated = await entry.promise
+      options.signal?.throwIfAborted()
+      if (firstFailure) throw firstFailure
       if (resource.type === RESOURCE_TYPE.USER_PERSONA) {
         const avatars = (resource.relatedResourceIds ?? []).flatMap((id) => {
           const candidate = plannedById.get(id)
@@ -838,8 +980,70 @@ export class RestoreService {
         if (cover) hydrated.thumbnailBlob = (await materialize(cover)).thumbnailBlob
       }
       return hydrated
+    }
+    try {
+      await this.restoreStructuredAlbum(prepared.portableData, readObject, options.signal)
+      await this.restoreStructuredCommunityAttachments(
+        prepared.portableData,
+        readObject,
+        options.signal,
+      )
+      const report = await this.restore(prepared, prepare, (progress) => {
+        if (progress.phase === 'prepare') options.signal?.throwIfAborted()
+        options.onProgress?.(progress)
+      })
+      return {
+        ...report,
+        portableData: prepared.portableData,
+        restoredCommunityAttachments:
+          prepared.portableData?.communitySources?.attachments.length ??
+          report.restoredCommunityAttachments,
+      }
+    } catch (error) {
+      stopped = true
+      const failure = firstFailure ?? error
+      options.onFailure?.(failure)
+      throw failure
+    } finally {
+      stopped = true
+      await Promise.allSettled([...pending.values()].map((entry) => entry.promise))
+      pending.clear()
+    }
+  }
+
+  async restoreStructuredAlbum(
+    data: ArchivePortableData | undefined,
+    readObject: (object: GitHubBundleManifest) => Promise<Blob>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!data?.generatedImageAlbum?.length) return
+    if (!this.albumOwner) throw new Error('当前恢复服务没有接入生图相册')
+    await this.albumOwner.importPortableState(
+      parseAlbumBackup(data.generatedImageAlbum),
+      (entry) => readObject(entry.object!),
+      signal,
+    )
+  }
+
+  private async restoreAlbumArchive(prepared: PreparedRestore): Promise<void> {
+    if (!prepared.portableData?.generatedImageAlbum?.length || !prepared.staging) return
+    await this.restoreStructuredAlbum(prepared.portableData, async (object) => {
+      const entry = await this.staging.get(
+        prepared.staging!.jobId,
+        albumArchivePath(object.totalSha256),
+      )
+      if (!entry) throw new Error('备份缺少相册原图')
+      return entry.blob
     })
-    return { ...report, portableData: prepared.portableData }
+  }
+
+  async restoreStructuredCommunityAttachments(
+    data: ArchivePortableData | undefined,
+    _readObject: (object: GitHubBundleManifest) => Promise<Blob>,
+    _signal?: AbortSignal,
+  ): Promise<void> {
+    if (data?.communitySources?.attachments.length)
+      throw new Error('当前恢复服务没有接入 Discord 附件存储')
   }
 
   private async validateSecrets(
@@ -868,6 +1072,7 @@ export class RestoreService {
     hydrate?: (resource: Resource) => Promise<Resource>,
     onProgress?: (progress: ArchiveRestoreProgress) => void,
   ): Promise<RestoreReport> {
+    await this.restoreAlbumArchive(prepared)
     const session = await prepared.openFiles?.()
     hydrate ??= session?.hydrate
     let restored = false
@@ -896,6 +1101,15 @@ export class RestoreService {
     }
     return {
       restoredResources: prepared.resources.length,
+      resourceIds: [
+        ...new Set([
+          ...prepared.resources.map((resource) => resource.id),
+          ...prepared.versions.flatMap((version) =>
+            version.versionGroupId ? [version.versionGroupId] : [],
+          ),
+        ]),
+      ],
+      categoriesChanged: prepared.categories.length > 0,
       restoredVersions: prepared.versions.length,
       skippedDuplicates: prepared.preview.duplicatesToSkip,
       preservedConflicts: prepared.preview.conflictsToPreserve,
@@ -947,6 +1161,15 @@ export class RestoreService {
     }
     return {
       restoredResources: prepared.resources.length,
+      resourceIds: [
+        ...new Set([
+          ...prepared.resources.map((resource) => resource.id),
+          ...prepared.versions.flatMap((version) =>
+            version.versionGroupId ? [version.versionGroupId] : [],
+          ),
+        ]),
+      ],
+      categoriesChanged: prepared.categories.length > 0,
       restoredVersions: prepared.versions.length,
       skippedDuplicates: prepared.preview.duplicatesToSkip,
       preservedConflicts: prepared.preview.conflictsToPreserve,
@@ -965,6 +1188,7 @@ export class RestoreService {
     if (prepared.preview.duplicatesToSkip || prepared.preview.categoriesToReuse) {
       throw new Error('整库覆盖需要完整备份计划，请重新预检备份')
     }
+    await this.restoreAlbumArchive(prepared)
     const session = await prepared.openFiles?.()
     let replaced = false
     try {

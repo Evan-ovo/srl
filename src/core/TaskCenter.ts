@@ -1,3 +1,5 @@
+import { acquireWebBackgroundAudio } from '../services/WebBackgroundKeepAlive'
+
 export type TaskStatus = 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface TaskTransferProgress {
@@ -23,6 +25,8 @@ export interface TaskRecord {
   cancelable: boolean
   retryable?: boolean
   actionLabel?: string
+  actionRequired?: boolean
+  /** Indicates an automatically scheduled/background-origin task, not whether Android may keep it running when unfocused. */
   background: boolean
   status: TaskStatus
   error?: string
@@ -36,10 +40,22 @@ export interface StartTaskOptions {
   phase?: string
   cancelable?: boolean
   background?: boolean
+  /** Temporary web media retention for actual work, never for restored terminal cards. */
+  keepAlive?: boolean
   /** A returned Promise acknowledges the owner's safe stop; synchronous return values stay ignored. */
   cancel?: () => unknown
   retry?: () => Promise<unknown>
-  action?: { label: string; run: () => void | Promise<void> }
+  action?: { label: string; run: () => void | Promise<void>; required?: boolean }
+}
+
+export const COMPLETED_TASK_RETENTION_MS = 5_000
+
+export function isAutoClearingTask(task: TaskRecord): boolean {
+  return (
+    (task.status === 'completed' || task.status === 'cancelled') &&
+    task.phase !== '下载完成，可继续导入' &&
+    (!task.actionLabel || task.actionRequired === false)
+  )
 }
 
 export class TaskCenter {
@@ -53,11 +69,18 @@ export class TaskCenter {
   private readonly transferSamples = new Map<string, Array<{ at: number; bytes: number }>>()
   private readonly transferPublishedAt = new Map<string, number>()
   private readonly retrying = new Set<string>()
+  private readonly completedCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly keepAliveReleases = new Map<string, () => void>()
 
   start(options: StartTaskOptions): string {
     const operationId = options.operationId ?? crypto.randomUUID()
     const now = Date.now()
+    const release = options.keepAlive ? acquireWebBackgroundAudio() : undefined
+    this.keepAliveReleases.get(operationId)?.()
+    this.keepAliveReleases.delete(operationId)
+    if (release) this.keepAliveReleases.set(operationId, release)
     this.clearTransfer(operationId)
+    this.clearCompletedCleanup(operationId)
     this.tasks.set(operationId, {
       operationId,
       name: options.name,
@@ -65,6 +88,7 @@ export class TaskCenter {
       cancelable: options.cancelable === true,
       retryable: typeof options.retry === 'function',
       actionLabel: options.action?.label,
+      actionRequired: options.action ? options.action.required !== false : false,
       background: options.background === true,
       status: 'running',
       startedAt: now,
@@ -193,6 +217,8 @@ export class TaskCenter {
     if (!task || !handlers) return
     handlers.action = action
     task.actionLabel = action?.label
+    task.actionRequired = action ? action.required !== false : false
+    this.scheduleCompletedCleanup(task)
     this.publish()
   }
 
@@ -243,18 +269,20 @@ export class TaskCenter {
     this.tasks.delete(operationId)
     this.actions.delete(operationId)
     this.clearTransfer(operationId)
+    this.clearCompletedCleanup(operationId)
     this.publish()
   }
 
   dismissCompleted(): void {
     const completed = [...this.tasks.values()]
-      .filter((task) => task.status === 'completed' && task.phase !== '下载完成，可继续导入')
+      .filter(isAutoClearingTask)
       .map((task) => task.operationId)
     if (!completed.length) return
     for (const operationId of completed) {
       this.tasks.delete(operationId)
       this.actions.delete(operationId)
       this.clearTransfer(operationId)
+      this.clearCompletedCleanup(operationId)
     }
     this.publish()
   }
@@ -275,8 +303,31 @@ export class TaskCenter {
       updatedAt: Date.now(),
       progress: status === 'completed' ? 1 : task.progress,
     })
+    this.keepAliveReleases.get(operationId)?.()
+    this.keepAliveReleases.delete(operationId)
     this.clearTransfer(operationId)
+    this.scheduleCompletedCleanup(task)
     this.publish()
+  }
+
+  private scheduleCompletedCleanup(task: TaskRecord): void {
+    this.clearCompletedCleanup(task.operationId)
+    if (!isAutoClearingTask(task)) return
+    const updatedAt = task.updatedAt
+    this.completedCleanupTimers.set(
+      task.operationId,
+      setTimeout(() => {
+        const current = this.tasks.get(task.operationId)
+        if (current === task && isAutoClearingTask(current) && current.updatedAt === updatedAt)
+          this.dismiss(task.operationId)
+      }, COMPLETED_TASK_RETENTION_MS),
+    )
+  }
+
+  private clearCompletedCleanup(operationId: string): void {
+    const timer = this.completedCleanupTimers.get(operationId)
+    if (timer !== undefined) clearTimeout(timer)
+    this.completedCleanupTimers.delete(operationId)
   }
 
   private clearTransfer(operationId: string): void {

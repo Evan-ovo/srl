@@ -19,6 +19,7 @@ export interface PlatformInfo {
 
 interface NativePlatformApi {
   getInfo(): Promise<Omit<PlatformInfo, 'kind'>>
+  clearLocalData(options: { confirmation: string }): Promise<void>
 }
 
 const nativePlatform = registerPlugin<NativePlatformApi>('NativePlatform')
@@ -62,6 +63,18 @@ export function requirePlatformCapability(info: PlatformInfo, capability: string
  * 实现打进启动路径；Feature 只依赖这个稳定门面，不自行判断 Capacitor 环境。
  */
 export const platform = {
+  maintenance: {
+    async clearLocalData(confirmation: string): Promise<void> {
+      if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android')
+        throw new Error('本接口仅用于 Android 应用数据清理')
+      const info = await getPlatformInfo()
+      if (!info.capabilities.includes('clear-app-user-data-v1'))
+        throw new Error(
+          '当前 APK 未提供完整数据清理接口。请更新 APK，或在 Android 系统设置 → 应用 → SRL → 存储中清除数据。未改用网页清理。',
+        )
+      await nativePlatform.clearLocalData({ confirmation })
+    },
+  },
   capabilities: {
     getInfo: getPlatformInfo,
     require: requirePlatformCapability,
@@ -112,8 +125,8 @@ export const platform = {
     async chooseDirectory() {
       return (await import('./NativeSafBackup')).chooseNativeSafBackupDirectory()
     },
-    async clearDirectory(): Promise<void> {
-      await (await import('./NativeSafBackup')).clearNativeSafBackupDirectory()
+    async clearDirectory() {
+      return (await import('./NativeSafBackup')).clearNativeSafBackupDirectory()
     },
     async openWriter(fileName: string) {
       return (await import('./NativeSafBackup')).openNativeSafBackupWriter(fileName)

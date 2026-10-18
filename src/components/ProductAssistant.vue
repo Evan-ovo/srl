@@ -543,7 +543,11 @@ async function executeChatOperation(
   if (reply.action === 'run-page-script') {
     if (!workspace.preferences().allowPageScripts)
       throw new Error('页面脚本权限已关闭，请在小助手设置中开启后再运行。')
-    const result = await runAssistantPageScript(reply.code, signal)
+    const result = await runAssistantPageScript(
+      reply.code,
+      signal,
+      () => workspace.preferences().allowPageScripts === true,
+    )
     return {
       text: reply.answer,
       status: '页面脚本已运行',
@@ -668,6 +672,8 @@ async function executeChatOperation(
       props.getContext,
       props.navigate,
       props.captureReference,
+      () => apiConfig ?? workspace.config(mainApiService.getConfig()),
+      () => workspace.preferences().allowScreenshots !== false,
     )
   if (reply.action === 'custom-tools')
     return executeCustomTool(

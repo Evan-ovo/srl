@@ -10,6 +10,7 @@ import { downloadBlob } from '../utils/LibraryFormatting'
 import { confirmAction } from '../composables/UseConfirmDialog'
 import PocketPhoneContents from './PocketPhoneContents.vue'
 import PocketPhoneIconPicker from './PocketPhoneIconPicker.vue'
+import { EXTRA_STORY_TEXT_ACCEPT, extractExtraStoryText } from '../parser/ExtraStoryText'
 
 const props = defineProps<{
   kind: PersonalResourceKind
@@ -62,6 +63,8 @@ async function readPhoneFile(path: string): Promise<Blob> {
 const apkInput = useTemplateRef<HTMLInputElement>('apkInput')
 const sourceInput = useTemplateRef<HTMLInputElement>('sourceInput')
 const folderInput = useTemplateRef<HTMLInputElement>('folderInput')
+const extraTextInput = useTemplateRef<HTMLInputElement>('extraTextInput')
+const importLifetime = new AbortController()
 const password = ref('')
 const passwordExists = ref(true)
 const sessionReady = ref(false)
@@ -179,9 +182,44 @@ function lock(clearSession = false) {
 }
 
 onBeforeUnmount(() => {
+  importLifetime.abort()
   lock()
   files.clear()
 })
+
+async function importExtraText(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || busy.value) return
+  busy.value = true
+  status.value = '正在提取正文…'
+  try {
+    const text = await extractExtraStoryText(file, importLifetime.signal)
+    if (
+      draft.value.text &&
+      !(await confirmAction({
+        title: '替换现有番外正文？',
+        message: `将使用“${file.name}”提取的文字替换当前正文，保存后才写入资源。`,
+        confirmLabel: '替换正文',
+        cancelLabel: '保留当前正文',
+      }))
+    ) {
+      status.value = ''
+      return
+    }
+    if (importLifetime.signal.aborted) return
+    draft.value.text = text
+    if (!draft.value.name.trim())
+      draft.value.name = file.name.replace(/\.[^.]+$/u, '').slice(0, 160)
+    status.value = `已提取 ${text.length} 字符，可编辑后保存`
+  } catch (error) {
+    if (!importLifetime.signal.aborted)
+      status.value = error instanceof Error ? error.message : '正文提取失败'
+  } finally {
+    busy.value = false
+  }
+}
 
 async function unlock(biometric = false) {
   busy.value = true
@@ -374,16 +412,34 @@ async function exportPlain() {
                 ><span>名称</span
                 ><input v-model="draft.name" class="field__control" maxlength="160" required
               /></label>
-              <label v-if="kind === 'extraStory'" class="field">
-                <span>番外指令</span>
+              <div v-if="kind === 'extraStory'" class="field">
+                <div class="personal-resource-editor__text-heading">
+                  <label for="personal-extra-text">番外指令</label>
+                  <button
+                    class="button button--quiet personal-resource-editor__import"
+                    type="button"
+                    @click="extraTextInput?.click()"
+                  >
+                    导入 TXT/Word
+                  </button>
+                </div>
+                <input
+                  ref="extraTextInput"
+                  type="file"
+                  hidden
+                  :accept="EXTRA_STORY_TEXT_ACCEPT"
+                  aria-label="导入 TXT/Word 文件"
+                  @change="importExtraText"
+                />
                 <textarea
+                  id="personal-extra-text"
                   v-model="draft.text"
                   class="field__control"
                   rows="8"
                   required
                   placeholder="粘贴想保存、下次复制使用的番外指令"
                 />
-              </label>
+              </div>
               <template v-if="kind === 'pocketPhone'">
                 <label class="field"
                   ><span>访问网址</span

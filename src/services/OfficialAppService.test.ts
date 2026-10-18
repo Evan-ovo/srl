@@ -7,6 +7,22 @@ import type { OfficialAppPackageStorage } from '../storage/OfficialAppPackageSto
 import type { InstalledOfficialApp, OfficialAppId, OfficialAppPackage } from '../types/OfficialApp'
 
 describe('official APP package lifecycle', () => {
+  it('shares concurrent catalog requests but fetches fresh data after completion or failure', async () => {
+    const { service, fetcher } = await fixture()
+    const original = fetcher.getMockImplementation()!
+    let finish!: (response: Response) => void
+    fetcher.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)))
+    const first = service.catalog()
+    const second = service.catalog()
+    finish(await original('https://library.test/catalog.json'))
+    expect(await first).toEqual(await second)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    fetcher.mockRejectedValueOnce(new Error('offline'))
+    await expect(service.catalog()).rejects.toThrow('offline')
+    await expect(service.catalog()).resolves.toMatchObject({ schemaVersion: 1 })
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
   it('excludes retired installed APPs without deleting their records or files', async () => {
     const { service } = await fixture()
     await service.install('draw')

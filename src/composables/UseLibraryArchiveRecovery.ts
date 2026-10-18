@@ -1,3 +1,4 @@
+import { requestWebBackgroundAudio } from '../services/WebBackgroundKeepAlive'
 import type { LibraryArchiveContext } from './UseLibraryArchive'
 import type { RestoreRecoveryTask, ExportRecoveryTask } from '../services/ArchiveRecoveryService'
 
@@ -164,7 +165,9 @@ export async function resumeRestoreTask(
   if (operations.recovering.size || context.isRestoring.value) return
   operations.recovering.add(id)
   let ownsRestoreBusy = false
+  let releaseAudio = () => undefined as void
   try {
+    releaseAudio = await requestWebBackgroundAudio('继续导入备份')
     await initializeVaultOnce()
     const task = (await archiveRecoveryService.store.read(id)) as RestoreRecoveryTask | undefined
     if (!task || task.kind !== 'restore') return
@@ -217,6 +220,7 @@ export async function resumeRestoreTask(
   } catch (error) {
     operations.getContext().showNotice(error instanceof Error ? error.message : '恢复任务无法继续')
   } finally {
+    releaseAudio()
     if (ownsRestoreBusy) context.isRestoring.value = false
     operations.recovering.delete(id)
   }

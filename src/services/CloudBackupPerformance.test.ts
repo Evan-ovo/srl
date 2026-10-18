@@ -9,6 +9,7 @@ import { JSDOM } from 'jsdom'
 import type { CreatedStructuredSnapshot } from './CloudStructuredSnapshot'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CloudBackupTransport } from './CloudBackupTransport'
+import { hashCloudBlob } from './CloudArchiveCodec'
 import { CloudBackupMetricsTracker } from './CloudBackupMetrics'
 import type { GitHubBackupConfig } from '../types/CloudBackup'
 import type { GitHubBundleManifest } from './GitHubBackupBundle'
@@ -24,6 +25,17 @@ const config: GitHubBackupConfig = {
   repository: 'backups',
   autoBackup: false,
   retention: 7,
+}
+const proxyJson = (value: unknown) =>
+  new Response(JSON.stringify(value), { headers: { 'x-srl-cloud-proxy': '1' } })
+const proxyResponse = (body: BodyInit | null, init?: ResponseInit) => {
+  const headers = new Headers(init?.headers)
+  headers.set('x-srl-cloud-proxy', '1')
+  return new Response(body, { ...init, headers })
+}
+const upstreamUrl = (target: string | URL) => {
+  const requestUrl = new URL(String(target), 'https://srl.example')
+  return new URL(requestUrl.searchParams.get('url') ?? requestUrl.toString())
 }
 class Probe extends CloudBackupTransport {
   constructor() {
@@ -73,8 +85,17 @@ class Probe extends CloudBackupTransport {
     return this.confirmGitHubAssetSize(
       config,
       'fixture',
-      { id: 1, name: 'manifest', size: 10, state: 'uploaded', url: '', created_at: '' },
+      {
+        id: 1,
+        name: 'manifest',
+        size: 10,
+        digest: `sha256:${'a'.repeat(64)}`,
+        state: 'uploaded',
+        url: '',
+        created_at: '',
+      },
       10,
+      'a'.repeat(64),
     )
   }
   remove(id: number) {
@@ -223,28 +244,24 @@ describe('Koofr list failures', () => {
 })
 describe('cloud inventory reuse', () => {
   it('finds sorted object containers from one release-list request, including gaps', async () => {
-    const fetch = vi.fn(
-      async (_url: RequestInfo | URL) =>
-        new Response(
-          JSON.stringify([
-            { id: 3, tag_name: 'srl-cloud-objects-0003', assets: [] },
-            { id: 9, tag_name: 'unrelated', assets: [] },
-            { id: 1, tag_name: 'srl-cloud-objects-0001', assets: [] },
-          ]),
-        ),
+    const fetch = vi.fn(async (_url: RequestInfo | URL) =>
+      proxyJson([
+        { id: 3, tag_name: 'srl-cloud-objects-0003', assets: [] },
+        { id: 9, tag_name: 'unrelated', assets: [] },
+        { id: 1, tag_name: 'srl-cloud-objects-0001', assets: [] },
+      ]),
     )
     vi.stubGlobal('fetch', fetch)
     expect((await new Probe().listContainers()).map((item) => item.id)).toEqual([1, 3])
     expect(fetch).toHaveBeenCalledOnce()
-    expect(String(fetch.mock.calls[0]?.[0])).toContain('/releases?per_page=10&page=1')
+    expect(upstreamUrl(String(fetch.mock.calls[0]?.[0])).pathname).toContain('/releases')
+    expect(upstreamUrl(String(fetch.mock.calls[0]?.[0])).search).toBe('?per_page=10&page=1')
   })
   it('keeps several container inventories, updates deletions and invalidates a different destination', async () => {
     const fetch = vi.fn(async (_url: string, init?: RequestInit) =>
       init?.method === 'DELETE'
-        ? new Response(null, { status: 204 })
-        : new Response(
-            JSON.stringify([{ id: 1, name: 'object', size: 10, url: '', created_at: '' }]),
-          ),
+        ? proxyResponse(null, { status: 204 })
+        : proxyJson([{ id: 1, name: 'object', size: 10, url: '', created_at: '' }]),
     )
     vi.stubGlobal('fetch', fetch)
     const probe = new Probe()
@@ -282,6 +299,7 @@ describe('retention waits and deletion boundaries', () => {
         { id: 'kept', kind: 'githubSnapshot', objectKey: 'kept' },
       ]),
       readGitHubStructuredSnapshot: vi.fn(async () => ({
+        portableData: { version: 1 },
         resources: [
           {
             object: {
@@ -540,12 +558,12 @@ describe('bounded remote preparation', () => {
       peak = Math.max(peak, active)
       await barrier
       active -= 1
-      const path = new URL(target).pathname
+      const path = upstreamUrl(target).pathname
       if (path.includes('/tags/')) {
-        return Response.json({ id: Number(path.slice(-4)), tag_name: path.split('/').at(-1) })
+        return proxyJson({ id: Number(path.slice(-4)), tag_name: path.split('/').at(-1) })
       }
       const id = Number(/releases\/(\d+)/u.exec(path)![1])
-      return Response.json([{ id, name: `part-${id}`, size: 1, url: '', created_at: '' }])
+      return proxyJson([{ id, name: `part-${id}`, size: 1, url: '', created_at: '' }])
     })
     vi.stubGlobal('fetch', fetch)
     const parts = [1, 2, 3, 4, 1].map((id) => ({
@@ -583,30 +601,35 @@ describe('bounded remote preparation', () => {
       release = resolve
     })
     const listingPages: number[] = []
+    let uploadedManifest: Record<string, unknown> | undefined
     vi.stubGlobal(
       'fetch',
       vi.fn(async (target: string, init?: RequestInit) => {
-        const url = new URL(target)
+        const url = upstreamUrl(target)
         if (url.pathname.endsWith('/releases/tags/srl-cloud-snapshots'))
-          return Response.json({ id: 100, tag_name: 'srl-cloud-snapshots', assets: [] })
+          return proxyJson({ id: 100, tag_name: 'srl-cloud-snapshots', assets: [] })
         if (url.pathname.endsWith('/releases')) {
           const page = Number(url.searchParams.get('page'))
           listingPages.push(page)
-          return Response.json(containers.slice((page - 1) * 10, page * 10))
+          return proxyJson(containers.slice((page - 1) * 10, page * 10))
         }
-        if (init?.method === 'POST')
-          return Response.json({
+        if (init?.method === 'POST') {
+          const body = init.body as Blob
+          uploadedManifest = {
             id: 1000,
             name: url.searchParams.get('name'),
-            size: (init.body as Blob).size,
+            size: body.size,
+            digest: `sha256:${await hashCloudBlob(body)}`,
             state: 'uploaded',
             created_at: new Date().toISOString(),
-          })
+          }
+          return proxyJson(uploadedManifest)
+        }
         active += 1
         peak = Math.max(peak, active)
         await barrier
         active -= 1
-        return Response.json([])
+        return proxyJson([])
       }),
     )
     const snapshot: CreatedStructuredSnapshot = {

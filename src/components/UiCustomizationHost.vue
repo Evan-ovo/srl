@@ -2,7 +2,7 @@
 import recoveryCss from '../styles/RecoveryControls.css?inline'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { appearanceScopes } from '../core/AppearanceScopes'
-import { createProtectedHost } from '../core/AppearanceSafety'
+import { appearanceTransaction, createProtectedHost } from '../core/AppearanceSafety'
 import { installUiRecoveryGesture } from '../core/UiRecoveryGesture'
 import { BrowserStorageService } from '../services/BrowserStorageService'
 import { createUiDomSession, UI_PRIVATE_SELECTOR } from '../services/UiViewDom'
@@ -22,6 +22,13 @@ const state = shallowRef<UiViewSnapshot>({ html: '', controls: [], theme: 'light
 const css = ref('')
 const ready = ref(false)
 const failed = ref(false)
+const hostScrollHeight = ref<number | null>(null)
+const hostViewportHeight = ref(0)
+const hostSurfaceHeight = computed(() =>
+  hostScrollHeight.value === null
+    ? null
+    : Math.max(hostViewportHeight.value, Math.ceil(hostScrollHeight.value)),
+)
 const view = computed(() => (scope.value ? props.views[scope.value] : undefined))
 let session: ReturnType<typeof createUiDomSession> | undefined
 let observer: MutationObserver | undefined
@@ -33,15 +40,34 @@ let rescue: HTMLDivElement | undefined
 let stopRecoveryGesture: (() => void) | undefined
 let disposed = false
 let queued = false
-const nativeStyles = new Map<HTMLElement, string | null>()
+const nativeStyles = new Map<HTMLElement, { attribute: string | null; clipPath: string }>()
 const nativeAnchors = new Map<HTMLElement, HTMLElement>()
 let nativePlacements: UiNativePlacement[] = []
 let originalPosition: { value: string; priority: string } | undefined
+let originalScroll: { top: number; left: number } | undefined
+
+function applyLayout(height: number | null) {
+  if (!root.value) return
+  if (height !== null) {
+    originalScroll ??= { top: root.value.scrollTop, left: root.value.scrollLeft }
+    root.value.dataset.srlCustomScroll = 'host'
+    hostViewportHeight.value = root.value.clientHeight
+    hostScrollHeight.value = height
+  } else {
+    delete root.value.dataset.srlCustomScroll
+    hostScrollHeight.value = null
+    if (originalScroll) {
+      root.value.scrollTop = originalScroll.top
+      root.value.scrollLeft = originalScroll.left
+      originalScroll = undefined
+    }
+  }
+}
 
 function restoreNative() {
-  for (const [node, style] of nativeStyles) {
-    if (style === null) node.removeAttribute('style')
-    else node.setAttribute('style', style)
+  for (const [node, saved] of nativeStyles) {
+    if (saved.attribute === null) node.removeAttribute('style')
+    else node.setAttribute('style', saved.attribute)
   }
   nativeStyles.clear()
   for (const anchor of nativeAnchors.values()) anchor.remove()
@@ -49,28 +75,44 @@ function restoreNative() {
 }
 function placeNative(regions: UiNativePlacement[]) {
   if (!ready.value || !root.value || failed.value) return
+  regions = regions.filter(
+    (region) =>
+      region &&
+      typeof region.id === 'string' &&
+      [region.top, region.left, region.width, region.height].every(Number.isFinite) &&
+      region.width >= 0 &&
+      region.height >= 0 &&
+      (region.visibleRects === undefined ||
+        (Array.isArray(region.visibleRects) &&
+          region.visibleRects.every(
+            (rect) =>
+              rect &&
+              [rect.top, rect.left, rect.width, rect.height].every(Number.isFinite) &&
+              rect.width >= 0 &&
+              rect.height >= 0,
+          ))),
+  )
   nativePlacements = regions
   const box = root.value.getBoundingClientRect()
+  const scrollTop = hostScrollHeight.value === null ? 0 : root.value.scrollTop
+  const scrollLeft = hostScrollHeight.value === null ? 0 : root.value.scrollLeft
   const used = new Set(regions.map((region) => session?.native(region.id)))
-  for (const [node, style] of nativeStyles)
+  for (const [node, saved] of nativeStyles)
     if (!used.has(node)) {
-      if (style === null) node.removeAttribute('style')
-      else node.setAttribute('style', style)
+      if (saved.attribute === null) node.removeAttribute('style')
+      else node.setAttribute('style', saved.attribute)
       nativeStyles.delete(node)
       nativeAnchors.get(node)?.remove()
       nativeAnchors.delete(node)
     }
   for (const region of regions) {
-    if (
-      !region ||
-      typeof region.id !== 'string' ||
-      ![region.top, region.left, region.width, region.height].every(Number.isFinite)
-    )
-      continue
     const node = session?.native(region.id)
     if (!node) continue
     if (!nativeStyles.has(node)) {
-      nativeStyles.set(node, node.getAttribute('style'))
+      nativeStyles.set(node, {
+        attribute: node.getAttribute('style'),
+        clipPath: node.style.clipPath,
+      })
       const anchor = document.createElement('div')
       anchor.dataset.srlNativeAnchor = ''
       const computed = getComputedStyle(node)
@@ -86,12 +128,24 @@ function placeNative(regions: UiNativePlacement[]) {
       node.before(anchor)
       nativeAnchors.set(node, anchor)
     }
+    const pieces = region.visibleRects
+    const fullyVisible =
+      pieces?.length === 1 &&
+      pieces[0]!.left === 0 &&
+      pieces[0]!.top === 0 &&
+      pieces[0]!.width === region.width &&
+      pieces[0]!.height === region.height
+    const clipPath =
+      pieces && !fullyVisible && pieces.length
+        ? `path('${pieces.map((rect) => `M${rect.left} ${rect.top}h${rect.width}v${rect.height}h${-rect.width}Z`).join(' ')}')`
+        : nativeStyles.get(node)!.clipPath
     const styles: Record<string, string> = {
       position: 'absolute',
       width: `${Math.max(0, region.width)}px`,
       height: `${Math.max(0, region.height)}px`,
-      visibility: 'visible',
+      visibility: pieces?.length === 0 ? 'hidden' : 'visible',
       zIndex: '21',
+      clipPath,
     }
     if (node.matches('img, .fa-solid, .fa-regular, .fa-brands, .fa-duotone'))
       styles.pointerEvents = 'none'
@@ -106,14 +160,17 @@ function placeNative(regions: UiNativePlacement[]) {
           value,
         )
     const placed = node.getBoundingClientRect()
-    const top = (Number.parseFloat(node.style.top) || 0) + box.top + region.top - placed.top
-    const left = (Number.parseFloat(node.style.left) || 0) + box.left + region.left - placed.left
-    if (Math.abs(placed.top - box.top - region.top) > 0.5) node.style.top = `${top}px`
-    if (Math.abs(placed.left - box.left - region.left) > 0.5) node.style.left = `${left}px`
+    const targetTop = box.top + region.top - scrollTop
+    const targetLeft = box.left + region.left - scrollLeft
+    const top = (Number.parseFloat(node.style.top) || 0) + targetTop - placed.top
+    const left = (Number.parseFloat(node.style.left) || 0) + targetLeft - placed.left
+    if (Math.abs(placed.top - targetTop) > 0.5) node.style.top = `${top}px`
+    if (Math.abs(placed.left - targetLeft) > 0.5) node.style.left = `${left}px`
   }
 }
 
 function restore() {
+  applyLayout(null)
   if (root.value?.classList.contains('srl-ui-controller-hidden'))
     root.value.classList.remove('srl-ui-controller-hidden')
   if (originalPosition && root.value) {
@@ -128,7 +185,13 @@ function restore() {
 }
 function updatePosition() {
   if (!root.value) return
+  hostViewportHeight.value = root.value.clientHeight
   if (nativePlacements.length) placeNative(nativePlacements)
+}
+function updateScrolledPosition(event: Event) {
+  // Shared-container scrolling moves both layers in the compositor; no position chase is needed.
+  if (hostScrollHeight.value !== null && event.target === root.value) return
+  updatePosition()
 }
 function hideController() {
   if (!ready.value || failed.value) {
@@ -161,6 +224,7 @@ function revealRecovery() {
 }
 function disableCurrent() {
   if (!scope.value) return
+  if (appearanceTransaction.disablePreviewView(scope.value)) return
   const storage = new BrowserStorageService()
   const saved = storage.getCustomUiViews()
   if (saved[scope.value]) saved[scope.value]!.enabled = false
@@ -321,7 +385,7 @@ onMounted(() => {
   })
   window.addEventListener(APPLIED_CSS_CHANGED_EVENT, refreshStyles)
   window.addEventListener('resize', updatePosition)
-  window.addEventListener('scroll', updatePosition, true)
+  window.addEventListener('scroll', updateScrolledPosition, true)
   window.addEventListener('keydown', escape)
   locate()
 })
@@ -336,7 +400,7 @@ onBeforeUnmount(() => {
   sizeObserver?.disconnect()
   window.removeEventListener(APPLIED_CSS_CHANGED_EVENT, refreshStyles)
   window.removeEventListener('resize', updatePosition)
-  window.removeEventListener('scroll', updatePosition, true)
+  window.removeEventListener('scroll', updateScrolledPosition, true)
   window.removeEventListener('keydown', escape)
 })
 </script>
@@ -349,6 +413,11 @@ onBeforeUnmount(() => {
       data-srl-custom-surface
       class="srl-custom-ui-surface"
       :class="{ 'is-ready': ready }"
+      :style="
+        hostSurfaceHeight === null
+          ? undefined
+          : { height: `${hostSurfaceHeight}px`, bottom: 'auto' }
+      "
     >
       <CustomUiFrame
         :view="view"
@@ -360,6 +429,7 @@ onBeforeUnmount(() => {
         @ready="ready = true"
         @error="failCurrent"
         @native="placeNative"
+        @layout="applyLayout"
       />
     </div>
   </Teleport>
@@ -367,6 +437,19 @@ onBeforeUnmount(() => {
 
 <style>
 .srl-ui-controller-hidden {
+  visibility: hidden;
+}
+/* The iframe and original native elements must share the compositor's scroll layer. */
+.srl-ui-controller-hidden[data-srl-custom-scroll='host'] {
+  visibility: visible;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-width: none;
+}
+.srl-ui-controller-hidden[data-srl-custom-scroll='host']::-webkit-scrollbar {
+  display: none;
+}
+.srl-ui-controller-hidden[data-srl-custom-scroll='host'] > :where(:not([data-srl-custom-surface])) {
   visibility: hidden;
 }
 .srl-custom-ui-surface {

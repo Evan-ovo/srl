@@ -1,6 +1,7 @@
 package buzz.jixiangruyi1207.srl;
 
 import android.content.Context;
+import android.app.ActivityManager;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -32,10 +33,25 @@ public class NativePlatformPlugin extends Plugin {
         capabilities.put("photo-picker-v1");
         capabilities.put("documents-provider-v2");
         capabilities.put("app-resume-v1");
+        capabilities.put("clear-app-user-data-v1");
         result.put("capabilities", capabilities);
         result.put("insets", readInsets());
         result.put("network", readNetwork());
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void clearLocalData(PluginCall call) {
+        try {
+            ActivityManager manager = (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
+            if (manager == null) throw new IllegalStateException("无法取得 Android 应用数据清理服务");
+            // Android terminates this process when it accepts the request; a JS success callback
+            // is not guaranteed. It clears app-private data, not shared exports or cloud accounts.
+            NativeLocalDataReset.clear(call.getString("confirmation"), manager::clearApplicationUserData);
+            call.resolve();
+        } catch (Exception error) {
+            call.reject(error.getMessage(), error);
+        }
     }
 
     private JSObject readInsets() {

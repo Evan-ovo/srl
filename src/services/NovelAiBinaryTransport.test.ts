@@ -274,8 +274,13 @@ describe('NovelAI Android binary transport', () => {
       if (stage === 'during body') await ready
       controller.abort()
       await assertion
-      expect(receivedSignal).toBe(controller.signal)
-      expect(original).toHaveBeenCalledOnce()
+      if (stage === 'before fetch') {
+        expect(receivedSignal).toBeUndefined()
+        expect(original).not.toHaveBeenCalled()
+      } else {
+        expect(receivedSignal).toBe(controller.signal)
+        expect(original).toHaveBeenCalledOnce()
+      }
       expect(patched).not.toHaveBeenCalled()
       expect(console.warn).not.toHaveBeenCalled()
     },

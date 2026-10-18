@@ -4,6 +4,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch 
 import { externalAppSdkService, externalAppService } from '../core/AppContainer'
 import { SRL_BACK_REQUEST_EVENT, type SrlBackRequestDetail } from '../composables/UseBackStack'
 import { usePreviewBudget } from '../composables/UsePreviewBudget'
+import { chooseAction } from '../composables/UseConfirmDialog'
 import type { ExternalAppResourceSnapshot } from '../services/ExternalAppSdkService'
 import { ExternalAppToolSession } from '../services/ExternalAppToolSession'
 import { customToolMethodPermissions } from '../services/ExternalAppTools'
@@ -112,22 +113,14 @@ const { previewEnabled } = usePreviewBudget(
   previewHost,
   () => isBuiltinReader.value,
 )
-const permissionRequest = ref<{
-  appId: string
-  permission: ExternalAppPermission
-  method: string
-  summary: string
-  resolve: () => void
-  reject: (reason: Error) => void
-}>()
-const permissionDialog = ref<HTMLDialogElement>()
-watch(
-  permissionRequest,
-  (request) => {
-    if (request) permissionDialog.value?.showModal()
-  },
-  { flush: 'post' },
-)
+const requests = new Set<AbortController>()
+let stopAccessChanges: (() => void) | undefined
+function cancelRequests(): void {
+  for (const controller of requests) controller.abort()
+  requests.clear()
+  cancelFilePick()
+  cancelResourcePick()
+}
 const diagnostics = ref<Array<{ level: 'warn' | 'error'; message: string }>>([])
 let port: MessagePort | undefined
 const toolSession = new ExternalAppToolSession()
@@ -139,9 +132,16 @@ async function invokeTool(
   if (tool.appId !== props.appId || tool.id !== props.assistantTool?.id)
     throw new Error('工具不属于当前工作区')
   const current = await externalAppService.requireCustomTool(tool.id, tool.fingerprint)
-  const result = await toolSession.invoke(current, args, signal)
-  await externalAppService.requireCustomTool(tool.id, tool.fingerprint)
-  return result
+  signal.throwIfAborted()
+  signal.addEventListener('abort', cancelRequests, { once: true })
+  try {
+    const result = await toolSession.invoke(current, args, signal)
+    await externalAppService.requireCustomTool(tool.id, tool.fingerprint)
+    signal.throwIfAborted()
+    return result
+  } finally {
+    signal.removeEventListener('abort', cancelRequests)
+  }
 }
 defineExpose({ invokeTool })
 let sessionNonce = ''
@@ -159,7 +159,6 @@ let pendingFilePick:
       reject: (reason: Error) => void
     }
   | undefined
-const HOST_REQUEST_TIMEOUT_MS = 15_000
 const STARTUP_TIMEOUT_MS = 12_000
 const MAX_FILE_PICK_COUNT = 10
 const MAX_FILE_PICK_BYTES = 25 * 1024 * 1024
@@ -182,6 +181,7 @@ const filteredPickableResources = computed(() => {
 })
 
 async function load(): Promise<void> {
+  cancelRequests()
   const version = ++loadVersion
   readerReady.value = false
   errorMessage.value = ''
@@ -245,21 +245,6 @@ function enforceSdkRateLimit(): void {
   requestTimes.push(now)
 }
 
-async function reply(
-  requestId: unknown,
-  ok: boolean,
-  value?: unknown,
-  error?: string,
-): Promise<void> {
-  port?.postMessage({
-    type: 'srl:response',
-    nonce: sessionNonce,
-    id: requestId,
-    ok,
-    ...(ok ? { value } : { error }),
-  })
-}
-
 async function handleRequest(event: MessageEvent): Promise<void> {
   const request = event.data
   if (
@@ -272,6 +257,30 @@ async function handleRequest(event: MessageEvent): Promise<void> {
   )
     return
   lastRequestSequence = request.sequence
+  const requestNonce = sessionNonce
+  const requestVersion = loadVersion
+  const requestPort = port
+  const reply = async (
+    requestId: unknown,
+    ok: boolean,
+    value?: unknown,
+    error?: string,
+  ): Promise<void> => {
+    if (
+      hostClosed ||
+      requestNonce !== sessionNonce ||
+      requestVersion !== loadVersion ||
+      requestPort !== port
+    )
+      return
+    requestPort?.postMessage({
+      type: 'srl:response',
+      nonce: requestNonce,
+      id: requestId,
+      ok,
+      ...(ok ? { value } : { error }),
+    })
+  }
   const current = app.value ? await externalAppService.getSummary(app.value.id) : undefined
   if (!current?.enabled) {
     await reply(request.id, false, undefined, 'APP 已被禁用')
@@ -284,7 +293,27 @@ async function handleRequest(event: MessageEvent): Promise<void> {
     await reply(request.id, false, undefined, 'APP 版本或运行模式已变化，请重新打开')
     return
   }
+  const controller = new AbortController()
+  const nonce = requestNonce
+  const version = requestVersion
+  requests.add(controller)
+  const check = () => {
+    controller.signal.throwIfAborted()
+    if (hostClosed || nonce !== sessionNonce || version !== loadVersion)
+      throw new DOMException('APP 请求已过期', 'AbortError')
+  }
+  const ensurePermission = async (
+    current: InstalledExternalAppSummary,
+    permission: ExternalAppPermission,
+    method: string,
+    summary: string,
+  ) => {
+    check()
+    await requestPermission(current, permission, method, summary, controller.signal)
+    check()
+  }
   try {
+    check()
     enforceSdkRateLimit()
     if (props.assistantTool) {
       await externalAppService.requireCustomTool(
@@ -484,7 +513,11 @@ async function handleRequest(event: MessageEvent): Promise<void> {
               request.method,
               '读取你选中资源的结构化内容，不交出原始文件或数据库对象。',
             )
-          await reply(request.id, true, await requestResourcePick(current.id, request.payload))
+          await reply(
+            request.id,
+            true,
+            await requestResourcePick(current.id, request.payload, controller.signal),
+          )
           return
         case 'resources.update': {
           const updatePreview = await externalAppSdkService.describeUpdate(
@@ -505,6 +538,7 @@ async function handleRequest(event: MessageEvent): Promise<void> {
             request.method,
             `修改“${updatePreview.resource.name}”的普通字段：\n${details}`,
           )
+          check()
           await reply(
             request.id,
             true,
@@ -616,19 +650,18 @@ async function handleRequest(event: MessageEvent): Promise<void> {
           await reply(request.id, false, undefined, '不支持的 APP 接口')
       }
     })()
-    await Promise.race([
-      task,
-      new Promise<never>((_resolve, reject) =>
-        window.setTimeout(() => reject(new Error('APP 接口调用超时')), HOST_REQUEST_TIMEOUT_MS),
-      ),
-    ])
+    await task
   } catch (error) {
-    await reply(
-      request.id,
-      false,
-      undefined,
-      error instanceof Error ? error.message : 'APP 接口调用失败',
-    )
+    if (!hostClosed && nonce === sessionNonce && version === loadVersion)
+      await reply(
+        request.id,
+        false,
+        undefined,
+        error instanceof Error ? error.message : 'APP 接口调用失败',
+      )
+  } finally {
+    controller.abort()
+    requests.delete(controller)
   }
 }
 
@@ -646,6 +679,13 @@ function requestFiles(accept: string, multiple: boolean): Promise<File[]> {
     input.multiple = multiple
     input.click()
   })
+}
+
+function cancelFilePick(): void {
+  const pending = pendingFilePick
+  pendingFilePick = undefined
+  if (fileInput.value) fileInput.value.value = ''
+  pending?.reject(new DOMException('你取消了文件选择', 'AbortError'))
 }
 
 function completeFilePick(event: Event): void {
@@ -666,12 +706,14 @@ function completeFilePick(event: Event): void {
   pending.resolve(files)
 }
 
-async function ensurePermission(
+async function requestPermission(
   current: InstalledExternalAppSummary,
   permission: ExternalAppPermission,
   method: string,
   summary: string,
+  signal: AbortSignal,
 ): Promise<void> {
+  signal.throwIfAborted()
   if (!(await externalAppService.hasPermission(current.id, permission))) {
     throw new Error('此权限未在安装时授权；可在第三方 APP 管理中重新安装并授权')
   }
@@ -689,44 +731,57 @@ async function ensurePermission(
   )
     return
   if (await externalAppService.hasPersistentPermission(current.id, permission)) return
-  await new Promise<void>((resolve, reject) => {
-    permissionRequest.value = {
-      appId: current.id,
-      permission,
-      method,
-      summary,
-      resolve,
-      reject,
-    }
-  })
-}
-
-async function decidePermission(decision: 'once' | 'always' | 'denied'): Promise<void> {
-  const pending = permissionRequest.value
-  if (!pending) return
-  permissionRequest.value = undefined
-  await externalAppService.recordPermissionDecision(pending.appId, {
-    permission: pending.permission,
-    method: pending.method,
+  const response = await chooseAction(
+    {
+      title: '允许此 APP 请求吗？',
+      message: `APP：${current.manifest.name}\n请求：${EXTERNAL_APP_PERMISSION_LABELS[permission]}\n${summary}\n\n长期授权只适用于当前安装包和这类权限，可在扩展管理的权限页撤销。`,
+      confirmLabel: '仅同意这次',
+      alternativeLabel: '以后允许此权限',
+      cancelLabel: '不同意',
+      centered: true,
+    },
+    signal,
+  )
+  signal.throwIfAborted()
+  const decision =
+    response === 'confirm' ? 'once' : response === 'alternative' ? 'always' : 'denied'
+  const latest = await externalAppService.getSummary(current.id)
+  signal.throwIfAborted()
+  if (
+    !latest?.enabled ||
+    latest.packageFingerprint !== current.packageFingerprint ||
+    latest.runtimeMode !== current.runtimeMode ||
+    !(await externalAppService.hasPermission(current.id, permission))
+  )
+    throw new Error('APP 版本或权限已变化，请重新发起请求')
+  signal.throwIfAborted()
+  await externalAppService.recordPermissionDecision(current.id, {
+    permission,
+    method,
     decision,
-    summary: pending.summary,
+    summary,
   })
+  signal.throwIfAborted()
   if (decision === 'denied') {
-    pending.reject(new Error('你拒绝了这次资源库权限请求'))
-    return
+    throw new Error('你拒绝了这次资源库权限请求')
   }
   if (decision === 'always') {
-    await externalAppService.grantPersistentPermission(pending.appId, pending.permission)
-    notice.value = `已允许该 APP 后续使用“${EXTERNAL_APP_PERMISSION_LABELS[pending.permission]}”。`
+    await externalAppService.grantPersistentPermission(current.id, permission, current, signal)
+    signal.throwIfAborted()
+    notice.value = `已允许该 APP 后续使用“${EXTERNAL_APP_PERMISSION_LABELS[permission]}”。`
   }
-  pending.resolve()
 }
 
 async function requestResourcePick(
   appId: string,
   payload: unknown,
+  signal: AbortSignal,
 ): Promise<ExternalAppResourceSnapshot> {
+  signal.throwIfAborted()
+  if (resourcePicker.value) throw new Error('已有资源选择正在等待，请先完成或取消')
   const items = await externalAppSdkService.listPickable(appId, payload)
+  signal.throwIfAborted()
+  if (resourcePicker.value) throw new Error('已有资源选择正在等待，请先完成或取消')
   if (!items.length) throw new Error('没有可供选择的资源')
   resourceQuery.value = ''
   return new Promise<ExternalAppResourceSnapshot>((resolve, reject) => {
@@ -745,10 +800,12 @@ async function chooseResource(resourceId: string): Promise<void> {
       !props.assistantTool ||
         props.assistantTool.permissions.includes(EXTERNAL_APP_PERMISSION.RESOURCES_CONTENT_READ),
     )
+    if (hostClosed || resourcePicker.value !== picker || app.value?.id !== current.id) return
     resourcePicker.value = undefined
     picker.resolve(selected)
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '无法读取所选资源'
+    if (!hostClosed && resourcePicker.value === picker)
+      errorMessage.value = error instanceof Error ? error.message : '无法读取所选资源'
   }
 }
 
@@ -911,11 +968,6 @@ function handleKeydown(event: KeyboardEvent): void {
     cancelResourcePick()
     return
   }
-  if (event.key === 'Escape' && permissionRequest.value) {
-    event.preventDefault()
-    void decidePermission('denied')
-    return
-  }
   if (event.key === 'Escape' && isFullscreen.value) {
     event.preventDefault()
     // The host owns immersive exit; a sandboxed APP cannot consume or suppress it.
@@ -947,6 +999,16 @@ function handleBackRequest(event: Event): void {
 }
 
 onMounted(() => {
+  stopAccessChanges = externalAppService.subscribeAccessChanges?.((id) => {
+    if (id !== props.appId) return
+    loadVersion++
+    cancelRequests()
+    port?.close()
+    toolSession.close()
+    app.value = undefined
+    setFullscreen(false)
+    errorMessage.value = 'APP 权限或运行设置已变化，当前运行已停止；请返回后重新打开。'
+  })
   void load()
   window.addEventListener(APPLIED_CSS_CHANGED_EVENT, syncReaderUiCss)
   window.addEventListener('keydown', handleKeydown, { capture: true })
@@ -962,6 +1024,8 @@ watch(
 
 onBeforeUnmount(() => {
   hostClosed = true
+  stopAccessChanges?.()
+  cancelRequests()
   loadVersion++
   clearHoldGesture()
   hideExitHandle()
@@ -977,13 +1041,6 @@ onBeforeUnmount(() => {
     screen.orientation?.unlock?.()
   } catch {
     // 部分 WebView 不提供方向解锁；离开后仍可由系统方向继续接管。
-  }
-  pendingFilePick?.reject(new Error('APP 工作区已关闭'))
-  pendingFilePick = undefined
-  cancelResourcePick()
-  if (permissionRequest.value) {
-    permissionRequest.value.reject(new Error('APP 工作区已关闭'))
-    permissionRequest.value = undefined
   }
 })
 </script>
@@ -1141,6 +1198,7 @@ onBeforeUnmount(() => {
       class="external-app-host__file-input"
       type="file"
       @change="completeFilePick"
+      @cancel="cancelFilePick"
     />
     <Teleport to="body">
       <section
@@ -1177,47 +1235,6 @@ onBeforeUnmount(() => {
           <footer><button type="button" @click="cancelResourcePick">取消</button></footer>
         </div>
       </section>
-      <dialog
-        v-if="permissionRequest"
-        ref="permissionDialog"
-        class="external-app-permission"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="external-app-permission-title"
-        @cancel.prevent="decidePermission('denied')"
-        @click.self="decidePermission('denied')"
-      >
-        <div class="external-app-permission__panel">
-          <header>
-            <div>
-              <small>RESOURCE LIBRARY PERMISSION</small>
-              <h2 id="external-app-permission-title">允许此请求吗？</h2>
-            </div>
-            <button type="button" aria-label="拒绝权限请求" @click="decidePermission('denied')">
-              ×
-            </button>
-          </header>
-          <p>
-            <strong>{{ app?.manifest.name || '第三方 APP' }}</strong>
-            请求：{{ EXTERNAL_APP_PERMISSION_LABELS[permissionRequest.permission] }}
-          </p>
-          <pre>{{ permissionRequest.summary }}</pre>
-          <p class="external-app-permission__note">
-            “后续始终允许”只适用于此 APP 的当前安装包和这一类权限；更新包或新权限会再次询问。
-          </p>
-          <footer>
-            <button type="button" @click="decidePermission('denied')">不同意</button>
-            <button type="button" @click="decidePermission('once')">仅同意这次</button>
-            <button
-              class="external-app-permission__always"
-              type="button"
-              @click="decidePermission('always')"
-            >
-              以后允许此权限
-            </button>
-          </footer>
-        </div>
-      </dialog>
       <ChatReaderFullPreview
         v-if="chatPreview"
         v-bind="chatPreview"

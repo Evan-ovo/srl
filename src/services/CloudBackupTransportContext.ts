@@ -23,6 +23,7 @@ export interface GitHubAsset {
   id: number
   name: string
   size: number
+  digest?: string | null
   state?: string
   created_at: string
   url: string
@@ -51,6 +52,8 @@ export interface WebDavCapabilities {
 export type CloudBackupProgressCallback = (message: string) => void
 
 export interface CloudBackupTransportContext {
+  signal?: AbortSignal
+  beginCommit?: () => void
   activeGitHubInventory:
     | {
         key: string
@@ -63,7 +66,7 @@ export interface CloudBackupTransportContext {
   activeWebDavInventory: { key: string; objects: Map<string, WebDavObject> } | undefined
   webDavCapabilities: Map<string, WebDavCapabilities>
   cloudFetch(url: string, init: RequestInit, provider: CloudBackupProvider): Promise<Response>
-  readResponseBlob(response: Response, totalBytes?: number): Promise<Blob>
+  readResponseBlob(response: Response, totalBytes?: number, fileName?: string): Promise<Blob>
   githubFetch(
     config: GitHubBackupConfig,
     secret: string,
@@ -76,12 +79,14 @@ export interface CloudBackupTransportContext {
     secret: string,
     create: boolean,
     tag?: string,
+    signal?: AbortSignal,
   ): Promise<GitHubRelease | undefined>
   listGitHubObjectContainers(config: GitHubBackupConfig, secret: string): Promise<GitHubRelease[]>
   listGitHubAssets(
     config: GitHubBackupConfig,
     secret: string,
     releaseId: number,
+    signal?: AbortSignal,
   ): Promise<GitHubAsset[]>
   materializeCloudObject(plan: CloudObjectPlan): Promise<Blob>
   uploadGitHubAsset(
@@ -99,6 +104,7 @@ export interface CloudBackupTransportContext {
     secret: string,
     uploaded: GitHubAsset,
     expectedSize: number,
+    expectedHash?: string,
   ): Promise<GitHubAsset | undefined>
   readGitHubStructuredSnapshot(
     config: GitHubBackupConfig,

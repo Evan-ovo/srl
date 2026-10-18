@@ -83,7 +83,7 @@ describe('AppearanceStudio cabinet layout', () => {
     }
   })
 
-  it('previews the complete CSS and Vue draft through the real trial without saving it', async () => {
+  it('requests live full-screen CSS and Vue preview without applying or saving the draft', async () => {
     const storage = new BrowserStorageService()
     const preset = {
       id: 'trial',
@@ -101,22 +101,112 @@ describe('AppearanceStudio cabinet layout', () => {
     })
     try {
       await wrapper.get('textarea').setValue('body { color: orange; }')
-      const preview = wrapper.findAll('button').find((button) => button.text() === '预览并试用')!
+      await wrapper.get('textarea').trigger('focus')
+      const preview = wrapper
+        .findAll('.appearance-code-actions > button')
+        .find((button) => button.text() === '全屏预览')!
       await preview.trigger('click')
       await flushPromises()
-      expect(wrapper.emitted('save-css')?.at(-1)).toEqual([
-        'body { color: orange; }',
-        { views: preset.views },
+      expect(wrapper.emitted('preview-css')?.at(-1)).toEqual([
+        {
+          css: 'body { color: orange; }',
+          views: preset.views,
+          scope: undefined,
+          onExit: expect.any(Function),
+        },
       ])
+      expect(wrapper.emitted('save-css')).toBeUndefined()
       expect(storage.getCustomUiPresets()).toEqual([preset])
       expect(wrapper.find('iframe[title="自定义 CSS 隔离预览"]').exists()).toBe(false)
       vi.mocked(confirmAction).mockResolvedValueOnce(false)
       await preview.trigger('click')
       await flushPromises()
-      expect(wrapper.emitted('save-css')).toHaveLength(1)
+      expect(wrapper.emitted('preview-css')).toHaveLength(1)
     } finally {
       wrapper.unmount()
     }
+  })
+
+  it('routes source preview to its actual scope and only temporarily enables an unchecked Vue draft', async () => {
+    const storage = new BrowserStorageService()
+    const preset = {
+      id: 'source-preview',
+      name: '源码草稿',
+      globalCss: '',
+      scopedCss: {},
+      views: { library: createUiView() },
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.setCustomUiPresets([preset])
+    storage.setActiveCustomUiPresetId(preset.id)
+    const wrapper = mount(AppearanceStudio, {
+      props: { theme: 'light', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
+    })
+    try {
+      const sourceEditor = wrapper.getComponent(AppearanceUiEditor)
+      await sourceEditor
+        .findAll('button')
+        .find((button) => button.text() === '全屏预览')!
+        .trigger('click')
+      await flushPromises()
+      const request = wrapper.emitted('preview-css')![0]![0] as {
+        scope: string
+        views: typeof preset.views
+      }
+      expect(request.scope).toBe('library')
+      expect(request.views.library.enabled).toBe(true)
+      expect(sourceEditor.props('views').library!.enabled).toBe(false)
+      expect(storage.getCustomUiPresets()).toEqual([preset])
+      expect(wrapper.emitted('save-css')).toBeUndefined()
+      await wrapper
+        .findAll('[role="tab"]')
+        .find((tab) => tab.text() === '设置页面')!
+        .trigger('click')
+      await wrapper
+        .findAll('.appearance-code-actions > button')
+        .find((button) => button.text() === '全屏预览')!
+        .trigger('click')
+      await flushPromises()
+      expect(wrapper.emitted('preview-css')!.at(-1)![0]).toMatchObject({ scope: 'settings' })
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('does not start a late preview after the editor is unmounted during script consent', async () => {
+    const storage = new BrowserStorageService()
+    const preset = {
+      id: 'late',
+      name: '迟到预览',
+      globalCss: '',
+      scopedCss: {},
+      views: { library: createUiView() },
+      createdAt: '',
+      updatedAt: '',
+    }
+    storage.setCustomUiPresets([preset])
+    storage.setActiveCustomUiPresetId(preset.id)
+    let resolveConsent!: (allow: boolean) => void
+    vi.mocked(confirmAction).mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveConsent = resolve
+        }),
+    )
+    const wrapper = mount(AppearanceStudio, {
+      props: { theme: 'light', layoutMode: 'grid', uiFontScale: 'standard', customCss: '' },
+    })
+    await wrapper
+      .getComponent(AppearanceUiEditor)
+      .findAll('button')
+      .find((button) => button.text() === '全屏预览')!
+      .trigger('click')
+    wrapper.unmount()
+    resolveConsent(true)
+    await flushPromises()
+    expect(wrapper.emitted('preview-css')).toBeUndefined()
+    expect(wrapper.emitted('save-css')).toBeUndefined()
   })
 
   it('refreshes a retained editor on return without losing its unsaved CSS draft', async () => {

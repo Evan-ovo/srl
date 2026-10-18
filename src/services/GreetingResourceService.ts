@@ -1,6 +1,11 @@
 import type { ResourceService } from './ResourceService'
 import { JsonResourceParser } from '../parser/JsonResourceParser'
-import { RESOURCE_TYPE, getRelatedResourceIds, type Resource } from '../types/Resource'
+import {
+  RESOURCE_TYPE,
+  getRelatedResourceIds,
+  type Resource,
+  type ResourceListSummary,
+} from '../types/Resource'
 import { parseGreetingResource } from '../types/GreetingResource'
 import { inspectGreetingScripts, type GreetingScriptChoice } from '../utils/GreetingScriptMerge'
 import { isRecord } from '../utils/UnknownValue'
@@ -13,24 +18,28 @@ import {
 /** Coordinates the existing import/version owners; does not maintain another resource store. */
 export class GreetingResourceService {
   private saveQueue: Promise<unknown> = Promise.resolve()
-  // Keep only digests, never greeting text or files. Content changes naturally invalidate a hit.
-  private readonly contentSignatures = new Map<string, string>()
-  private rememberSignature(hash: string, signature: string): void {
-    if (!hash) return
-    this.contentSignatures.delete(hash)
+  // At most 4 MiB of SHA-256 string payload plus Map overhead; no text/files.
+  // Stable admission prevents a >capacity sequential scan evicting every hit.
+  private readonly contentSignatures = new Map<string, string | null>()
+  private rememberSignature(hash: string, signature: string | null): void {
+    if (!/^[a-f0-9]{64}$/.test(hash)) return
+    if (this.contentSignatures.size >= 16_384 && !this.contentSignatures.has(hash)) return
     this.contentSignatures.set(hash, signature)
-    if (this.contentSignatures.size > 512)
-      this.contentSignatures.delete(this.contentSignatures.keys().next().value!)
   }
-  private readonly savedListeners = new Set<() => void>()
-  onSaved(listener: () => void): () => void {
+  private pruneSignatures(candidates: ResourceListSummary[]): void {
+    const obsolete = new Set(this.contentSignatures.keys())
+    for (const candidate of candidates) obsolete.delete(candidate.contentHash)
+    for (const hash of obsolete) this.contentSignatures.delete(hash)
+  }
+  private readonly savedListeners = new Set<(resourceId: string, changed: boolean) => void>()
+  onSaved(listener: (resourceId: string, changed: boolean) => void): () => void {
     this.savedListeners.add(listener)
     return () => {
       this.savedListeners.delete(listener)
     }
   }
-  private saved(resource: Resource): Resource {
-    this.savedListeners.forEach((listener) => listener())
+  private saved(resource: Resource, changed = true): Resource {
+    this.savedListeners.forEach((listener) => listener(resource.id, changed))
     return resource
   }
   private readonly resources: ResourceService
@@ -53,35 +62,45 @@ export class GreetingResourceService {
         ),
       )
     const signature = await content(document)
-    const candidates = await this.resources.listResourceListSummaries({
-      types: [RESOURCE_TYPE.GREETING],
-    })
-    for (const candidate of candidates) {
-      const cached = candidate.contentHash
-        ? this.contentSignatures.get(candidate.contentHash)
-        : undefined
-      if (cached && cached !== signature) continue
-      const existing = await this.resources.get(candidate.id)
-      if (!existing) continue
-      if (cached === signature && existing.contentHash === candidate.contentHash)
-        return this.saved(existing)
-      let value: typeof document
-      try {
-        value = parseGreetingResource(JSON.parse(await existing.originalBlob.text()))
-      } catch {
-        continue
+    try {
+      const candidates = await this.resources.listResourceListSummaries({
+        types: [RESOURCE_TYPE.GREETING],
+      })
+      this.pruneSignatures(candidates)
+      for (const candidate of candidates) {
+        const cached = this.contentSignatures.get(candidate.contentHash)
+        if (cached !== undefined && cached !== signature) continue
+        const existing = await this.resources.get(candidate.id)
+        if (!existing || existing.type !== RESOURCE_TYPE.GREETING) continue
+        const liveSignature = this.contentSignatures.get(existing.contentHash)
+        if (liveSignature !== undefined) {
+          if (liveSignature === signature) return this.saved(existing, false)
+          continue
+        }
+        // Read failures are not evidence of malformed JSON or of no duplicate.
+        const text = await existing.originalBlob.text()
+        let value: ReturnType<typeof parseGreetingResource>
+        try {
+          value = parseGreetingResource(JSON.parse(text))
+        } catch {
+          this.rememberSignature(existing.contentHash, null)
+          continue
+        }
+        const existingSignature = await content(value)
+        this.rememberSignature(existing.contentHash, existingSignature)
+        if (existingSignature === signature) return this.saved(existing, false)
       }
-      const existingSignature = await content(value)
-      this.rememberSignature(existing.contentHash, existingSignature)
-      if (existingSignature === signature) return this.saved(existing)
+      const parsed = await new JsonResourceParser().parse(file)
+      if (parsed.type !== RESOURCE_TYPE.GREETING) throw new Error('请选择开场白资源文件')
+      const result = await this.resources.importPreparedFile(file, parsed)
+      if (result.status === 'failed' || result.status === 'versionCandidate')
+        throw new Error(result.status === 'failed' ? result.message : '开场白保存失败')
+      this.rememberSignature(result.resource.contentHash, signature)
+      return this.saved(result.resource, result.status === 'imported' || result.reclassified)
+    } catch (error) {
+      this.contentSignatures.clear()
+      throw error
     }
-    const parsed = await new JsonResourceParser().parse(file)
-    if (parsed.type !== RESOURCE_TYPE.GREETING) throw new Error('请选择开场白资源文件')
-    const result = await this.resources.importPreparedFile(file, parsed)
-    if (result.status === 'failed' || result.status === 'versionCandidate')
-      throw new Error(result.status === 'failed' ? result.message : '开场白保存失败')
-    this.rememberSignature(result.resource.contentHash, signature)
-    return this.saved(result.resource)
   }
 
   async apply(

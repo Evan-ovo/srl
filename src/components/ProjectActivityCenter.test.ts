@@ -2,31 +2,77 @@
 import { mount } from '@vue/test-utils'
 import { expect, it, vi } from 'vitest'
 import ProjectActivityCenter from './ProjectActivityCenter.vue'
-import { taskCenter } from '../core/TaskCenter'
+import { COMPLETED_TASK_RETENTION_MS, taskCenter } from '../core/TaskCenter'
 import { noticeCenter } from '../core/NoticeCenter'
 import { notifyWebDiscordInboxResult } from '../services/WebDiscordInboxNotifications'
 
-it('does not add a floating trigger for a finished task without an action, but retains its folded history', async () => {
+it('removes both completed backup surfaces after five seconds while its optional view action works', async () => {
+  vi.useFakeTimers()
+  const open = vi.fn()
+  const id = taskCenter.start({
+    name: '网页云备份成功',
+    action: { label: '查看云备份', run: open, required: false },
+  })
+  taskCenter.complete(id)
+  const notice = noticeCenter.push({
+    type: 'success',
+    message: '网页云备份完成通知',
+    completed: true,
+    persistent: true,
+    actions: [{ label: '查看云备份', run: open }],
+  })
+  const wrapper = mount(ProjectActivityCenter)
+  try {
+    await wrapper.vm.$nextTick()
+    await wrapper.get('.activity-center__trigger').trigger('click')
+    const recent = wrapper
+      .findAll('.activity-center__group')
+      .find((group) => group.text().includes('刚刚结束'))!
+    expect(recent.text()).toContain('网页云备份成功')
+    await recent
+      .findAll('button')
+      .find((button) => button.text() === '查看云备份')!
+      .trigger('click')
+    expect(open).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(COMPLETED_TASK_RETENTION_MS)
+    expect(wrapper.find('.activity-center__trigger').exists()).toBe(false)
+    expect(taskCenter.list().some((task) => task.operationId === id)).toBe(false)
+    expect(noticeCenter.list().some((item) => item.id === notice)).toBe(false)
+  } finally {
+    wrapper.unmount()
+    taskCenter.dismiss(id)
+    noticeCenter.dismiss(notice)
+    vi.useRealTimers()
+  }
+})
+
+it('shows a completed task briefly, then removes it while keeping notifications separate', async () => {
+  vi.useFakeTimers()
   const id = taskCenter.start({ name: '普通导入已完成' })
   taskCenter.complete(id)
   const wrapper = mount(ProjectActivityCenter)
   let notice = ''
   try {
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('.activity-center').exists()).toBe(false)
+    expect(wrapper.text()).toContain('普通导入已完成')
     notice = noticeCenter.push({ type: 'info', message: '需要查看的通知', persistent: true })
     await wrapper.vm.$nextTick()
     await wrapper.get('.activity-center__trigger').trigger('click')
-    expect(wrapper.get('.activity-center__completed').text()).toContain('普通导入已完成')
-    expect(wrapper.get('.activity-center__completed').attributes('open')).toBeUndefined()
+    await wrapper.get('.activity-center__tabs button').trigger('click')
+    expect(wrapper.text()).toContain('普通导入已完成')
+    expect(wrapper.text()).not.toContain('需要查看的通知')
+    await vi.advanceTimersByTimeAsync(COMPLETED_TASK_RETENTION_MS)
+    expect(wrapper.text()).not.toContain('普通导入已完成')
+    expect(noticeCenter.list().some((item) => item.id === notice)).toBe(true)
   } finally {
     wrapper.unmount()
     taskCenter.dismiss(id)
     noticeCenter.dismiss(notice)
+    vi.useRealTimers()
   }
 })
 
-it('folds completed history without hiding pending work or letting history consume its slots', async () => {
+it('shows recent successes separately from active failures and actions', async () => {
   const ids = Array.from({ length: 10 }, (_, index) =>
     taskCenter.start({ name: `完成任务${index}` }),
   )
@@ -50,21 +96,17 @@ it('folds completed history without hiding pending work or letting history consu
   try {
     await wrapper.vm.$nextTick()
     await wrapper.get('.activity-center__trigger').trigger('click')
-    const history = wrapper.get('.activity-center__completed')
-    expect(history.attributes('open')).toBeUndefined()
-    expect(history.get('summary').text()).toBe('已完成（11）')
-    expect(history.findAll('.activity-card')).toHaveLength(11)
+    const recent = wrapper
+      .findAll('.activity-center__group')
+      .find((group) => group.text().includes('刚刚结束'))!
+    expect(recent.findAll('.activity-card')).toHaveLength(10)
     for (const label of ['仍待导入', '未成功资源', '正在处理下一份']) {
       const card = wrapper.findAll('.activity-card').find((card) => card.text().includes(label))!
       expect(card.element.closest('.activity-center__completed')).toBeNull()
     }
     taskCenter.complete(running)
     await wrapper.vm.$nextTick()
-    expect(history.attributes('open')).toBeUndefined()
-    expect(history.get('summary').text()).toBe('已完成（12）')
-    await wrapper.get('button[aria-label="收起任务与通知"]').trigger('click')
-    await wrapper.get('.activity-center__trigger').trigger('click')
-    expect(wrapper.get('.activity-center__completed').attributes('open')).toBeUndefined()
+    expect(recent.findAll('.activity-card')).toHaveLength(11)
   } finally {
     wrapper.unmount()
     for (const id of [...ids, pending, failed, running]) {
@@ -88,9 +130,10 @@ it('clears completed web inbox results while preserving failed and pending resul
   try {
     await wrapper.vm.$nextTick()
     await wrapper.get('.activity-center__trigger').trigger('click')
+    await wrapper.get('.activity-center__tabs button[aria-pressed="false"]').trigger('click')
     await wrapper
       .findAll('button')
-      .find((button) => button.text() === '清理完成项')!
+      .find((button) => button.text() === '清理已完成通知')!
       .trigger('click')
     const results = noticeCenter.list().filter((notice) => notice.id.includes('web-clear'))
     expect(results).toHaveLength(2)
@@ -125,6 +168,7 @@ it('closes the activity drawer when a notice opens the inbox', async () => {
   try {
     await wrapper.vm.$nextTick()
     await wrapper.get('.activity-center__trigger').trigger('click')
+    await wrapper.get('.activity-center__tabs button[aria-pressed="false"]').trigger('click')
     await wrapper
       .findAll('button')
       .find((button) => button.text() === '查看收件箱')!
@@ -172,10 +216,11 @@ it('局部窗口承载的通知不重复显示，全局记录与其他通知保�
     expect(noticeCenter.list().some((notice) => notice.id === local)).toBe(true)
     noticeCenter.push({ id: other, type: 'info', message: '其他通知', persistent: true })
     await wrapper.vm.$nextTick()
+    await wrapper.get('.activity-center__trigger').trigger('click')
+    await wrapper.get('.activity-center__tabs button[aria-pressed="false"]').trigger('click')
     expect(wrapper.text()).toContain('其他通知')
     expect(wrapper.text()).not.toContain('局部已保存')
     await wrapper.setProps({ hiddenNoticeIds: [] })
-    await wrapper.get('.activity-center__trigger').trigger('click')
     expect(wrapper.text()).toContain('局部已保存')
   } finally {
     wrapper.unmount()
@@ -213,9 +258,15 @@ it('一键清理成功通知，但保留需要处理的通知和仍在运行的�
     await wrapper.get('.activity-center__trigger').trigger('click')
     await wrapper
       .findAll('button')
-      .find((button) => button.text() === '清理完成项')!
+      .find((button) => button.text() === '清理已结束任务')!
       .trigger('click')
     await wrapper.vm.$nextTick()
+    expect(noticeCenter.list().some((notice) => [first, second].includes(notice.id))).toBe(true)
+    await wrapper.get('.activity-center__tabs button[aria-pressed="false"]').trigger('click')
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '清理已完成通知')!
+      .trigger('click')
     expect(noticeCenter.list().some((notice) => [first, second].includes(notice.id))).toBe(false)
     expect(noticeCenter.list().some((notice) => notice.id === actionNotice)).toBe(true)
     expect(taskCenter.list().some((task) => task.operationId === runningTask)).toBe(true)
@@ -227,6 +278,55 @@ it('一键清理成功通知，但保留需要处理的通知和仍在运行的�
     taskCenter.dismiss(runningTask)
     taskCenter.dismiss(readyToImport)
     noticeCenter.dismiss(actionNotice)
+  }
+})
+
+it('自动移除完成任务，但保留需要用户后续操作的任务；通知单独显示', async () => {
+  vi.useFakeTimers()
+  const id = taskCenter.start({ name: '短暂显示的完成任务' })
+  taskCenter.complete(id)
+  const cancelled = taskCenter.start({ name: '已取消任务' })
+  taskCenter.cancelled(cancelled)
+  const failed = taskCenter.start({ name: '失败任务' })
+  taskCenter.fail(failed, '校验失败')
+  const actionable = taskCenter.start({
+    name: '需要继续导入的附件',
+    phase: '下载完成，可继续导入',
+    action: { label: '继续导入', run: () => undefined },
+  })
+  taskCenter.complete(actionable)
+  const noticeId = noticeCenter.push({
+    id: 'activity-separated-notice',
+    type: 'warning',
+    message: '需要处理的通知',
+    persistent: true,
+    actions: [{ label: '处理', run: () => undefined }],
+  })
+  const wrapper = mount(ProjectActivityCenter)
+  try {
+    await wrapper.vm.$nextTick()
+    await wrapper.get('.activity-center__trigger').trigger('click')
+    expect(wrapper.text()).toContain('短暂显示的完成任务')
+    expect(wrapper.text()).not.toContain('需要处理的通知')
+    await wrapper.get('.activity-center__tabs button[aria-pressed="false"]').trigger('click')
+    expect(wrapper.text()).toContain('需要处理的通知')
+    expect(wrapper.text()).not.toContain('短暂显示的完成任务')
+    await vi.advanceTimersByTimeAsync(COMPLETED_TASK_RETENTION_MS - 1)
+    expect(taskCenter.list().some((task) => task.operationId === id)).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(taskCenter.list().some((task) => task.operationId === id)).toBe(false)
+    expect(taskCenter.list().some((task) => task.operationId === cancelled)).toBe(false)
+    expect(taskCenter.list().some((task) => task.operationId === failed)).toBe(true)
+    expect(taskCenter.list().some((task) => task.operationId === actionable)).toBe(true)
+    expect(noticeCenter.list().some((notice) => notice.id === noticeId)).toBe(true)
+  } finally {
+    wrapper.unmount()
+    taskCenter.dismiss(id)
+    taskCenter.dismiss(cancelled)
+    taskCenter.dismiss(failed)
+    taskCenter.dismiss(actionable)
+    noticeCenter.dismiss(noticeId)
+    vi.useRealTimers()
   }
 })
 

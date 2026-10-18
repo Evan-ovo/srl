@@ -17,12 +17,16 @@ export interface NoticeRecord {
 }
 
 export function isCompletedNotice(notice: NoticeRecord): boolean {
+  if (notice.type === 'error' || notice.type === 'data-risk') return false
   return notice.completed === true || (notice.type === 'success' && notice.actions.length === 0)
 }
+
+export const COMPLETED_NOTICE_RETENTION_MS = 5_000
 
 export class NoticeCenter {
   private readonly notices = new Map<string, NoticeRecord>()
   private readonly listeners = new Set<() => void>()
+  private readonly expiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   push(
     input: Omit<NoticeRecord, 'id' | 'createdAt' | 'persistent' | 'actions'> & {
@@ -34,26 +38,36 @@ export class NoticeCenter {
   ): string {
     const id = input.id ?? crypto.randomUUID()
     const createdAt = Date.now()
-    const persistent = (input.persistent ?? input.type === 'error') || input.type === 'data-risk'
-    this.notices.set(id, {
+    this.clearExpiry(id)
+    const notice: NoticeRecord = {
       id,
       type: input.type,
       message: input.message,
       details: input.details,
       createdAt,
-      persistent,
+      persistent: (input.persistent ?? input.type === 'error') || input.type === 'data-risk',
       completed: input.completed,
       actions: input.actions ?? [],
-    })
+    }
+    const completed = isCompletedNotice(notice)
+    if (completed) notice.persistent = false
+    this.notices.set(id, notice)
+    if (!notice.persistent)
+      this.expiryTimers.set(
+        id,
+        setTimeout(
+          () => {
+            if (this.notices.get(id) === notice) this.dismiss(id)
+          },
+          input.durationMs ?? (completed ? COMPLETED_NOTICE_RETENTION_MS : 4000),
+        ),
+      )
     this.publish()
-    if (!persistent)
-      window.setTimeout(() => {
-        if (this.notices.get(id)?.createdAt === createdAt) this.dismiss(id)
-      }, input.durationMs ?? 4000)
     return id
   }
 
   dismiss(id: string): void {
+    this.clearExpiry(id)
     if (this.notices.delete(id)) this.publish()
   }
 
@@ -62,7 +76,10 @@ export class NoticeCenter {
       .filter(isCompletedNotice)
       .map((notice) => notice.id)
     if (!completed.length) return
-    for (const id of completed) this.notices.delete(id)
+    for (const id of completed) {
+      this.clearExpiry(id)
+      this.notices.delete(id)
+    }
     this.publish()
   }
 
@@ -77,6 +94,12 @@ export class NoticeCenter {
 
   private publish(): void {
     for (const listener of this.listeners) listener()
+  }
+
+  private clearExpiry(id: string): void {
+    const timer = this.expiryTimers.get(id)
+    if (timer !== undefined) clearTimeout(timer)
+    this.expiryTimers.delete(id)
   }
 }
 

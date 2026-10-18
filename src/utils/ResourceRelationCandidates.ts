@@ -6,7 +6,7 @@ import {
   type ResourceType,
 } from '../types/Resource'
 
-import { isResourceGalleryImage } from '../types/ResourceGallery'
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
 
 export interface ResourceRelationCandidateOptions {
   currentResourceId: string
@@ -30,7 +30,7 @@ export function filterResourceRelationCandidates(
 ): ResourceSummary[] {
   const query = options.query.trim().toLocaleLowerCase()
   return resources
-    .filter((resource) => !isResourceGalleryImage(resource))
+    .filter((resource) => !isResourceOwnedFile(resource))
     .filter((resource) => resource.id !== options.currentResourceId)
     .filter((resource) => !options.resourceType || resource.type === options.resourceType)
     .filter((resource) => {

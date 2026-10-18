@@ -89,6 +89,17 @@ it.each([false, true])(
       new MessageEvent('message', { source: frame.contentWindow, data: { type: 'srl:ui-ready' } }),
     )
     const nonce = (post.mock.calls[0]![0] as { nonce: string }).nonce
+    port.onmessage!({
+      data: { type: 'native', nonce: 'wrong', regions: [], hostScrollHeight: 1200 },
+    })
+    expect(wrapper.emitted('layout')).toBeUndefined()
+    port.onmessage!({ data: { type: 'native', nonce, regions: [], hostScrollHeight: 1200 } })
+    expect(wrapper.emitted('layout')).toEqual([[1200]])
+    for (const height of [-1, Number.NaN, Number.POSITIVE_INFINITY, '1200', undefined])
+      port.onmessage!({ data: { type: 'native', nonce, regions: [], hostScrollHeight: height } })
+    expect(wrapper.emitted('layout')).toEqual([[1200]])
+    port.onmessage!({ data: { type: 'native', nonce, regions: [], hostScrollHeight: null } })
+    expect(wrapper.emitted('layout')).toEqual([[1200], [null]])
     port.onmessage!({ data: { type: 'ready', nonce } })
     expect(port.postMessage).toHaveBeenCalledWith({
       type: 'recovery-gesture',

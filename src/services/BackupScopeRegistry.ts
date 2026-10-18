@@ -1,3 +1,4 @@
+import { isResourceAttachment, isResourceOwnedFile } from '../types/ResourceAttachment'
 import type { ArchivePortableSelection } from '../types/Backup'
 import type { CloudBackupContentSelection } from '../types/CloudBackup'
 import { isResourceGalleryImage } from '../types/ResourceGallery'
@@ -12,6 +13,7 @@ export const BACKUP_SCOPE_REGISTRY_VERSION = 1
 
 export type BackupScopeGroupId = 'tavernResources' | 'manualResources' | 'extraContent'
 export type BackupScopeId =
+  | 'extra.resourceAttachments'
   | 'extra.resourceGallery'
   | 'resource.characterCard'
   | 'resource.greeting'
@@ -35,6 +37,9 @@ export type BackupScopeId =
   | 'extra.aiTaggingState'
   | 'extra.stitchWork'
   | 'extra.frontendWorkshopComponents'
+  | 'extra.frontendWorkshopProjects'
+  | 'extra.imageGeneration'
+  | 'extra.generatedImageAlbum'
   | 'extra.appearance'
   | 'extra.generalPreferences'
   | 'extra.characterDraw'
@@ -86,6 +91,15 @@ export const BACKUP_SCOPE_REGISTRY: ReadonlyArray<BackupScopeDefinition> = [
     label: '资源图库',
     description:
       '所选资源的图片、直链、备注与按资源类型保存的分类（含空分类）；可能包含聊天截图。封面始终随资源保存。',
+    privacyWarning: true,
+    defaultLocal: true,
+    defaultCloud: false,
+  },
+  {
+    id: 'extra.resourceAttachments',
+    group: 'extraContent',
+    label: '资源附件',
+    description: '所选资源的附件原件、编辑内容与历史版本；可能包含私人文档。',
     privacyWarning: true,
     defaultLocal: true,
     defaultCloud: false,
@@ -169,6 +183,32 @@ export const BACKUP_SCOPE_REGISTRY: ReadonlyArray<BackupScopeDefinition> = [
     defaultCloud: false,
   },
   {
+    id: 'extra.frontendWorkshopProjects',
+    group: 'extraContent',
+    label: '前端项目与创作记录',
+    description: '作品原始源码、恢复版本、组件收录关系与已保存 AI 会话',
+    privacyWarning: true,
+    defaultLocal: true,
+    defaultCloud: false,
+  },
+  {
+    id: 'extra.imageGeneration',
+    group: 'extraContent',
+    label: '生图配置与草稿',
+    description: '连接配置、各供应商草稿和提示词模板；API 密钥需另选应用凭据',
+    defaultLocal: true,
+    defaultCloud: true,
+  },
+  {
+    id: 'extra.generatedImageAlbum',
+    group: 'extraContent',
+    label: '生图相册',
+    description: '已保存原图、分类、生成参数与托管地址；可能包含私人图片',
+    privacyWarning: true,
+    defaultLocal: true,
+    defaultCloud: false,
+  },
+  {
     id: 'extra.appearance',
     group: 'extraContent',
     label: '外观与 CSS',
@@ -204,7 +244,8 @@ export const BACKUP_SCOPE_REGISTRY: ReadonlyArray<BackupScopeDefinition> = [
     id: 'extra.credentials',
     group: 'extraContent',
     label: '应用凭据',
-    description: 'API Key、GitHub Token、WebDAV 密码和 Bot Token',
+    description:
+      '主 API、生图 API、助手 GitHub 读取令牌、旧前端 API、自建图床、云备份和 Bot 凭据；不含网页登录或设备授权',
     sensitive: true,
     defaultLocal: false,
     defaultCloud: false,
@@ -240,8 +281,7 @@ export function createDefaultBackupSelection(
     resourceIds: new Set(
       resources
         .filter(
-          (resource) =>
-            !isResourceGalleryImage(resource) && selectedResourceTypes.has(resource.type),
+          (resource) => !isResourceOwnedFile(resource) && selectedResourceTypes.has(resource.type),
         )
         .map((resource) => resource.id),
     ),
@@ -263,6 +303,7 @@ export function toArchivePortableSelection(
   state: BackupSelectionTreeState,
 ): ArchivePortableSelection {
   return {
+    resourceAttachments: state.scopes.has('extra.resourceAttachments'),
     resourceGallery: state.scopes.has('extra.resourceGallery'),
     personalResources: {
       extraStory: state.scopes.has('resource.extraStory'),
@@ -281,6 +322,9 @@ export function toArchivePortableSelection(
     assistantData: state.scopes.has('extra.assistantData'),
     stitchWork: state.scopes.has('extra.stitchWork'),
     frontendWorkshopComponents: state.scopes.has('extra.frontendWorkshopComponents'),
+    frontendWorkshopProjects: state.scopes.has('extra.frontendWorkshopProjects'),
+    imageGeneration: state.scopes.has('extra.imageGeneration'),
+    generatedImageAlbum: state.scopes.has('extra.generatedImageAlbum'),
     communitySources: state.scopes.has('extra.communitySources'),
   }
 }
@@ -289,6 +333,7 @@ export function toCloudContentSelection(
   state: BackupSelectionTreeState,
 ): CloudBackupContentSelection {
   return {
+    resourceAttachments: state.scopes.has('extra.resourceAttachments'),
     resourceGallery: state.scopes.has('extra.resourceGallery'),
     personalResources: {
       extraStory: state.scopes.has('resource.extraStory'),
@@ -303,6 +348,9 @@ export function toCloudContentSelection(
     assistantData: state.scopes.has('extra.assistantData'),
     stitchWork: state.scopes.has('extra.stitchWork'),
     frontendWorkshopComponents: state.scopes.has('extra.frontendWorkshopComponents'),
+    frontendWorkshopProjects: state.scopes.has('extra.frontendWorkshopProjects'),
+    imageGeneration: state.scopes.has('extra.imageGeneration'),
+    generatedImageAlbum: state.scopes.has('extra.generatedImageAlbum'),
     resourceIds: [...state.resourceIds],
     communitySources: state.scopes.has('extra.communitySources'),
     appearance: state.scopes.has('extra.appearance'),
@@ -320,11 +368,13 @@ export function resourceRestoreScopeIds(
   resources: readonly ResourceSummary[],
   includeEmptyGallery = false,
 ): BackupScopeId[] {
-  const types = new Set(resources.filter((r) => !isResourceGalleryImage(r)).map((r) => r.type))
+  const types = new Set(resources.filter((r) => !isResourceOwnedFile(r)).map((r) => r.type))
   return BACKUP_SCOPE_REGISTRY.filter((scope) =>
     scope.resourceType
       ? types.has(scope.resourceType)
-      : scope.id === 'extra.resourceGallery' &&
-        (includeEmptyGallery || resources.some(isResourceGalleryImage)),
+      : scope.id === 'extra.resourceAttachments'
+        ? resources.some(isResourceAttachment)
+        : scope.id === 'extra.resourceGallery' &&
+          (includeEmptyGallery || resources.some(isResourceGalleryImage)),
   ).map((scope) => scope.id)
 }

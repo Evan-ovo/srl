@@ -2,7 +2,10 @@ import type {
   FrontendWorkshopImageGenerationRequest,
   FrontendWorkshopImageGenerationConfig,
 } from '../types/ImageGeneration'
-import { getImageGenerationCapabilities } from './ImageGenerationCapabilities'
+import {
+  getImageGenerationCapabilities,
+  isOfficialOpenAiImageEndpoint,
+} from './ImageGenerationCapabilities'
 import {
   DEFAULT_MODELS,
   DEFAULT_ENDPOINTS,
@@ -105,6 +108,7 @@ export function buildOpenAiImageRequest(
     config.endpoint,
   )
   const images = request.openAiInputImages ?? []
+  if (caps.textToImage === 'unsupported') throw new Error(caps.notes[0])
   const edit =
     images.length > 0 ||
     Boolean(request.openAiEditInstruction?.trim()) ||
@@ -125,11 +129,13 @@ export function buildOpenAiImageRequest(
     : openAiSize(request.width ?? 1024, request.height ?? 1024)
   const outputFormat = caps.outputFormat === 'supported' ? (request.outputFormat ?? 'png') : 'png'
   const body: Record<string, unknown> = { model, prompt, size }
-  if (config.provider === 'openai') body.n = 1
+  if (isOfficialOpenAiImageEndpoint(config.endpoint)) body.n = 1
   if (caps.quality === 'supported') body.quality = request.openAiQuality ?? 'auto'
   if (caps.background === 'supported') body.background = request.openAiBackground ?? 'auto'
   if (body.background === 'transparent' && outputFormat === 'jpeg')
     throw new Error('透明背景不能使用 JPEG，请选择 PNG 或 WebP')
+  if (body.background === 'transparent' && caps.transparentBackground !== 'supported')
+    throw new Error('透明背景需要接口同时确认背景和 PNG / WebP 输出格式能力')
   if (caps.outputFormat === 'supported') body.output_format = outputFormat
   if (
     caps.outputCompression === 'supported' &&
@@ -140,7 +146,6 @@ export function buildOpenAiImageRequest(
   if (config.provider === 'openai')
     Object.assign(body, parseImageAdditionalJson(request.additionalJson))
   const url = new URL(requiredHttpsUrl(config.endpoint, DEFAULT_ENDPOINTS[config.provider]))
-  if (url.username || url.password) throw new Error('Endpoint 不允许包含用户名或密码')
   const path = url.pathname.replace(/\/+$/u, '')
   url.pathname = /\/images\/(generations|edits)$/.test(path)
     ? path.replace(/\/(generations|edits)$/, edit ? '/edits' : '/generations')

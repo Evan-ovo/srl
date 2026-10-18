@@ -1,5 +1,6 @@
 export type GalleryCategoryCatalog = Partial<Record<import('./Resource').ResourceType, string[]>>
 import type { ResourceReference } from './Resource'
+import { includeResourceAttachmentIds } from './ResourceAttachment'
 
 /** Images use the existing resource binary/backup/vault pipeline, like persona attachments. */
 export const RESOURCE_GALLERY_ASSET_KIND = 'resource-gallery-image'
@@ -52,7 +53,10 @@ export function includeResourceGalleryIds<T extends Pick<ResourceReference, 'id'
   resources: readonly T[],
   selectedIds: Set<string>,
   includeGallery: boolean,
+  includeAttachments = true,
+  allowDetachedAttachments = false,
 ): void {
+  includeResourceAttachmentIds(resources, selectedIds, includeAttachments, allowDetachedAttachments)
   const owners = new Map(resources.filter((r) => !isResourceGalleryImage(r)).map((r) => [r.id, r]))
   for (const image of resources) {
     if (!isResourceGalleryImage(image)) continue
@@ -75,7 +79,7 @@ export function remapGalleryMetadata(
   ids: ReadonlyMap<string, string>,
 ): Record<string, unknown> {
   const next = { ...metadata }
-  for (const key of ['galleryOwnerId', 'resourceCoverId']) {
+  for (const key of ['galleryOwnerId', 'resourceCoverId', 'attachmentOwnerId']) {
     if (typeof next[key] === 'string') next[key] = ids.get(next[key]) ?? next[key]
   }
   return next

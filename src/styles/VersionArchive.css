@@ -64,8 +64,10 @@
   gap: 0.35rem;
   padding: 0.65rem 0.4rem;
   border: 0;
-  color: var(--button-color, var(--color-ink-soft));
-  background: var(--button-background, transparent);
+  border-radius: 0;
+  color: var(--color-ink-soft);
+  background: transparent;
+  box-shadow: none;
   font-size: 0.75rem;
   cursor: pointer;
 }
@@ -88,7 +90,6 @@
 .resource-detail__tabs .resource-detail__tab--active {
   color: var(--selection-color, var(--color-ink));
   background: var(--selection-background, var(--color-accent-soft));
-  box-shadow: var(--selection-shadow, var(--control-shadow));
 }
 
 .resource-detail__tabs .resource-detail__tab--active::after {

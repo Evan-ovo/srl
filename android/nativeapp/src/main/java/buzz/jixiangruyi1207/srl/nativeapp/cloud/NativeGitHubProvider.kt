@@ -70,6 +70,7 @@ class NativeGitHubProvider(
 
     override fun upload(name: String, file: File, contentType: String): NativeCloudObject {
         val (tag, releaseId) = uploadContainer(name)
+        val expectedHash = NativeCloudSnapshotCodec.sha256(file)
         var last: Exception? = null
         repeat(3) { attempt ->
             try {
@@ -80,8 +81,14 @@ class NativeGitHubProvider(
                         val existing = listReleaseAssets(releaseId).find { it.name == name && it.size == file.length() }
                             ?: throw IllegalStateException("GitHub 同名对象已存在但大小不一致；拒绝覆盖 immutable 对象")
                         val confirmed = assetById(existing.id)
-                        if (confirmed?.size != file.length()) {
-                            throw IllegalStateException("GitHub 已有对象远端大小确认失败")
+                        if (confirmed == null || !assetMatchesFile(confirmed, file, expectedHash)) {
+                            val namedHash = Regex("^srl-chunk--sha256-([a-f0-9]{64})$", RegexOption.IGNORE_CASE)
+                                .matchEntire(name)?.groupValues?.get(1)
+                            if (namedHash?.equals(expectedHash, ignoreCase = true) != true) {
+                                throw IllegalStateException("GitHub 已有同名对象摘要不符；拒绝删除 immutable 对象")
+                            }
+                            deleteById(existing.id)
+                            throw IllegalStateException("GitHub 已有同名对象 SHA-256 不符；已删除校验失败的附件并重试")
                         }
                         return confirmed.copy(name = if (tag == LEGACY_RELEASE) name else "$tag::$name")
                     }
@@ -91,7 +98,13 @@ class NativeGitHubProvider(
                 val id = uploaded.getLong("id").toString()
                 repeat(4) { poll ->
                     val confirmed = assetById(id)
-                    if (confirmed?.size == file.length()) return confirmed.copy(name = if (tag == LEGACY_RELEASE) name else "$tag::$name")
+                    if (confirmed != null && assetMatchesFile(confirmed, file, expectedHash))
+                        return confirmed.copy(name = if (tag == LEGACY_RELEASE) name else "$tag::$name")
+                    val remoteDigest = confirmed?.digest?.let(::parseSha256Digest)
+                    if (remoteDigest != null && !remoteDigest.equals(expectedHash, ignoreCase = true)) {
+                        deleteById(id)
+                        throw IllegalStateException("GitHub 上传对象 SHA-256 不符；已删除校验失败的附件")
+                    }
                     if (poll < 3) sleeper((poll + 1) * 600L)
                 }
                 deleteById(id)
@@ -140,9 +153,38 @@ class NativeGitHubProvider(
             return NativeCloudObject(
                 item.getLong("id").toString(), item.getString("name"), item.getLong("size"),
                 runCatching { Instant.parse(item.getString("created_at")).toEpochMilli() }.getOrDefault(0),
+                item.optString("digest").takeIf(String::isNotBlank),
             )
         }
     }
+
+    private fun assetMatchesFile(asset: NativeCloudObject, file: File, expectedHash: String): Boolean {
+        if (asset.size != file.length()) return false
+        val remoteDigest = asset.digest?.let(::parseSha256Digest)
+        if (remoteDigest != null) return remoteDigest.equals(expectedHash, ignoreCase = true)
+        val request = request("$apiBase/releases/assets/${asset.id}")
+            .header("Accept", "application/octet-stream").get().build()
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        var received = 0L
+        execute(request).use { response ->
+            if (!response.isSuccessful) throw githubError("GitHub 对象摘要读取失败", response.code, response.body?.string(), response.headers["X-GitHub-Request-Id"])
+            val body = response.body ?: throw IllegalStateException("GitHub 对象摘要响应为空")
+            body.byteStream().buffered(128 * 1024).use { input ->
+                val buffer = ByteArray(128 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    received += count
+                    digest.update(buffer, 0, count)
+                }
+            }
+        }
+        val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+        return received == asset.size && actualHash.equals(expectedHash, ignoreCase = true)
+    }
+
+    private fun parseSha256Digest(value: String): String? =
+        Regex("^sha256:([a-f0-9]{64})$", RegexOption.IGNORE_CASE).matchEntire(value)?.groupValues?.get(1)
 
     private fun getRelease(tag: String, required: Boolean): Pair<Long, JSONObject>? {
         execute(request("$apiBase/releases/tags/${Uri.encode(tag)}").get().build()).use { response ->

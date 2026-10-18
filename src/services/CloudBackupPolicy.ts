@@ -46,6 +46,7 @@ export function normalizeContentSelection(
 ): CloudBackupContentSelection {
   return {
     credentials: selection?.credentials === true,
+    resourceAttachments: selection?.resourceAttachments === true,
     resourceGallery: selection?.resourceGallery === true,
     appearance: selection?.appearance !== false,
     cloudBackup: selection?.cloudBackup !== false,
@@ -61,6 +62,7 @@ export function normalizeContentSelection(
         )
       : undefined,
     personalResources: {
+      resourceAttachments: selection?.resourceAttachments === true,
       resourceGallery: selection?.resourceGallery === true,
       extraStory: selection?.personalResources?.extraStory !== false,
       pocketPhone: selection?.personalResources?.pocketPhone !== false,
@@ -82,6 +84,9 @@ export function normalizeContentSelection(
     assistantData: selection?.assistantData === true,
     stitchWork: selection?.stitchWork === true,
     frontendWorkshopComponents: selection?.frontendWorkshopComponents === true,
+    frontendWorkshopProjects: selection?.frontendWorkshopProjects === true,
+    imageGeneration: selection?.imageGeneration === true,
+    generatedImageAlbum: selection?.generatedImageAlbum === true,
     communitySources: selection?.communitySources === true,
   }
 }

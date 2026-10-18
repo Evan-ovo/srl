@@ -1,6 +1,7 @@
 import type {
   FrontendWorkshopImageProvider,
   FrontendWorkshopImageModelOption,
+  FrontendWorkshopImageGenerationConfig,
 } from '../types/ImageGeneration'
 
 export const DEFAULT_ENDPOINTS: Record<FrontendWorkshopImageProvider, string> = {
@@ -25,9 +26,21 @@ export const NOVELAI_MODELS: FrontendWorkshopImageModelOption[] = [
 ]
 
 export function requiredHttpsUrl(value: string, fallback: string): string {
-  const url = new URL(value.trim() || fallback)
+  let url: URL
+  try {
+    url = new URL(value.trim() || fallback)
+  } catch {
+    throw new Error('生图 API 地址无效，请在连接设置中填写完整的 HTTPS 地址')
+  }
   if (url.protocol !== 'https:') throw new Error('生图 API 地址必须使用 HTTPS')
+  if (url.username || url.password) throw new Error('生图 API 地址不能包含用户名或密码')
   return url.toString()
+}
+
+export function validateImageGenerationConfig(config: FrontendWorkshopImageGenerationConfig): void {
+  requiredHttpsUrl(config.endpoint, DEFAULT_ENDPOINTS[config.provider])
+  if (!config.model.trim()) throw new Error('请在连接设置中填写模型 ID 或选择模型')
+  if (!config.apiKey.trim()) throw new Error('请在连接设置中填写当前供应商的 API 密钥')
 }
 
 export function diagnosticEndpoint(value: string): string {

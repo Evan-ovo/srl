@@ -19,3 +19,11 @@ repository; see LICENSE for the applicable redistribution conditions.
 `src/utils/RenderCompatibilityRuntime.ts` and
 `src/utils/RenderCompatibilityFrontend.ts` are independent behavior-contract
 Owners and are not included in the preceding derived-portions designation.
+
+`src/vendor/legacy-word/DocToText.js` is based on JSDoc at
+https://github.com/Alpaq92/JSDoc, commit 821695a884e0c0bb8592a635d9524bb3e116cd67,
+under the 0BSD license retained alongside the source. SRL changes its module
+wrapper to ESM, bounds and rejects cyclic sector chains, and reads CLX lengths
+as unsigned values. The generated public-domain `feature-showcase.doc` sample
+from that revision is retained as `fixtures/extra-story/word97-showcase.doc` for
+reader regression tests. Document code/macros are never executed.

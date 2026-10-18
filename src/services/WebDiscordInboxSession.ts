@@ -1,3 +1,4 @@
+import { requestWebBackgroundAudio } from './WebBackgroundKeepAlive'
 import { Capacitor } from '@capacitor/core'
 import { taskCenter } from '../core/TaskCenter'
 import { noticeCenter } from '../core/NoticeCenter'
@@ -143,7 +144,9 @@ export async function startWebDiscordInbox(): Promise<void> {
   state = { status: 'starting', message: '' }
   installGuards()
   publish()
+  let releaseAudio = () => undefined as void
   try {
+    releaseAudio = await requestWebBackgroundAudio('后台收件', controller.signal)
     const { initializeVaultOnce, vaultService } = await import('../core/LibraryContainer')
     await Promise.all([initializeVaultOnce(), draining])
     if (id !== session) return
@@ -158,6 +161,7 @@ export async function startWebDiscordInbox(): Promise<void> {
     taskCenter.start({
       operationId: TASK_ID,
       name: '网页后台收件',
+      keepAlive: true,
       phase: '检查新帖子和资源',
       background: true,
       cancelable: true,
@@ -184,6 +188,8 @@ export async function startWebDiscordInbox(): Promise<void> {
     if (id === session)
       pauseWebDiscordInbox(error instanceof Error ? error.message : '收件未能启动。')
     throw error
+  } finally {
+    releaseAudio()
   }
 }
 

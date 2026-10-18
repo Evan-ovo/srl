@@ -65,7 +65,13 @@ export async function backfillCardFingerprints(
   checkpoint = () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
   snapshot?: ResourceSummary[],
 ): Promise<number> {
-  return (await loadVersionRecognitionSnapshot(storage, checkpoint, snapshot)).backfilled
+  await checkpoint()
+  const [summaries, versions] = await Promise.all([
+    snapshot ?? storage.listResourceListSummaries?.() ?? storage.listSummaries(),
+    storage.listVersionListSummaries?.() ?? storage.listVersionSummaries(),
+  ])
+  return (await prepareVersionRecognitionSnapshot(storage, checkpoint, summaries, versions))
+    .backfilled
 }
 
 export interface VersionRecognitionSnapshot {
@@ -85,6 +91,17 @@ export async function loadVersionRecognitionSnapshot(
     snapshot ?? storage.listSummaries(),
     storage.listVersionSummaries(),
   ])
+  return prepareVersionRecognitionSnapshot(storage, checkpoint, summaries, versionSummaries)
+}
+
+async function prepareVersionRecognitionSnapshot(
+  storage: ResourceStorageAdapter,
+  checkpoint: () => Promise<void>,
+  summaries: ResourceSummary[],
+  versionSummaries: ResourceSummary[],
+): Promise<VersionRecognitionSnapshot> {
+  // A pause/lock can arrive while storage reads are pending, even for a tiny library.
+  await checkpoint()
   let backfilled = 0
   let processed = 0
   for (const summary of summaries) {
@@ -97,7 +114,8 @@ export async function loadVersionRecognitionSnapshot(
       continue
     const metadata = summary.metadata.card
       ? summary.metadata
-      : ((await storage.get(summary.id))?.metadata ?? summary.metadata)
+      : ((await (storage.getSummary?.(summary.id) ?? storage.get(summary.id)))?.metadata ??
+        summary.metadata)
     const fingerprints = await computeCardFingerprints(metadata)
     if (!fingerprints) continue
     const changes = {
@@ -122,7 +140,8 @@ export async function loadVersionRecognitionSnapshot(
       continue
     const metadata = summary.metadata.card
       ? summary.metadata
-      : ((await storage.getVersion?.(summary.id))?.metadata ?? summary.metadata)
+      : ((await (storage.getSummary?.(summary.id, true) ?? storage.getVersion?.(summary.id)))
+          ?.metadata ?? summary.metadata)
     const fingerprints = await computeCardFingerprints(metadata)
     if (!fingerprints) continue
     const changes = {
@@ -494,15 +513,20 @@ export async function updateVersionNote(
 ): Promise<void> {
   const normalizedNote = note.trim().slice(0, 240)
   if (versionId === resourceId) {
-    if (!(await storage.get(resourceId))) throw new Error('当前版本已经不存在')
+    const current = await (storage.getSummary?.(resourceId) ?? storage.get(resourceId))
+    if (!current) throw new Error('当前版本已经不存在')
+    if ((current.versionNote ?? '') === normalizedNote) return
     await storage.update(resourceId, { versionNote: normalizedNote, updatedAt: Date.now() })
     return
   }
-  const selected = (await storage.listVersions(resourceId)).find(
-    (version) => version.id === versionId,
-  )
-  if (!selected) throw new Error('历史版本已经不存在')
-  await storage.saveVersion({ ...selected, versionNote: normalizedNote })
+  const selected = storage.getSummary
+    ? await storage.getSummary(versionId, true)
+    : storage.getVersion
+      ? await storage.getVersion(versionId)
+      : (await storage.listVersions(resourceId)).find((version) => version.id === versionId)
+  if (!selected || selected.versionGroupId !== resourceId) throw new Error('历史版本已经不存在')
+  if ((selected.versionNote ?? '') === normalizedNote) return
+  await storage.updateVersion(versionId, { versionNote: normalizedNote })
 }
 
 export async function mergeExistingResourceAsVersion(

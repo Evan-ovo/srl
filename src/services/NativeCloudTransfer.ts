@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 
 import { transferNativeStream } from '../core/NativeStreamTransfer'
+import { taskCenter } from '../core/TaskCenter'
 import type {
   CloudBackupConfig,
   CloudBackupMetrics,
@@ -12,6 +13,7 @@ interface NativeCloudJobStatus {
   id: string
   kind?: 'upload' | 'restore'
   provider: CloudBackupProvider
+  automatic?: boolean
   status: 'staging' | 'queued' | 'running' | 'committing' | 'completed' | 'failed' | 'cancelled'
   completed: number
   total: number
@@ -51,6 +53,7 @@ interface NativeCloudTransferPlugin {
     secret: string
     wifiOnly: boolean
     chargingOnly: boolean
+    automatic: boolean
     expectedTotal: number
   }): Promise<{ jobId: string; pipeline?: boolean }>
   beginObject(options: {
@@ -79,6 +82,16 @@ interface NativeCloudTransferPlugin {
     existingId?: string
     releaseId?: number
     segments: Array<{ contentHash: string; offset: number; size: number }>
+  }): Promise<{ staged: boolean }>
+  stageObjectFromFile(options: {
+    jobId: string
+    name: string
+    contentType: string
+    existingId?: string
+    releaseId?: number
+    uri: string
+    offset: number
+    size: number
   }): Promise<{ staged: boolean }>
   probeLibraryObject(options: {
     sourceHash: string
@@ -181,6 +194,16 @@ export function isNativeCloudTransferAvailable(): boolean {
 function hasValidNativeSource(object: NativeUploadObject): boolean {
   const source = object.nativeSource
   if (!source || source.kind === 'inline') return false
+  if (source.kind === 'file')
+    return (
+      Boolean(source.uri) &&
+      Number.isSafeInteger(source.offset) &&
+      source.offset >= 0 &&
+      Number.isSafeInteger(source.size) &&
+      source.size >= 0 &&
+      Number.isSafeInteger(source.offset + source.size) &&
+      source.size === (object.size ?? object.blob?.size)
+    )
   const segments = source.kind === 'range' ? [source] : source.segments
   if (!segments.length) return false
   let total = 0
@@ -213,6 +236,7 @@ export async function canUseNativeStructuredSnapshotHandoff(options: {
     if (!hasValidNativeSource(object)) return false
     const source = object.nativeSource
     if (!source || source.kind === 'inline') return false
+    if (source.kind === 'file') continue // The native stage method validates and snapshots its controlled path.
     const segments = source.kind === 'range' ? [source] : source.segments
     for (const segment of segments) {
       const minimumSize = segment.offset + segment.size
@@ -282,25 +306,49 @@ async function stageObject(
   if (!manifest && object.nativeSource && object.nativeSource.kind !== 'inline') {
     const started = monotonicNow()
     const result =
-      object.nativeSource.kind === 'range'
-        ? await nativeTransfer.stageObjectFromLibrary({
-            jobId,
-            name: object.name,
-            contentType: object.contentType,
-            existingId: object.existingId,
-            releaseId: object.releaseId,
-            sourceHash: object.nativeSource.contentHash,
-            offset: object.nativeSource.offset,
-            size: object.nativeSource.size,
-          })
-        : await nativeTransfer.stageObjectFromSources({
-            jobId,
-            name: object.name,
-            contentType: object.contentType,
-            existingId: object.existingId,
-            releaseId: object.releaseId,
-            segments: object.nativeSource.segments,
-          })
+      object.nativeSource.kind === 'file'
+        ? await nativeTransfer
+            .stageObjectFromFile({
+              jobId,
+              name: object.name,
+              contentType: object.contentType,
+              existingId: object.existingId,
+              releaseId: object.releaseId,
+              uri: object.nativeSource.uri,
+              offset: object.nativeSource.offset,
+              size: object.nativeSource.size,
+            })
+            .catch((error: unknown) => {
+              if (
+                error &&
+                typeof error === 'object' &&
+                'code' in error &&
+                error.code === 'UNIMPLEMENTED'
+              )
+                throw new Error('当前 APK 缺少 Discord 附件原生备份接口，请更新 APK 后重试。', {
+                  cause: error,
+                })
+              throw error
+            })
+        : object.nativeSource.kind === 'range'
+          ? await nativeTransfer.stageObjectFromLibrary({
+              jobId,
+              name: object.name,
+              contentType: object.contentType,
+              existingId: object.existingId,
+              releaseId: object.releaseId,
+              sourceHash: object.nativeSource.contentHash,
+              offset: object.nativeSource.offset,
+              size: object.nativeSource.size,
+            })
+          : await nativeTransfer.stageObjectFromSources({
+              jobId,
+              name: object.name,
+              contentType: object.contentType,
+              existingId: object.existingId,
+              releaseId: object.releaseId,
+              segments: object.nativeSource.segments,
+            })
     if (result.staged) {
       return {
         nativeDiskMs: monotonicNow() - started,
@@ -383,11 +431,40 @@ export async function uploadNativeStructuredSnapshot(options: {
     secret: options.secret,
     wifiOnly: options.respectConstraints ? protection.wifiOnly : false,
     chargingOnly: options.respectConstraints ? protection.chargingOnly : false,
+    automatic: options.respectConstraints === true,
     expectedTotal: total,
   })
   const { jobId } = started
   const pipeline = started.pipeline === true
   activeJobId = jobId
+  const operationId = `native-cloud-backup:${jobId}`
+  taskCenter.start({
+    operationId,
+    name: options.config.provider === 'github' ? 'GitHub 云备份' : 'Koofr 云备份',
+    phase: '正在准备 Android 上传任务',
+    background: options.respectConstraints === true,
+  })
+  const publishTaskProgress = (state: NativeCloudJobStatus, phase?: string): void => {
+    taskCenter.update(operationId, {
+      phase:
+        phase ??
+        (state.status === 'staging'
+          ? '正在暂存备份对象'
+          : state.status === 'committing'
+            ? '正在提交最终清单'
+            : options.respectConstraints
+              ? '自动备份正在后台上传'
+              : '正在上传本次备份'),
+      progress: state.total > 0 ? state.completed / state.total : undefined,
+      itemProgress: { completed: state.completed, total: state.total },
+    })
+    if ((state.totalBytes ?? 0) > 0 || (state.uploadedBytes ?? 0) > 0) {
+      taskCenter.updateTransfer(operationId, {
+        transferredBytes: state.uploadedBytes ?? 0,
+        totalBytes: state.totalBytes,
+      })
+    }
+  }
   let listener: PluginListenerHandle | undefined
   let completed: Promise<NativeCloudJobStatus> | undefined
 
@@ -402,6 +479,7 @@ export async function uploadNativeStructuredSnapshot(options: {
     void completed.catch(() => undefined)
     listener = await nativeTransfer.addListener('jobProgress', (state) => {
       if (state.id !== jobId) return
+      publishTaskProgress(state)
       const percent = state.total
         ? Math.min(100, Math.round((state.completed / state.total) * 100))
         : 0
@@ -414,7 +492,7 @@ export async function uploadNativeStructuredSnapshot(options: {
           ? ` · ${(state.uploadedBytes ?? 0) / 1024 / 1024 < 10 ? ((state.uploadedBytes ?? 0) / 1024 / 1024).toFixed(1) : Math.round((state.uploadedBytes ?? 0) / 1024 / 1024)} MiB / ${state.totalBytes / 1024 / 1024 < 10 ? (state.totalBytes / 1024 / 1024).toFixed(1) : Math.round(state.totalBytes / 1024 / 1024)} MiB`
           : ''
       options.onProgress?.(
-        `正在上传 ${state.completed}/${state.total}（${percent}%）${transferred}${speed}；Android 切到后台也会继续…`,
+        `正在上传 ${state.completed}/${state.total}（${percent}%）${transferred}${speed}；${options.respectConstraints ? '自动备份会在后台继续' : '手动备份切到其他应用后仍会继续'}…`,
       )
       if (state.status === 'completed') resolveCompleted(state)
       else if (state.status === 'failed' || state.status === 'cancelled') {
@@ -472,7 +550,11 @@ export async function uploadNativeStructuredSnapshot(options: {
     await attachCompletionListener()
     if (pipeline) {
       await nativeTransfer.startJob({ jobId })
-      options.onProgress?.('Android 后台上传任务已启动，正在流水暂存变更对象…')
+      options.onProgress?.(
+        options.respectConstraints
+          ? 'Android 自动备份任务已启动，正在后台流水暂存并上传变更对象…'
+          : 'Android 上传任务已启动，正在流水暂存并上传本次备份；切到其他应用后仍会继续…',
+      )
     }
 
     let staged = 0
@@ -492,9 +574,20 @@ export async function uploadNativeStructuredSnapshot(options: {
       mergeStagingMetrics(await stageObject(jobId, object, false))
       if (activeJobId !== jobId) throw new Error('原生云备份已取消')
       staged += 1
+      publishTaskProgress(
+        {
+          id: jobId,
+          provider: options.config.provider,
+          status: 'staging',
+          completed: staged,
+          total,
+          updatedAt: Date.now(),
+        },
+        `正在暂存备份对象 ${staged}/${total}`,
+      )
       options.onProgress?.(
         pipeline
-          ? `正在扫描并暂存 ${staged}/${total}；Android 后台同步上传中…`
+          ? `正在扫描并暂存 ${staged}/${total}；${options.respectConstraints ? 'Android 自动备份在后台同步上传' : 'Android 正在同步上传本次备份，切到其他应用后仍会继续'}…`
           : `正在扫描并暂存 ${staged}/${total}…`,
       )
     }
@@ -507,11 +600,16 @@ export async function uploadNativeStructuredSnapshot(options: {
     } else {
       // 兼容尚未实现流水协议的旧 APK：保持原来的“全部暂存后再启动”行为。
       await nativeTransfer.startJob({ jobId })
-      options.onProgress?.('正在提交快照……变更对象已持久化，等待后台上传完成后提交最终清单。')
+      options.onProgress?.('正在提交快照……变更对象已持久化，等待上传完成后提交最终清单。')
     }
 
-    return await awaitCompletion(stagingMetrics)
+    const result = await awaitCompletion(stagingMetrics)
+    taskCenter.complete(operationId)
+    return result
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error ?? '')
+    if (/^(原生云备份|云备份)已取消$/u.test(message)) taskCenter.cancelled(operationId)
+    else taskCenter.fail(operationId, error)
     if (activeJobId === jobId) {
       await Promise.resolve(nativeTransfer.cancelJob({ jobId })).catch(() => undefined)
     }

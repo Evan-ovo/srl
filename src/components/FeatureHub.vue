@@ -327,7 +327,7 @@ function forwardAssistantAppearance(
         :resources="resources"
         :categories="categories"
         @back="activePage = 'home'"
-        @library-changed="emit('library-changed')"
+        @library-changed="emit('library-changed', $event)"
       />
     </template>
     <AppearanceStudio
@@ -356,6 +356,7 @@ function forwardAssistantAppearance(
       @update:ui-font-scale="emit('update:uiFontScale', $event)"
       @save-css="saveAppearance"
       @save-assistant-css="forwardAssistantAppearance"
+      @preview-css="emit('preview-css', $event)"
       @assistant-visibility="setAssistantVisible($event, assistantPage)"
       @assistant-activity="setAssistantActivity($event, assistantPage)"
     />

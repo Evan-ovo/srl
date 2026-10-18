@@ -9,6 +9,7 @@ export {
 import { selectCloudResources, type PersonalResourceSelection } from './PersonalResourceBackup'
 
 import type { ArchivePortableData } from '../types/Backup'
+import { remapCommunitySourceBackupBindings } from './CommunitySourceBackupService'
 import type { Category, ResourceSummary } from '../types/Resource'
 
 import type { CloudBackupConfig, CloudBackupItem, GitHubBackupConfig } from '../types/CloudBackup'
@@ -18,6 +19,7 @@ import type { CategoryService } from './CategoryService'
 import { hashCloudBlob } from './CloudArchiveCodec'
 
 import { isCloudRequestTimeout } from './CloudBackupHttp'
+import { assertGitHubDownloadableAsset } from './CloudBackupGitHubTransport'
 
 import {
   LEGACY_RELEASE_TAG,
@@ -43,17 +45,20 @@ import {
   materializeStructuredResource,
   structuredSnapshotArchiveName,
   structuredSnapshotParts,
+  structuredSnapshotObjects,
   type CreatedStructuredSnapshot,
   type StructuredSnapshot,
 } from './CloudStructuredSnapshot'
 
 import type { ExportService } from './ExportService'
+import type { RestoreTransferOptions } from './CloudBackupTransport'
 
 import { type NativeRestoreObject, type NativeRestoreResource } from './NativeCloudTransfer'
 
 import type { ResourceService } from './ResourceService'
 
 export interface CloudBackupSnapshotOperationsContext {
+  signal?: AbortSignal
   listRetentionBackups: (config: CloudBackupConfig, secret: string) => Promise<CloudBackupItem[]>
   referencedPartIdentities: (
     config: CloudBackupConfig,
@@ -84,14 +89,18 @@ export interface CloudBackupSnapshotOperationsContext {
   createGitHubObjectReader: (
     config: GitHubBackupConfig,
     secret: string,
+    options?: RestoreTransferOptions,
   ) => Promise<(object: import('./GitHubBackupBundle').GitHubBundleManifest) => Promise<Blob>>
   createWebDavObjectReader: (
     config: import('../types/CloudBackup').WebDavBackupConfig,
     secret: string,
+    options?: RestoreTransferOptions,
   ) => (object: import('./GitHubBackupBundle').GitHubBundleManifest) => Promise<Blob>
   exportService: ExportService
   resourceService: ResourceService
   categoryService: CategoryService
+  readCommunityAttachment?: (assetId: string) => Promise<Blob | undefined>
+  readAlbumFile?: (id: string) => Promise<Blob>
   transportState: Pick<
     import('./CloudBackupTransportContext').CloudBackupTransportContext,
     | 'webDavCapabilities'
@@ -161,7 +170,21 @@ export async function buildNativeRestorePlan(
     return pending
   }
   const resources: NativeRestoreResource[] = []
-  for (const resource of [...snapshot.resources, ...snapshot.versions]) {
+  const records = [
+    ...snapshot.resources,
+    ...snapshot.versions,
+    ...(snapshot.portableData.generatedImageAlbum?.map((entry) => ({
+      object: entry.object!,
+      type: 'other',
+      fileName: entry.item.name,
+    })) ?? []),
+    ...(snapshot.portableData.communitySources?.attachments.map((entry) => ({
+      object: entry.object,
+      type: 'other',
+      fileName: entry.assetId,
+    })) ?? []),
+  ]
+  for (const resource of records) {
     const segments: NativeRestoreResource['segments'] = []
     for (const part of resource.object.parts) {
       const hash = part.sha256.toLowerCase()
@@ -171,9 +194,11 @@ export async function buildNativeRestorePlan(
         const container = structuredPartContainer(part)
         const objectKey = structuredPartObjectKey(part)
         const asset = (await githubInventory(container)).get(objectKey)
-        if (!asset || asset.size !== storedSize) {
-          throw new Error(`GitHub 对象缺少分块：${container}/${objectKey}`)
-        }
+        assertGitHubDownloadableAsset(
+          asset,
+          storedSize,
+          `资源 ${resource.fileName} 的分块 ${container}/${objectKey}`,
+        )
         url = `https://api.github.com/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repository)}/releases/assets/${asset.id}`
       } else {
         url = joinUrl(config.baseUrl, normalizeFolder(config.folder), structuredPartObjectKey(part))
@@ -202,31 +227,87 @@ export async function materializeStructuredArchive(
   config: CloudBackupConfig,
   secret: string,
 ) {
-  const snapshot =
-    config.provider === 'github'
-      ? await context.readGitHubStructuredSnapshot(config, secret, item)
-      : await context.readWebDavStructuredSnapshot(config, secret, item.objectKey)
-  const providerReader =
-    config.provider === 'github'
-      ? await context.createGitHubObjectReader(config, secret)
-      : context.createWebDavObjectReader(config, secret)
-  return (
-    await context.exportService.createArchivesFromSource(
-      {
-        resources: snapshot.resources,
-        versions: snapshot.versions,
-        read: async (planned, historical) => {
-          const record = (historical ? snapshot.versions : snapshot.resources).find(
-            (resource) => resource.id === planned.id,
-          )
-          if (!record) throw new Error(`备份缺少资源描述：${planned.fileName}`)
-          return materializeStructuredResource(record, providerReader)
-        },
-      },
-      snapshot.categories,
-      { mode: 'full', portableData: snapshot.portableData },
+  const controller = new AbortController()
+  const abort = () => controller.abort(context.signal?.reason)
+  if (context.signal?.aborted) abort()
+  else context.signal?.addEventListener('abort', abort, { once: true })
+  try {
+    controller.signal.throwIfAborted()
+    const snapshot =
+      config.provider === 'github'
+        ? await context.readGitHubStructuredSnapshot(config, secret, item)
+        : await context.readWebDavStructuredSnapshot(config, secret, item.objectKey)
+    controller.signal.throwIfAborted()
+    const transfer = { signal: controller.signal }
+    const providerReader =
+      config.provider === 'github'
+        ? await context.createGitHubObjectReader(config, secret, transfer)
+        : context.createWebDavObjectReader(config, secret, transfer)
+    const index = (records: typeof snapshot.resources) => {
+      const byId = new Map<string, (typeof records)[number]>()
+      for (const record of records) if (!byId.has(record.id)) byId.set(record.id, record)
+      return byId
+    }
+    const resources = index(snapshot.resources),
+      versions = index(snapshot.versions)
+    const album = new Map(
+      snapshot.portableData.generatedImageAlbum?.map((entry) => [entry.item.id, entry]),
     )
-  )[0]!
+    const { communitySources, ...portableData } = snapshot.portableData
+    const communitySourceAttachments = []
+    for (const entry of communitySources?.attachments ?? []) {
+      controller.signal.throwIfAborted()
+      const blob = await providerReader(entry.object)
+      communitySourceAttachments.push({
+        assetId: entry.assetId,
+        blob: new Blob([blob], { type: entry.mimeType }),
+      })
+    }
+    return (
+      await context.exportService.createArchivesFromSource(
+        {
+          resources: snapshot.resources,
+          versions: snapshot.versions,
+          read: async (planned, historical) => {
+            controller.signal.throwIfAborted()
+            const record = (historical ? versions : resources).get(planned.id)
+            if (!record) throw new Error(`备份缺少资源描述：${planned.fileName}`)
+            return materializeStructuredResource(record, providerReader)
+          },
+        },
+        snapshot.categories,
+        {
+          mode: 'full',
+          portableData,
+          readAlbumFile: async (id) => {
+            const entry = album.get(id)
+            if (!entry?.object) throw new Error('云备份缺少相册原图描述')
+            return providerReader(entry.object)
+          },
+          ...(communitySources
+            ? {
+                communitySourceData: remapCommunitySourceBackupBindings(
+                  communitySources.data,
+                  new Map(snapshot.resources.map((record) => [record.id, record.id])),
+                ),
+                communitySourceAttachments,
+              }
+            : {}),
+        },
+        undefined,
+        {
+          signal: controller.signal,
+          ...(config.provider === 'github'
+            ? { readAhead: { onFailure: (error: unknown) => controller.abort(error) } }
+            : {}),
+        },
+      )
+    )[0]!
+  } finally {
+    // Also release the reader's last verified chunk when the ZIP has been written.
+    controller.abort()
+    context.signal?.removeEventListener('abort', abort)
+  }
 }
 
 export interface StructuredBackupIndex {
@@ -315,6 +396,11 @@ export async function reuseUnchangedStructuredBackup(
     const assets = await context.listGitHubAssets(config, secret, release.id)
     const manifest = assets.find((asset) => asset.name === objectKey)
     if (!manifest) return undefined
+    try {
+      assertGitHubDownloadableAsset(manifest, manifest.size, manifest.name)
+    } catch {
+      return undefined
+    }
     let snapshot: StructuredSnapshot
     try {
       snapshot = await context.readGitHubStructuredSnapshot(config, secret, {
@@ -330,14 +416,21 @@ export async function reuseUnchangedStructuredBackup(
     }
     const parts = structuredSnapshotParts(snapshot)
     const partAssets = await context.readGitHubPartInventory(config, secret, parts)
-    if (parts.some((part) => partAssets.get(structuredPartIdentity(part))?.size !== part.size)) {
+    try {
+      for (const part of parts)
+        assertGitHubDownloadableAsset(
+          partAssets.get(structuredPartIdentity(part)),
+          part.size,
+          `${structuredPartContainer(part)}/${structuredPartObjectKey(part)}`,
+        )
+    } catch {
       return undefined
     }
     return {
       id: String(manifest.id),
       objectKey,
-      size: [...snapshot.resources, ...snapshot.versions].reduce(
-        (total, resource) => total + resource.fileSize,
+      size: structuredSnapshotObjects(snapshot).reduce(
+        (total, object) => total + object.totalSize,
         0,
       ),
       createdAt: Date.parse(manifest.created_at) || Date.parse(snapshot.createdAt) || Date.now(),
@@ -365,8 +458,8 @@ export async function reuseUnchangedStructuredBackup(
   return {
     id: objectKey,
     objectKey,
-    size: [...snapshot.resources, ...snapshot.versions].reduce(
-      (total, resource) => total + resource.fileSize,
+    size: structuredSnapshotObjects(snapshot).reduce(
+      (total, object) => total + object.totalSize,
       0,
     ),
     createdAt: manifest.createdAt || Date.parse(snapshot.createdAt) || Date.now(),
@@ -389,17 +482,20 @@ export async function buildStructuredBackup(
   const resourceService = context.resourceService
   async function* resources() {
     for (const summary of summaries) {
+      context.signal?.throwIfAborted()
       yield {
         summary,
         summaryIsPartial: true,
         loadSummary: resourceService.getSummary
           ? async () => {
+              context.signal?.throwIfAborted()
               const metadata = await resourceService.getSummary(summary.id, false)
               if (!metadata) throw new Error(`云备份期间资源已不存在：${summary.fileName}`)
               return metadata
             }
           : undefined,
         load: async () => {
+          context.signal?.throwIfAborted()
           const resource = await resourceService.get(summary.id)
           if (!resource) throw new Error(`云备份规划期间资源已不存在：${summary.fileName}`)
           return resource
@@ -410,6 +506,7 @@ export async function buildStructuredBackup(
   async function* versions() {
     const currentIds = new Set(summaries.map((summary) => summary.id))
     for (const summary of index!.versions) {
+      context.signal?.throwIfAborted()
       if (
         currentIds.has(summary.id) ||
         !summary.versionGroupId ||
@@ -423,12 +520,14 @@ export async function buildStructuredBackup(
         summaryIsPartial: true,
         loadSummary: resourceService.getSummary
           ? async () => {
+              context.signal?.throwIfAborted()
               const metadata = await resourceService.getSummary(summary.id, true)
               if (!metadata) throw new Error(`云备份期间资源已不存在：${summary.fileName}`)
               return metadata
             }
           : undefined,
         load: async () => {
+          context.signal?.throwIfAborted()
           const resource = await resourceService.getVersion(summary.id)
           if (!resource) throw new Error(`云备份规划期间历史版本已不存在：${summary.fileName}`)
           return resource
@@ -436,5 +535,9 @@ export async function buildStructuredBackup(
       }
     }
   }
-  return createStructuredSnapshot(resources(), versions(), index.categories, portableData)
+  return createStructuredSnapshot(resources(), versions(), index.categories, portableData, {
+    readAttachment: context.readCommunityAttachment,
+    readAlbumFile: context.readAlbumFile,
+    signal: context.signal,
+  })
 }

@@ -1,5 +1,6 @@
 import { readonly, shallowRef } from 'vue'
 import type { AssistantTokenReview } from '../services/ProductAssistantContext'
+import { matchesConfirmationText } from '../utils/ConfirmationText'
 
 /**
  * 全项目统一的确认对话框服务。
@@ -23,6 +24,10 @@ export interface ConfirmDialogOptions {
   tokenReview?: AssistantTokenReview
   /** Uses the existing password settings owner; passwords never enter this queue. */
   secretUnlock?: boolean
+  /** A typed acknowledgement; the queue also rejects confirmations without matching text. */
+  requiredText?: string
+  /** Runs in the confirm click, before resolving (e.g. gesture-gated media). */
+  onConfirm?: () => void
 }
 
 export interface ChoiceDialogOptions extends ConfirmDialogOptions {
@@ -32,11 +37,12 @@ export interface ChoiceDialogOptions extends ConfirmDialogOptions {
 }
 
 export interface ActiveConfirmDialog extends Required<
-  Omit<ConfirmDialogOptions, 'tokenReview' | 'secretUnlock'>
+  Omit<ConfirmDialogOptions, 'tokenReview' | 'secretUnlock' | 'onConfirm' | 'requiredText'>
 > {
   id: number
   tokenReview?: AssistantTokenReview
   secretUnlock?: boolean
+  requiredText?: string
   alternativeLabel?: string
   additionalLabel?: string
 }
@@ -74,8 +80,9 @@ export function confirmAction(
     centered: options.centered ?? false,
     tokenReview: options.tokenReview,
     secretUnlock: options.secretUnlock,
+    requiredText: options.requiredText,
   }
-  return new Promise<boolean>((resolve) => {
+  return new Promise<boolean>((resolve, reject) => {
     const cancel = () => {
       if (activeDialog.value?.id === dialog.id) {
         activeDialog.value = undefined
@@ -92,7 +99,12 @@ export function confirmAction(
       dialog,
       resolve: (response: ConfirmDialogResponse) => {
         signal?.removeEventListener('abort', cancel)
-        resolve(response === 'confirm')
+        try {
+          if (response === 'confirm') options.onConfirm?.()
+          resolve(response === 'confirm')
+        } catch (error) {
+          reject(error)
+        }
       },
     }
     signal?.addEventListener('abort', cancel, { once: true })
@@ -118,8 +130,9 @@ export function chooseAction(
     alternativeLabel: options.alternativeLabel,
     additionalLabel: options.additionalLabel,
     tokenReview: options.tokenReview,
+    requiredText: options.requiredText,
   }
-  return new Promise<ConfirmDialogResponse>((resolve) => {
+  return new Promise<ConfirmDialogResponse>((resolve, reject) => {
     const cancel = () => {
       if (activeDialog.value?.id === dialog.id) {
         activeDialog.value = undefined
@@ -136,7 +149,12 @@ export function chooseAction(
       dialog,
       resolve: (response: ConfirmDialogResponse) => {
         signal?.removeEventListener('abort', cancel)
-        resolve(response)
+        try {
+          if (response === 'confirm') options.onConfirm?.()
+          resolve(response)
+        } catch (error) {
+          reject(error)
+        }
       },
     }
     signal?.addEventListener('abort', cancel, { once: true })
@@ -149,7 +167,13 @@ export function chooseAction(
 export function useConfirmDialogState() {
   return {
     activeDialog: readonly(activeDialog),
-    respond(response: ConfirmDialogResponse): void {
+    respond(response: ConfirmDialogResponse, text = ''): void {
+      if (
+        response === 'confirm' &&
+        activeDialog.value?.requiredText &&
+        !matchesConfirmationText(text, activeDialog.value.requiredText)
+      )
+        return
       const resolve = activeResolve
       activeResolve = undefined
       activeDialog.value = undefined

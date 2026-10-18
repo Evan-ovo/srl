@@ -7,6 +7,8 @@ type PanelModel = Pick<
   | 'commitSearch'
   | 'searchScope'
   | 'isSearchIndexing'
+  | 'contentSearchError'
+  | 'retryContentSearch'
   | 'searchQuery'
   | 'handleSearchFocus'
   | 'handleSearchBlur'
@@ -26,6 +28,8 @@ const input = defineProps<{ model: PanelModel }>()
 const commitSearch = toRef(input.model, 'commitSearch')
 const searchScope = toRef(input.model, 'searchScope')
 const isSearchIndexing = toRef(input.model, 'isSearchIndexing')
+const contentSearchError = toRef(input.model, 'contentSearchError')
+const retryContentSearch = toRef(input.model, 'retryContentSearch')
 const searchQuery = toRef(input.model, 'searchQuery')
 const handleSearchFocus = toRef(input.model, 'handleSearchFocus')
 const handleSearchBlur = toRef(input.model, 'handleSearchBlur')
@@ -102,6 +106,14 @@ const openSimilarNameGroups = toRef(input.model, 'openSimilarNameGroups')
         </button>
       </div>
     </form>
+    <div
+      v-if="searchScope === 'content' && contentSearchError"
+      class="search-failure"
+      role="status"
+    >
+      <span>正文搜索未完成</span>
+      <button type="button" class="batch-toggle" @click="retryContentSearch">重试</button>
+    </div>
     <div class="toolbar__meta">
       <label class="sort-control">
         <span>排序</span>
@@ -134,3 +146,17 @@ const openSimilarNameGroups = toRef(input.model, 'openSimilarNameGroups')
     </div>
   </section>
 </template>
+
+<style scoped>
+.search-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--color-ink-soft);
+  font-size: 0.75rem;
+}
+.toolbar:has(.search-failure) {
+  flex-wrap: wrap;
+}
+</style>

@@ -116,6 +116,7 @@ public class NativeLibraryPlugin extends Plugin {
             result.put("storageVersion", hasLegacyEntries(new File(root, "current")) || hasLegacyEntries(new File(root, "versions")) ? 1 : 4);
             result.put("path", root.getAbsolutePath());
             result.put("recoveryMetadataVersion", 1);
+            result.put("recoveryDeletionVersion", 1);
             result.put("supportsRetiredTranslationModelCleanup", true);
             result.put("currentCount", countEntries(new File(root, "current")));
             result.put("versionCount", countEntries(new File(root, "versions")));
@@ -493,6 +494,7 @@ public class NativeLibraryPlugin extends Plugin {
                 throw new IllegalArgumentException("原生资源引用数量无效");
             }
             int linked = 0;
+            com.getcapacitor.JSArray replacements = new com.getcapacitor.JSArray();
             for (int index = 0; index < records.length(); index++) {
                 org.json.JSONObject record = records.getJSONObject(index);
                 String scope = scope(record.optString("scope", ""));
@@ -511,6 +513,17 @@ public class NativeLibraryPlugin extends Plugin {
                     throw new IllegalStateException("原生恢复对象尚未完整落盘");
                 }
                 File entry = entryDirectory(scope, id);
+                JSObject previous = readJson(new File(entry, "resource.json"));
+                String previousHash = previous == null ? "" : previous.optString("contentHash", "");
+                if (previousHash.matches("(?i)[a-f0-9]{64}") && !previousHash.equalsIgnoreCase(contentHash)) {
+                    JSONObject replacement = new JSONObject();
+                    replacement.put("scope", scope);
+                    replacement.put("id", id);
+                    replacement.put("contentHash", contentHash);
+                    replacement.put("size", size);
+                    replacement.put("replacedHashes", new org.json.JSONArray().put(previousHash));
+                    replacements.put(replacement);
+                }
                 if (!entry.exists() && !entry.mkdirs()) throw new IllegalStateException("无法创建原生资源目录");
                 writeMetadata(
                     new File(entry, "resource.json"), id, scope, fileName,
@@ -523,6 +536,7 @@ public class NativeLibraryPlugin extends Plugin {
             }
             JSObject result = new JSObject();
             result.put("linked", linked);
+            result.put("replacements", replacements);
             call.resolve(result);
         });
     }
@@ -672,33 +686,34 @@ public class NativeLibraryPlugin extends Plugin {
             File entry = entryDirectory(scope, id);
             File metadata = new File(entry, "resource.json");
             JSObject existing = readJson(metadata);
+            String replacedHash = existing == null ? "" : existing.optString("contentHash", "");
             File object = objectFile(contentHash);
-            if (object.isFile() && object.length() == size) {
-                if (!entry.exists() && !entry.mkdirs()) throw new IllegalStateException("无法创建原生资源目录");
-                writeMetadata(metadata, id, scope, fileName, mimeType, resourceType,
-                    hiddenFromDocuments, contentHash, size, updatedAt);
-                deleteEntryPayloads(entry);
-                JSObject result = new JSObject();
-                result.put("alreadyPresent", true);
-                result.put("token", "");
-                call.resolve(result);
-                return;
-            }
             File legacyFile = existing == null ? null : new File(entry, safeFileName(existing.optString("storedName", "resource.bin")));
-            if (existing != null && legacyFile != null && legacyFile.isFile()
-                && contentHash.equalsIgnoreCase(existing.optString("contentHash"))
-                && legacyFile.length() == size) {
+            if ((!object.isFile() || object.length() != size) && existing != null && legacyFile.isFile()
+                && contentHash.equalsIgnoreCase(existing.optString("contentHash")) && legacyFile.length() == size) {
                 File stagedLegacy = new File(object.getParentFile(), object.getName() + ".legacy.part");
                 if (!object.getParentFile().exists() && !object.getParentFile().mkdirs())
                     throw new IllegalStateException("无法创建原生对象目录");
                 copyFile(legacyFile, stagedLegacy);
                 installObject(stagedLegacy, object, size);
-                writeMetadata(metadata, id, scope, fileName, mimeType, resourceType,
-                    hiddenFromDocuments, contentHash, size, updatedAt);
-                deleteEntryPayloads(entry);
+            }
+            if (object.isFile() && object.length() == size) {
                 JSObject result = new JSObject();
+                String token = "";
+                if (call.getBoolean("deferCommit", false)) {
+                    // Preparing an immutable object must not publish an unaccepted database write.
+                    token = UUID.randomUUID().toString();
+                    pendingWrites.put(token, new PendingWrite(token, scope, id, fileName, mimeType,
+                        resourceType, hiddenFromDocuments, contentHash, size, updatedAt, null, null, null));
+                } else {
+                    if (!entry.exists() && !entry.mkdirs()) throw new IllegalStateException("无法创建原生资源目录");
+                    writeMetadata(metadata, id, scope, fileName, mimeType, resourceType,
+                        hiddenFromDocuments, contentHash, size, updatedAt);
+                    deleteEntryPayloads(entry);
+                }
                 result.put("alreadyPresent", true);
-                result.put("token", "");
+                result.put("replacedHash", replacedHash);
+                result.put("token", token);
                 call.resolve(result);
                 return;
             }
@@ -716,6 +731,7 @@ public class NativeLibraryPlugin extends Plugin {
             pendingWrites.put(token, write);
             JSObject result = new JSObject();
             result.put("alreadyPresent", false);
+            result.put("replacedHash", replacedHash);
             result.put("token", token);
             call.resolve(result);
         });
@@ -742,19 +758,23 @@ public class NativeLibraryPlugin extends Plugin {
     public void commitWrite(PluginCall call) {
         runIo(call, () -> {
             PendingWrite write = pending(call.getString("token"));
+            File object = objectFile(write.contentHash);
             synchronized (write) {
-                write.output.flush();
-                write.output.close();
-            }
-            String actualHash = hex(write.digest.digest());
-            if (write.written != write.expectedSize || !actualHash.equalsIgnoreCase(write.contentHash)) {
-                write.temporary.delete();
-                throw new IllegalStateException("原生资源文件大小或 SHA-256 校验失败");
+                if (write.output != null) {
+                    write.output.flush();
+                    write.output.close();
+                    String actualHash = hex(write.digest.digest());
+                    if (write.written != write.expectedSize || !actualHash.equalsIgnoreCase(write.contentHash)) {
+                        write.temporary.delete();
+                        throw new IllegalStateException("原生资源文件大小或 SHA-256 校验失败");
+                    }
+                    installObject(write.temporary, object, write.expectedSize);
+                } else if (!object.isFile() || object.length() != write.expectedSize) {
+                    throw new IllegalStateException("准备中的原生对象已变化，保留数据库原件");
+                }
             }
             File entry = entryDirectory(write.scope, write.id);
             if (!entry.exists() && !entry.mkdirs()) throw new IllegalStateException("无法创建原生资源目录");
-            File object = objectFile(write.contentHash);
-            installObject(write.temporary, object, write.expectedSize);
             writeMetadata(new File(entry, "resource.json"), write.id, write.scope, write.fileName,
                 write.mimeType, write.resourceType, write.hiddenFromDocuments, write.contentHash,
                 write.expectedSize, write.updatedAt);
@@ -771,11 +791,43 @@ public class NativeLibraryPlugin extends Plugin {
             PendingWrite write = pendingWrites.remove(token);
             if (write != null) {
                 synchronized (write) {
-                    try { write.output.close(); } catch (Exception ignored) {}
-                    write.temporary.delete();
+                    try { if (write.output != null) write.output.close(); } catch (Exception ignored) {}
+                    if (write.temporary != null) write.temporary.delete();
                 }
             }
             call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void deleteRecoveryCandidates(PluginCall call) {
+        runIo(call, () -> {
+            com.getcapacitor.JSArray candidates = call.getArray("candidates");
+            if (!call.getBoolean("confirmed", false) || candidates == null || candidates.length() == 0 || candidates.length() > 100)
+                throw new IllegalArgumentException("请先确认删除所选待找回原件");
+            for (int i = 0; i < candidates.length(); i++) {
+                JSONObject item = candidates.getJSONObject(i);
+                requiredHash(item.getString("contentHash"));
+                NativeBridgeNumber.bounded(item.opt("size"), 0L, MAX_FILE_BYTES, "原件大小无效");
+                NativeBridgeNumber.bounded(item.opt("modifiedAt"), 0L, Long.MAX_VALUE, "原件时间无效");
+                if (item.has("nativeId")) {
+                    String id = item.getString("nativeId");
+                    if (id.isBlank() || id.length() > 200 || !"current".equals(item.optString("nativeScope")))
+                        throw new IllegalArgumentException("待删除原件索引标识无效");
+                    item.put("entry", entryDirectory("current", id).getName());
+                }
+            }
+            synchronized (NativeCloudRestoreWorker.class) {
+              synchronized (NativeCloudTransferPlugin.class) {
+                try (NativeAppDatabase database = new NativeAppDatabase(getContext())) {
+                    JSONObject result = database.deleteUnreferencedRecoveryCandidates(candidates, protectedHashes -> {
+                        protectedHashes.addAll(preparedObjectHashes());
+                        return NativeRecoveryDeletion.delete(libraryRoot(), new File(getContext().getFilesDir(), "srl-cloud-jobs"), candidates, protectedHashes);
+                    });
+                    call.resolve(JSObject.fromJSONObject(result));
+                }
+              }
+            }
         });
     }
 
@@ -790,6 +842,30 @@ public class NativeLibraryPlugin extends Plugin {
             deleteRecursively(entry);
             garbageCollectObject(contentHash);
             call.resolve();
+        });
+    }
+
+    @PluginMethod
+    public void releaseReplacedObjects(PluginCall call) {
+        runIo(call, () -> {
+            com.getcapacitor.JSArray records = call.getArray("records");
+            if (records == null || records.length() > 50_000) throw new IllegalArgumentException("旧原件清单无效");
+            for (int i = 0; i < records.length(); i++) {
+                JSONObject record = records.getJSONObject(i);
+                record.put("entry", entryDirectory(scope(record.getString("scope")), record.getString("id")).getName());
+                String hash = record.getString("contentHash");
+                if (!hash.matches("(?i)[a-f0-9]{64}")) throw new IllegalArgumentException("新原件哈希无效");
+                NativeBridgeNumber.bounded(record.opt("size"), 0L, MAX_FILE_BYTES, "原件大小无效");
+            }
+            long cleared;
+            synchronized (NativeCloudTransferPlugin.class) {
+                cleared = NativeReplacedObjectCleanup.release(libraryRoot(),
+                    new File(getContext().getFilesDir(), "srl-cloud-jobs"),
+                    records, preparedObjectHashes());
+            }
+            JSObject result = new JSObject();
+            result.put("clearedBytes", cleared);
+            call.resolve(result);
         });
     }
 
@@ -813,25 +889,7 @@ public class NativeLibraryPlugin extends Plugin {
                 if (hash.matches("[a-f0-9]{64}")) hashes.add(hash);
             }
             for (File entry : entries) deleteRecursively(entry);
-            boolean referencesReadable = true;
-            for (String scope : new String[] { "current", "versions" }) {
-                File root = new File(libraryRoot(), scope);
-                File[] remaining = root.listFiles(File::isDirectory);
-                if (remaining == null) {
-                    if (root.exists()) referencesReadable = false;
-                    continue;
-                }
-                for (File entry : remaining) {
-                    JSObject metadata = readJson(new File(entry, "resource.json"));
-                    if (metadata == null) { referencesReadable = false; continue; }
-                    hashes.remove(metadata.optString("contentHash", "").toLowerCase(Locale.ROOT));
-                }
-            }
-            // Unreadable metadata cannot prove an original is no longer referenced.
-            if (referencesReadable) for (String hash : hashes) {
-                File object = objectFile(hash);
-                if (object.delete() && object.getParentFile() != null) object.getParentFile().delete();
-            }
+            garbageCollectObjects(hashes);
             call.resolve();
         });
     }
@@ -841,8 +899,8 @@ public class NativeLibraryPlugin extends Plugin {
         runIo(call, () -> {
             for (PendingWrite write : pendingWrites.values()) {
                 synchronized (write) {
-                    try { write.output.close(); } catch (Exception ignored) {}
-                    write.temporary.delete();
+                    try { if (write.output != null) write.output.close(); } catch (Exception ignored) {}
+                    if (write.temporary != null) write.temporary.delete();
                 }
             }
             pendingWrites.clear();
@@ -858,7 +916,7 @@ public class NativeLibraryPlugin extends Plugin {
     protected void handleOnDestroy() {
         for (PendingWrite write : pendingWrites.values()) {
             synchronized (write) {
-                try { write.output.close(); } catch (Exception ignored) {}
+                try { if (write.output != null) write.output.close(); } catch (Exception ignored) {}
             }
         }
         pendingWrites.clear();
@@ -1005,23 +1063,24 @@ public class NativeLibraryPlugin extends Plugin {
 
     private void garbageCollectObject(String contentHash) throws Exception {
         if (!contentHash.matches("(?i)[a-f0-9]{64}")) return;
-        if (isObjectReferenced(new File(libraryRoot(), "current"), contentHash)
-            || isObjectReferenced(new File(libraryRoot(), "versions"), contentHash)) return;
-        File object = objectFile(contentHash.toLowerCase(Locale.ROOT));
-        if (object.delete()) {
-            File parent = object.getParentFile();
-            if (parent != null) parent.delete();
-        }
+        garbageCollectObjects(Collections.singleton(contentHash.toLowerCase(Locale.ROOT)));
     }
 
-    private boolean isObjectReferenced(File scopeRoot, String contentHash) {
-        File[] entries = scopeRoot.listFiles(File::isDirectory);
-        if (entries == null) return false;
-        for (File entry : entries) {
-            JSObject metadata = readJson(new File(entry, "resource.json"));
-            if (metadata != null && contentHash.equalsIgnoreCase(metadata.optString("contentHash", ""))) return true;
+    private Set<String> preparedObjectHashes() {
+        Set<String> hashes = new HashSet<>();
+        for (PendingWrite write : pendingWrites.values()) hashes.add(write.contentHash.toLowerCase(Locale.ROOT));
+        return hashes;
+    }
+
+    private void garbageCollectObjects(Set<String> hashes) {
+        try {
+            synchronized (NativeCloudTransferPlugin.class) {
+                NativeReplacedObjectCleanup.releaseUnreferenced(libraryRoot(),
+                    new File(getContext().getFilesDir(), "srl-cloud-jobs"), hashes, preparedObjectHashes());
+            }
+        } catch (Exception unavailable) {
+            // Deleting an index does not authorize deleting an object with unreadable references.
         }
-        return false;
     }
 
     private String manifestHash(File scopeRoot) throws Exception {

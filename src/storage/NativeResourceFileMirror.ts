@@ -1,4 +1,4 @@
-import { isResourceGalleryImage } from '../types/ResourceGallery'
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 
 import { transferNativeStream } from '../core/NativeStreamTransfer'
@@ -9,6 +9,13 @@ import type { NativeVersionMatchReference, ParsedResource } from '../types/Impor
 type NativeResourceScope = 'current' | 'versions'
 
 interface NativeLibraryPlugin {
+  deleteRecoveryCandidates(options: {
+    candidates: NativeRecoveryCandidate[]
+    confirmed: true
+  }): Promise<NativeRecoveryDeletionReport>
+  releaseReplacedObjects(options: {
+    records: NativeObjectReplacement[]
+  }): Promise<{ clearedBytes: number }>
   getStorageInfo(options?: {
     includeDetails?: boolean
     includeUsage?: boolean
@@ -24,6 +31,7 @@ interface NativeLibraryPlugin {
     currentIds: string[]
   }): Promise<NativeRecoveryCandidatePage>
   beginWrite(options: {
+    deferCommit?: boolean
     scope: NativeResourceScope
     id: string
     fileName: string
@@ -33,7 +41,7 @@ interface NativeLibraryPlugin {
     contentHash: string
     size: number
     updatedAt: number
-  }): Promise<{ alreadyPresent: boolean; token: string }>
+  }): Promise<{ alreadyPresent: boolean; token: string; replacedHash?: string }>
   appendWrite(options: { token: string; data: string }): Promise<void>
   appendFile(options: { token: string; uri: string }): Promise<void>
   commitWrite(options: { token: string }): Promise<void>
@@ -48,7 +56,9 @@ interface NativeLibraryPlugin {
     contentHash: string
     size: number
   }): Promise<{ path: string; size: number }>
-  linkObjects(options: { records: NativeResourceLinkRecord[] }): Promise<{ linked: number }>
+  linkObjects(options: {
+    records: NativeResourceLinkRecord[]
+  }): Promise<{ linked: number; replacements?: NativeObjectReplacement[] }>
   verifyLinkedObjects(options: {
     records: Array<{
       scope: NativeResourceScope
@@ -90,13 +100,23 @@ interface NativeLibraryPlugin {
 const nativeLibrary = registerPlugin<NativeLibraryPlugin>('NativeLibrary')
 
 export interface NativeMirrorHandle {
+  replacement?: NativeObjectReplacement
   commit(): Promise<void>
   abort(): Promise<void>
+}
+
+export interface NativeObjectReplacement {
+  scope: NativeResourceScope
+  id: string
+  contentHash: string
+  size: number
+  replacedHashes: string[]
 }
 
 export interface NativeResourceStorageInfo {
   storageVersion: number
   recoveryMetadataVersion?: number
+  recoveryDeletionVersion?: number
   path: string
   currentCount: number
   versionCount: number
@@ -191,6 +211,28 @@ export interface NativeRecoveryCandidatePage {
   scanned: number
 }
 
+export interface NativeRecoveryDeletionReport {
+  deletedHashes: string[]
+  retainedHashes: string[]
+  clearedBytes: number
+}
+
+export async function deleteNativeRecoveryCandidates(
+  candidates: NativeRecoveryCandidate[],
+): Promise<NativeRecoveryDeletionReport> {
+  if (!isAndroidNative()) throw new Error('待找回原件删除仅适用于 Android 本地原件库')
+  try {
+    return await nativeLibrary.deleteRecoveryCandidates({ candidates, confirmed: true })
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'UNIMPLEMENTED')
+      throw new Error(
+        '当前 APK 未提供待找回原件删除接口，请更新 APK 后再操作；未改用普通文件删除。',
+        { cause: error },
+      )
+    throw error
+  }
+}
+
 export interface NativeResourceLinkRecord {
   scope: NativeResourceScope
   id: string
@@ -211,25 +253,103 @@ export function isAndroidNativeResourceMirrorAvailable(): boolean {
   return isAndroidNative() && Capacitor.isPluginAvailable('NativeLibrary')
 }
 
+/** Only a committed replacement authorizes GC; unknown recovery objects are never swept. */
+let nativeSourceReaders = 0
+const deferredReplacements = new Map<string, NativeObjectReplacement>()
+
+/** Protect the preparation window before a native backup has persisted its source plan. */
+export function retainNativeResourceFiles(): () => Promise<void> {
+  nativeSourceReaders++
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    if (--nativeSourceReaders || !deferredReplacements.size) return
+    const records = [...deferredReplacements.values()]
+    deferredReplacements.clear()
+    await releaseReplacedNativeObjects(records).catch(() => undefined)
+  }
+}
+
+export async function releaseReplacedNativeObjects(
+  records: NativeObjectReplacement[],
+): Promise<void> {
+  if (!isAndroidNativeResourceMirrorAvailable() || !records.length) return
+  if (nativeSourceReaders) {
+    for (const record of records) {
+      const key = `${record.scope}\u0000${record.id}`
+      const previous = deferredReplacements.get(key)
+      deferredReplacements.set(key, {
+        ...record,
+        replacedHashes: [
+          ...new Set([...(previous?.replacedHashes ?? []), ...record.replacedHashes]),
+        ],
+      })
+    }
+    return
+  }
+  await nativeLibrary.releaseReplacedObjects({ records })
+}
+
 export async function stageNativeResourceFile(
   resource: Resource,
   scope: NativeResourceScope,
 ): Promise<NativeMirrorHandle> {
   if (!isAndroidNative()) return { commit: async () => undefined, abort: async () => undefined }
   const started = await nativeLibrary.beginWrite({
+    deferCommit: true,
     scope,
     id: resource.id,
     fileName: resource.fileName,
     mimeType: resource.mimeType,
     resourceType: resource.type,
-    hiddenFromDocuments:
-      isUserPersonaAvatarAttachment(resource) || isResourceGalleryImage(resource),
+    hiddenFromDocuments: isUserPersonaAvatarAttachment(resource) || isResourceOwnedFile(resource),
     contentHash: resource.contentHash,
     size: resource.originalBlob.size,
     updatedAt: resource.updatedAt,
   })
+  const replacedHashes = [
+    ...new Set(
+      [
+        started.replacedHash,
+        ...(Array.isArray(resource.metadata.recognizedFileHashes)
+          ? resource.metadata.recognizedFileHashes
+          : []),
+      ]
+        .filter(
+          (hash): hash is string =>
+            typeof hash === 'string' &&
+            /^[a-f\d]{64}$/iu.test(hash) &&
+            hash.toLowerCase() !== resource.contentHash.toLowerCase(),
+        )
+        .map((hash) => hash.toLowerCase()),
+    ),
+  ]
+  const replacement = replacedHashes.length
+    ? {
+        scope,
+        id: resource.id,
+        contentHash: resource.contentHash,
+        size: resource.fileSize,
+        replacedHashes,
+      }
+    : undefined
   if (started.alreadyPresent) {
-    return { commit: async () => undefined, abort: async () => undefined }
+    // New native implementations stage the link too. Empty tokens retain old APK behavior.
+    let settled = false
+    return {
+      replacement,
+      async commit() {
+        if (settled) return
+        if (started.token) await nativeLibrary.commitWrite({ token: started.token })
+        settled = true
+      },
+      async abort() {
+        if (settled) return
+        if (started.token) await nativeLibrary.abortWrite({ token: started.token })
+        settled = true
+      },
+    }
   }
 
   try {
@@ -254,6 +374,7 @@ export async function stageNativeResourceFile(
 
   let settled = false
   return {
+    replacement,
     async commit(): Promise<void> {
       if (settled) return
       await nativeLibrary.commitWrite({ token: started.token })
@@ -368,9 +489,11 @@ export async function readNativeResourceObject(
 
 export async function linkNativeResourceObjects(
   records: NativeResourceLinkRecord[],
+  onReplaced?: (records: NativeObjectReplacement[]) => void,
 ): Promise<number> {
   if (!records.length || !isAndroidNative()) return 0
   const result = await nativeLibrary.linkObjects({ records })
+  if (result.replacements?.length) onReplaced?.(result.replacements)
   return result.linked
 }
 

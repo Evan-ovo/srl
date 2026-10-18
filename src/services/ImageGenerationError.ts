@@ -15,13 +15,25 @@ export class FrontendWorkshopImageGenerationError extends Error {
   }
 }
 
+export function responseErrorDetail(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return
+  const parsed = value as { error?: { message?: unknown } | string; message?: unknown }
+  const detail = typeof parsed.error === 'string' ? parsed.error : parsed.error?.message
+  if (typeof detail === 'string' && detail.trim()) return detail.slice(0, 500)
+  if (typeof parsed.message === 'string' && parsed.message.trim())
+    return parsed.message.slice(0, 500)
+}
+
 export async function responseError(response: Response): Promise<string> {
-  const body = await response.text()
+  let body: string
+  try {
+    body = await response.text()
+  } catch {
+    return `HTTP ${response.status}（错误响应正文读取失败）`
+  }
   if (!body) return `HTTP ${response.status}`
   try {
-    const parsed = JSON.parse(body) as { error?: { message?: string } | string; message?: string }
-    if (typeof parsed.error === 'string') return parsed.error
-    return parsed.error?.message || parsed.message || body.slice(0, 500)
+    return responseErrorDetail(JSON.parse(body)) ?? `HTTP ${response.status}（接口未提供文字说明）`
   } catch {
     return body.slice(0, 500)
   }
@@ -31,7 +43,7 @@ export function imageGenerationErrorCategory(
   status: number,
 ): FrontendWorkshopImageGenerationErrorCategory {
   if (status === 401 || status === 403) return 'auth'
-  if (status === 429) return 'rate_limit'
+  if (status === 402 || status === 429) return 'rate_limit'
   if (status === 400 || status === 422) return 'request'
   if (status >= 500) return 'server'
   return 'response_parse'
@@ -44,9 +56,14 @@ function providerErrorMessage(
 ): string {
   const label =
     provider === 'novelai' ? 'NovelAI' : provider === 'openai' ? 'OpenAI' : '第三方兼容接口'
-  if (category === 'network') return `${label} 请求未能到达服务端，请检查网络、CORS、DNS 或 TLS。`
-  if (category === 'auth') return `${label} 拒绝了凭据或当前权限。`
-  if (category === 'rate_limit') return `${label} 当前受限流或额度限制。`
+  if (category === 'network')
+    return `${label} 连接中断，未能取得响应；请检查网络、API 地址和跨域设置，确认供应商任务状态后再手动重试。`
+  if (category === 'auth')
+    return `${label} 验证失败（HTTP ${status}），请检查 API 密钥及模型使用权限。`
+  if (status === 402) return `${label} 额度不足（HTTP 402），请检查账户余额或套餐。`
+  if (category === 'rate_limit') return `${label} 请求受限（HTTP 429），请检查额度或稍后手动重试。`
+  if (status === 404) return `${label} 接口或模型不存在（HTTP 404），请检查 API 地址与模型 ID。`
+  if (status === 413) return `${label} 拒绝了过大的图片或请求（HTTP 413），请减少参考图数量或大小。`
   if (category === 'request')
     return `${label} 拒绝了当前模型或请求参数${status ? `（HTTP ${status}）` : ''}。`
   if (category === 'server')
@@ -74,10 +91,10 @@ export function createProviderError(
   } = {},
 ): FrontendWorkshopImageGenerationError {
   const baseMessage = providerErrorMessage(provider, category, options.httpStatus)
-  const message =
-    category === 'response_parse' && options.responseBody
-      ? `${baseMessage} ${options.responseBody}`
-      : baseMessage
+  const detail = options.responseBody?.trim()
+  const message = detail
+    ? `${baseMessage} 服务端说明：${/<(?:!doctype|html|body)[\s>]/iu.test(detail) ? '返回了网页内容，请核对 API 地址。' : detail.replace(/\s+/gu, ' ').slice(0, 240)}`
+    : baseMessage
   const diagnostic: FrontendWorkshopImageGenerationDiagnostic = {
     provider,
     endpoint,

@@ -21,6 +21,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -36,6 +37,44 @@ import java.util.zip.GZIPOutputStream
 
 @RunWith(AndroidJUnit4::class)
 class NativeCloudTransferTest {
+    @Test
+    fun failedAutomaticBackupIsNotScheduledAgainOnEveryForegroundResume() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val secrets = NativeSecretStore(context)
+        val preferences = context.getSharedPreferences("srl-native-cloud-config", android.content.Context.MODE_PRIVATE)
+        val previousConfig = preferences.getString("github", null)
+        val previousAttempt = preferences.getLong("lastAttempt-github", Long.MIN_VALUE)
+        val previousSecret = secrets.read("github")
+        NativeResourceStore(context).use { store ->
+            val service = NativeCloudBackupService(context, store)
+            val config = NativeGitHubConfig(
+                owner = "owner",
+                repository = "backups",
+                retention = 7,
+                autoBackup = true,
+                wifiOnly = false,
+                chargingOnly = false,
+            )
+            secrets.save("github", "fixture-token")
+            try {
+                service.saveGitHub(config, null)
+                val attemptedAt = System.currentTimeMillis()
+                assertTrue(service.automaticProvidersDue(true, true, attemptedAt).contains("github"))
+
+                service.recordBackupAttempt("github", attemptedAt)
+                assertFalse(service.automaticProvidersDue(true, true, attemptedAt + 1_000).contains("github"))
+                assertFalse(service.automaticProvidersDue(true, true, attemptedAt + 23L * 60 * 60 * 1000).contains("github"))
+                assertTrue(service.automaticProvidersDue(true, true, attemptedAt + 24L * 60 * 60 * 1000).contains("github"))
+            } finally {
+                if (previousSecret == null) secrets.clear("github") else secrets.save("github", previousSecret)
+                preferences.edit().apply {
+                    if (previousConfig == null) remove("github") else putString("github", previousConfig)
+                    if (previousAttempt == Long.MIN_VALUE) remove("lastAttempt-github") else putLong("lastAttempt-github", previousAttempt)
+                }.apply()
+            }
+        }
+    }
+
     @Test
     fun credentialReplacementIsDurableAndOnlyConfirmed401InvalidatesIt() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -372,7 +411,7 @@ class NativeCloudTransferTest {
                     request.method == "GET" && path.contains("/releases/1/assets?") -> MockResponse().setResponseCode(200)
                         .setBody("[{\"id\":77,\"name\":\"chunk\",\"size\":3,\"created_at\":\"2026-08-26T00:00:00Z\"}]")
                     request.method == "GET" && path.endsWith("/releases/assets/77") -> MockResponse().setResponseCode(200)
-                        .setBody("{\"id\":77,\"name\":\"chunk\",\"size\":3,\"created_at\":\"2026-08-26T00:00:00Z\"}")
+                        .setBody("{\"id\":77,\"name\":\"chunk\",\"size\":3,\"digest\":\"sha256:039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\",\"created_at\":\"2026-08-26T00:00:00Z\"}")
                     request.method == "DELETE" -> { deletes.incrementAndGet(); MockResponse().setResponseCode(204) }
                     else -> MockResponse().setResponseCode(500).setBody("unexpected $path")
                 }
@@ -390,6 +429,50 @@ class NativeCloudTransferTest {
             assertEquals("77", uploaded.id)
             assertEquals(1, uploads.get())
             assertEquals(0, deletes.get())
+            file.delete()
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun githubSameSizeWrongDigestIsDeletedBeforeContentAddressedRetry() {
+        val server = MockWebServer()
+        val uploads = AtomicInteger(0)
+        val deletes = AtomicInteger(0)
+        val expectedHash = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path.orEmpty()
+                return when {
+                    path.endsWith("/releases/tags/srl-cloud-objects-0001") -> MockResponse().setResponseCode(200).setBody("{\"id\":1}")
+                    request.method == "GET" && path.contains("/releases/1/assets?") -> MockResponse().setResponseCode(200)
+                        .setBody("[{\"id\":77,\"name\":\"srl-chunk--sha256-$expectedHash\",\"size\":3}]")
+                    request.method == "POST" && path.contains("/releases/1/assets?") -> {
+                        if (uploads.incrementAndGet() == 1) MockResponse().setResponseCode(422).setBody("{\"message\":\"already_exists\"}")
+                        else MockResponse().setResponseCode(201).setBody("{\"id\":88}")
+                    }
+                    request.method == "GET" && path.endsWith("/releases/assets/77") -> MockResponse().setResponseCode(200)
+                        .setBody("{\"id\":77,\"name\":\"srl-chunk--sha256-$expectedHash\",\"size\":3,\"digest\":\"sha256:${"b".repeat(64)}\",\"created_at\":\"2026-08-26T00:00:00Z\"}")
+                    request.method == "GET" && path.endsWith("/releases/assets/88") -> MockResponse().setResponseCode(200)
+                        .setBody("{\"id\":88,\"name\":\"srl-chunk--sha256-$expectedHash\",\"size\":3,\"digest\":\"sha256:$expectedHash\",\"created_at\":\"2026-08-26T00:00:00Z\"}")
+                    request.method == "DELETE" -> { deletes.incrementAndGet(); MockResponse().setResponseCode(204) }
+                    else -> MockResponse().setResponseCode(500).setBody("unexpected $path")
+                }
+            }
+        }
+        server.start()
+        try {
+            val file = File.createTempFile("github-same-size-corrupt", ".bin").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+            val provider = NativeGitHubProvider(
+                NativeGitHubConfig("owner", "repo"), "token", apiRoot = server.url("/").toString(), uploadsRoot = server.url("/").toString(), sleeper = {},
+            )
+
+            val uploaded = provider.upload("srl-chunk--sha256-$expectedHash", file, "application/octet-stream")
+
+            assertEquals("88", uploaded.id)
+            assertEquals(2, uploads.get())
+            assertEquals(1, deletes.get())
             file.delete()
         } finally {
             server.shutdown()

@@ -14,19 +14,32 @@ import java.util.Locale;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.UUID;
 
 
 final class NativeCloudRestoreTransport {
     static final int RESTORE_BUFFER_BYTES = 256 * 1024;
+    static final int RESTORE_PREFETCH_CONCURRENCY = 3;
+    // Planned stored bytes in the unconsumed window, not a heap or total-checkpoint disk cap.
+    static final long RESTORE_PREFETCH_BYTES = 64L * 1024 * 1024;
     static final class IntegrityException extends IOException {
         IntegrityException(String message) { super(message); }
     }
     interface ObjectLocator { File locate(String hash) throws Exception; }
+    /** Called concurrently for distinct hashes; implementations must honor interruption. */
     interface ObjectDownloader { void download(RestoreObject object, File temporary) throws Exception; }
     interface RestoreProgress { void update(int completed, int total) throws Exception; }
 
@@ -78,7 +91,23 @@ final class NativeCloudRestoreTransport {
         File pendingRoot, List<RestoreObject> objects, List<RestoreResource> resources,
         ObjectLocator locator, ObjectDownloader downloader, boolean resumable, RestoreProgress progress
     ) throws Exception {
+        return restoreFiles(pendingRoot, objects, resources, locator, downloader, resumable, progress,
+            RESTORE_PREFETCH_CONCURRENCY, RESTORE_PREFETCH_BYTES);
+    }
+
+    static RestoreCounts restoreFiles(
+        File pendingRoot, List<RestoreObject> objects, List<RestoreResource> resources,
+        ObjectLocator locator, ObjectDownloader downloader, boolean resumable, RestoreProgress progress,
+        int concurrency, long prefetchBytes
+    ) throws Exception {
+        if (concurrency < 1 || concurrency > RESTORE_PREFETCH_CONCURRENCY || prefetchBytes < 1) {
+            throw new IllegalArgumentException("原生恢复预读预算无效");
+        }
         Map<String, RestoreObject> byHash = validatePlan(objects, resources);
+        Map<String, Integer> remainingUses = new HashMap<>();
+        for (RestoreResource resource : resources) for (RestoreSegment segment : resource.segments) {
+            remainingUses.put(segment.hash, remainingUses.getOrDefault(segment.hash, 0) + 1);
+        }
         File taskRoot = resumable ? pendingRoot : new File(pendingRoot, UUID.randomUUID().toString());
         if (!taskRoot.isDirectory() && !taskRoot.mkdirs()) throw new IOException("无法创建原生恢复任务暂存目录");
         if (resumable) {
@@ -87,18 +116,22 @@ final class NativeCloudRestoreTransport {
                 if (!file.delete()) throw new IllegalStateException("无法清理已中断的原件拼装文件");
             }
         }
-        List<File> ownedFiles = new ArrayList<>();
+        Set<File> ownedFiles = new HashSet<>();
         if (resumable) for (RestoreObject object : objects) ownedFiles.add(new File(taskRoot, object.hash + ".chunk.part"));
         Map<String, File> verified = new HashMap<>();
         RestoreCounts counts = new RestoreCounts();
         boolean successful = false;
         int completed = 0;
-        try {
+        // Close/drain the workers before deleting any file they may still be writing.
+        try (ChunkPrefetch prefetch = new ChunkPrefetch(taskRoot, byHash, locator, downloader,
+                verified, ownedFiles, concurrency, prefetchBytes)) {
             for (RestoreResource resource : resources) {
+                prefetch.checkRunning();
                 progress.update(completed, resources.size());
                 File destination = locator.locate(resource.hash);
                 if (verifyFile(destination, resource.hash, resource.size)) {
                     counts.reused++;
+                    releaseCompletedChunks(resource, remainingUses, verified, ownedFiles);
                     progress.update(++completed, resources.size());
                     continue;
                 }
@@ -106,39 +139,32 @@ final class NativeCloudRestoreTransport {
                 ownedFiles.add(temporary);
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 long written = 0;
+                prefetch.begin(resource.segments);
                 try (FileOutputStream output = new FileOutputStream(temporary)) {
                     byte[] buffer = new byte[RESTORE_BUFFER_BYTES];
                     for (RestoreSegment segment : resource.segments) {
+                        prefetch.fill();
                         File source = verified.get(segment.hash);
                         if (source == null) {
-                            RestoreObject object = byHash.get(segment.hash);
-                            File legacy = locator.locate(segment.hash);
-                            if (verifyFile(legacy, object.hash, object.size)) {
-                                source = legacy;
-                                counts.reused++;
-                            } else {
-                                source = new File(taskRoot, object.hash + ".chunk.part");
-                                ownedFiles.add(source);
-                                if (!verifyFile(source, object.hash, object.size)) {
-                                    downloader.download(object, source);
-                                    counts.downloaded++;
-                                } else counts.reused++;
-                                if (!verifyFile(source, object.hash, object.size)) {
-                                    source.delete();
-                                    throw new IntegrityException("原生恢复对象大小或 SHA-256 校验失败");
-                                }
-                            }
+                            PreparedChunk chunk = prefetch.take(segment.hash);
+                            source = chunk.file;
+                            if (chunk.downloaded) counts.downloaded++; else counts.reused++;
                             verified.put(segment.hash, source);
                         }
-                        written += copyRange(source, segment.offset, segment.size, output, digest, buffer);
+                        written += copyRange(source, segment.offset, segment.size, output, digest, buffer, prefetch);
+                        prefetch.consumed(segment.hash);
                     }
                     output.getFD().sync();
                 }
+                prefetch.checkRunning();
                 if (written != resource.size || !resource.hash.equals(hex(digest.digest()))) {
                     throw new IntegrityException("原生恢复资源大小或 SHA-256 校验失败");
                 }
                 installRestoredObject(temporary, destination, resource.size);
                 counts.assembled++;
+                // Keep all chunks of an unfinished resource for resume. Only release task-owned
+                // chunks after the original is installed and no later resource needs them.
+                releaseCompletedChunks(resource, remainingUses, verified, ownedFiles);
                 progress.update(++completed, resources.size());
             }
             successful = true;
@@ -152,9 +178,186 @@ final class NativeCloudRestoreTransport {
         }
     }
 
+    private static void releaseCompletedChunks(RestoreResource resource, Map<String, Integer> remainingUses,
+        Map<String, File> verified, Set<File> ownedFiles) {
+        for (RestoreSegment segment : resource.segments) {
+            int remaining = remainingUses.get(segment.hash) - 1;
+            remainingUses.put(segment.hash, remaining);
+            if (remaining != 0) continue;
+            File file = verified.remove(segment.hash);
+            if (file != null && ownedFiles.contains(file)) file.delete();
+        }
+    }
+
+    private static final class PreparedChunk {
+        final File file;
+        final boolean downloaded;
+        PreparedChunk(File file, boolean downloaded) { this.file = file; this.downloaded = downloaded; }
+    }
+
+    /** Only chunks of the current missing original are prepared; existing originals never trigger
+     * speculative downloads. Results are consumed in descriptor order, regardless of completion order.
+     * Each stream hashes/copies with a fixed buffer. An oversized legacy chunk is admitted alone.
+     */
+    private static final class ChunkPrefetch implements AutoCloseable {
+        final File root;
+        final Map<String, RestoreObject> objects;
+        final ObjectLocator locator;
+        final ObjectDownloader downloader;
+        final Map<String, File> verified;
+        final Set<File> owned;
+        final int concurrency;
+        final long budget;
+        final ExecutorService executor;
+        final ExecutorCompletionService<PreparedChunk> completions;
+        final Map<String, Future<PreparedChunk>> pending = new HashMap<>();
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        List<RestoreSegment> segments;
+        int next;
+        long reserved;
+
+        ChunkPrefetch(File root, Map<String, RestoreObject> objects, ObjectLocator locator,
+            ObjectDownloader downloader, Map<String, File> verified, Set<File> owned,
+            int concurrency, long budget) {
+            this.root = root; this.objects = objects; this.locator = locator; this.downloader = downloader;
+            this.verified = verified; this.owned = owned; this.concurrency = concurrency; this.budget = budget;
+            executor = Executors.newFixedThreadPool(concurrency);
+            completions = new ExecutorCompletionService<>(executor);
+        }
+
+        void begin(List<RestoreSegment> segments) { this.segments = segments; next = 0; }
+
+        void checkRunning() throws Exception {
+            Throwable error = failure.get();
+            if (error instanceof Exception) throw (Exception) error;
+            if (error instanceof Error) throw (Error) error;
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedException("云恢复已暂停");
+        }
+
+        void fill() throws Exception {
+            checkRunning();
+            while (next < segments.size()) {
+                RestoreObject object = objects.get(segments.get(next).hash);
+                if (verified.containsKey(object.hash) || pending.containsKey(object.hash)) { next++; continue; }
+                if (pending.size() >= concurrency || (!pending.isEmpty() && object.size > budget - reserved)) break;
+                // Resolve paths and register ownership on the caller thread, before starting IO.
+                File legacy = locator.locate(object.hash);
+                File target = new File(root, object.hash + ".chunk.part");
+                owned.add(target);
+                checkRunning();
+                Future<PreparedChunk> future;
+                try {
+                    future = completions.submit(() -> {
+                        try {
+                            if (Thread.currentThread().isInterrupted()) throw new InterruptedException("云恢复已暂停");
+                            if (verifyFile(legacy, object.hash, object.size)) return new PreparedChunk(legacy, false);
+                            if (verifyFile(target, object.hash, object.size)) return new PreparedChunk(target, false);
+                            downloader.download(object, target);
+                            if (Thread.currentThread().isInterrupted()) throw new InterruptedException("云恢复已暂停");
+                            // The native downloader validates the full network/prefix stream itself.
+                            // Assembly still hashes persisted source bytes before any installation.
+                            // Arbitrary downloaders have no such proof and retain the full file check.
+                            boolean valid = downloader instanceof NativeObjectDownloader
+                                ? isReusableCasObject(target, object.size) : verifyFile(target, object.hash, object.size);
+                            if (!valid) {
+                                target.delete();
+                                throw new IntegrityException("原生恢复对象大小或 SHA-256 校验失败");
+                            }
+                            return new PreparedChunk(target, true);
+                        } catch (Exception | Error error) {
+                            failure.compareAndSet(null, error);
+                            cancelDownloads();
+                            executor.shutdownNow();
+                            throw error;
+                        }
+                    });
+                } catch (RejectedExecutionException rejected) { checkRunning(); throw rejected; }
+                pending.put(object.hash, future);
+                reserved += object.size;
+                next++;
+                checkRunning();
+            }
+        }
+
+        PreparedChunk take(String hash) throws Exception {
+            try {
+                Future<PreparedChunk> requested = pending.get(hash);
+                checkRunning();
+                // A later chunk failure must wake the owner even while an earlier chunk is blocked.
+                while (!requested.isDone()) {
+                    completions.take();
+                    checkRunning();
+                }
+                PreparedChunk result = requested.get();
+                while (completions.poll() != null) {} // Never accumulate one receipt per snapshot chunk.
+                checkRunning();
+                return result;
+            } catch (ExecutionException error) {
+                checkRunning();
+                throw new IOException("原生恢复对象预读失败", error.getCause());
+            }
+        }
+
+        void consumed(String hash) {
+            if (pending.remove(hash) != null) reserved -= objects.get(hash).size;
+        }
+
+        void cancelDownloads() {
+            if (downloader instanceof NativeObjectDownloader) ((NativeObjectDownloader) downloader).cancel();
+        }
+
+        @Override public void close() {
+            cancelDownloads();
+            for (Future<PreparedChunk> future : pending.values()) future.cancel(true);
+            executor.shutdownNow();
+            boolean interrupted = false;
+            while (!executor.isTerminated()) {
+                try { executor.awaitTermination(1, TimeUnit.DAYS); }
+                catch (InterruptedException stop) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+    }
+
+    static ObjectDownloader nativeDownloader(String provider, String secret, String username,
+        java.util.function.Consumer<okhttp3.Call> onCall) {
+        return new NativeObjectDownloader(provider, secret, username, onCall);
+    }
+
+    /** Invocation-scoped cancellation and verification proof, never a persisted trust flag. */
+    private static final class NativeObjectDownloader implements ObjectDownloader {
+        final String provider, secret, username;
+        final java.util.function.Consumer<okhttp3.Call> onCall;
+        final Set<okhttp3.Call> calls = new HashSet<>();
+        boolean cancelled;
+        NativeObjectDownloader(String provider, String secret, String username,
+            java.util.function.Consumer<okhttp3.Call> onCall) {
+            this.provider = provider; this.secret = secret; this.username = username; this.onCall = onCall;
+        }
+        @Override public void download(RestoreObject object, File target) throws Exception {
+            AtomicReference<okhttp3.Call> active = new AtomicReference<>();
+            try {
+                downloadRestoreObject(provider, object.url, secret, username, object.hash, object.size, target, call -> {
+                    active.set(call);
+                    synchronized (this) {
+                        if (cancelled) call.cancel(); else calls.add(call);
+                    }
+                    onCall.accept(call);
+                });
+            } finally {
+                synchronized (this) { calls.remove(active.get()); }
+            }
+        }
+        synchronized void cancel() {
+            cancelled = true;
+            for (okhttp3.Call call : calls) call.cancel();
+        }
+    }
+
     static Map<String, RestoreObject> validatePlan(List<RestoreObject> objects, List<RestoreResource> resources) {
         Map<String, RestoreObject> byHash = new HashMap<>();
         for (RestoreObject object : objects) {
+            if (object.size < 0) throw new IllegalArgumentException("原生恢复对象大小无效");
             RestoreObject previous = byHash.put(object.hash, object);
             if (previous != null && previous.size != object.size) {
                 throw new IllegalArgumentException("原生恢复对象的重复声明不一致");
@@ -241,7 +444,10 @@ final class NativeCloudRestoreTransport {
             if (offset > 0) try (FileInputStream prefix = new FileInputStream(temporary)) {
                 byte[] buffer = new byte[RESTORE_BUFFER_BYTES];
                 int count;
-                while ((count = prefix.read(buffer)) >= 0) digest.update(buffer, 0, count);
+                while ((count = prefix.read(buffer)) >= 0) {
+                    if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("云恢复已暂停");
+                    digest.update(buffer, 0, count);
+                }
             }
             long written = offset;
             try (InputStream input = body.byteStream(); FileOutputStream output = new FileOutputStream(temporary, offset > 0)) {
@@ -308,10 +514,16 @@ final class NativeCloudRestoreTransport {
         MessageDigest digest,
         byte[] buffer
     ) throws Exception {
+        return copyRange(source, offset, size, output, digest, buffer, null);
+    }
+
+    private static long copyRange(File source, long offset, long size, FileOutputStream output,
+        MessageDigest digest, byte[] buffer, ChunkPrefetch prefetch) throws Exception {
         try (RandomAccessFile input = new RandomAccessFile(source, "r")) {
             input.seek(offset);
             long remaining = size;
             while (remaining > 0) {
+                if (prefetch != null) prefetch.checkRunning();
                 if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("云恢复已暂停");
                 int count = input.read(buffer, 0, (int) Math.min(buffer.length, remaining));
                 if (count < 0) throw new IOException("原生恢复资源分段被截断");

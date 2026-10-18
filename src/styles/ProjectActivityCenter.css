@@ -171,6 +171,23 @@
   gap: 0.65rem;
 }
 
+.activity-center__tabs {
+  display: flex;
+  gap: 0.45rem;
+  margin: 0 0 0.7rem;
+}
+
+.activity-center__tabs button[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.activity-center__tabs span {
+  margin-left: 0.25rem;
+  color: var(--color-ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
 .activity-center__header-actions {
   display: flex;
   align-items: center;

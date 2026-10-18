@@ -78,6 +78,7 @@ export function useApp() {
 
   const {
     loadResources,
+    loadCategories,
     loadLibrary,
     handleLibraryChanged,
     refreshLibraryAndOpenVersions,
@@ -1069,6 +1070,8 @@ export function useApp() {
     isSearchHistoryOpen,
     isSearchFocused,
     isSearchIndexing,
+    contentSearchError,
+    retryContentSearch,
     nameSearchIndexById,
     searchIndexById,
     contentSearchMatchIds,
@@ -1250,6 +1253,7 @@ export function useApp() {
     activeCategoryId,
     isOrganizing,
     showNotice,
+    loadCategories,
     loadLibrary,
   })
   const {
@@ -1458,6 +1462,8 @@ export function useApp() {
     commitSearch,
     searchScope,
     isSearchIndexing,
+    contentSearchError,
+    retryContentSearch,
     handleSearchFocus,
     handleSearchBlur,
     isSearchFocused,

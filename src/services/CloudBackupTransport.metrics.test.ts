@@ -38,7 +38,7 @@ describe('cloud accepted upload metrics', () => {
     const body = new Blob(['actual accepted data'])
     const operation = transport.send(body)
     expect(transport.metrics.snapshot().uploadedBytes).toBe(0)
-    resolve(new Response('accepted', { status: 201 }))
+    resolve(new Response('accepted', { status: 201, headers: { 'x-srl-cloud-proxy': '1' } }))
     await operation
     expect(transport.metrics.snapshot().uploadedBytes).toBe(body.size)
   })
@@ -46,7 +46,13 @@ describe('cloud accepted upload metrics', () => {
   it('does not add a rejected or failed attempt to accepted upload bytes', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response('rejected', { status: 503 })),
+      vi.fn(
+        async () =>
+          new Response('rejected', {
+            status: 503,
+            headers: { 'x-srl-cloud-proxy': '1' },
+          }),
+      ),
     )
     const transport = new Probe()
     await transport.send(new Blob(['data']))
@@ -72,7 +78,7 @@ describe('cloud accepted upload metrics', () => {
     const body = new Blob(['data'])
     const operation = transport.send(body)
     const next = transport.replaceMetrics()
-    resolve(new Response('accepted'))
+    resolve(new Response('accepted', { headers: { 'x-srl-cloud-proxy': '1' } }))
     await operation
     expect(transport.metrics.snapshot().uploadedBytes).toBe(body.size)
     expect(next.snapshot().uploadedBytes).toBe(0)

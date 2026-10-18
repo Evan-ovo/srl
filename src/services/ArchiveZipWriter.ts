@@ -1,4 +1,7 @@
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate'
+import { createGitHubBundle } from './GitHubBackupBundle'
+import { hashCloudBlob } from './CloudArchiveCodec'
+import { albumArchivePath, parseAlbumBackup } from './GeneratedImageAlbumBackup'
 import {
   COMMUNITY_SOURCE_ARCHIVE_PATH,
   COMMUNITY_SOURCE_ATTACHMENT_ARCHIVE_PREFIX,
@@ -16,6 +19,12 @@ export interface ArchiveTransferOptions {
   createdAt?: string
   signal?: AbortSignal
   onProgress?: (progress: { writtenBytes: number; fileName?: string }) => void
+  /** Opt in only when onFailure aborts the source reads using the same signal. */
+  readAhead?: {
+    concurrency?: number
+    maxPreparedBytes?: number
+    onFailure(error: unknown): void
+  }
 }
 
 export function throwIfArchiveAborted(signal?: AbortSignal): void {
@@ -23,6 +32,7 @@ export function throwIfArchiveAborted(signal?: AbortSignal): void {
 }
 
 export interface ArchiveEncoding extends ArchiveTransferOptions {
+  readAlbumFile?: (id: string) => Promise<Blob>
   resources: Resource[]
   versions: Resource[]
   manifest: ArchiveManifest
@@ -177,28 +187,122 @@ export async function writeArchiveEntries(
     ...options.versions.map((resource): [Resource, boolean] => [resource, true]),
   ]
   entries.sort(([a, av], [b, bv]) => options.path(a, av).localeCompare(options.path(b, bv)))
-  for (const [planned, historical] of entries) {
-    throwIfArchiveAborted(options.signal)
-    const path = options.path(planned, historical)
-    const cached = await writer.cached?.(path)
-    if (cached) {
-      descriptors[historical ? 1 : 0].set(planned.id, new Blob([JSON.stringify(cached)]))
-      paths.push(path)
-      continue
+  const requestedConcurrency = options.readAhead?.concurrency ?? 3
+  const concurrency = options.readAhead
+    ? Math.max(1, Math.min(3, Math.floor(requestedConcurrency) || 1))
+    : 1
+  const requestedBytes = options.readAhead?.maxPreparedBytes ?? 32 * 1024 * 1024
+  const byteLimit = Math.max(1, Math.min(32 * 1024 * 1024, requestedBytes || 1))
+  type Prepared = { path: string } & ({ cached: ArchivedResource } | { resource: Resource })
+  const pending = new Map<number, { promise: Promise<Prepared>; bytes: number }>()
+  let next = 0
+  let retainedBytes = 0
+  let stopped = false
+  let failure: unknown
+  const stop = (error: unknown) => {
+    if (stopped) return
+    stopped = true
+    failure = error
+    try {
+      options.readAhead?.onFailure(error)
+    } catch {
+      // A cancellation callback cannot replace the original read/write failure.
     }
-    const resource = await options.read(planned, historical)
-    throwIfArchiveAborted(options.signal)
-    const descriptor = options.describe(resource, historical)
-    const compress = !(
-      /^(image\/(png|jpeg|webp|gif)|audio\/|video\/)/i.test(resource.mimeType) ||
-      /\.(png|jpe?g|webp|gif|zip|gz|7z|rar|mp[34]|ogg|webm)$/i.test(resource.fileName)
-    )
-    const mtime = Number.isFinite(resource.updatedAt)
-      ? Math.min(Date.UTC(2107, 11, 31), Math.max(Date.UTC(1980, 0, 1), resource.updatedAt))
-      : Date.UTC(1980, 0, 1)
-    await emit(path, resource.originalBlob, { compress, mtime, descriptor })
-    descriptors[historical ? 1 : 0].set(resource.id, new Blob([JSON.stringify(descriptor)]))
   }
+  const check = () => {
+    if (stopped) throw failure
+    throwIfArchiveAborted(options.signal)
+  }
+  const abort = () => stop(options.signal?.reason ?? new DOMException('归档已取消', 'AbortError'))
+  const fill = () => {
+    while (!stopped && next < entries.length && pending.size < concurrency) {
+      check()
+      const [planned, historical] = entries[next]!
+      // This is a declared-original budget, not a claim about total process memory.
+      // Unknown sizes and a single oversize original run alone.
+      const bytes =
+        Number.isFinite(planned.fileSize) && planned.fileSize >= 0
+          ? planned.fileSize
+          : byteLimit + 1
+      if (pending.size && retainedBytes + bytes > byteLimit) break
+      const path = options.path(planned, historical)
+      const promise = (async (): Promise<Prepared> => {
+        const cached = await writer.cached?.(path)
+        check()
+        if (cached) return { path, cached }
+        const resource = await options.read(planned, historical)
+        check()
+        return { path, resource }
+      })().catch((error: unknown) => {
+        stop(error)
+        throw error
+      })
+      // A later read may reject before its sorted entry is consumed.
+      void promise.catch(() => undefined)
+      pending.set(next++, { promise, bytes })
+      retainedBytes += bytes
+    }
+  }
+  options.signal?.addEventListener('abort', abort, { once: true })
+  try {
+    for (const [index, [planned, historical]] of entries.entries()) {
+      check()
+      fill()
+      const entry = pending.get(index)!
+      const ready = await entry.promise
+      check()
+      if ('cached' in ready) {
+        descriptors[historical ? 1 : 0].set(planned.id, new Blob([JSON.stringify(ready.cached)]))
+        paths.push(ready.path)
+      } else {
+        const { resource } = ready
+        const descriptor = options.describe(resource, historical)
+        const compress = !(
+          /^(image\/(png|jpeg|webp|gif)|audio\/|video\/)/i.test(resource.mimeType) ||
+          /\.(png|jpe?g|webp|gif|zip|gz|7z|rar|mp[34]|ogg|webm)$/i.test(resource.fileName)
+        )
+        const mtime = Number.isFinite(resource.updatedAt)
+          ? Math.min(Date.UTC(2107, 11, 31), Math.max(Date.UTC(1980, 0, 1), resource.updatedAt))
+          : Date.UTC(1980, 0, 1)
+        await emit(ready.path, resource.originalBlob, {
+          compress,
+          mtime,
+          descriptor,
+        })
+        check()
+        descriptors[historical ? 1 : 0].set(resource.id, new Blob([JSON.stringify(descriptor)]))
+      }
+      // Keep both the slot and bytes reserved until the sorted sink write finishes.
+      retainedBytes -= entry.bytes
+      pending.delete(index)
+    }
+  } catch (error) {
+    stop(error)
+    throw failure
+  } finally {
+    stopped = true
+    await Promise.allSettled([...pending.values()].map((entry) => entry.promise))
+    pending.clear()
+    options.signal?.removeEventListener('abort', abort)
+  }
+  const albumPaths = new Set<string>()
+  for (const entry of options.manifest.portableData?.generatedImageAlbum ?? []) {
+    throwIfArchiveAborted(options.signal)
+    const blob = await options.readAlbumFile?.(entry.item.id)
+    throwIfArchiveAborted(options.signal)
+    if (!blob || blob.size !== entry.item.sizeBytes)
+      throw new Error(`相册原图缺失或已变化：${entry.item.name}`)
+    if (entry.object) {
+      if ((await hashCloudBlob(blob)).toLowerCase() !== entry.object.totalSha256.toLowerCase())
+        throw new Error(`相册原图校验失败：${entry.item.name}`)
+    } else entry.object = (await createGitHubBundle(blob, entry.item.name)).manifest
+    const path = albumArchivePath(entry.object.totalSha256)
+    if (!albumPaths.has(path))
+      await emit(path, blob, { compress: false, mtime: Date.parse(options.manifest.createdAt) })
+    albumPaths.add(path)
+  }
+  if (options.manifest.portableData?.generatedImageAlbum)
+    parseAlbumBackup(options.manifest.portableData.generatedImageAlbum)
   for (const attachment of options.communitySourceAttachments) {
     await emit(COMMUNITY_SOURCE_ATTACHMENT_ARCHIVE_PREFIX + attachment.assetId, attachment.blob, {
       compress: false,

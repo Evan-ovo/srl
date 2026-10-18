@@ -71,6 +71,97 @@
   gap: 0.6rem;
 }
 
+.confirm-dialog__typed {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  overflow-wrap: anywhere;
+}
+.confirm-dialog--typed {
+  width: min(27rem, 100%);
+  padding: 1.5rem;
+  border: 1px solid var(--color-line);
+  border-radius: 1.25rem;
+  background: var(--color-surface-raised);
+  box-shadow: 0 1rem 3rem var(--color-shadow);
+}
+.confirm-dialog__warning {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--color-danger);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.confirm-dialog--typed > h3 {
+  margin-bottom: 0.625rem;
+  font-size: 1.25rem;
+  line-height: 1.4;
+  font-weight: 650;
+}
+.confirm-dialog--typed > p {
+  margin-bottom: 1.5rem;
+  color: var(--color-ink-soft);
+  opacity: 1;
+}
+.confirm-dialog__field-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.confirm-dialog__phrase {
+  padding: 0.75rem 0.875rem;
+  border-left: 2px solid color-mix(in srgb, var(--color-danger) 65%, transparent);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: 0.9375rem;
+  line-height: 1.75;
+}
+.confirm-dialog__typed textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 6rem;
+  margin: 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 0.75rem;
+  background: var(--control-background);
+  color: var(--color-ink);
+  box-shadow: none;
+  resize: vertical;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+.confirm-dialog__typed textarea::placeholder {
+  color: var(--color-ink-soft);
+  opacity: 0.8;
+}
+.confirm-dialog__typed textarea:focus-visible {
+  border-color: var(--color-danger);
+  outline: 2px solid color-mix(in srgb, var(--color-danger) 18%, transparent);
+  outline-offset: 2px;
+}
+.confirm-dialog__typed small {
+  color: var(--color-ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.65;
+}
+.confirm-dialog--typed > footer {
+  display: grid;
+  grid-template-columns: 1fr 1.65fr;
+  gap: 0.75rem;
+}
+.confirm-dialog--typed > footer button {
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.5rem;
+  border-radius: 0.75rem;
+  box-shadow: none;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
 .confirm-dialog :where(footer button) {
   min-width: 5.5rem;
   padding: 0 1.1rem;
@@ -87,7 +178,7 @@
   overflow-wrap: anywhere;
 }
 
-button.confirm-dialog__confirm--danger {
+.confirm-dialog button.confirm-dialog__confirm--danger {
   border-color: var(--color-danger);
   background: var(--color-danger);
   color: var(--button-color, var(--color-on-danger));

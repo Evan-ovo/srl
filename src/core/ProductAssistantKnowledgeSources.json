@@ -1,22 +1,23 @@
 {
-  "knowledgeSha256": "16330a38d3f3df3426894317beb6f88b2df78ed1da9137c35b47ff1617633526",
+  "knowledgeSha256": "66445237b9c220d64d7091635e6c91986f0d81af40539704ef2fed6b4f9623a7",
   "sources": [
     {
       "path": "src/App.vue",
       "guides": [
+        "appearance",
         "assistant",
-        "import",
         "data-protection",
-        "appearance"
+        "import"
       ],
-      "sha256": "9ebc17cae1f61dfc36909aceaa6b2ed594973b0dfd9e03f73652e0c3b722fc0c"
+      "sha256": "3a86428c8dc083a8158698c57aba1ed54597e0c6b30110d1b3861df46e91d004"
     },
     {
       "path": "src/Bootstrap.ts",
       "guides": [
-        "appearance"
+        "appearance",
+        "data-protection"
       ],
-      "sha256": "03f03769b5d0c2bda36640bd0aab5ce5a11407ba46df9d6385ad26561b9d1617"
+      "sha256": "9d98c53b450a7bcef3fa445c3aa07d67396844885c75f80a323ce3d00dd03c13"
     },
     {
       "path": "src/components/AiTaggingPanel.vue",
@@ -40,18 +41,25 @@
       "sha256": "4aeefcd2276d658e7b97b1f7f0b9e00ddcb005955d8c29ecc998b53b94fc1401"
     },
     {
+      "path": "src/components/AppearanceQuickMenu.vue",
+      "guides": [
+        "appearance"
+      ],
+      "sha256": "f768f27b7033fd665c93b4a47111e4ab072cc3b934ef0c749ea205d6109449de"
+    },
+    {
       "path": "src/components/AppearanceStudio.vue",
       "guides": [
         "appearance"
       ],
-      "sha256": "4d60d6be35a571dcceaaa6a852d887252b3aa4ea16c652fd7d06718607781e82"
+      "sha256": "2fa1a8b7ef42c47e6c17444511c1c9d310c0ae2828f057b5dabe013d5f7cad37"
     },
     {
       "path": "src/components/AppearanceUiEditor.vue",
       "guides": [
         "appearance"
       ],
-      "sha256": "10462396aafe790014411da877bdb593b404941a40d384e093fecc36f58ad1e3"
+      "sha256": "f020b5abc6a6da10cdc96fd8bb0b7f70fea27a41985dd10d16059ef0ec47fe00"
     },
     {
       "path": "src/components/AssistantUiPreview.vue",
@@ -59,6 +67,13 @@
         "appearance"
       ],
       "sha256": "0144d56922c47cbaf43c996239ac8595817d22c0da3fd38866f12aad0fdd31c1"
+    },
+    {
+      "path": "src/components/AttachmentDocumentPreview.vue",
+      "guides": [
+        "resource-attachments"
+      ],
+      "sha256": "12cdb207b9a05ebce8823e1b81ae376c4c5d67f017a76c0db7dc068f56e785f4"
     },
     {
       "path": "src/components/CharacterCardContentWorkbench.vue",
@@ -79,7 +94,7 @@
       "guides": [
         "chat-reader"
       ],
-      "sha256": "781ad22c6809f7e3bd94e375849b846daa43fabb84b228312f166ad249ab9d3a"
+      "sha256": "f3008c5df67312ddf07573a65cdf34bbb7708bfa03d998835eb7b9b8b8110334"
     },
     {
       "path": "src/components/ChatReaderStartup.vue",
@@ -93,21 +108,22 @@
       "guides": [
         "backup"
       ],
-      "sha256": "09fc27565babe0db180d7acfb2350c726ae68e660246d9c9d5b62da10581100c"
+      "sha256": "4a6c8ca3361d744bb73a95b5404c51ad117e57b34dc8c7b078f6f8ac5c3e1adf"
     },
     {
       "path": "src/components/ConfirmDialog.vue",
       "guides": [
-        "assistant"
+        "assistant",
+        "data-protection"
       ],
-      "sha256": "b01369f843a10c464602d38070190ea263ee6018b0d747acb497538243e873e1"
+      "sha256": "dace5865ed8bf0a9869e835cc0eed9d664431a038d9d5029e6e7f39db70280cb"
     },
     {
       "path": "src/components/CustomUiFrame.vue",
       "guides": [
         "appearance"
       ],
-      "sha256": "a69b67d13d33adbc0f8e01e01f1efb46cf778f9cec313eb1cdb32d7da3946f62"
+      "sha256": "e7575958ba7cc16271817b87d0abad4ea50fe6a915ca0b7db3b580651cfa34df"
     },
     {
       "path": "src/components/DiscordCommunitySources.vue",
@@ -119,11 +135,11 @@
     {
       "path": "src/components/DiscordInboxCenter.vue",
       "guides": [
-        "discord-posts",
-        "inbox-connection",
-        "discord-oneclick-tutorial",
         "discord-github-tutorial",
-        "discord-manual-deploy-tutorial"
+        "discord-manual-deploy-tutorial",
+        "discord-oneclick-tutorial",
+        "discord-posts",
+        "inbox-connection"
       ],
       "sha256": "64de3c21997a715cb590b38750e1396058cd7901dfd8de4ebd11bea14adefa62"
     },
@@ -131,8 +147,8 @@
       "path": "src/components/DiscordInboxPanel.vue",
       "guides": [
         "discord-posts",
-        "inbox-post-claim",
-        "inbox-cloud-cleanup"
+        "inbox-cloud-cleanup",
+        "inbox-post-claim"
       ],
       "sha256": "43ad57a2ed6fd73323e7b02783f811176c75b00d19ed86e644b4619754c34164"
     },
@@ -142,6 +158,13 @@
         "discord-manual-deploy-tutorial"
       ],
       "sha256": "68ab83e1c72460cee446530a2ef39293cf7f1f1e77eb107c0e6d9b4a56dd07b2"
+    },
+    {
+      "path": "src/components/DiscordNativeInboxMode.vue",
+      "guides": [
+        "discord-posts"
+      ],
+      "sha256": "c903c6239a74a90ab8499dc5fe56f62541dffed9b22b01a2208ce83ec7ebc9ad"
     },
     {
       "path": "src/components/DiscordPendingSources.vue",
@@ -168,9 +191,9 @@
     {
       "path": "src/components/DiscordSetupGuideDrawer.vue",
       "guides": [
-        "discord-posts",
+        "discord-github-tutorial",
         "discord-oneclick-tutorial",
-        "discord-github-tutorial"
+        "discord-posts"
       ],
       "sha256": "11881fa56f441b99f5143f0e5aee8a5eef933c503b1f7bcc8c9ae7e9b471f2f9"
     },
@@ -186,7 +209,7 @@
       "guides": [
         "discord-posts"
       ],
-      "sha256": "587c7329c65ce28179fc73e5e21b069bce1a5b5058260de1bceac6ddb81b4dd9"
+      "sha256": "ca94c01f5b6c8336587fe390a42b618ec68d4244898230ff4cb4a8015ef22b5c"
     },
     {
       "path": "src/components/DrawApp.vue",
@@ -198,9 +221,10 @@
     {
       "path": "src/components/ExternalAppHost.vue",
       "guides": [
+        "apps",
         "chat-reader"
       ],
-      "sha256": "8c3ce9e0cb1292fddc42f2fd1590521d83fd7eb1946a55dce865ef1a2795a795"
+      "sha256": "073af11510e64d4939ba558d8898cf1514efb69ae7abec7a8fcecb0153698242"
     },
     {
       "path": "src/components/ExternalAppManager.vue",
@@ -212,10 +236,10 @@
     {
       "path": "src/components/FeatureHub.vue",
       "guides": [
-        "folders",
-        "appearance"
+        "appearance",
+        "folders"
       ],
-      "sha256": "ac725fd054e85f74f46c7b183212a2c6094a3b7b7780f6f9f953be44504df478"
+      "sha256": "f69238a55bdc27ed98ba790d14f5fc3cd80b63b9e4f78eace068d0bade74e00b"
     },
     {
       "path": "src/components/FolderLibraryView.vue",
@@ -223,6 +247,13 @@
         "folders"
       ],
       "sha256": "2b13d832a8628a87d341e7a202ba31dd7800808d048739353cb30cfd4570c27a"
+    },
+    {
+      "path": "src/components/FrontendWorkshopSourceComponentLibrary.vue",
+      "guides": [
+        "frontend-workshop"
+      ],
+      "sha256": "64d4716b367c7b5017dd65d9a4a2ca1552b78e8fea8efb75f1b7cff566047041"
     },
     {
       "path": "src/components/FrontendWorkshopWorkbench.vue",
@@ -236,18 +267,18 @@
       "guides": [
         "image-album"
       ],
-      "sha256": "87853daeb4a8967ca15d4fb42b7fab33fe471453fae20127c5ccc92dd34c9ce8"
+      "sha256": "5b39471b3ce85c301ac36a3f18325ae645431af6664b9fa438fc890edc4d21c0"
     },
     {
       "path": "src/components/LayoutSettingsPanel.vue",
       "guides": [
-        "import",
-        "discord-posts",
-        "data-protection",
         "appearance",
-        "background-notifications"
+        "background-notifications",
+        "data-protection",
+        "discord-posts",
+        "import"
       ],
-      "sha256": "a0ef888dc9dea000c6c26c43dde4b5ebdfd388139415c5b51d29b59ffa5fa39d"
+      "sha256": "39878bf12a462f9bb1ad7dc4797653617c2e03f3dcf71336465a933334c87076"
     },
     {
       "path": "src/components/LibraryLinkImportPanel.vue",
@@ -259,8 +290,8 @@
     {
       "path": "src/components/LibraryProtectionPanel.vue",
       "guides": [
-        "import",
-        "data-protection"
+        "data-protection",
+        "import"
       ],
       "sha256": "d041314bc68223fcc3ea333cb1479262415c8f2d79b68abeeb773e2c65b6b471"
     },
@@ -269,13 +300,20 @@
       "guides": [
         "library-search"
       ],
-      "sha256": "1a3705a4e8ab92f1413cd0ca28f1ecb480a2e61fe8445a80e50d7e677b99dae8"
+      "sha256": "e208d1c483d85b5b0e9dbe786c9f5c3e092afaf8baa3e2b693c61512892af1d3"
+    },
+    {
+      "path": "src/components/LocalDataResetControls.vue",
+      "guides": [
+        "data-protection"
+      ],
+      "sha256": "531ae9aff29014cfc614cba4da296cb96fdc727db6704bed998d2c7392d7f6f5"
     },
     {
       "path": "src/components/MainApiSettings.vue",
       "guides": [
-        "assistant",
-        "api"
+        "api",
+        "assistant"
       ],
       "sha256": "add8f11d8102f2a039b83c325fe7f02518b1b41dfe1bc40425af52baca169c8a"
     },
@@ -296,8 +334,8 @@
     {
       "path": "src/components/OfficialAssistantGate.vue",
       "guides": [
-        "assistant",
-        "apps"
+        "apps",
+        "assistant"
       ],
       "sha256": "6ea3bbdb9127d88f0c041f07f8db6311e7f715dc6fd885e45396248933341f0a"
     },
@@ -306,7 +344,7 @@
       "guides": [
         "personal-resources"
       ],
-      "sha256": "f1c0cfe0193bd84e67a21fec0be67d18d71ab423e36cb4225e8bbebfc58b1022"
+      "sha256": "e912f7b7a36819bf66fb08102c42a4423db224823dea416aa86699145d41d001"
     },
     {
       "path": "src/components/PocketPhoneContents.vue",
@@ -327,7 +365,7 @@
       "guides": [
         "assistant"
       ],
-      "sha256": "df155c65974671b87ee53897e17894340c89298d93c228e96947bfab79dbecb8"
+      "sha256": "77b0ee60957d3b59f8f294942cbecdca0bcb7de537e7ce92a9415459b9ce8202"
     },
     {
       "path": "src/components/ProductAssistantAppAcceptance.vue",
@@ -374,9 +412,9 @@
     {
       "path": "src/components/ProductAssistantPet.vue",
       "guides": [
+        "appearance",
         "assistant",
-        "discord-posts",
-        "appearance"
+        "discord-posts"
       ],
       "sha256": "cb192f1e6d5ab338f8cd8a8648584c5472ac7a96449bd5a103258811635e9782"
     },
@@ -413,7 +451,7 @@
       "guides": [
         "assistant"
       ],
-      "sha256": "e2a0b688260915a090ccb25758d6165fcdcd4681356e3c3170748e7427d63890"
+      "sha256": "ef8557a00cb0604c8509cbd4f23ddf9f4a512c0c0e8d91f82f0626d71fc21528"
     },
     {
       "path": "src/components/ProductAssistantTaskContext.vue",
@@ -446,10 +484,24 @@
     {
       "path": "src/components/RelayWorkerSettings.vue",
       "guides": [
-        "bridge",
-        "backup"
+        "backup",
+        "bridge"
       ],
       "sha256": "5bdb0821ff249ba76764a01adc4178a71c7d4e4f3198b41ed9e07f41f916e962"
+    },
+    {
+      "path": "src/components/ResourceAttachmentEntry.vue",
+      "guides": [
+        "resource-attachments"
+      ],
+      "sha256": "7325bd38c381f2b44b73846b9d012feca9fe83460dba5a79e22ac03e76e43aa3"
+    },
+    {
+      "path": "src/components/ResourceAttachmentPanel.vue",
+      "guides": [
+        "resource-attachments"
+      ],
+      "sha256": "b9aa5388662e5c8f0cf46cf5d8a1f33685f2fcf3eae5f3245d994f0e8b9014f5"
     },
     {
       "path": "src/components/ResourceGalleryPanel.vue",
@@ -463,15 +515,15 @@
       "guides": [
         "data-protection"
       ],
-      "sha256": "1b59227b59eef2122d4721ef5bf03c19ce2f29c4cf64d4c52da55f4585046614"
+      "sha256": "f9f6403ed63ee0950a6e375745d379beb544482b21f142d88c0a4b94f0d7b179"
     },
     {
       "path": "src/components/ResourceLinkAdvancedSettings.vue",
       "guides": [
-        "discord-posts",
-        "discord-oneclick-tutorial",
         "discord-github-tutorial",
-        "discord-manual-deploy-tutorial"
+        "discord-manual-deploy-tutorial",
+        "discord-oneclick-tutorial",
+        "discord-posts"
       ],
       "sha256": "bed35ce2cada9eb5dd684bc0d58adc5d6054a2d11abb4ee9d7263ab19a4eebfe"
     },
@@ -480,7 +532,7 @@
       "guides": [
         "versions"
       ],
-      "sha256": "0164f38541d1df225417552d87d4fdd639305a9e89119f158b8dce903beaad32"
+      "sha256": "e18db3b864716fce19e1959214078a4fb2fb981fe3c5589901f298f228fbfb7e"
     },
     {
       "path": "src/components/ResourcePicker.vue",
@@ -488,6 +540,13 @@
         "discord-posts"
       ],
       "sha256": "c845246439e27f9657d3bda3bc8b1a516f2d232938fd816e6e96fad2b1b53118"
+    },
+    {
+      "path": "src/components/ResourceSourceLinks.vue",
+      "guides": [
+        "discord-posts"
+      ],
+      "sha256": "a2506d7634b4bb5010ff944a76304904cd7a67adca37a7282bfa0d2f3483c15c"
     },
     {
       "path": "src/components/StorageUsageChart.vue",
@@ -538,7 +597,7 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "7ef72a6f09c009d93ed05ab99210666930560cedc55e45538203fad908f55c10"
+      "sha256": "f3a626905266872933570d6955dcdfa90211b8b7514956129665db316444adef"
     },
     {
       "path": "src/components/UserPersonaApp.vue",
@@ -580,7 +639,7 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "a52b979d52eb510e3bf86decdb0a704a9e2772e1aa94cf2addd78f9048f8aef1"
+      "sha256": "764e49516390ee60c157fa2ce2e01e60aeb675fa6347110639b8f0cdc8e69e39"
     },
     {
       "path": "src/composables/UseAssistantHelpContext.ts",
@@ -611,18 +670,42 @@
       "sha256": "dea58555df8d5eaba0d2db51ed432bcac18890f6a2e777b26c02b67c045a8e1a"
     },
     {
+      "path": "src/composables/UseCloudBackupCenter.ts",
+      "guides": [
+        "background-notifications",
+        "backup"
+      ],
+      "sha256": "613ff2ff9f400af1cab119547b4b287f6d5f757c6de889ce79030f9b39c65eff"
+    },
+    {
+      "path": "src/composables/UseCloudBackupDrafts.ts",
+      "guides": [
+        "backup"
+      ],
+      "sha256": "dd05ce4e9202d31f57dbfd071634853af77eaeea5660ebfb7c3a81c4ec15edcf"
+    },
+    {
       "path": "src/composables/UseConfirmDialog.ts",
       "guides": [
-        "assistant"
+        "assistant",
+        "background-notifications",
+        "data-protection"
       ],
-      "sha256": "03cf9378acc2bda5740d0437f2d861473d574958b189b2fcd3f6545dbc9ba2f6"
+      "sha256": "26014c9946f580d97d66971cc71c3cb172f8d1702d6f92906449816eeaf2b648"
     },
     {
       "path": "src/composables/UseCustomUiViews.ts",
       "guides": [
         "appearance"
       ],
-      "sha256": "b8fc66fd1c51e34ecbe6bfbde9e4200ac6b5a9ead419e56044341ccb808a12cf"
+      "sha256": "bc5c52b732998090d3effa4ed5b73dfaaaca6a7542c7ae17a34a73095f18d025"
+    },
+    {
+      "path": "src/composables/UseDiscordResourceInbox.ts",
+      "guides": [
+        "background-notifications"
+      ],
+      "sha256": "4966c4cd1aa65060ad4d63bf007eecfa86801f9e70a9e914c161e3a4b2461286"
     },
     {
       "path": "src/composables/UseDrawApp.ts",
@@ -634,11 +717,11 @@
     {
       "path": "src/composables/UseFeatureHub.ts",
       "guides": [
+        "appearance",
         "apps",
-        "assistant",
-        "appearance"
+        "assistant"
       ],
-      "sha256": "49b73707d0d0af3f1f2e9094f2817e5babd3c4d68d0027648627dbd295480b10"
+      "sha256": "316f633bc045a5e999bd20e045b93f61c303dd8646869c5c24a2adb3637db2e9"
     },
     {
       "path": "src/composables/UseFolderCabinetDrag.ts",
@@ -655,17 +738,38 @@
       "sha256": "d361b8654c4fce9efa1d3ebb5b3b6effe1ad04ecba6d99f00a36a45d757aa159"
     },
     {
+      "path": "src/composables/UseFrontendWorkshopSourceComponentLibrary.ts",
+      "guides": [
+        "frontend-workshop"
+      ],
+      "sha256": "151aad482e1b0cdd1382aa44859279659ba403e4093c83ecdc3baea55a6db592"
+    },
+    {
       "path": "src/composables/UseImageGenerationApp.ts",
       "guides": [
         "image-generation"
       ],
-      "sha256": "778fe7c4ed6e8ee5f7d69f9d16bd23a9885946629706b0805f35ea2cb55caa8a"
+      "sha256": "8c1b5ef326c40911e759e191898a9359a2deb8286114daf5850abc55a684368e"
+    },
+    {
+      "path": "src/composables/UseLibraryArchive.ts",
+      "guides": [
+        "background-notifications"
+      ],
+      "sha256": "5f5854455f5cf64eda9ad38897f7a86a22d3ac22fd394cff51bfb3ac66a1652a"
+    },
+    {
+      "path": "src/composables/UseLibraryArchiveRecovery.ts",
+      "guides": [
+        "background-notifications"
+      ],
+      "sha256": "3b365a56642fa47c927caa305989ba0b1fd821fe26a8c2b395d64c7eca289f67"
     },
     {
       "path": "src/composables/UseLibraryFileImport.ts",
       "guides": [
-        "import",
-        "discord-posts"
+        "discord-posts",
+        "import"
       ],
       "sha256": "0b95fc95fb2ab968a1072f7e5503294ee59999d72cce3110823269d5d30cad40"
     },
@@ -679,25 +783,34 @@
     {
       "path": "src/composables/UseLibraryImport.ts",
       "guides": [
+        "background-notifications",
         "import",
         "link-import"
       ],
-      "sha256": "6a94c6d00888456cfc82eca867bf2079772b95af0919cb97c081fce872c4ceda"
+      "sha256": "7f98890cfc92bcfb3d10e02bf42df9eef21ba295f6b66f42d80cc092e885914c"
+    },
+    {
+      "path": "src/composables/UseLibraryLifecycle.ts",
+      "guides": [
+        "background-notifications",
+        "backup"
+      ],
+      "sha256": "9bdfab39d6f9034a043217faf6281b31f43a8b6c77b22de2954e6eda6fc3057f"
     },
     {
       "path": "src/composables/UseLibraryNavigation.ts",
       "guides": [
+        "assistant",
         "import",
-        "link-import",
-        "assistant"
+        "link-import"
       ],
       "sha256": "5b9a201d21ef42c7dfb1aa40351a917abc33e5b96322455f2addd985aecf2790"
     },
     {
       "path": "src/composables/UseLibraryProtection.ts",
       "guides": [
-        "import",
-        "data-protection"
+        "data-protection",
+        "import"
       ],
       "sha256": "dbc52f541c70f72201402ec0316057227e130f93f076319dd0bfc7ba84756630"
     },
@@ -706,7 +819,7 @@
       "guides": [
         "library-search"
       ],
-      "sha256": "a63828e086cc5c3d50b82a242bb72eb31fc22e8f2ab7596660052bf26069ba2f"
+      "sha256": "c2671f1e341a04c2df5b45d176caaa147f46bb1f4dd275790782eeed2e073fac"
     },
     {
       "path": "src/composables/UseNativeResourceExport.ts",
@@ -734,7 +847,7 @@
       "guides": [
         "assistant"
       ],
-      "sha256": "42c494303b93edc0248d1436facf5ec58034c4fe48bd30f3ce4b9168ec22a6ce"
+      "sha256": "b7ba7f2c0a29d4210fa96939f5f12e607a27e801fbf93e748d235d14f0a4cfb9"
     },
     {
       "path": "src/composables/UseProductAssistantMessageActions.ts",
@@ -749,6 +862,20 @@
         "assistant"
       ],
       "sha256": "afb17e8fb5d8e1cd88ad5556f749886a9a6f193fa99f383ea57befc4be0441f6"
+    },
+    {
+      "path": "src/composables/UseProductAssistantToolRuntime.ts",
+      "guides": [
+        "assistant"
+      ],
+      "sha256": "289c4c05b0fc123ce44d71a7cf11935cfac5826b0d67cefb8ce4c4dfba1b968c"
+    },
+    {
+      "path": "src/composables/UseSearchIndex.ts",
+      "guides": [
+        "library-search"
+      ],
+      "sha256": "c24fb8b459a2cd3eec4f624d2f117bc5f4f106a116a1f3163e15f6977bc992c5"
     },
     {
       "path": "src/composables/UseStructuredResourceDetails.ts",
@@ -786,6 +913,13 @@
       "sha256": "439a837fb52ce80c819b6022ae8d6298075119e1dd33d4060c46dd290453a8f1"
     },
     {
+      "path": "src/core/AppContainer.ts",
+      "guides": [
+        "backup"
+      ],
+      "sha256": "a2a0a786320cafee124a901a3de29f359e05d51bf30afaa5edfac754216b6fb2"
+    },
+    {
       "path": "src/core/AppearanceCssReference.ts",
       "sha256": "88fe795188f0271e35846227fd1de38e35777465799c614f38477148e1c207eb",
       "guides": [
@@ -797,14 +931,14 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "c5707fcbe7ab19dfc125f89930a376854d8df7c90aac0514a855fa74a439f9d4"
+      "sha256": "1ca88d122f67ac0c9f93263c9a9c6c9daaa9dc6ec2987600531aa730e366ebbf"
     },
     {
       "path": "src/core/AppearanceSafety.ts",
       "guides": [
         "appearance"
       ],
-      "sha256": "bee3d77ca6b7b661d73466bc84d09a5c607713d7e5462c39e28ae5dcf804daee"
+      "sha256": "311f7abda7384abb1df9c4532a8ff158161c494d463701898630632e0e99784d"
     },
     {
       "path": "src/core/AppearanceSafetyStorage.ts",
@@ -821,6 +955,14 @@
       "sha256": "5e8ab27a4c3d5af3f7136555801d9e0d5e88d6a73470bb3151d6e0f020201fd8"
     },
     {
+      "path": "src/core/FatalErrorNotice.ts",
+      "guides": [
+        "backup",
+        "library-search"
+      ],
+      "sha256": "8ad32d39835fa3f909871a6c356ef83be177fdb61f2cbf985cb78249cccc92a5"
+    },
+    {
       "path": "src/core/FeatureAppRegistry.ts",
       "guides": [
         "apps"
@@ -832,7 +974,21 @@
       "guides": [
         "import"
       ],
-      "sha256": "5b00482a183367dfb78f5be9ca8230e6f09eda64a2915757fcf53e3f420c195a"
+      "sha256": "3d797d8a65abd1b8aa64c45d179fe97ef27e7b81fde39d2deb88d44b44cf7d54"
+    },
+    {
+      "path": "src/core/LocalDataReset.ts",
+      "guides": [
+        "data-protection"
+      ],
+      "sha256": "143b65d4ae1e32c3a77f3f403c07b4c1b895eb7a3fa10d7f4dc268849161edd6"
+    },
+    {
+      "path": "src/core/LocalDataResetPage.ts",
+      "guides": [
+        "data-protection"
+      ],
+      "sha256": "dbf59f4288febefb6981ae7ff0b4f14eb1f22351cdd43fb92a8e66eb987bf630"
     },
     {
       "path": "src/core/NativeRuntime.ts",
@@ -842,6 +998,13 @@
       "sha256": "accd274264f33cb80990c3ac32cbfda3f7edd21e6210d8478149705491410f35"
     },
     {
+      "path": "src/core/NativeSafBackup.ts",
+      "guides": [
+        "data-protection"
+      ],
+      "sha256": "d33af342381db7db3bc40a28ba84ab9430872bd3b158b713853d0c594a6394cf"
+    },
+    {
       "path": "src/core/OfficialAppHostApi.ts",
       "guides": [
         "apps"
@@ -849,21 +1012,28 @@
       "sha256": "4fc57644eeeed42cda4270fcc4efe9b09188518d7534c24252c999b9e2fa8f36"
     },
     {
+      "path": "src/core/PlatformService.ts",
+      "guides": [
+        "data-protection"
+      ],
+      "sha256": "cbc5092b9323b3dcd176cd4c4a142fb6db23d56f93553caf1894a01ec13d1477"
+    },
+    {
       "path": "src/core/ProductAssistantGuidance.ts",
       "guides": [
-        "assistant",
-        "import",
-        "link-import",
         "appearance",
-        "library-search",
-        "backup",
-        "stitch",
         "apps",
+        "assistant",
+        "backup",
         "data-protection",
-        "discord-posts",
-        "discord-oneclick-tutorial",
         "discord-github-tutorial",
         "discord-manual-deploy-tutorial",
+        "discord-oneclick-tutorial",
+        "discord-posts",
+        "import",
+        "library-search",
+        "link-import",
+        "stitch",
         "tavern-transfer-install"
       ],
       "sha256": "9f7faf709f790cc28af8d1d915b6204d2883720626fa3299f6d3bfe4ef06fca4"
@@ -899,10 +1069,11 @@
     {
       "path": "src/core/TaskCenter.ts",
       "guides": [
+        "background-notifications",
         "data-protection",
         "import"
       ],
-      "sha256": "3ed6611f9b335968c8cc8573a9f177b5b4bc950c74dfaf0ba991f9c2d8569c2a"
+      "sha256": "9096d99854cfe6ad25f19f9659d8fe956852eeb34335729994865ed216c9cae9"
     },
     {
       "path": "src/core/UiCustomization.ts",
@@ -910,6 +1081,13 @@
         "appearance"
       ],
       "sha256": "530cd9c58fbfb1eca18c9fe0122f89facdee589b93bc27f4e561f140d10d3a10"
+    },
+    {
+      "path": "src/core/UiRecoveryGesture.ts",
+      "guides": [
+        "appearance"
+      ],
+      "sha256": "7fbdbbf6fa7c454e490a9ca21a7d38d8f0b621f62540940d79f3ebd3d65d40f5"
     },
     {
       "path": "src/core/UiViewPreview.ts",
@@ -935,10 +1113,17 @@
     {
       "path": "src/parser/ChatResourceParser.ts",
       "guides": [
-        "versions",
-        "chat-reader"
+        "chat-reader",
+        "versions"
       ],
       "sha256": "9f6bacffabe6ed1c29d8a08ed69b90e0059c0039b1c2e6fc05ae0b14419febbd"
+    },
+    {
+      "path": "src/parser/ExtraStoryText.ts",
+      "guides": [
+        "personal-resources"
+      ],
+      "sha256": "a3069d6d09ec9bfe6555bab55d301660db2a206727356c57c82c0370f5f06752"
     },
     {
       "path": "src/reader/ChatReaderView.js",
@@ -971,6 +1156,7 @@
     {
       "path": "src/services/AssistantBrowserRuntime.ts",
       "guides": [
+        "assistant",
         "discord-posts"
       ],
       "sha256": "38085a65d0ca08ffb281cfc1be824cf5425e15d3ac707a606bbff39b4fd29277"
@@ -991,6 +1177,27 @@
       "sha256": "3f9ef7ebc1385a09d0461e73b845025ceeaef746dc003477951f20e9187b3df4"
     },
     {
+      "path": "src/services/AttachmentDocument.ts",
+      "guides": [
+        "resource-attachments"
+      ],
+      "sha256": "300465d417999bad41f666eb8f6d8c51b64f7c406c035d5c913d25a664faf1f8"
+    },
+    {
+      "path": "src/services/AttachmentWordEditing.ts",
+      "guides": [
+        "resource-attachments"
+      ],
+      "sha256": "3655be70d24a71d1f0139d6ee1947fb746fa73e3800657afedd4985ba8df6ce1"
+    },
+    {
+      "path": "src/services/BackupScopeRegistry.ts",
+      "guides": [
+        "backup"
+      ],
+      "sha256": "e39b79d1c0e6be2fb8bd4de1d8c0b931acefa786bafda0fd0519a6e0afd76fa4"
+    },
+    {
       "path": "src/services/BrowserAppearancePreferences.ts",
       "guides": [
         "appearance"
@@ -1000,19 +1207,19 @@
     {
       "path": "src/services/BrowserDevicePreferences.ts",
       "guides": [
-        "user-persona",
-        "stitch",
         "bridge",
-        "resource-bundle"
+        "resource-bundle",
+        "stitch",
+        "user-persona"
       ],
       "sha256": "dd8899b45b31fa3bd3df522e04f2fb013dccabdc59966f989efcc8c9d1d2bb51"
     },
     {
       "path": "src/services/BrowserStorageService.ts",
       "guides": [
-        "import",
-        "bridge",
         "appearance",
+        "bridge",
+        "import",
         "resource-bundle"
       ],
       "sha256": "478aba2881cbea096db77f10673dfc285a77a11d1ba2cdb9efb9f67b53dce792"
@@ -1071,21 +1278,28 @@
       "guides": [
         "backup"
       ],
-      "sha256": "b40d03155cf8172d3110b327bfb817b4c83a871ad984c3bd1d7412dfa63e7490"
+      "sha256": "cf538142f54e3d1cb89827f7f2700d6a9ab2760a3780703e4a329e85831b23f6"
     },
     {
       "path": "src/services/CloudBackupSnapshotOperations.ts",
       "guides": [
         "backup"
       ],
-      "sha256": "0cb430a704ac909da6682966de9b3f70cba082b47c5d0372d7b0eb737e9f2aec"
+      "sha256": "9b736c174106af8a3fd22c4eea26b2131a63873fab7fd25238fafab84a08fbf7"
     },
     {
       "path": "src/services/CloudBackupTransport.ts",
       "guides": [
         "backup"
       ],
-      "sha256": "4b3dbad6053cbf7431ff8a023990682e40bca473520c773257044fb9beeecf2f"
+      "sha256": "456b202f651da5d5a8db3b51aa48b21d6df13988b0cb044cadd651f2b7a36aaf"
+    },
+    {
+      "path": "src/services/CloudStructuredSnapshot.ts",
+      "guides": [
+        "backup"
+      ],
+      "sha256": "c7727ec534618e751fb175cb83ca5f79c2660f0ed91fb7accf2ccdfe56a066ea"
     },
     {
       "path": "src/services/CommunitySourceService.ts",
@@ -1093,6 +1307,13 @@
         "discord-posts"
       ],
       "sha256": "a855ba06f8de936ad81babb21850f4358b21c0ed51ed29e60d07c8f873982c72"
+    },
+    {
+      "path": "src/services/DiscordBridgeDeployService.ts",
+      "guides": [
+        "discord-posts"
+      ],
+      "sha256": "6b412389ecda638a0b37c0ebf43941525b47b5d0bc9d6acc65e86782b14205de"
     },
     {
       "path": "src/services/DiscordHandoffService.ts",
@@ -1111,10 +1332,17 @@
     {
       "path": "src/services/DiscordInboxAutomationSettings.ts",
       "guides": [
-        "import",
-        "discord-posts"
+        "discord-posts",
+        "import"
       ],
       "sha256": "d0aa7a5eb796c3c2a20014e0c4aebeae2c9608a767cb04252fb2177e4edcf2bb"
+    },
+    {
+      "path": "src/services/DiscordSetupGitHub.ts",
+      "guides": [
+        "discord-posts"
+      ],
+      "sha256": "e53a669db9ae7ada92f15da47f86b3299345a0cebdb2cbba0537c117437a5ddb"
     },
     {
       "path": "src/services/DiscordSetupParameters.ts",
@@ -1154,10 +1382,10 @@
     {
       "path": "src/services/ExportService.ts",
       "guides": [
-        "versions",
-        "bridge"
+        "bridge",
+        "versions"
       ],
-      "sha256": "657c6e65021ed90411d187b64039c353dd9c54f628f4ca3d6ca3799a2842fd29"
+      "sha256": "fb312d5951a9b15e026a6a01949d4a91938d315528cf8225ab3856799ced7453"
     },
     {
       "path": "src/services/ExternalAppAcceptance.ts",
@@ -1178,7 +1406,14 @@
       "guides": [
         "apps"
       ],
-      "sha256": "572a68213c9f597d126b1834fe07ba9e9eefae6740be0f9e209d9f85dae75ade"
+      "sha256": "eeaa4e8db38a7db3f3bae961ee5e0bcbc49990fb2e396bfa0ea504fc6d67a9b8"
+    },
+    {
+      "path": "src/services/ExternalAppService.ts",
+      "guides": [
+        "apps"
+      ],
+      "sha256": "4f0541bb250b458222a055fe75a2b284e7cdbc3c14a60495045486d88ac9cf34"
     },
     {
       "path": "src/services/ExternalAppTrialInspection.ts",
@@ -1213,7 +1448,7 @@
       "guides": [
         "image-generation"
       ],
-      "sha256": "ca92505da8dfbe09dd148f239ce34857742eec862dc598686cec53ed51f12df5"
+      "sha256": "d100f3732fc08133d404df134784498316349d7a8797500f9af417c85c5526fb"
     },
     {
       "path": "src/services/FrontendWorkshopSourcePatchService.ts",
@@ -1223,18 +1458,33 @@
       "sha256": "aa708c6422fb9718593ccd4bea3b781a72b449e2f2e3bcca0e01774545dafc6d"
     },
     {
+      "path": "src/services/GeneratedImageAlbumBackup.ts",
+      "guides": [
+        "backup",
+        "image-album"
+      ],
+      "sha256": "90da0f72f0ab2935b0a1ea2ca66ac78b378ef552d0fc6fdb015bc127fb7b0fa4"
+    },
+    {
       "path": "src/services/GeneratedImageAlbumService.ts",
       "guides": [
         "image-album"
       ],
-      "sha256": "af57ef4020e1df6931f7fa5a41c28fc8cdc7923f5084aae95dcb66b3a0e87752"
+      "sha256": "4248f58b4098cb6c3559c19a276ffcde3efc083738e2c73cc54656fea98e5b05"
+    },
+    {
+      "path": "src/services/GitHubAssistantConnection.ts",
+      "guides": [
+        "discord-posts"
+      ],
+      "sha256": "ddd25a4b1f1a953086686cf33d3e4e9180290526ea480b4a64b0aeafcc354b59"
     },
     {
       "path": "src/services/ImageGenerationCapabilities.ts",
       "guides": [
         "image-generation"
       ],
-      "sha256": "a7f0dbcd30c5799f8198fe0cbcd668cb633e075b3bb4a19ce6cb905b1413b7ca"
+      "sha256": "144a96b05e44218203f3233cec747259f1ab986cc3ca413736e5f94e1a6f5279"
     },
     {
       "path": "src/services/LocalCredentialStore.ts",
@@ -1246,16 +1496,16 @@
     {
       "path": "src/services/MainApiProtocol.ts",
       "guides": [
-        "assistant",
-        "api"
+        "api",
+        "assistant"
       ],
       "sha256": "4a007224cb6b7bfef3c6d76daf17ba66dc7936144443ca0f774874c8befa3b43"
     },
     {
       "path": "src/services/MainApiService.ts",
       "guides": [
-        "assistant",
-        "api"
+        "api",
+        "assistant"
       ],
       "sha256": "f89a3f9e081ff65b5d3900c591fd78e8984b9f3b9d5b3071c84d7bec82c57d7f"
     },
@@ -1281,11 +1531,25 @@
       "sha256": "f444b4678e207fa3c73e227d0e178a1b09da6405f8a299afb752d7ce957cd73e"
     },
     {
+      "path": "src/services/NativeResourceRecoveryService.ts",
+      "guides": [
+        "data-protection"
+      ],
+      "sha256": "5d5cd87d2e77e841ad1cca65b93fcd2a93ca3d1b3acdd06e955c978eb55fae75"
+    },
+    {
       "path": "src/services/OfficialAppService.ts",
       "guides": [
         "apps"
       ],
-      "sha256": "8beb988964e64f7ba3196ea9f61caa7766fdc034cdb57fa3d1f0de2047008b53"
+      "sha256": "d27416853b017cc3383e1ac0553c8ea5ebba58434411b02500052747e0c4dc98"
+    },
+    {
+      "path": "src/services/PersonalResourceBackup.ts",
+      "guides": [
+        "backup"
+      ],
+      "sha256": "6677a50d99566f71462079a55e2d5b549dd6d21367ff9baf50b375f1b6e3f34b"
     },
     {
       "path": "src/services/PersonalResourceService.ts",
@@ -1367,8 +1631,8 @@
     {
       "path": "src/services/ProductAssistantRequest.ts",
       "guides": [
-        "assistant",
-        "appearance"
+        "appearance",
+        "assistant"
       ],
       "sha256": "58cc0c94ada816b66187539f5b9d012b5cac84e1e06059cd6f47e37e87eddaf4"
     },
@@ -1380,12 +1644,19 @@
       "sha256": "3992f2f09f14b2b45ffb5ceae725ca480594c82d6052a3acacaa37d7ccc787c8"
     },
     {
+      "path": "src/services/ProductAssistantScript.ts",
+      "guides": [
+        "assistant"
+      ],
+      "sha256": "0f403648fafd9796bdfa5279a025bdaf15cd45bffc867b20df2b389ecb59ec93"
+    },
+    {
       "path": "src/services/ProductAssistantService.ts",
       "guides": [
-        "assistant",
-        "appearance"
+        "appearance",
+        "assistant"
       ],
-      "sha256": "d0e80eb4974c7a816f78c115cdd932992ecf53927f7a729bf5281df89732b38c"
+      "sha256": "7786c906539108353a89b0426b84d76ea1de3454e6d55992585538bead1f57fe"
     },
     {
       "path": "src/services/ProductAssistantTask.ts",
@@ -1397,9 +1668,9 @@
     {
       "path": "src/services/ProductAssistantTools.ts",
       "guides": [
-        "assistant",
+        "appearance",
         "apps",
-        "appearance"
+        "assistant"
       ],
       "sha256": "e7cd8a4449be7db0a875b9d04a8a84c9b4cd2e0230132ab59055b8d2c2c4092b"
     },
@@ -1408,20 +1679,20 @@
       "guides": [
         "assistant"
       ],
-      "sha256": "2e16270d31544d1f58799917abdd134e94202e32933d2f73a853096808c25cff"
+      "sha256": "7474902125be3511e864c16a7f7e8275c4138adf2f907c97486adc2336171fee"
     },
     {
       "path": "src/services/RecycleBinService.ts",
       "guides": [
         "data-protection"
       ],
-      "sha256": "e6bdcd9e58c4c35a2439d8be2a0dd7b6aad5103318e237d354838632826697c1"
+      "sha256": "2b3e1861874329a4ebf53aab4b341f20017d8329dc8026a347d1c87e6a0fc33e"
     },
     {
       "path": "src/services/RelayWorkerSettingsService.ts",
       "guides": [
-        "bridge",
-        "backup"
+        "backup",
+        "bridge"
       ],
       "sha256": "b1db04869bfeca185d5e4730954d297b83b1cbf4b8280b3e1aca3674cbe2efa6"
     },
@@ -1431,6 +1702,13 @@
         "import"
       ],
       "sha256": "d4aa268c2fd55a0ab84f2737886d555d6576eb7963bd9b9808640453e016f6d5"
+    },
+    {
+      "path": "src/services/ResourceAttachmentService.ts",
+      "guides": [
+        "resource-attachments"
+      ],
+      "sha256": "33a3eef3fb5871647cd7b6eaf051e25cbd3010c38196e11d149d9cf1d4c992bb"
     },
     {
       "path": "src/services/ResourceCardVersionOperations.ts",
@@ -1445,14 +1723,14 @@
         "gallery",
         "versions"
       ],
-      "sha256": "95e7535dcfc66d611cc968713cc22fecc6453394b8932a78573892fa6a401814"
+      "sha256": "b12ec693dad45885bcd05b4a0b5e72e54d01eded72818c9de68090759929efac"
     },
     {
       "path": "src/services/ResourceImportOperations.ts",
       "guides": [
         "import"
       ],
-      "sha256": "41d55203e007bb7eb5718d72f680135fadcd2f2bffa8383cfbdd5e6dc8f28134"
+      "sha256": "5f9429c7fbe1bd7940c98fb0942e9000da4136e0f8463274f5956e7affa97e2d"
     },
     {
       "path": "src/services/ResourceRecognizedFileHashes.ts",
@@ -1466,7 +1744,7 @@
       "guides": [
         "world-book"
       ],
-      "sha256": "e5a38f30104bb6890a5e7c81c1f05b82e318715c1c25c9197de00e8dcb955388"
+      "sha256": "73d209c5508ffd9e243027b2a9f8b12e0cd4e81ae301456bc3db665db3b657bc"
     },
     {
       "path": "src/services/ResourceVersionMatcher.ts",
@@ -1480,7 +1758,7 @@
       "guides": [
         "versions"
       ],
-      "sha256": "85dbfc0a09e84b68c656418979d0f5e064126df43bef8273cc3dd54a7d6ceb04"
+      "sha256": "a9f5826b5c0c59e78a2e81e1602168d7d440c9f4fac5a7bb3b7ade67a89ad510"
     },
     {
       "path": "src/services/ResourceVersionRecognitionProtocol.ts",
@@ -1501,7 +1779,7 @@
       "guides": [
         "backup"
       ],
-      "sha256": "7e99573dc28f07cffcabd9bbadb3809b7d612d3112c85593107517a57720dc63"
+      "sha256": "60e46676417ae0ed962d7fd5d448d4ea4ccfdb34e811f6ddc9920cf15e85ffac"
     },
     {
       "path": "src/services/SecretResourceService.ts",
@@ -1529,14 +1807,14 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "0bd159849da411fdf7e52aa928c9616f0f174d01e3a8749cc226de69ca3854cc"
+      "sha256": "870565cc2c908750d1c965c95ee1239950a769443dc0d80edfa987256385dc04"
     },
     {
       "path": "src/services/UiViewRuntime.ts",
       "guides": [
         "appearance"
       ],
-      "sha256": "90cbd3b86812b65c614dfe5caa583e22a4af658fdae140c48d3f72f3571ac81e"
+      "sha256": "d90ed9c8360dad26f3f75f5579fe1f22f8dc3a8e027d3800894e6ac615b1f09c"
     },
     {
       "path": "src/services/UserPersonaService.ts",
@@ -1551,6 +1829,29 @@
         "data-protection"
       ],
       "sha256": "095733bb14120017ef65131fcd18792cdcd9d13a37f0a997cd8143c72f818806"
+    },
+    {
+      "path": "src/services/WebBackgroundKeepAlive.ts",
+      "guides": [
+        "background-notifications"
+      ],
+      "sha256": "2e3c7738b76461e20e69336f0d69c959f432f93c35fa4549f9048d9b0146a37d"
+    },
+    {
+      "path": "src/services/WebDiscordInboxNotifications.ts",
+      "guides": [
+        "background-notifications",
+        "discord-posts"
+      ],
+      "sha256": "838f5c2cf3bd6bed87ea3d52173775d45950bbb8b7447b9048e8411f3bf4feb4"
+    },
+    {
+      "path": "src/services/WebDiscordInboxSession.ts",
+      "guides": [
+        "background-notifications",
+        "discord-posts"
+      ],
+      "sha256": "a7485ec28717a0fd07a49126fac1fbe9b62339abbaf2d057c14552874776e065"
     },
     {
       "path": "src/storage/AndroidNativeAppDatabaseRuntime.ts",
@@ -1568,6 +1869,14 @@
       "sha256": "f867f9165bc660da0b1bde9d0b657ff7fca0873046d981d68b677a5d926bea4b"
     },
     {
+      "path": "src/storage/FrontendWorkshopProjectStorage.ts",
+      "guides": [
+        "backup",
+        "frontend-workshop"
+      ],
+      "sha256": "ea97d6f801b8f707bcc935040e717cf4de3b2fd48aacf3f868d8bc7a651bbf8c"
+    },
+    {
       "path": "src/storage/IndexedDbCommunitySourceStorage.ts",
       "guides": [
         "discord-posts"
@@ -1582,11 +1891,19 @@
       "sha256": "6c6c726d48bf44dca75398febbf09b7ee5aa8c50181dfd09717051e1bbbc247f"
     },
     {
+      "path": "src/storage/IndexedDbFrontendWorkshopProjectStorage.ts",
+      "guides": [
+        "backup",
+        "frontend-workshop"
+      ],
+      "sha256": "7769b3945fefd31479a0875046639bcc640ceef6da8f5f0f18dddf751e038e33"
+    },
+    {
       "path": "src/storage/IndexedDbGeneratedImageAlbumStorage.ts",
       "guides": [
         "image-album"
       ],
-      "sha256": "1a021725e7ab9a631d2a8a7202352fb64df6215279acacb07d4375140e809084"
+      "sha256": "c5053a3323b17a2f923304ae499163797be207fbe2e983893143c9d97a1a67a2"
     },
     {
       "path": "src/storage/IndexedDbProductAssistantStorage.ts",
@@ -1600,14 +1917,14 @@
       "guides": [
         "import"
       ],
-      "sha256": "9569275013d00d2f7caa105c1f90ae4a032de8c296a8346732d4ccedf50e2e36"
+      "sha256": "424d8e4feb2526b13c51c94cb9b2b3994d256d6e951db891c630782eb968e549"
     },
     {
       "path": "src/storage/IndexedDbResourceStorage.ts",
       "guides": [
         "import"
       ],
-      "sha256": "dea8be57ef8fcc34973be14b0299c216a168c2cb87cc96e0b0aa5f75293dda9f"
+      "sha256": "efdf73f0c572c4b03bf4c29cc414dbbeb6b9298bc698e855b9584fa068188b19"
     },
     {
       "path": "src/storage/InstalledOfficialAppStorage.ts",
@@ -1621,14 +1938,15 @@
       "guides": [
         "import"
       ],
-      "sha256": "cbe128c2c2872c00b80aa5f5396e13f17a02ef8a1c607fe39bdea8d97646ce03"
+      "sha256": "8ebcdc6dc06866881db272e0a41de6fd36ed63d08905ec23991d8d524ca07a89"
     },
     {
       "path": "src/storage/NativeResourceFileMirror.ts",
       "guides": [
+        "data-protection",
         "import"
       ],
-      "sha256": "6e8a9126ea696a09c8d7923050e72c5c51c78a04952a6fe671376260e64542b2"
+      "sha256": "7684ae655a3f62ea3916b156c0804f3a18d6c27c47d4b09ec8092c7f19a20d92"
     },
     {
       "path": "src/storage/ResourceGalleryCategoryStorage.ts",
@@ -1642,7 +1960,7 @@
       "guides": [
         "import"
       ],
-      "sha256": "67b55cf35c00612e88a887f7334d864204dee87cdc3a17a3e84dcbc0fa6533b4"
+      "sha256": "7685377fe190c453fc7f363f52cd17ea7ea5f2719f787f3bc23a1e6b8f2e9f72"
     },
     {
       "path": "src/types/Import.ts",
@@ -1664,13 +1982,13 @@
       "guides": [
         "appearance"
       ],
-      "sha256": "09189361b6641d5ebafa833d3f69238d7934d961807601a6cf305283bfc29c03"
+      "sha256": "48adf6ae1c5ea6bee8a2da5164797a37edb4cc9dd2312fc9f6d1ebadee5efc37"
     },
     {
       "path": "src/utils/CharacterCardCustomization.ts",
       "guides": [
-        "versions",
-        "bridge"
+        "bridge",
+        "versions"
       ],
       "sha256": "9317dfd87465204f7d29eed61237e47b1be5b32205bde3cb611c3165e0a1e710"
     },
@@ -1680,6 +1998,27 @@
         "chat-reader"
       ],
       "sha256": "03d24e207ef13d73340af2fab25ef790e18a7a9116beaf15cafb5d153d592910"
+    },
+    {
+      "path": "src/utils/ConfirmationText.ts",
+      "guides": [
+        "data-protection"
+      ],
+      "sha256": "1f5d838c51c1b4acc12bf83af29455f86a8a42dc06e2aed8fe3b5e70673d3d72"
+    },
+    {
+      "path": "src/utils/ContentSearchCache.ts",
+      "guides": [
+        "library-search"
+      ],
+      "sha256": "640a72eee14cb8dbb5079ee575814929882c126ba4f70cdf92632042655b06a8"
+    },
+    {
+      "path": "src/utils/LibraryFormatting.ts",
+      "guides": [
+        "appearance"
+      ],
+      "sha256": "a786bb2f94e5770905802439b72a1502eff937a52cb6d325dfd554535d5fae4a"
     },
     {
       "path": "src/utils/ResourceDiff.ts",
@@ -1731,52 +2070,18 @@
       "sha256": "3726e63b468a85cf3927eee7845c5e5001ad273df8e5ea8e6a40e75b334cc444"
     },
     {
+      "path": "src/workers/ContentSearchWorker.ts",
+      "guides": [
+        "library-search"
+      ],
+      "sha256": "a7d938a14cd4360d7c36f343a7cfb75f2cca7fb0c0e6967226e377b0d465c9fb"
+    },
+    {
       "path": "src/workers/ExternalAppUnzipWorker.ts",
       "guides": [
         "apps"
       ],
       "sha256": "1b2a5595516b4a7cf54435222f88feca203670d382c313062104694359ab93ba"
-    }
-    ,
-{
-      "path": "src/components/AppearanceQuickMenu.vue",
-      "guides": [
-        "appearance"
-      ],
-      "sha256": "f768f27b7033fd665c93b4a47111e4ab072cc3b934ef0c749ea205d6109449de"
-    }
-    ,
-{
-      "path": "src/components/DiscordNativeInboxMode.vue",
-      "guides": [
-        "discord-posts"
-      ],
-      "sha256": "c903c6239a74a90ab8499dc5fe56f62541dffed9b22b01a2208ce83ec7ebc9ad"
-    }
-    ,
-{
-      "path": "src/services/WebBackgroundKeepAlive.ts",
-      "guides": [
-        "background-notifications"
-      ],
-      "sha256": "470ce62e0ac3c57a44788293f66837d021bf98089f4090fea32c83133ce07b4b"
-    }
-    ,
-{
-      "path": "src/services/WebDiscordInboxNotifications.ts",
-      "guides": [
-        "background-notifications",
-        "discord-posts"
-      ],
-      "sha256": "3548a932d15449e452ce07f2cb96ae61329d2ca88b66c4ac456bc8c529ea3994"
-    }
-    ,
-{
-      "path": "src/services/WebDiscordInboxSession.ts",
-      "guides": [
-        "discord-posts"
-      ],
-      "sha256": "554e171b5d47f9986ff312031b0881e644b1f2ede4cf0ca897efb24840bb15dd"
     }
   ]
 }

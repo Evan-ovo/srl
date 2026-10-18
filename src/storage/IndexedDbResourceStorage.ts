@@ -7,6 +7,11 @@ import {
   yieldMainThread,
 } from './ResourceThumbnailMaintenance'
 
+import {
+  isResourceAttachment,
+  isResourceOwnedFile,
+  resourceOwnedFileOwnerId,
+} from '../types/ResourceAttachment'
 import { galleryOwnerId, isResourceGalleryImage } from '../types/ResourceGallery'
 
 import Dexie from 'dexie'
@@ -17,6 +22,7 @@ import type { VaultService } from '../services/VaultService'
 
 import {
   RESOURCE_TYPE,
+  getResourceCategoryIds,
   normalizeResource,
   toResourceListSummary,
   toResourceSummary,
@@ -74,6 +80,7 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
   private readonly database: AppDatabase
   private readonly vault?: VaultService
   private readonly assets: IndexedDbAssetStore
+  private metadataPlaceholder?: Blob
   private thumbnailMigrationPromise?: Promise<number>
   private missingPngThumbnailRepairPromise?: Promise<number>
 
@@ -246,33 +253,48 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     const table = this.database.resourceListSummaries
     const ids = filter?.ids
       ? Array.from(new Set(filter.ids)).sort()
-      : filter?.types && !this.vault?.isEnabled()
-        ? filter.types.length
-          ? (
-              await table
-                .where('type')
-                .anyOf([...filter.types])
-                .primaryKeys()
-            ).sort()
-          : []
-        : await table.toCollection().primaryKeys()
+      : filter?.categoryId && !this.vault?.isEnabled()
+        ? await table
+            .where('categoryId')
+            .equals(filter.categoryId)
+            .or('categoryIds')
+            .equals(filter.categoryId)
+            .primaryKeys()
+        : filter?.types && !this.vault?.isEnabled()
+          ? filter.types.length
+            ? (
+                await table
+                  .where('type')
+                  .anyOf([...filter.types])
+                  .primaryKeys()
+              ).sort()
+            : []
+          : await table.toCollection().primaryKeys()
     const types = filter?.types ? new Set(filter.types) : undefined
     const resources: ResourceListSummary[] = []
     for (let start = 0; start < ids.length; start += SUMMARY_READ_BATCH_SIZE) {
       const stored = (
         await table.bulkGet(ids.slice(start, start + SUMMARY_READ_BATCH_SIZE))
       ).filter((resource): resource is StoredResourceSummary => resource !== undefined)
-      const decoded = await Promise.all(
-        stored.map((resource) =>
-          this.vault ? this.vault.decodeResourceSummary(resource) : (resource as ResourceSummary),
+      const decoded = await Dexie.waitFor(
+        Promise.all(
+          stored.map((resource) =>
+            this.vault ? this.vault.decodeResourceSummary(resource) : (resource as ResourceSummary),
+          ),
         ),
       )
       resources.push(
         ...decoded
-          .filter((resource) => !types || types.has(resource.type))
+          .filter(
+            (resource) =>
+              (!types || types.has(resource.type)) &&
+              (!filter?.categoryId || getResourceCategoryIds(resource).includes(filter.categoryId)),
+          )
           .map(toResourceListSummary),
       )
-      if (start + SUMMARY_READ_BATCH_SIZE < ids.length) await yieldMainThread()
+      // Folder deletion consumes this catalogue inside its atomic write. Keep that
+      // transaction alive while yielding, just as during encrypted summary decoding.
+      if (start + SUMMARY_READ_BATCH_SIZE < ids.length) await Dexie.waitFor(yieldMainThread())
     }
     resources.sort((left, right) => right.updatedAt - left.updatedAt)
     return resources
@@ -285,6 +307,28 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
       ? await this.vault.decodeResourceSummary(stored)
       : (stored as ResourceSummary)
     return toResourceListSummary(summary)
+  }
+
+  async getResourceListSummaries(ids: readonly string[]): Promise<ResourceListSummary[]> {
+    const selected = Array.from(new Set(ids))
+    const summaries: ResourceListSummary[] = []
+    for (let start = 0; start < selected.length; start += SUMMARY_READ_BATCH_SIZE) {
+      const rows = await this.database.resourceListSummaries.bulkGet(
+        selected.slice(start, start + SUMMARY_READ_BATCH_SIZE),
+      )
+      const decoded = await Dexie.waitFor(
+        Promise.all(
+          rows.map(async (row) => {
+            if (!row) return undefined
+            return toResourceListSummary(
+              this.vault ? await this.vault.decodeResourceSummary(row) : (row as ResourceSummary),
+            )
+          }),
+        ),
+      )
+      summaries.push(...decoded.flatMap((row) => (row ? [row] : [])))
+    }
+    return summaries
   }
 
   async listRecentCharacterCardSummaries(limit = 100): Promise<ResourceListSummary[]> {
@@ -406,6 +450,25 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     })
   }
 
+  async listAttachmentListSummaries(ownerId: string): Promise<ResourceListSummary[]> {
+    if (this.vault?.isEnabled()) {
+      return (await this.listResourceListSummaries({ types: [RESOURCE_TYPE.OTHER] })).filter(
+        (r) => isResourceAttachment(r) && resourceOwnedFileOwnerId(r) === ownerId,
+      )
+    }
+    const rows = await this.database.resourceSummaries
+      .where('type')
+      .equals(RESOURCE_TYPE.OTHER)
+      .filter(
+        (r) =>
+          !isEncryptedResourceSummary(r) &&
+          isResourceAttachment(r) &&
+          resourceOwnedFileOwnerId(r) === ownerId,
+      )
+      .toArray()
+    return rows.map((row) => toResourceListSummary(row as ResourceSummary))
+  }
+
   private async repairResourceListSummaryIndex(
     force = false,
     selectedIds?: readonly string[],
@@ -498,6 +561,14 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
 
   async getSummary(id: string, historical = false): Promise<ResourceSummary | undefined> {
     const store = historical ? 'resourceVersions' : 'resources'
+    if (!isAndroidNativeAppDatabaseActive() && !Dexie.currentTransaction) {
+      // A standalone IndexedDB get is already atomic. Inside a caller's transaction,
+      // retain the existing nested scope and its transaction lifetime guarantees.
+      const record = await this.database[store].get(id)
+      if (!record) return undefined
+      const summary = this.toStoredSummary(record)
+      return this.vault ? this.vault.decodeResourceSummary(summary) : (summary as ResourceSummary)
+    }
     const summary = await this.database.transaction(
       'r',
       this.database[store],
@@ -547,18 +618,23 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
       const stored = await this.database.resources.get(id)
       if (!stored) continue
       const resource = await this.decodeStoredResource(stored)
-      if (!isResourceGalleryImage(resource)) return resource
+      if (!isResourceOwnedFile(resource)) return resource
     }
     return undefined
   }
 
   async findVersionByHash(contentHash: string): Promise<Resource | undefined> {
-    const stored = await this.database.resourceVersions
+    const ids = await this.database.resourceVersions
       .where('contentHash')
       .equals(contentHash)
-      .first()
-    if (!stored) return undefined
-    return this.decodeStoredResource(stored)
+      .primaryKeys()
+    for (const id of ids) {
+      const stored = await this.database.resourceVersions.get(id)
+      if (!stored) continue
+      const resource = await this.decodeStoredResource(stored)
+      if (!isResourceOwnedFile(resource)) return resource
+    }
+    return undefined
   }
 
   async getVersion(id: string): Promise<Resource | undefined> {
@@ -589,21 +665,33 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
   async listVersionListSummaries(): Promise<ResourceListSummary[]> {
     const summaries: ResourceListSummary[] = []
     const ids = await this.database.resourceVersions.toCollection().primaryKeys()
+    const native = isAndroidNativeAppDatabaseActive()
     for (let start = 0; start < ids.length; start += SUMMARY_READ_BATCH_SIZE) {
-      const records = await readResourceMetadataBatch(
-        this.database,
-        ids.slice(start, start + SUMMARY_READ_BATCH_SIZE),
-        'resourceVersions',
-      )
-      for (const record of records) {
-        if (!record) continue
+      const batch = ids.slice(start, start + SUMMARY_READ_BATCH_SIZE)
+      const storedSummaries: Array<StoredResourceSummary | undefined> = native
+        ? (await readResourceMetadataBatch(this.database, batch, 'resourceVersions')).map(
+            (record) => record && this.toStoredSummary(record),
+          )
+        : []
+      if (!native) {
+        // Web records contain original ArrayBuffers. Project each regular-cursor
+        // row before retaining it, rather than holding 250 originals in bulkGet().
+        // Native metadata batches already retain descriptors, not binary bytes.
+        await this.database.resourceVersions
+          .where(':id')
+          .anyOf(batch)
+          .each((record) => {
+            storedSummaries.push(this.toStoredSummary(record))
+          })
+      }
+      for (const stored of storedSummaries) {
+        if (!stored) continue
         // Encrypted metadata still needs its existing payload-only decoder; never hydrate originals.
-        if (isEncryptedResource(record)) {
-          const summary = await this.getSummary(record.id, true)
+        if (native && isEncryptedResourceSummary(stored)) {
+          const summary = await this.getSummary(stored.id, true)
           if (summary) summaries.push(toResourceListSummary(summary))
           continue
         }
-        const stored = this.toStoredSummary(record)
         const summary = this.vault
           ? await this.vault.decodeResourceSummary(stored)
           : (stored as ResourceSummary)
@@ -839,6 +927,14 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
   }
 
   async updateVersion(versionId: string, changes: Partial<Resource>): Promise<void> {
+    if (
+      !['originalBlob', 'contentHash', 'fileSize', 'fileName', 'mimeType', 'id', 'createdAt'].some(
+        (key) => key in changes,
+      )
+    ) {
+      await this.updateStoredMetadata(versionId, changes, 'resourceVersions')
+      return
+    }
     const stored = await this.database.resourceVersions.get(versionId)
     if (!stored) return
     const current = hydrateResourceFromIndexedDb(
@@ -885,6 +981,12 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     await this.putStoredResources([stored])
   }
 
+  async insertIfAbsent(resource: Resource): Promise<boolean> {
+    const normalized = await this.prepareResourceForStorage(resource)
+    const stored = this.vault ? await this.vault.encodeResource(normalized) : normalized
+    return this.putStoredResources([stored], undefined, true)
+  }
+
   async saveMany(resources: Resource[]): Promise<void> {
     const normalized: Resource[] = []
     for (const resource of resources)
@@ -895,27 +997,53 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     await this.putStoredResources(stored)
   }
 
-  async updateMetadata(
+  updateMetadata(
     id: string,
     changes: ResourceMetadataPatch,
     expectedPersonalDocument?: string,
   ): Promise<ResourceSummary> {
+    return this.updateStoredMetadata(id, changes, 'resources', expectedPersonalDocument)
+  }
+
+  private updateStoredMetadata(
+    id: string,
+    changes: ResourceMetadataPatch,
+    store: 'resources',
+    expectedPersonalDocument?: string,
+  ): Promise<ResourceSummary>
+  private updateStoredMetadata(
+    id: string,
+    changes: ResourceMetadataPatch,
+    store: 'resourceVersions',
+  ): Promise<ResourceSummary | undefined>
+  private async updateStoredMetadata(
+    id: string,
+    changes: ResourceMetadataPatch,
+    store: 'resources' | 'resourceVersions',
+    expectedPersonalDocument?: string,
+  ): Promise<ResourceSummary | undefined> {
+    const historical = store === 'resourceVersions'
+    const table = this.database[store]
+    const summaryTable = historical
+      ? this.database.resourceVersionSummaries
+      : this.database.resourceSummaries
     if (changes.thumbnailBlob) {
+      const current = await this.getSummary(id, historical)
+      if (historical && !current) return undefined
       const asset = await this.assets.put(changes.thumbnailBlob, { source: 'thumbnail' })
-      if ((await this.getSummary(id))?.type === RESOURCE_TYPE.CHARACTER_CARD)
+      if (current?.type === RESOURCE_TYPE.CHARACTER_CARD)
         await this.assets.thumbnails.prepareCard(asset.assetId)
       changes = { ...changes, thumbnailBlob: undefined, thumbnailAssetId: asset.assetId }
     }
     return this.database.transaction(
       'rw',
-      [
-        this.database.resources,
-        this.database.resourceSummaries,
-        this.database.resourceListSummaries,
-      ],
+      [table, summaryTable, ...(historical ? [] : [this.database.resourceListSummaries])],
       async () => {
-        const current = await Dexie.waitFor(this.getSummary(id))
-        if (!current) throw new Error('资源不存在，未修改资源')
+        const current = await Dexie.waitFor(this.getSummary(id, historical))
+        if (!current) {
+          if (historical) return undefined
+          throw new Error('资源不存在，未修改资源')
+        }
         if (
           expectedPersonalDocument !== undefined &&
           JSON.stringify(current.metadata.personalDocument ?? null) !== expectedPersonalDocument
@@ -925,8 +1053,11 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
         const normalized = await cloneResourceForStorage({
           ...current,
           ...changes,
-          metadata: { ...current.metadata, ...changes.metadata },
-          originalBlob: new Blob(),
+          metadata:
+            historical && 'metadata' in changes
+              ? (changes.metadata ?? {})
+              : { ...current.metadata, ...changes.metadata },
+          originalBlob: (this.metadataPlaceholder ??= new Blob()),
         })
         if ('thumbnailBlob' in changes) {
           normalized.thumbnailAssetId = changes.thumbnailAssetId
@@ -939,6 +1070,8 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
         const light = (
           await Dexie.waitFor(this.createStoredListSummariesFromSummaries([encoded]))
         )[0]!
+        // Metadata-only writes must retain legacy embedded thumbnails too.
+        const patch = 'thumbnailBlob' in changes ? encoded : stripStableSummaryBinaryFields(encoded)
         if (isAndroidNativeAppDatabaseActive()) {
           // Dexie.update() enumerates a primary-key range and hydrates the old
           // record before modify(). The keyed mutation keeps stored attachments
@@ -947,25 +1080,29 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
             trans: Dexie.currentTransaction!.idbtrans,
             type: 'put' as const,
             keys: [id],
-            values: [encoded],
+            values: [patch],
             upsert: false,
-            updates: { keys: [id], changeSpecs: [encoded] },
+            updates: { keys: [id], changeSpecs: [patch] },
             resourceMetadataOnly: true,
           }
-          const result = await this.database.resources.core.mutate(request)
+          const result = await table.core.mutate(request)
           if (result.numFailures) throw result.failures[0]
           if (!result.results?.length) throw new Error('资源已经不存在')
-        } else if (!(await this.database.resources.update(id, encoded))) {
+        } else if (!(await table.update(id, patch))) {
           throw new Error('资源已经不存在')
         }
-        await this.database.resourceSummaries.put(light)
-        await this.database.resourceListSummaries.put(light)
+        await summaryTable.put(light)
+        if (!historical) await this.database.resourceListSummaries.put(light)
         return summary
       },
     )
   }
 
-  async update(id: string, changes: Partial<Resource>): Promise<void> {
+  async update(
+    id: string,
+    changes: Partial<Resource>,
+    expectedContentHash?: string,
+  ): Promise<void> {
     if (
       !['originalBlob', 'contentHash', 'fileSize', 'fileName', 'mimeType', 'id', 'createdAt'].some(
         (key) => key in changes,
@@ -975,7 +1112,10 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
       return
     }
     const stored = await this.database.resources.get(id)
-    if (!stored) return
+    if (!stored) {
+      if (expectedContentHash !== undefined) throw new Error('附件已被删除，请重新打开后编辑')
+      return
+    }
     const resource = hydrateResourceFromIndexedDb(
       (this.vault ? await this.vault.decodeResource(stored) : stored) as StoredResource,
     )
@@ -991,7 +1131,12 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     const replaceStableBinaryIds = Object.prototype.hasOwnProperty.call(changes, 'thumbnailBlob')
       ? new Set([id])
       : undefined
-    await this.putStoredResources([encoded], replaceStableBinaryIds)
+    await this.putStoredResources(
+      [encoded],
+      replaceStableBinaryIds,
+      false,
+      expectedContentHash === undefined ? undefined : new Map([[id, expectedContentHash]]),
+    )
   }
 
   async updateMetadataMany(
@@ -1174,12 +1319,14 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
   private async putStoredResources(
     resources: StoredResource[],
     replaceStableBinaryIds = new Set<string>(),
-  ): Promise<void> {
-    if (!resources.length) return
+    insertOnly = false,
+    expectedContentHashes?: ReadonlyMap<string, string>,
+  ): Promise<boolean> {
+    if (!resources.length) return false
     const storedResources = await Promise.all(resources.map(materializeResourceForIndexedDb))
     const summaries = storedResources.map((resource) => this.toStoredSummary(resource))
     const listSummaries = await this.createStoredListSummariesFromSummaries(summaries)
-    await this.database.transaction(
+    return this.database.transaction(
       'rw',
       this.database.resources,
       this.database.resourceSummaries,
@@ -1187,6 +1334,12 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
       async () => {
         for (const resource of storedResources) {
           const existing = await this.database.resources.get(resource.id)
+          if (insertOnly && existing) return false
+          if (
+            expectedContentHashes?.has(resource.id) &&
+            existing?.contentHash !== expectedContentHashes.get(resource.id)
+          )
+            throw new Error('附件已被修改或删除，请重新打开后编辑')
           if (
             existing?.contentHash === resource.contentHash &&
             !replaceStableBinaryIds.has(resource.id)
@@ -1215,6 +1368,7 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
           }
         }
         await this.database.resourceListSummaries.bulkPut(listSummaries)
+        return true
       },
     )
   }

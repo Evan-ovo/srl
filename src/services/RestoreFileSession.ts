@@ -13,6 +13,8 @@ export async function openArchiveFiles(
   paths: Map<string, string>,
   resources: Resource[],
 ): Promise<{ hydrate: (resource: Resource) => Promise<Resource>; dispose: () => Promise<void> }> {
+  type Avatar = { resource: Resource; index: number }
+  let avatarsById: Map<string, Avatar[]> | undefined
   const materialize = async (resource: Resource): Promise<Resource> => {
     const path = paths.get(resource.contentHash.toLowerCase())
     const entry = path ? await staging.get(jobId, path) : undefined
@@ -38,15 +40,28 @@ export async function openArchiveFiles(
     hydrate: async (resource) => {
       const ready = await materialize(resource)
       if (resource.type === RESOURCE_TYPE.USER_PERSONA) {
-        const avatars = resources.filter(
-          (candidate) =>
-            resource.relatedResourceIds?.includes(candidate.id) &&
-            isUserPersonaAvatarAttachment(candidate),
-        )
-        const cover =
-          avatars.find(
-            (avatar) => avatar.metadata.avatarId === resource.metadata.defaultPersonaAvatarId,
-          ) ?? avatars[0]
+        if (!avatarsById) {
+          avatarsById = new Map()
+          for (const [index, candidate] of resources.entries()) {
+            if (!isUserPersonaAvatarAttachment(candidate)) continue
+            const avatar = { resource: candidate, index },
+              matches = avatarsById.get(candidate.id)
+            if (matches) matches.push(avatar)
+            else avatarsById.set(candidate.id, [avatar])
+          }
+        }
+        let first: Avatar | undefined, preferred: Avatar | undefined
+        for (const id of new Set(resource.relatedResourceIds ?? [])) {
+          for (const avatar of avatarsById.get(id) ?? []) {
+            if (!first || avatar.index < first.index) first = avatar
+            if (
+              avatar.resource.metadata.avatarId === resource.metadata.defaultPersonaAvatarId &&
+              (!preferred || avatar.index < preferred.index)
+            )
+              preferred = avatar
+          }
+        }
+        const cover = (preferred ?? first)?.resource
         if (cover) ready.thumbnailBlob = (await materialize(cover)).thumbnailBlob
       }
       return ready

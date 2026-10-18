@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   preview: vi.fn(),
   recover: vi.fn(),
   repair: vi.fn(),
+  deleteCandidates: vi.fn(),
   accounting: vi.fn(),
   mirrors: vi.fn(),
   notice: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('../core/AppContainer', () => ({
     preview: api.preview,
     recover: api.recover,
     repairExisting: api.repair,
+    deleteCandidates: api.deleteCandidates,
     storageAccounting: api.accounting,
     nativeMirrorDuplicationSummary: api.mirrors,
   },
@@ -47,7 +49,16 @@ vi.mock('../core/AppContainer', () => ({
 vi.mock('../core/HealthCenter', () => ({ healthCenter: { scan: api.scan, repairSafe: vi.fn() } }))
 vi.mock('../core/PlatformService', () => ({ getPlatformInfo: vi.fn() }))
 vi.mock('../core/SafeStartup', () => ({ isSafeModeActive: () => false }))
-vi.mock('../core/TaskCenter', () => ({ taskCenter: { list: () => [] } }))
+vi.mock('../core/TaskCenter', () => ({
+  taskCenter: {
+    list: () => [],
+    start: vi.fn(() => 'browser-usage'),
+    update: vi.fn(),
+    complete: vi.fn(),
+    fail: vi.fn(),
+    cancelled: vi.fn(),
+  },
+}))
 vi.mock('../core/NoticeCenter', () => ({ noticeCenter: { push: api.notice, list: () => [] } }))
 vi.mock('../storage/NativeResourceFileMirror', () => ({
   getNativeResourceStorageInfo: api.info,
@@ -56,6 +67,7 @@ vi.mock('../storage/NativeResourceFileMirror', () => ({
 vi.mock('../composables/UseConfirmDialog', () => ({ confirmAction: api.confirm }))
 import ResourceHealthCenter from './ResourceHealthCenter.vue'
 import { domainEvents } from '../core/DomainEvents'
+import { taskCenter } from '../core/TaskCenter'
 const accounting = {
   currentOriginalBytes: 10,
   versionOriginalBytes: 5,
@@ -109,6 +121,46 @@ beforeEach(() => {
   })
 })
 describe('ResourceHealthCenter recovery controls', () => {
+  it('requires explicit selection and confirmation before deleting recovery candidates, then refreshes only candidates', async () => {
+    const view = mount(ResourceHealthCenter)
+    await view
+      .findAll('button')
+      .find((button) => button.text() === '检查原件与空间')!
+      .trigger('click')
+    await flushPromises()
+    const remove = () =>
+      view.findAll('button').find((button) => button.text().startsWith('删除所选'))!
+    expect(remove().attributes('disabled')).toBeDefined()
+    await view.get('.resource-health__candidates input').setValue(true)
+    api.confirm.mockResolvedValueOnce(false)
+    await remove().trigger('click')
+    await flushPromises()
+    expect(api.deleteCandidates).not.toHaveBeenCalled()
+    expect(api.candidates).toHaveBeenCalledOnce()
+    api.confirm.mockResolvedValueOnce(true)
+    api.deleteCandidates.mockResolvedValue({
+      deletedHashes: ['a'.repeat(64)],
+      retainedHashes: [],
+      clearedBytes: 180,
+    })
+    api.candidates.mockResolvedValueOnce({ candidates: [], scanned: 1 })
+    await remove().trigger('click')
+    await flushPromises()
+    expect(api.confirm).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        danger: true,
+        confirmLabel: '永久删除所选',
+        message: expect.stringContaining('不进入回收站'),
+      }),
+      expect.any(AbortSignal),
+    )
+    expect(api.deleteCandidates).toHaveBeenCalledOnce()
+    expect(api.candidates).toHaveBeenCalledTimes(2)
+    expect(api.accounting).toHaveBeenCalledOnce()
+    expect(api.scan).not.toHaveBeenCalled()
+    expect(view.find('.resource-health__candidates').exists()).toBe(false)
+    view.unmount()
+  })
   it('separates quick index scanning from explicit original and link inspection', async () => {
     const view = mount(ResourceHealthCenter)
     await view
@@ -401,6 +453,114 @@ describe('ResourceHealthCenter recovery controls', () => {
     expect(view.text()).toContain('当前浏览器未提供占用总量')
     expect(view.text()).toContain('当前原件 10 B')
     expect(view.text()).not.toContain('站点已用 0 B')
+    view.unmount()
+  })
+
+  it.each([true, false])(
+    'shows purpose categories without expanding technical details (estimate available: %s)',
+    async (supported) => {
+      api.info.mockResolvedValue(null)
+      api.browserHealth.mockResolvedValue({
+        supported,
+        persisted: false,
+        usage: supported ? 10000 : 0,
+        quota: supported ? 20000 : 0,
+      })
+      api.accounting.mockResolvedValue({
+        ...accounting,
+        browserStores: [
+          { store: 'resources', bytes: 1024, records: 2 },
+          { store: 'resourceVersions', bytes: 2048, records: 3 },
+          { store: 'externalAppData', bytes: 4096, records: 10 },
+          { store: 'settings', bytes: 128, records: 5 },
+        ],
+      })
+      const view = mount(ResourceHealthCenter)
+      expect(api.accounting).not.toHaveBeenCalled()
+      await view
+        .findAll('button')
+        .find((button) => button.text() === '检查原件与空间')!
+        .trigger('click')
+      await flushPromises()
+      const section = view.get('[aria-label="网页数据用途分类"]')
+      expect(section.find('details').exists()).toBe(false)
+      expect(section.text()).toContain('当前资源1.0 KiB · 2 条')
+      expect(section.text()).toContain('历史版本2.0 KiB · 3 条')
+      expect(section.text()).toContain('APP 使用数据与草稿4.0 KiB · 10 条')
+      expect(section.text()).toContain('素材与缩略图0 B · 0 条')
+      expect(view.get('.storage-usage').text()).toContain('已统计数据（估算）')
+      expect(view.get('.storage-usage').text()).not.toContain('浏览器本机存储')
+      expect(api.accounting).toHaveBeenCalledWith(
+        expect.objectContaining({ browserDetails: true, signal: expect.any(AbortSignal) }),
+      )
+      await view.get('.storage-usage__legend button').trigger('click')
+      expect(api.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({ title: '当前资源 · 1.0 KiB', confirmLabel: '知道了' }),
+      )
+      expect(api.optimize).not.toHaveBeenCalled()
+      view.unmount()
+    },
+  )
+
+  it.each(['button', 'task', 'unmount'])(
+    'stops browser accounting via %s and ignores a late success',
+    async (stop) => {
+      api.info.mockResolvedValue(null)
+      let finish!: (value: unknown) => void
+      api.accounting.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      const view = mount(ResourceHealthCenter)
+      await view
+        .findAll('button')
+        .find((button) => button.text() === '检查原件与空间')!
+        .trigger('click')
+      await flushPromises()
+      const options = api.accounting.mock.calls[0]![0]
+      options.onProgress(1, 26)
+      await flushPromises()
+      expect(taskCenter.update).toHaveBeenCalled()
+      if (stop === 'button')
+        await view
+          .findAll('button')
+          .find((button) => button.text() === '停止统计')!
+          .trigger('click')
+      else if (stop === 'task') vi.mocked(taskCenter.start).mock.calls[0]![0].cancel!()
+      else view.unmount()
+      expect(options.signal.aborted).toBe(true)
+      finish({ ...accounting, browserStores: [{ store: 'resources', bytes: 9999, records: 1 }] })
+      await flushPromises()
+      expect(view.find('[aria-label="网页数据用途分类"]').exists()).toBe(false)
+      if (stop !== 'unmount') expect(view.text()).toContain('用途统计已停止')
+      expect(taskCenter.cancelled).toHaveBeenCalledWith('browser-usage')
+      expect(api.accounting).toHaveBeenCalledOnce()
+      if (stop === 'unmount') return
+      await view
+        .findAll('button')
+        .find((button) => button.text() === '检查原件与空间')!
+        .trigger('click')
+      await flushPromises()
+      expect(api.accounting).toHaveBeenCalledTimes(2)
+      view.unmount()
+    },
+  )
+
+  it('keeps a failed browser inventory incomplete and does not retry it automatically', async () => {
+    api.info.mockResolvedValue(null)
+    api.accounting.mockRejectedValue(new Error('无法读取数据库'))
+    const view = mount(ResourceHealthCenter)
+    await view
+      .findAll('button')
+      .find((button) => button.text() === '检查原件与空间')!
+      .trigger('click')
+    await flushPromises()
+    expect(view.text()).toContain('无法读取数据库')
+    expect(view.find('[aria-label="网页数据用途分类"]').exists()).toBe(false)
+    expect(api.accounting).toHaveBeenCalledOnce()
+    expect(taskCenter.fail).toHaveBeenCalledWith('browser-usage', expect.any(Error))
     view.unmount()
   })
 

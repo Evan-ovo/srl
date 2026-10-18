@@ -51,7 +51,13 @@ self.addEventListener('fetch', (event) => {
 // Inbox results are posted locally by the live PWA after its persistence owner commits.
 // This does not subscribe to remote push or keep the service worker running indefinitely.
 self.addEventListener('notificationclick', (event) => {
-  if (event.notification.data?.srlInbox !== true) return
+  const destination =
+    event.notification.data?.srlBackup === true
+      ? 'backup'
+      : event.notification.data?.srlInbox === true
+        ? 'inbox'
+        : undefined
+  if (!destination) return
   event.notification.close()
   event.waitUntil(
     (async () => {
@@ -59,8 +65,8 @@ self.addEventListener('notificationclick', (event) => {
       const client = windows.find((entry) => new URL(entry.url).origin === self.location.origin)
       if (client) {
         await client.focus()
-        client.postMessage({ type: 'srl:open-inbox' })
-      } else await self.clients.openWindow('/?open-inbox=1')
+        client.postMessage({ type: `srl:open-${destination}` })
+      } else await self.clients.openWindow(`/?open-${destination}=1`)
     })(),
   )
 })

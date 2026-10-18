@@ -13,6 +13,7 @@ export interface CloudBackupProtection {
 }
 
 export interface CloudBackupContentSelection {
+  resourceAttachments?: boolean
   resourceGallery?: boolean
   personalResources?: PersonalResourceSelection
   /** 未定义表示所有可备份资源；定义后仅备份这些资源 ID。 */
@@ -25,6 +26,9 @@ export interface CloudBackupContentSelection {
   assistantData?: boolean
   stitchWork?: boolean
   frontendWorkshopComponents?: boolean
+  frontendWorkshopProjects?: boolean
+  imageGeneration?: boolean
+  generatedImageAlbum?: boolean
   communitySources?: boolean
   appearance?: boolean
   cloudBackup?: boolean
@@ -79,6 +83,8 @@ export interface CloudBackupMetrics {
 }
 
 export interface CloudBackupStatus {
+  /** Device-local control checkpoint; never exported with portable settings. No credentials. */
+  webBackup?: WebCloudBackupState
   provider?: CloudBackupProvider
   lastAttemptAt?: number
   lastSuccessAt?: number
@@ -91,6 +97,13 @@ export interface CloudBackupStatus {
   lastHealthyObjectKey?: string
   lastHealthyResourceCount?: number
   lastMetrics?: CloudBackupMetrics
+}
+
+export interface WebCloudBackupState {
+  operationId: string
+  status: 'running' | 'paused' | 'stopped' | 'failed' | 'completed'
+  phase: string
+  target: CloudBackupConfig
 }
 
 export interface CloudBackupItem {

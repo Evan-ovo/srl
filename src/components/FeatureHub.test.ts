@@ -1,6 +1,8 @@
 /** @vitest-environment jsdom */
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick, reactive } from 'vue'
+import { featureAppUsageStore } from '../core/FeatureAppUsageStore'
 
 import { RESOURCE_TYPE, type Category, type ResourceSummary } from '../types/Resource'
 import type { InstalledExternalApp } from '../types/ExternalApp'
@@ -159,6 +161,22 @@ function render(overrides: Record<string, unknown> = {}) {
   })
 }
 
+function countedResources(count: number) {
+  const reads = { count: 0 }
+  const rows = Array.from({ length: count }, (_, index): ResourceSummary => {
+    const row = { ...resources[0]!, id: 'counted-' + index }
+    Object.defineProperty(row, 'type', {
+      enumerable: true,
+      get: () => {
+        reads.count++
+        return index % 2 ? RESOURCE_TYPE.USER_PERSONA : RESOURCE_TYPE.PRESET
+      },
+    })
+    return row
+  })
+  return { reads, rows }
+}
+
 function dispatchPointer(
   element: Element,
   type: string,
@@ -187,6 +205,93 @@ describe('FeatureHub', () => {
     localStorage.clear()
     loadDrawState.mockResolvedValue({ totalDraws: 0, totalSessions: 0, records: {}, history: [] })
     listExternalApps.mockResolvedValue([])
+  })
+
+  it.each([1000, 10000])(
+    'does not rescan %i resource types for each desktop badge',
+    async (count) => {
+      const { rows, reads } = countedResources(count)
+      const wrapper = render({ resources: rows })
+      await flushPromises()
+      expect(wrapper.get('.feature-app--stitch em').text()).toBe(`${count / 2} 个预设可用`)
+      expect(reads.count).toBeLessThanOrEqual(count * 4)
+    },
+  )
+
+  it('reuses resource type counts while paging through the desktop', async () => {
+    const { rows, reads } = countedResources(1001)
+    const wrapper = render({ resources: rows })
+    await flushPromises()
+    expect(wrapper.get('.feature-app--persona em').text()).toBe('500 份人设文件')
+    reads.count = 0
+    for (let index = 0; index < 4; index++) {
+      await wrapper.get('[aria-label="下一页应用"]').trigger('click')
+      await wrapper.get('[aria-label="上一页应用"]').trigger('click')
+      expect(wrapper.get('.feature-app--persona em').text()).toBe('500 份人设文件')
+      expect(wrapper.get('.feature-app--stitch em').text()).toBe('501 个预设可用')
+    }
+    expect(reads.count).toBe(0)
+  })
+
+  it('does not count resources for a desktop showing only static badges', async () => {
+    featureAppUsageStore.togglePinned('builtIn:cloud')
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('[aria-label="筛选功能"]').trigger('click')
+    wrapper.findComponent(ActionSheet).vm.$emit('select', { id: 'pinned' })
+    await flushPromises()
+    expect(wrapper.findAll('.feature-desktop > .feature-app')).toHaveLength(1)
+    const { rows, reads } = countedResources(1001)
+    await wrapper.setProps({ resources: rows })
+    expect(wrapper.get('.feature-app--cloud em').text()).toBe('每日异地快照')
+    expect(reads.count).toBe(0)
+  })
+
+  it('keeps badge counts fresh on in-place resource and category changes', async () => {
+    const rows = reactive<ResourceSummary[]>([
+      { ...resources[0]!, id: 'persona', type: RESOURCE_TYPE.USER_PERSONA },
+      {
+        ...resources[0]!,
+        id: 'hidden-persona',
+        type: RESOURCE_TYPE.USER_PERSONA,
+        categoryIds: ['hidden'],
+        categoryId: 'hidden',
+      },
+      { ...resources[0]!, id: 'preset', type: RESOURCE_TYPE.PRESET },
+      {
+        ...resources[0]!,
+        id: 'hidden-preset',
+        type: RESOURCE_TYPE.PRESET,
+        categoryIds: ['hidden'],
+        categoryId: 'hidden',
+      },
+    ])
+    const folders = reactive<Category[]>([
+      ...categories,
+      { ...categories[0]!, id: 'hidden', name: '隐藏', hidden: true },
+    ])
+    const wrapper = render({ resources: rows, categories: folders })
+    await flushPromises()
+    expect(wrapper.get('.feature-app--folders em').text()).toBe('2 个文件夹')
+    expect(wrapper.get('.feature-app--stitch em').text()).toBe('1 个预设可用')
+    expect(wrapper.get('.feature-app--persona em').text()).toBe('2 份人设文件')
+    rows[2]!.type = RESOURCE_TYPE.USER_PERSONA
+    await nextTick()
+    expect(wrapper.get('.feature-app--persona em').text()).toBe('3 份人设文件')
+    rows.push({ ...resources[0]!, id: 'added', type: RESOURCE_TYPE.USER_PERSONA })
+    await nextTick()
+    expect(wrapper.get('.feature-app--persona em').text()).toBe('4 份人设文件')
+    rows.splice(1, 1)
+    await nextTick()
+    expect(wrapper.get('.feature-app--persona em').text()).toBe('3 份人设文件')
+    rows[0]!.type = RESOURCE_TYPE.PRESET
+    folders[1]!.hidden = false
+    folders.push({ ...categories[0]!, id: 'new-folder' })
+    await nextTick()
+    expect(wrapper.get('.feature-app--persona em').text()).toBe('2 份人设文件')
+    await wrapper.get('[aria-label="上一页应用"]').trigger('click')
+    expect(wrapper.get('.feature-app--folders em').text()).toBe('3 个文件夹')
+    expect(wrapper.get('.feature-app--stitch em').text()).toBe('2 个预设可用')
   })
 
   it('keeps fixed and recent groups behind the lightweight filter entry', async () => {

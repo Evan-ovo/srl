@@ -8,6 +8,7 @@ import {
   CloudRequestTimeoutError,
   fetchWithDeadline,
   readCloudResponseText,
+  readCloudResponseBlob,
 } from './CloudBackupHttp'
 
 async function withFakeNetwork(
@@ -59,6 +60,36 @@ it('keeps caller cancellation connected after headers and aborts a blocked body'
     assert.equal(cancelled, true)
     assert.equal(timers.size, 0)
   })
+})
+
+it('reports streamed download bytes without another request and preserves body failures', async () => {
+  const progress: number[] = []
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('first'))
+      controller.enqueue(new TextEncoder().encode('second'))
+      controller.close()
+    },
+  })
+  const result = await readCloudResponseBlob(new Response(body), 11, (bytes) =>
+    progress.push(bytes),
+  )
+  assert.equal(await result.text(), 'firstsecond')
+  assert.equal(progress.at(-1), 11)
+  await assert.rejects(
+    readCloudResponseBlob(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new TypeError('download body interrupted'))
+          },
+        }),
+      ),
+      11,
+      () => undefined,
+    ),
+    /download body interrupted/,
+  )
 })
 
 it('enforces the body deadline and aborts the transport, not only the waiting promise', async () => {

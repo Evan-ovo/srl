@@ -1,6 +1,8 @@
 import type { ArchiveStorageAdapter } from '../storage/ArchiveStorageAdapter'
 import type { RestoreStagingStore } from '../storage/RestoreStagingStore'
-import type { PreparedRestore, RestoreReport } from '../types/Backup'
+import type { ArchivePortableData, PreparedRestore, RestoreReport } from '../types/Backup'
+import type { GitHubBundleManifest } from './GitHubBackupBundle'
+import { nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
 import type { CommunitySourceAttachmentArchiveEntry } from '../types/CommunitySource'
 import {
   readCommunitySourceLocalAttachmentsFromArchive,
@@ -31,8 +33,12 @@ export class CommunitySourceRestoreService extends RestoreService {
     staging: RestoreStagingStore,
     sourceOwner: Pick<CommunitySourceService, 'restoreBackup' | 'replaceAll'>,
     attachmentRestore?: AttachmentRestore,
+    albumOwner?: Pick<
+      import('./GeneratedImageAlbumService').GeneratedImageAlbumService,
+      'importPortableState'
+    >,
   ) {
-    super(storage, staging, sourceOwner)
+    super(storage, staging, sourceOwner, albumOwner)
     this.attachmentRestore = attachmentRestore
   }
 
@@ -88,6 +94,27 @@ export class CommunitySourceRestoreService extends RestoreService {
     return {
       ...report,
       restoredCommunityAttachments: prepared.communitySourceAttachments?.length,
+    }
+  }
+
+  override async restoreStructuredCommunityAttachments(
+    data: ArchivePortableData | undefined,
+    readObject: (object: GitHubBundleManifest) => Promise<Blob>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    for (const entry of data?.communitySources?.attachments ?? []) {
+      signal?.throwIfAborted()
+      if (!this.attachmentRestore) throw new Error('当前恢复服务没有接入 Discord 附件存储')
+      const original = await readObject(entry.object)
+      signal?.throwIfAborted()
+      if (original.size !== entry.object.totalSize)
+        throw new Error(`Discord 本地附件完整性校验失败：${entry.assetId}`)
+      const uri = nativeFileSource(original)
+      const blob =
+        original.type === entry.mimeType ? original : new Blob([original], { type: entry.mimeType })
+      await this.attachmentRestore([
+        { assetId: entry.assetId, blob: uri ? rememberNativeFile(blob, uri) : blob },
+      ])
     }
   }
 

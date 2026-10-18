@@ -62,6 +62,128 @@ export class GeneratedImageAlbumService {
     return this.storage.count ? this.storage.count() : (await this.storage.list()).length
   }
 
+  async exportPortableState(): Promise<
+    NonNullable<import('../types/Backup').ArchivePortableData['generatedImageAlbum']>
+  > {
+    return (await this.storage.list()).map((item) => ({ item }))
+  }
+
+  async importPortableState(
+    entries: import('./GeneratedImageAlbumBackup').AlbumBackup,
+    read: (entry: import('./GeneratedImageAlbumBackup').AlbumBackup[number]) => Promise<Blob>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const { hashCloudBlob } = await import('./CloudArchiveCodec')
+    const { hashBytes } = await import('./HashService')
+    const { canonicalizeFingerprintValue } = await import('./CloudBackupPolicy')
+    const { nativeFileSource, rememberNativeFile } = await import('../core/NativeFileSource')
+    const equal = (a: unknown, b: unknown) =>
+      JSON.stringify(canonicalizeFingerprintValue(a)) ===
+      JSON.stringify(canonicalizeFingerprintValue(b))
+    const ids = new Map<string, string>(),
+      fallbackIds = new Map<string, string>()
+    const existing = new Map<string, GeneratedImageAlbumItem>()
+    const children = new Map<string, typeof entries>()
+    const withoutParent = (value: GeneratedImageAlbumItem) => {
+      const clone = structuredClone(value)
+      if (clone.generationManifest) delete clone.generationManifest.parentImageId
+      return clone
+    }
+    for (const entry of entries) {
+      signal?.throwIfAborted()
+      const digest = await hashBytes(
+        new TextEncoder().encode(
+          JSON.stringify(
+            canonicalizeFingerprintValue({ item: entry.item, hash: entry.object!.totalSha256 }),
+          ),
+        ),
+      )
+      fallbackIds.set(entry.item.id, entry.item.id + '-restored-' + digest.slice(0, 16))
+      const local = await this.storage.get(entry.item.id)
+      if (local) existing.set(entry.item.id, local)
+      const same =
+        !local ||
+        (equal(withoutParent(local), withoutParent(entry.item)) &&
+          (await hashCloudBlob(await this.getOriginalBlob(local.id))).toLowerCase() ===
+            entry.object!.totalSha256.toLowerCase())
+      ids.set(entry.item.id, same ? entry.item.id : fallbackIds.get(entry.item.id)!)
+      const parent = entry.item.generationManifest?.parentImageId
+      if (parent) {
+        const group = children.get(parent) ?? []
+        group.push(entry)
+        children.set(parent, group)
+      }
+    }
+    // Each identity can change once; descendants follow the same parent mapping without repeated full scans.
+    const queue = [...entries]
+    for (let index = 0; index < queue.length; index++) {
+      const entry = queue[index]!,
+        local = existing.get(entry.item.id)
+      if (!local || ids.get(entry.item.id) !== entry.item.id) continue
+      const parent = entry.item.generationManifest?.parentImageId
+      if (parent && local.generationManifest?.parentImageId !== (ids.get(parent) ?? parent)) {
+        ids.set(entry.item.id, fallbackIds.get(entry.item.id)!)
+        queue.push(...(children.get(entry.item.id) ?? []))
+      }
+    }
+    for (const entry of entries) {
+      const id = ids.get(entry.item.id)!
+      if (id !== entry.item.id) {
+        const target = await this.storage.get(id)
+        if (target) existing.set(id, target)
+      }
+    }
+    for (const entry of entries) {
+      signal?.throwIfAborted()
+      const id = ids.get(entry.item.id)!
+      const item = structuredClone(entry.item)
+      item.id = id
+      if (item.generationManifest?.parentImageId)
+        item.generationManifest.parentImageId =
+          ids.get(item.generationManifest.parentImageId) ?? item.generationManifest.parentImageId
+      const local = existing.get(id)
+      if (local) {
+        if (
+          !equal(local, item) ||
+          (await hashCloudBlob(await this.getOriginalBlob(id))).toLowerCase() !==
+            entry.object!.totalSha256.toLowerCase()
+        )
+          throw new Error(`相册恢复身份冲突：${item.name}`)
+        continue
+      }
+      const original = await read(entry)
+      signal?.throwIfAborted()
+      if (
+        original.size !== item.sizeBytes ||
+        (await hashCloudBlob(original)).toLowerCase() !== entry.object!.totalSha256.toLowerCase()
+      )
+        throw new Error(`相册原图完整性校验失败：${item.name}`)
+      signal?.throwIfAborted()
+      const uri = nativeFileSource(original)
+      const blob =
+        original.type === item.mimeType ? original : new Blob([original], { type: item.mimeType })
+      const preserved = uri ? rememberNativeFile(blob, uri) : blob
+      const thumbnail = await createImageThumbnail(preserved)
+      signal?.throwIfAborted()
+      // Recheck only this target after asynchronous preparation, never overwrite a concurrent save.
+      if (await this.storage.get(id)) throw new Error(`相册恢复期间目标发生变化：${item.name}`)
+      await this.storage.put(item, {
+        id,
+        originalBlob: preserved,
+        originalMimeType: item.mimeType,
+        thumbnailBlob: thumbnail ?? undefined,
+        thumbnailMimeType: thumbnail?.type,
+        updatedAt: item.updatedAt,
+      })
+      if (
+        !equal(await this.storage.get(id), item) ||
+        (await hashCloudBlob(await this.getOriginalBlob(id))).toLowerCase() !==
+          entry.object!.totalSha256.toLowerCase()
+      )
+        throw new Error(`相册原图保存后读回失败：${item.name}`)
+    }
+  }
+
   async list(query: GeneratedImageAlbumQuery = {}): Promise<GeneratedImageAlbumPage> {
     if (this.storage.query) return this.storage.query(query)
     const all = await this.storage.list()

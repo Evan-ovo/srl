@@ -43,6 +43,7 @@ export function createUiDomSession(root: HTMLElement, privateSelector: string, o
       if (
         node instanceof HTMLElement &&
         (privateContent ||
+          node.hasAttribute('data-srl-native-root') ||
           node.matches('input[type="file"], .fa-solid, .fa-regular, .fa-brands, .fa-duotone') ||
           ['IFRAME', 'CANVAS', 'VIDEO', 'AUDIO', 'IMG'].includes(node.tagName))
       ) {
@@ -53,7 +54,9 @@ export function createUiDomSession(root: HTMLElement, privateSelector: string, o
         nativeRegions.push({
           id,
           tag: node.tagName.toLowerCase(),
-          label: privateContent ? '受保护输入' : node.getAttribute('title') || '原生内容',
+          label: privateContent
+            ? '受保护输入'
+            : node.getAttribute('aria-label') || node.getAttribute('title') || '原生内容',
         })
         const placeholder = document.createElement('div')
         for (const attribute of [...node.attributes])

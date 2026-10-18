@@ -71,6 +71,29 @@ const { useAppearanceSettings } = await import('./UseAppearanceSettings')
 describe('useAppearanceSettings', () => {
   let notices: string[]
 
+  it('previews real CSS and Vue in memory and restores without changing saved preferences', () => {
+    const appearance = create()
+    const previousCss = appearance.customUiCss.value
+    const previousViews = normalizeUiViews(views)
+    const onExit = vi.fn()
+    const previewViews = { library: { ...createUiView(), enabled: true } }
+    appearance.saveCustomUiCss('body { color: orange; }', {
+      views: previewViews,
+      preview: { onExit },
+    })
+    expect(document.getElementById('srl-custom-ui-style')!.textContent).toContain('orange')
+    expect(appearanceTransaction.getPreviewViews()).toEqual(previewViews)
+    expect(storage.setCustomUiCss).not.toHaveBeenCalled()
+    expect(storage.setCustomUiViews).not.toHaveBeenCalled()
+    expect(storage.setActiveCustomUiPresetId).not.toHaveBeenCalled()
+    expect(views).toEqual(previousViews)
+    appearanceTransaction.exitPreview()
+    expect(appearance.customUiCss.value).toBe(previousCss)
+    expect(appearanceTransaction.getPreviewViews()).toBeUndefined()
+    expect(storage.setCustomUiCss).not.toHaveBeenCalled()
+    expect(onExit).toHaveBeenCalledTimes(1)
+  })
+
   it('存储不足以记录恢复信息时不开始试用，也不覆盖当前界面', () => {
     const appearance = create()
     const previous = appearance.customUiCss.value

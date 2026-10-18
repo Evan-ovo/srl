@@ -16,19 +16,28 @@ const runtime = vi.hoisted(() => ({
     runtime.permission = 'granted'
     return 'granted' as const
   }),
+  audioManual: false,
+  audioTasks: 0,
   inboxStatus: 'off' as 'off' | 'starting' | 'running' | 'pausing' | 'paused',
   inboxListeners: new Set<() => void>(),
   startAudio: vi.fn(async () => {
+    runtime.audioManual = true
     runtime.inboxStatus = 'running'
     runtime.inboxListeners.forEach((fn) => fn())
   }),
   stopAudio: vi.fn(async () => {
+    runtime.audioManual = false
     runtime.inboxStatus = 'off'
     runtime.inboxListeners.forEach((fn) => fn())
   }),
 }))
 vi.mock('../services/WebBackgroundKeepAlive', () => ({
-  webBackgroundAudioState: () => ({ status: runtime.inboxStatus, message: '' }),
+  webBackgroundAudioState: () => ({
+    status: runtime.inboxStatus,
+    message: '',
+    manual: runtime.audioManual,
+    tasks: runtime.audioTasks,
+  }),
   subscribeWebBackgroundAudio: (listener: () => void) => {
     runtime.inboxListeners.add(listener)
     return () => runtime.inboxListeners.delete(listener)
@@ -100,6 +109,13 @@ vi.mock('./ResourceHealthCenter.vue', () => ({ default: { template: '<div />' } 
 import LayoutSettingsPanel from './LayoutSettingsPanel.vue'
 
 const wrappers: Array<ReturnType<typeof shallowMount>> = []
+it('places factory reset last in the scrollable settings sections before the footer', () => {
+  const view = mountSettings()
+  expect(view.get('.settings-sections > :last-child').element.tagName.toLowerCase()).toBe(
+    'local-data-reset-controls-stub',
+  )
+  expect(view.find('.layout-settings__footer').exists()).toBe(true)
+})
 it('defaults post media downloads off and persists the choice when settings reopen', async () => {
   const first = mountSettings()
   await flushPromises()
@@ -145,6 +161,8 @@ afterEach(() => {
   runtime.postMedia = false
   runtime.save.mockClear()
   runtime.inboxStatus = 'off'
+  runtime.audioManual = false
+  runtime.audioTasks = 0
   runtime.permission = 'default'
   runtime.nativeGranted = false
   vi.clearAllMocks()
@@ -176,6 +194,17 @@ function mountSettings() {
 }
 
 describe('background audio and unified notification settings', () => {
+  it('shows temporary task audio separately and lets the user promote it to manual retention', async () => {
+    runtime.inboxStatus = 'running'
+    runtime.audioTasks = 1
+    const wrapper = mountSettings()
+    const toggle = wrapper.get('input[aria-label="后台音频保活"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    expect(wrapper.text()).toContain('本次任务保活中，结束后自动关闭')
+    await toggle.setValue(true)
+    expect(runtime.startAudio).toHaveBeenCalledOnce()
+    expect((toggle.element as HTMLInputElement).checked).toBe(true)
+  })
   it('uses one audio toggle and retains its running state when settings reopen', async () => {
     const first = mountSettings()
     const toggle = first.get('input[aria-label="后台音频保活"]')

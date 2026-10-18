@@ -46,7 +46,7 @@
 .cloud-center {
   width: 100%;
   min-width: 0;
-  max-width: 76rem;
+  max-width: 54rem;
   margin: 0 auto;
 }
 
@@ -54,11 +54,9 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 1rem;
-  margin-bottom: 1rem;
-  padding: 1rem 1.25rem;
-  border: 1px solid var(--color-line-strong);
-  background: var(--color-surface);
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.25rem;
 }
 
 .cloud-status > i {
@@ -79,19 +77,10 @@
   display: grid;
 }
 
-.cloud-status small,
-.cloud-config header small,
-.cloud-operations header small {
-  color: var(--color-accent);
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-}
-
 .cloud-status p,
 .cloud-status time {
   color: var(--color-ink-soft);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .cloud-status p {
@@ -101,87 +90,105 @@
 .cloud-provider-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--glass-radius-control);
+  background: var(--glass-panel-muted);
 }
 
 .cloud-provider-tabs button {
-  display: grid;
-  min-height: 5.5rem;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-rows: auto auto;
-  align-content: center;
-  gap: 0.15rem 0.8rem;
-  padding: 0.9rem 1rem;
-  text-align: left;
+  min-height: var(--size-touch);
+  padding: 0.4rem 1rem;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 
-.cloud-provider-tabs button > span {
-  display: grid;
-  width: 2.8rem;
-  height: 2.8rem;
-  grid-row: 1 / -1;
-  place-items: center;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 50%;
+.cloud-provider-tabs button.is-active {
+  border-color: var(--color-line-strong);
+  background: var(--control-background, var(--color-surface-raised));
   color: var(--color-accent);
-  font-family: var(--font-display);
-}
-
-.cloud-provider-tabs button small {
-  color: var(--color-ink-soft);
 }
 
 .cloud-workspace {
   display: grid;
-  grid-template-columns: minmax(18rem, 0.85fr) minmax(22rem, 1.15fr);
-  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
 }
 
-.cloud-config {
-  grid-column: 1;
-  grid-row: 1;
+.cloud-connection {
+  min-width: 0;
+  border-top: 1px solid var(--color-line);
 }
 
-.cloud-operations {
-  grid-column: 2;
-  grid-row: 1;
+.cloud-connection > summary,
+.cloud-restore-scope > summary {
+  display: flex;
+  min-height: var(--size-touch);
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+:is(.cloud-connection, .cloud-restore-scope) > summary::after {
+  content: '+';
+  color: var(--color-ink-soft);
+}
+
+:is(.cloud-connection, .cloud-restore-scope)[open] > summary::after {
+  content: '−';
+}
+
+:is(.cloud-connection, .cloud-restore-scope) > summary span {
+  margin-left: auto;
+  color: var(--color-ink-soft);
+  font-size: 0.75rem;
 }
 
 .cloud-config,
 .cloud-operations {
   min-width: 0;
-  padding: clamp(1rem, 2.5vw, 1.5rem);
+  padding: clamp(0.75rem, 2.5vw, 1.25rem);
   border: 1px solid var(--color-line-strong);
   background: var(--color-surface);
 }
 
 .cloud-backup-scope {
   display: grid;
-  gap: 0.25rem;
-  margin: 0.85rem 0;
-  padding: 0.75rem;
-  border: 1px solid var(--color-line);
-  background: color-mix(in srgb, var(--color-accent-soft) 36%, var(--color-surface-raised));
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--color-line);
 }
 
 .cloud-backup-scope p,
 .cloud-backup-scope small {
   margin: 0;
   color: var(--color-ink-soft);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
 .cloud-backup-scope__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  display: contents;
+}
+
+.cloud-backup-scope__header strong {
+  font-size: 0.875rem;
 }
 
 .cloud-backup-scope__header button {
+  grid-column: 2;
+  grid-row: span 3;
   display: inline-flex;
   min-height: 44px;
   flex-shrink: 0;
@@ -193,29 +200,25 @@
   cursor: pointer;
 }
 
-.cloud-config > header,
 .cloud-operations > header {
   display: flex;
   align-items: start;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1rem;
-  padding-bottom: 0.8rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.65rem;
   border-bottom: 1px solid var(--color-line);
 }
 
-.cloud-config h2,
 .cloud-operations h2 {
-  margin: 0.15rem 0 0;
-  font-family: var(--font-display);
-  font-size: 1.55rem;
-  font-weight: 500;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
 }
 
-.cloud-config > header > span,
 .cloud-operations > header > span {
   color: var(--color-ink-soft);
-  font-size: 0.62rem;
+  font-size: 0.75rem;
 }
 
 .cloud-config > label,
@@ -1006,6 +1009,41 @@
   background: var(--color-surface-raised);
 }
 
+.cloud-restore-progress progress {
+  display: block;
+  width: 100%;
+  height: 0.4rem;
+  margin: 0.35rem 0;
+  accent-color: var(--color-accent);
+}
+
+.cloud-restore-progress {
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--color-line);
+  font-size: 0.875rem;
+}
+
+.cloud-restore-progress__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cloud-restore-progress p {
+  margin: 0.5rem 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.cloud-restore-progress small {
+  color: var(--color-ink-soft);
+  font-size: 0.75rem;
+}
+
 .cloud-metrics summary,
 .cloud-metrics dl div {
   display: flex;
@@ -1111,12 +1149,12 @@
 }
 
 .cloud-backup-list strong {
-  font-size: 0.75rem;
+  font-size: 0.875rem;
 }
 
 .cloud-backup-list small {
   color: var(--color-ink-soft);
-  font-size: 0.62rem;
+  font-size: 0.75rem;
 }
 
 .cloud-backup-list article > span {
@@ -1126,7 +1164,7 @@
 
 .cloud-empty {
   display: grid;
-  min-height: 15rem;
+  min-height: 7rem;
   align-content: center;
   justify-items: center;
   color: var(--color-ink-soft);
@@ -1139,10 +1177,7 @@
 }
 
 .cloud-restore-selection {
-  margin-top: 1rem;
-  padding: 1rem;
-  border: 1px solid var(--color-accent);
-  background: var(--color-surface);
+  margin-top: 0.5rem;
 }
 
 .cloud-restore-selection > header {
@@ -1159,13 +1194,13 @@
 
 .cloud-restore-selection > header small,
 .cloud-restore-selection > header span,
-.cloud-restore-selection > p {
+.cloud-restore-scope > p {
   color: var(--color-ink-soft);
-  font-size: 0.62rem;
+  font-size: 0.75rem;
 }
 
 .cloud-restore-selection > header strong {
-  font-size: 0.8rem;
+  font-size: 0.875rem;
 }
 
 .cloud-restore-selection > header div span {
@@ -1176,6 +1211,7 @@
 
 .cloud-restore-selection__tools {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin: 0.65rem 0;
 }
@@ -1183,6 +1219,7 @@
 .cloud-restore-selection__tools button {
   min-height: var(--size-touch);
   padding: 0 0.65rem;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 
@@ -1241,52 +1278,35 @@
   font-size: 0.6rem;
 }
 
-.cloud-restore-selection > p {
+.cloud-restore-scope > p {
   margin: 0.65rem 0 0;
   line-height: 1.5;
 }
 
-@media (max-width: 53.75rem) {
-  .cloud-workspace {
-    grid-template-columns: 1fr;
-  }
+.cloud-restore-scope {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--color-line);
+}
 
-  .cloud-config,
-  .cloud-operations {
-    grid-column: auto;
-    grid-row: auto;
-  }
+.cloud-restore-selection .backup-scope-tree__summary,
+.cloud-restore-selection .backup-scope-tree__group {
+  border-radius: var(--glass-radius-control);
+  box-shadow: none;
+}
 
-  .cloud-provider-tabs button {
-    min-height: var(--size-touch);
-  }
+.cloud-restore-selection .backup-scope-tree__summary {
+  padding: 0.5rem 0;
+  border: 0;
+  background: transparent;
 }
 
 @media (max-width: 32rem) {
   .cloud-status {
     grid-template-columns: auto minmax(0, 1fr);
-    padding: 0.85rem;
+    padding: 0.5rem 0.25rem;
   }
 
   .cloud-status time {
-    display: none;
-  }
-
-  .cloud-provider-tabs {
-    gap: 0.5rem;
-  }
-
-  .cloud-provider-tabs button {
-    grid-template-columns: auto minmax(0, 1fr);
-    padding: 0.65rem;
-  }
-
-  .cloud-provider-tabs button > span {
-    width: 2.25rem;
-    height: 2.25rem;
-  }
-
-  .cloud-provider-tabs button small {
     display: none;
   }
 
@@ -1299,9 +1319,12 @@
     grid-template-columns: 1fr;
   }
 
-  .cloud-config__actions,
-  .cloud-primary-actions {
+  .cloud-config__actions {
     flex-direction: column;
+  }
+
+  .cloud-primary-actions {
+    flex-wrap: wrap;
   }
 
   .cloud-backup-list article {
@@ -1653,7 +1676,6 @@
 }
 
 /* 云备份自己的容器语义：不再依赖末级全局选择器覆盖。 */
-.cloud-status,
 .cloud-config,
 .cloud-operations,
 .cloud-beginner-guide,

@@ -1,4 +1,4 @@
-import { isResourceGalleryImage } from '../types/ResourceGallery'
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
 import { restoreVersionKey } from '../utils/RestoreIdentity'
 import Dexie from 'dexie'
 import type { AppDatabase } from '../database/AppDatabase'
@@ -23,9 +23,14 @@ import {
 import type { ArchiveRestoreProgress, ArchiveStorageAdapter } from './ArchiveStorageAdapter'
 import type { StagedArchiveRecord } from '../types/RestoreStaging'
 import { IndexedDbAssetStore } from './IndexedDbAssetStore'
-import { linkNativeResourceObjects } from './NativeResourceFileMirror'
+import {
+  linkNativeResourceObjects,
+  releaseReplacedNativeObjects,
+  type NativeObjectReplacement,
+} from './NativeResourceFileMirror'
 import { isAndroidNativeAppDatabaseActive } from './AndroidNativeDexieCore'
 import { isEncodedBlobValue } from './AndroidAppDatabaseMigration'
+import { readResourceMetadataBatch } from './ResourceReadSource'
 
 function toBackupRecordSummary(record: BackupRecord): BackupRecordSummary {
   const { blob, ...summary } = record
@@ -77,6 +82,7 @@ export async function listBackupRecordSummaries(
 async function detachStoredBlob(
   blob: Blob,
   onProgress?: (transferredBytes: number, totalBytes: number) => void,
+  fileName?: string,
 ): Promise<Blob> {
   // Use the browser's local Blob loader. Response(blob.stream()) can stall in WebKit
   // when copying a large IDB-backed file while its write transaction is active.
@@ -106,6 +112,13 @@ async function detachStoredBlob(
     }
     if (detached.size !== blob.size) throw new Error('恢复暂存原文件读取不完整')
     return detached.slice(0, detached.size, blob.type)
+  } catch (error) {
+    if (error instanceof Error && ['AbortError', 'QuotaExceededError'].includes(error.name))
+      throw error
+    throw new Error(
+      `读取本机恢复暂存原文件失败${fileName ? `：${fileName}` : ''}。这是本机暂存读取阶段，不能据此判断 GitHub 或浏览器网络断开。${error instanceof Error ? `\n${error.message}` : ''}`,
+      { cause: error },
+    )
   } finally {
     URL.revokeObjectURL(url)
   }
@@ -126,18 +139,29 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
     this.assets = assets
   }
 
-  async listRestoreVersionKeys(): Promise<string[]> {
+  async listRestoreVersionKeys(groupIds?: readonly string[]): Promise<string[]> {
     const keys: string[] = []
-    for (const id of await this.database.resourceVersions.toCollection().primaryKeys()) {
-      const record = await this.database.resourceVersions.get(id)
-      if (!record) continue
-      const stored = toStoredSummary(record)
-      if (isEncryptedResource(record) && !this.vault)
-        throw new Error('请先解锁保险箱再恢复历史版本')
-      const summary = this.vault
-        ? await this.vault.decodeResourceSummary(stored)
-        : (stored as ResourceSummary)
-      keys.push(restoreVersionKey(summary))
+    if (groupIds && !groupIds.length) return keys
+    const table = this.database.resourceVersions
+    const ids = await (
+      groupIds ? table.where('versionGroupId').anyOf([...new Set(groupIds)]) : table.toCollection()
+    ).primaryKeys()
+    for (let offset = 0; offset < ids.length; offset += 250) {
+      const records = await readResourceMetadataBatch(
+        this.database,
+        ids.slice(offset, offset + 250),
+        'resourceVersions',
+      )
+      for (const record of records) {
+        if (!record) continue
+        const stored = toStoredSummary(record)
+        if (isEncryptedResource(record) && !this.vault)
+          throw new Error('请先解锁保险箱再恢复历史版本')
+        const summary = this.vault
+          ? await this.vault.decodeResourceSummary(stored)
+          : (stored as ResourceSummary)
+        keys.push(restoreVersionKey(summary))
+      }
     }
     return keys
   }
@@ -224,6 +248,7 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
     if (!this.canRestoreNative()) {
       throw new Error('资源库保险箱开启时不能保存 Android 原生明文引用')
     }
+    let replacements: NativeObjectReplacement[] = []
     await this.restoreStaged(
       categories,
       resources,
@@ -236,13 +261,20 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
         }
       },
       () =>
-        linkNativeResourceObjects([
-          ...resources.map((resource) => nativeLinkRecord(resource, 'current')),
-          ...versions.map((resource) => nativeLinkRecord(resource, 'versions')),
-        ]),
+        linkNativeResourceObjects(
+          [
+            ...resources.map((resource) => nativeLinkRecord(resource, 'current')),
+            ...versions.map((resource) => nativeLinkRecord(resource, 'versions')),
+          ],
+          (records) => {
+            replacements = records
+          },
+        ),
       false,
       onProgress,
     )
+    // Native links are prepared before the database transaction. GC belongs after its commit.
+    await releaseReplacedNativeObjects(replacements).catch(() => undefined)
   }
 
   private async restoreStaged<T extends Resource | NativeBackedResourceRecord>(
@@ -360,16 +392,20 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
                 // WebKit can keep the source IDB file path when cloning a stored Blob. Clearing
                 // staging then breaks the final record. Read a fresh body without arrayBuffer.
                 record.resource.originalBlob = await Dexie.waitFor(
-                  detachStoredBlob(record.resource.originalBlob, (transferredBytes) => {
-                    onProgress?.({
-                      phase: 'commit',
-                      completed: committed,
-                      total,
-                      fileName: records[index]!.fileName,
-                      transferredBytes: committedBytes + transferredBytes,
-                      totalBytes,
-                    })
-                  }),
+                  detachStoredBlob(
+                    record.resource.originalBlob,
+                    (transferredBytes) => {
+                      onProgress?.({
+                        phase: 'commit',
+                        completed: committed,
+                        total,
+                        fileName: records[index]!.fileName,
+                        transferredBytes: committedBytes + transferredBytes,
+                        totalBytes,
+                      })
+                    },
+                    records[index]!.fileName,
+                  ),
                 )
               }
               if (scope === 'current') {
@@ -469,8 +505,7 @@ function nativeLinkRecord(resource: NativeBackedResourceRecord, scope: 'current'
     fileName: resource.fileName,
     mimeType: resource.mimeType,
     resourceType: resource.type,
-    hiddenFromDocuments:
-      isUserPersonaAvatarAttachment(resource) || isResourceGalleryImage(resource),
+    hiddenFromDocuments: isUserPersonaAvatarAttachment(resource) || isResourceOwnedFile(resource),
     contentHash: resource.nativeOriginal.contentHash,
     size: resource.nativeOriginal.size,
     updatedAt: resource.updatedAt,

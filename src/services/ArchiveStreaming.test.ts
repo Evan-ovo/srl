@@ -219,4 +219,47 @@ describe('streamed archive round trip', () => {
     expect(abort).toHaveBeenCalledTimes(1)
     expect(commit).not.toHaveBeenCalled()
   })
+
+  it('passes opt-in prefetch cancellation through lazy export and drains its source reads', async () => {
+    const records = await Promise.all(['a', 'b', 'c', 'd'].map(resource))
+    const controller = new AbortController()
+    const drained: string[] = []
+    const read = vi.fn(async (summary: { id: string }) => {
+      if (summary.id === 'a') return records[0]!
+      return new Promise<Resource>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          'abort',
+          () => {
+            drained.push(summary.id)
+            reject(controller.signal.reason)
+          },
+          { once: true },
+        )
+      })
+    })
+    const failure = new Error('prefetched destination full')
+    const onFailure = vi.fn((reason: unknown) => controller.abort(reason))
+    const abort = vi.fn(async () => {})
+    const commit = vi.fn(async () => {})
+    await expect(
+      new ExportService().createArchivesFromSource(
+        { resources: records.map(toResourceListSummary), versions: [], read },
+        [],
+        { mode: 'full' },
+        async () => ({
+          write: async () => {
+            throw failure
+          },
+          abort,
+          commit,
+        }),
+        { signal: controller.signal, readAhead: { onFailure } },
+      ),
+    ).rejects.toBe(failure)
+    expect(read.mock.calls.map(([summary]) => summary.id)).toEqual(['a', 'b', 'c'])
+    expect(drained).toEqual(['b', 'c'])
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith(failure)
+    expect(abort).toHaveBeenCalledTimes(1)
+    expect(commit).not.toHaveBeenCalled()
+  })
 })

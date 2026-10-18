@@ -10,6 +10,7 @@ import {
 } from '../core/LibraryContainer'
 import { markStartupReady } from '../core/SafeStartup'
 import { noticeCenter } from '../core/NoticeCenter'
+import { reportHandledError, type HandledErrorCode } from '../core/FatalErrorNotice'
 import type { FilterValue, SortValue } from '../types/AppView'
 import type { UiFontScale } from '../types/BrowserPreferences'
 import { type ResourceSummary } from '../types/Resource'
@@ -24,12 +25,13 @@ import {
 import type { SharedFileBatch } from '../utils/ShareTargetIntake'
 import type { SearchScope } from './UseSearchIndex'
 import { useDiscordResourceInbox } from './UseDiscordResourceInbox'
+import { installWebInboxNotificationNavigation } from '../services/WebDiscordInboxNotifications'
 
 interface LibraryLifecycleContext {
   showNotice: (message: string, duration?: number, preserveRecycleUndo?: boolean) => void
   receiveSharedFileBatch: (batch: SharedFileBatch) => void
   handleNativeDownloadState?: (event: Event) => boolean | void
-  loadResources: () => Promise<void>
+  loadResources: (ids?: string[]) => Promise<void>
   refreshStorageHealth: () => Promise<void>
   vaultStatus: Ref<VaultStatus>
   searchQuery: Ref<string, string>
@@ -80,6 +82,21 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
   let resumeMaintenance: (() => void) | undefined
   let maintenanceRun: Promise<void> | undefined
   let stopGreetingUpdates: (() => void) | undefined
+  let removeNotificationNavigation: (() => void) | undefined
+  let startupFailureCode: HandledErrorCode = 'SRL-LIBRARY-VAULT-INIT'
+  let maintenanceFailureCode: HandledErrorCode = 'SRL-LIBRARY-MAINTENANCE-THUMBNAILS'
+  const maintenanceInterrupted = new DOMException('Maintenance paused or stopped', 'AbortError')
+
+  function reportFailure(
+    code: HandledErrorCode,
+    error: unknown,
+    notify = true,
+  ): string | undefined {
+    if (disposed) return
+    const message = reportHandledError(code, error)
+    if (notify && message) context.showNotice(message)
+    return message
+  }
 
   function handleDiscordDownloadFailure(event: Event): void {
     if (context.handleNativeDownloadState?.(event) === false) return
@@ -142,13 +159,12 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
     ) {
       // Do not retain a metadata snapshot across a foreground edit/import.
       // Restart the idempotent pass after the user finishes instead.
-      if (!wait) throw new DOMException('Maintenance paused', 'AbortError')
+      if (!wait) throw maintenanceInterrupted
       await new Promise<void>((resolve) => {
         resumeMaintenance = resolve
       })
     }
-    if (disposed || context.vaultStatus.value.locked)
-      throw new DOMException('Maintenance stopped', 'AbortError')
+    if (disposed || context.vaultStatus.value.locked) throw maintenanceInterrupted
   }
 
   watch(
@@ -161,19 +177,24 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
 
   async function maintainLibrary(): Promise<void> {
     await maintenanceCheckpoint(true)
+    maintenanceFailureCode = 'SRL-LIBRARY-MAINTENANCE-THUMBNAILS'
     const thumbnailRepairCount = await resourceService.repairThumbnailAssets()
     await maintenanceCheckpoint()
-    const snapshot = await resourceService.listSummaries()
+    maintenanceFailureCode = 'SRL-LIBRARY-MAINTENANCE-SUMMARIES'
+    const snapshot = await resourceService.listResourceListSummaries()
+    maintenanceFailureCode = 'SRL-LIBRARY-MAINTENANCE-UPGRADE'
     const upgradedCount = await resourceService.upgradeLegacyJsonResources(
       maintenanceCheckpoint,
       snapshot,
     )
     // A real upgrade changed content/metadata: backfill must obtain the committed new snapshot.
+    maintenanceFailureCode = 'SRL-LIBRARY-MAINTENANCE-FINGERPRINTS'
     const backfilledCount = await resourceService.backfillCardFingerprints(
       maintenanceCheckpoint,
       upgradedCount ? undefined : snapshot,
     )
     if (thumbnailRepairCount > 0 || upgradedCount > 0 || backfilledCount > 0) {
+      maintenanceFailureCode = 'SRL-LIBRARY-MAINTENANCE-REFRESH'
       await context.loadResources()
     }
   }
@@ -186,7 +207,9 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
             await maintainLibrary()
             return
           } catch (error) {
-            if (!(error instanceof DOMException && error.name === 'AbortError')) throw error
+            // Only our foreground pause restarts the pass. A cancelled storage
+            // operation must not become an automatic retry loop.
+            if (error !== maintenanceInterrupted) throw error
           }
         }
       })().finally(() => {
@@ -200,8 +223,7 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
     libraryMaintenanceTimer = window.setTimeout(() => {
       libraryMaintenanceTimer = undefined
       void runLibraryMaintenance().catch((error) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return
-        console.warn('存量资源后台维护失败:', error)
+        reportFailure(maintenanceFailureCode, error, false)
       })
     }, 0)
   }
@@ -217,6 +239,7 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
       context.isVaultPanelOpen.value = true
       return
     }
+    startupFailureCode = 'SRL-LIBRARY-LOAD'
     await context.loadLibrary()
     if (disposed) return
     markStartupReady()
@@ -228,13 +251,22 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
         context.refreshStorageHealth(),
         context.loadRecycleBin(),
       ])
-      if (!disposed && results.some((result) => result.status === 'rejected'))
-        context.showNotice('资源库已打开，部分存储或回收站信息暂时读取失败，可在对应面板重试')
+      const codes: HandledErrorCode[] = ['SRL-LIBRARY-STORAGE-HEALTH', 'SRL-LIBRARY-RECYCLE-LOAD']
+      const messages = results.flatMap((result, index) => {
+        const message =
+          result.status === 'rejected'
+            ? reportFailure(codes[index]!, result.reason, false)
+            : undefined
+        return message ? [message] : []
+      })
+      if (messages.length) context.showNotice(messages.join('\n'))
     })()
+    startupFailureCode = 'SRL-LIBRARY-DEEP-LINK'
     await context.handleNativeDeepLink()
     await consumeSharedFiles()
     if (disposed) return
     scheduleLibraryMaintenance()
+    startupFailureCode = 'SRL-LIBRARY-BACKUP-LOAD'
     const { cloudBackupService } = await import('../core/AppContainer')
     void cloudBackupService
       .pendingNativeRestores()
@@ -261,19 +293,24 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
           })
         }
       })
-      .catch(() => {
-        if (!disposed) context.showNotice('暂时无法读取云恢复检查点，可在云备份中重试。')
-      })
+      .catch((error) => reportFailure('SRL-BACKUP-CHECKPOINT-READ', error))
     // Settle completed receipts independently; starting a backup still requires both checks.
-    void Promise.all([cloudBackupService.reconcileNativeJob(), syncNativeResourceFiles()])
-      .then(() => cloudBackupService.runDueBackup())
-      .catch((error) => {
-        context.showNotice(
-          error instanceof Error
-            ? `Android 本地文件同步或云备份启动失败：${error.message}`
-            : 'Android 本地文件同步或云备份启动失败',
-        )
+    const settleStartup = (operation: Promise<unknown>, code: HandledErrorCode) =>
+      operation.then(
+        () => true,
+        (error) => {
+          reportFailure(code, error)
+          return false
+        },
+      )
+    void Promise.all([
+      settleStartup(cloudBackupService.reconcileNativeJob(), 'SRL-BACKUP-RECEIPT-RECONCILE'),
+      settleStartup(syncNativeResourceFiles(), 'SRL-BACKUP-NATIVE-FILE-SYNC'),
+    ])
+      .then((results) => {
+        if (!disposed && results.every(Boolean)) return cloudBackupService.runDueBackup()
       })
+      .catch((error) => reportFailure('SRL-BACKUP-AUTO-START', error))
   }
 
   watch(
@@ -334,10 +371,11 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
   context.syncCustomUiCss()
 
   onMounted(() => {
-    stopGreetingUpdates = greetingResourceService.onSaved(() => {
+    stopGreetingUpdates = greetingResourceService.onSaved((resourceId, changed) => {
+      if (!changed) return
       void context
-        .loadResources()
-        .catch(() => context.showNotice('开场白已保存，资源列表暂时刷新失败'))
+        .loadResources([resourceId])
+        .catch((error) => reportFailure('SRL-LIBRARY-GREETING-REFRESH', error))
     })
     window.addEventListener('keydown', context.handleGlobalKeydown)
     window.addEventListener(SRL_BACK_REQUEST_EVENT, context.handleBackRequest)
@@ -350,6 +388,8 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
     window.addEventListener('srl:native-share-download-completed', handleDiscordDownloadComplete)
     window.addEventListener('srl:native-shortcut', context.handleNativeShortcut)
     window.addEventListener('srl:native-deep-link', context.handleNativeDeepLink)
+    // Install only after the navigation owner is listening, including a cold PWA notification open.
+    removeNotificationNavigation = installWebInboxNotificationNavigation()
     window.addEventListener('pagehide', context.saveWorkspaceSnapshot)
     context.handleNativeShortcut()
     document.addEventListener('focusin', context.handleMobileFocus)
@@ -358,14 +398,12 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
       () =>
         void import('../core/AppContainer')
           .then(({ cloudBackupService }) => cloudBackupService.runDueBackup())
-          .catch(() => undefined),
+          .catch((error) => reportFailure('SRL-BACKUP-AUTO-START', error, false)),
       60 * 1000,
     )
     void initializeLibrary()
       .then(markStartupReady)
-      .catch(() => {
-        context.showNotice('无法读取本地数据库，请刷新后重试')
-      })
+      .catch((error) => reportFailure(startupFailureCode, error))
   })
 
   onUnmounted(() => {
@@ -385,6 +423,7 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
     window.removeEventListener('srl:native-share-download-completed', handleDiscordDownloadComplete)
     window.removeEventListener('srl:native-shortcut', context.handleNativeShortcut)
     window.removeEventListener('srl:native-deep-link', context.handleNativeDeepLink)
+    removeNotificationNavigation?.()
     window.removeEventListener('pagehide', context.saveWorkspaceSnapshot)
     context.saveWorkspaceSnapshot()
     document.removeEventListener('focusin', context.handleMobileFocus)

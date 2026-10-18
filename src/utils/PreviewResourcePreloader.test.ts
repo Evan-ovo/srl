@@ -269,6 +269,8 @@ describe('PreviewResourcePreloader', () => {
 
   it('样式表优先于等待中的图片，原生传输收到取消信号', async () => {
     nativeMocks.available.mockReturnValue(true)
+    // The native cache URL is a fixture, so materialize it locally as well.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('image')))
     nativeMocks.download.mockImplementation(async (url: string) => ({
       resourceUrl: `https://app.example/cache/${url.split('/').at(-1)}`,
       resolvedUrl: url,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { isResourceOwnedFile } from '../types/ResourceAttachment'
 import { computed, ref, watch } from 'vue'
-import { isResourceGalleryImage, includeResourceGalleryIds } from '../types/ResourceGallery'
+import { includeResourceGalleryIds } from '../types/ResourceGallery'
 
 import {
   BACKUP_SCOPE_GROUPS,
@@ -52,12 +53,12 @@ const visibleGroups = computed(() =>
   BACKUP_SCOPE_GROUPS.filter((group) => scopesForGroup(group.id).length),
 )
 const visibleResourceCount = computed(
-  () => props.resources.filter((r) => !isResourceGalleryImage(r)).length,
+  () => props.resources.filter((r) => !isResourceOwnedFile(r)).length,
 )
 const resourcesByScope = computed(() => {
   const byType = new Map<string, ResourceSummary[]>()
   for (const resource of props.resources) {
-    if (isResourceGalleryImage(resource)) continue
+    if (isResourceOwnedFile(resource)) continue
     const bucket = byType.get(resource.type)
     if (bucket) bucket.push(resource)
     else byType.set(resource.type, [resource])
@@ -95,7 +96,7 @@ const pageCount = (id: BackupScopeId) =>
 const categoryCounts = computed(() => {
   const counts = new Map<string | null, number>()
   for (const resource of props.resources) {
-    if (isResourceGalleryImage(resource)) continue
+    if (isResourceOwnedFile(resource)) continue
     const ids = getResourceCategoryIds(resource)
     for (const id of ids.length ? ids : [null]) counts.set(id, (counts.get(id) ?? 0) + 1)
   }
@@ -200,7 +201,12 @@ function scopeBadge(id: BackupScopeId): string {
 const selectedResourceCount = computed(() => selectedIds.value.size)
 const selectedWithGallery = computed(() => {
   const ids = new Set(selectedIds.value)
-  includeResourceGalleryIds(props.resources, ids, selectedScopes.value.has('extra.resourceGallery'))
+  includeResourceGalleryIds(
+    props.resources,
+    ids,
+    selectedScopes.value.has('extra.resourceGallery'),
+    selectedScopes.value.has('extra.resourceAttachments'),
+  )
   return ids
 })
 const selectedResourceSize = computed(() =>

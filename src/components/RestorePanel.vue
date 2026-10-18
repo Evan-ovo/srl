@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isResourceOwnedFile, isResourceAttachment } from '../types/ResourceAttachment'
 import '../FeatureStyles.css'
 import { computed, ref, toRefs, watch } from 'vue'
 
@@ -22,7 +23,12 @@ const emit = defineEmits<{
   close: []
   stop: []
   inspect: [file: File]
-  confirm: [mode: RestoreMode, resourceIds: string[], includeGallery: boolean]
+  confirm: [
+    mode: RestoreMode,
+    resourceIds: string[],
+    includeGallery: boolean,
+    includeAttachments: boolean,
+  ]
 }>()
 
 const restoreMode = ref<RestoreMode>('merge')
@@ -68,8 +74,19 @@ const scopeModel = computed({
 function confirmSelection() {
   const ids = new Set(selectedResourceIds.value)
   const includeGallery = selectedScopeIds.value.includes('extra.resourceGallery')
-  includeResourceGalleryIds(restoreResources.value, ids, includeGallery)
-  emit('confirm', restoreMode.value, [...ids], includeGallery)
+  includeResourceGalleryIds(
+    restoreResources.value,
+    ids,
+    includeGallery,
+    selectedScopeIds.value.includes('extra.resourceAttachments'),
+  )
+  emit(
+    'confirm',
+    restoreMode.value,
+    [...ids],
+    includeGallery,
+    selectedScopeIds.value.includes('extra.resourceAttachments'),
+  )
 }
 
 watch(
@@ -77,7 +94,7 @@ watch(
   () => {
     restoreMode.value = 'merge'
     selectedResourceIds.value = new Set(
-      restoreResources.value.filter((r) => !isResourceGalleryImage(r)).map((r) => r.id),
+      restoreResources.value.filter((r) => !isResourceOwnedFile(r)).map((r) => r.id),
     )
     selectedScopeIds.value = [...scopeIds.value]
   },
@@ -93,7 +110,7 @@ watch(
 
 const selectedResources = computed(() =>
   restoreResources.value.filter(
-    (resource) => !isResourceGalleryImage(resource) && selectedResourceIds.value.has(resource.id),
+    (resource) => !isResourceOwnedFile(resource) && selectedResourceIds.value.has(resource.id),
   ),
 )
 const selectedVersionCount = computed(() => {
@@ -106,13 +123,15 @@ const allResourcesSelected = computed(
   () =>
     Boolean(prepared.value) &&
     restoreResources.value
-      .filter((r) => !isResourceGalleryImage(r))
+      .filter((r) => !isResourceOwnedFile(r))
       .every((r) => selectedResourceIds.value.has(r.id)) &&
     (!(
       restoreResources.value.some(isResourceGalleryImage) ||
       prepared.value?.portableData?.resourceGalleryCategories
     ) ||
-      selectedScopeIds.value.includes('extra.resourceGallery')),
+      selectedScopeIds.value.includes('extra.resourceGallery')) &&
+    (!restoreResources.value.some(isResourceAttachment) ||
+      selectedScopeIds.value.includes('extra.resourceAttachments')),
 )
 
 function handleFile(event: Event): void {

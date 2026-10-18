@@ -772,7 +772,9 @@ class MainActivity : ComponentActivity() {
         val providers = cloudService.automaticProvidersDue(unmetered, charging)
         if (providers.isEmpty()) return
         runCloudAction("自动云备份已完成") {
-            providers.forEach { providerName -> cloudService.createBackup(providerName, NativeBackupSelection(), ::showCloudProgress) }
+            providers.forEach { providerName ->
+                cloudService.createBackup(providerName, NativeBackupSelection(), ::showCloudProgress)
+            }
         }
     }
 

@@ -356,113 +356,6 @@
   background: color-mix(in srgb, var(--color-ink) 42%, transparent);
 }
 
-.external-app-permission {
-  position: fixed;
-  z-index: 185;
-  inset: 0;
-  display: grid;
-  place-items: end center;
-  padding: 1rem;
-  background: var(--overlay-background);
-}
-
-dialog.external-app-permission {
-  width: 100%;
-  height: 100%;
-  max-width: none;
-  max-height: none;
-  margin: 0;
-  border: 0;
-}
-
-.external-app-permission__panel {
-  display: grid;
-  width: min(42rem, 100%);
-  gap: 0.85rem;
-  padding: 1rem;
-  border: 1px solid var(--dialog-border, var(--glass-border));
-  border-radius: var(--dialog-radius, 1.25rem);
-  color: var(--color-ink);
-  background: var(--dialog-background, var(--color-surface-raised));
-  box-shadow: var(--dialog-shadow, var(--glass-shadow));
-}
-
-.external-app-permission__panel header,
-.external-app-permission__panel footer {
-  display: flex;
-  gap: 0.65rem;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.external-app-permission__panel small {
-  color: var(--color-accent);
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-}
-
-.external-app-permission__panel h2,
-.external-app-permission__panel p {
-  margin: 0;
-}
-
-.external-app-permission__panel h2 {
-  margin-top: 0.2rem;
-  font-family: var(--font-display);
-  font-size: 1.25rem;
-}
-
-.external-app-permission__panel p {
-  color: var(--color-ink-soft);
-  font-size: 0.85rem;
-  line-height: 1.55;
-}
-
-.external-app-permission__panel p strong {
-  color: var(--color-ink);
-}
-
-.external-app-permission__panel pre {
-  max-height: 12rem;
-  margin: 0;
-  overflow: auto;
-  padding: 0.75rem;
-  border-radius: 0.8rem;
-  color: var(--color-ink);
-  background: var(--color-canvas);
-  font: 0.75rem/1.5 var(--font-code, monospace);
-  white-space: pre-wrap;
-}
-
-.external-app-permission__note {
-  font-size: 0.75rem !important;
-}
-
-.external-app-permission__panel button {
-  min-height: var(--size-touch);
-  padding: 0.55rem 0.75rem;
-  border: 1px solid var(--button-border, var(--color-line-strong));
-  border-radius: var(--button-radius, 0.8rem);
-  color: var(--button-color, var(--color-ink));
-  background: var(--button-background, var(--color-surface-raised));
-  font: inherit;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
-
-.external-app-permission__panel header button {
-  width: var(--size-touch);
-  padding: 0;
-  font-size: 1.3rem;
-}
-
-.external-app-permission__always {
-  color: var(--button-primary-color, var(--color-on-accent)) !important;
-  border-color: var(--button-primary-border, var(--color-accent)) !important;
-  background: var(--button-primary-background, var(--color-accent)) !important;
-}
-
 .external-app-resource-picker__panel {
   display: grid;
   width: min(42rem, 100%);
@@ -603,22 +496,10 @@ dialog.external-app-permission {
       max(var(--mobile-gutter), var(--safe-left));
   }
 
-  .external-app-permission {
-    padding: var(--safe-top) max(var(--mobile-gutter), var(--safe-right)) 0
-      max(var(--mobile-gutter), var(--safe-left));
-    background: var(--overlay-background);
-  }
-
-  .external-app-resource-picker__panel,
-  .external-app-permission__panel {
+  .external-app-resource-picker__panel {
     padding-bottom: max(1rem, var(--safe-bottom));
     border-bottom-right-radius: 0;
     border-bottom-left-radius: 0;
-  }
-
-  .external-app-permission__panel footer {
-    display: grid;
-    grid-template-columns: 1fr;
   }
 
   .external-app-resource-picker__panel {

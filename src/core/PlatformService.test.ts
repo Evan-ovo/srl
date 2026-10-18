@@ -5,6 +5,7 @@ const native = vi.hoisted(() => ({
   getInfo: vi.fn(),
   getState: vi.fn(),
   setShowStatusBar: vi.fn(),
+  clearLocalData: vi.fn(),
 }))
 const capacitor = vi.hoisted(() => ({ available: true }))
 
@@ -22,6 +23,17 @@ import { setNativeStatusBarVisible } from './NativeSystemUi'
 import { refreshSystemInsets } from './SystemInsetsService'
 
 describe('PlatformService', () => {
+  it('clears native app data only with the actual capability and never falls back to browser clearing', async () => {
+    const phrase = '我已了解到该操作会清除srl的数据，并确保我的确想这么做。'
+    await expect(platform.maintenance.clearLocalData(phrase)).rejects.toThrow('系统设置')
+    expect(native.clearLocalData).not.toHaveBeenCalled()
+    native.getInfo.mockResolvedValueOnce({ capabilities: ['clear-app-user-data-v1'] })
+    await platform.maintenance.clearLocalData(phrase)
+    expect(native.clearLocalData).toHaveBeenCalledWith({ confirmation: phrase })
+    capacitor.available = false
+    await expect(platform.maintenance.clearLocalData(phrase)).rejects.toThrow('仅用于 Android')
+    expect(native.clearLocalData).toHaveBeenCalledOnce()
+  })
   const browserSafeArea = (edge: 'top' | 'right' | 'bottom' | 'left') =>
     `env(safe-area-inset-${edge}, 0px)`
 
@@ -118,6 +130,7 @@ describe('PlatformService', () => {
 
   it('provides one stable facade for every platform capability domain', async () => {
     expect(Object.keys(platform)).toEqual([
+      'maintenance',
       'capabilities',
       'files',
       'backup',

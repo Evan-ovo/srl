@@ -4,6 +4,7 @@ import type { Resource } from '../types/Resource'
 import { RESOURCE_TYPE, RESOURCE_TYPE_LABELS } from '../types/Resource'
 import { galleryImageUrl, resourceCoverId, normalizeGalleryUrl } from '../types/ResourceGallery'
 import { resourceGalleryService as gallery } from '../core/AppContainer'
+import { nativeFileSource } from '../core/NativeFileSource'
 import { useLoadedObjectUrl } from '../composables/UseLoadedObjectUrl'
 import ResourceImageViewer from './ResourceImageViewer.vue'
 import '../styles/ResourceGallery.css'
@@ -13,27 +14,44 @@ const viewing = ref(false),
   busy = ref(false),
   failed = ref(false)
 const error = ref('')
+const originalSource = ref<string>()
 defineExpose({
   busy,
   editing: computed(() => viewing.value),
-  requestBack: () => {
-    viewing.value = false
-  },
+  requestBack: closeViewer,
   restoreDefault: () => save((owner) => gallery.restoreDefaultCover(owner)),
 })
 const { previewUrl, replacePreview, confirmPreviewLoaded } = useLoadedObjectUrl()
 let generation = 0
 let mounted = true
+
+function closeViewer() {
+  viewing.value = false
+}
+function openOriginal() {
+  if (viewing.value || busy.value || !previewUrl.value || failed.value) return
+  viewing.value = true
+  error.value = ''
+}
 watch(
-  () => [
-    props.resource.id,
-    props.resource.contentHash,
-    props.resource.updatedAt,
-    resourceCoverId(props.resource),
+  [
+    () => props.resource.id,
+    () => props.resource.contentHash,
+    () => resourceCoverId(props.resource),
+    () => props.resource.type,
+    () => props.resource.mimeType,
+    () => !resourceCoverId(props.resource) && props.resource.thumbnailAssetId,
+    () =>
+      !resourceCoverId(props.resource) &&
+      !props.resource.thumbnailAssetId &&
+      props.resource.thumbnailBlob,
+    () => !resourceCoverId(props.resource) && props.resource.metadata.phoneIconUrl,
   ],
   async () => {
     const token = ++generation,
       resource = props.resource
+    closeViewer()
+    originalSource.value = undefined
     failed.value = false
     error.value = ''
     replacePreview('')
@@ -42,15 +60,20 @@ watch(
       if (cover) {
         const image = await gallery.getImage(resource.id, cover)
         if (token !== generation) return
-        replacePreview(galleryImageUrl(image) || URL.createObjectURL(image.originalBlob))
+        const url = galleryImageUrl(image)
+        originalSource.value = !url ? nativeFileSource(image.originalBlob) : undefined
+        replacePreview(url || URL.createObjectURL(image.originalBlob))
       } else if (
         resource.type === RESOURCE_TYPE.CHARACTER_CARD &&
         resource.mimeType.startsWith('image/')
-      )
+      ) {
+        originalSource.value = nativeFileSource(resource.originalBlob)
         replacePreview(URL.createObjectURL(resource.originalBlob))
-      else if (resource.thumbnailBlob) replacePreview(URL.createObjectURL(resource.thumbnailBlob))
-      else if (resource.type === RESOURCE_TYPE.POCKET_PHONE && resource.metadata.phoneIconUrl)
+      } else if (resource.thumbnailBlob) {
+        replacePreview(URL.createObjectURL(resource.thumbnailBlob))
+      } else if (resource.type === RESOURCE_TYPE.POCKET_PHONE && resource.metadata.phoneIconUrl) {
         replacePreview(normalizeGalleryUrl(String(resource.metadata.phoneIconUrl)))
+      }
     } catch (cause) {
       if (token === generation)
         error.value = cause instanceof Error ? cause.message : '封面加载失败'
@@ -61,6 +84,7 @@ watch(
 onBeforeUnmount(() => {
   generation++
   mounted = false
+  closeViewer()
 })
 async function save(operation: (owner: string) => Promise<Resource>) {
   if (busy.value) return
@@ -87,7 +111,7 @@ async function save(operation: (owner: string) => Promise<Resource>) {
     aria-label="查看封面原图"
     :aria-busy="busy"
     :disabled="busy || !previewUrl || failed"
-    @click="viewing = true"
+    @click="openOriginal"
   >
     <img
       v-if="previewUrl && !failed"
@@ -106,8 +130,9 @@ async function save(operation: (owner: string) => Promise<Resource>) {
     v-if="viewing && previewUrl"
     cover
     :src="previewUrl"
+    :native-source="originalSource"
     :name="resource.name"
-    @close="viewing = false"
+    @close="closeViewer"
     @loaded="confirmPreviewLoaded"
   />
 </template>

@@ -47,8 +47,12 @@ import {
   fingerprintAppDatabaseStore,
 } from './AndroidAppDatabaseMigration'
 import { hashBlob } from '../services/HashService'
+import { CHARACTER_CARD_FINGERPRINT_VERSION } from '../utils/CharacterCardFingerprint'
 import { ChatReaderService } from '../services/ChatReaderService'
 import { ResourceService } from '../services/ResourceService'
+import { ResourceGalleryService, moveResourceGallery } from '../services/ResourceGalleryService'
+import { RESOURCE_GALLERY_ASSET_KIND } from '../types/ResourceGallery'
+import { cloudPlainSecretCopies } from '../services/PersonalResourceBackup'
 import {
   updateDetails,
   moveManyToCategory,
@@ -321,7 +325,9 @@ it.each([1000, 5000, 10000])(
     const { native, stores } = createNativeStore(true, 2)
     const ids = Array.from({ length: size }, (_, i) => `r-${i}`)
     for (const id of ids)
-      stores.get('resourceListSummaries')!.set(JSON.stringify(id), { id, name: id, tags: ['keep'] })
+      stores
+        .get('resourceListSummaries')!
+        .set(JSON.stringify(id), { id, name: id, tags: ['keep'], metadata: {} })
     database.use(createAndroidNativeDexieCore({ enabled: () => true, native }))
     const batches = vi.spyOn(native, 'getRecordsByKeys')
     const originals = vi.spyOn(native, 'readBlob')
@@ -334,6 +340,27 @@ it.each([1000, 5000, 10000])(
       expect(rows.map((r) => r?.id)).toEqual(ids)
       expect(batches).toHaveBeenCalledTimes(Math.ceil(size / 250))
       expect(batches.mock.calls.every(([, keys]) => keys.length <= 250)).toBe(true)
+      expect(originals).not.toHaveBeenCalled()
+      batches.mockClear()
+      const storage = new IndexedDbResourceStorage(database)
+      expect(await storage.getResourceListSummaries([...ids, ids[0]!])).toEqual(rows)
+      expect(batches).toHaveBeenCalledTimes(Math.ceil(size / 250))
+      expect(batches.mock.calls.every(([, keys]) => keys.length <= 250)).toBe(true)
+      expect(originals).not.toHaveBeenCalled()
+      batches.mockClear()
+      const keys = vi.spyOn(native, 'getRecordKeys')
+      const service = new ResourceService(
+        new NativeMirroredResourceStorage(storage, new VaultService(database)),
+        new ResourceParserRegistry([]),
+      )
+      expect(
+        (await service.getResourceListSummaries([ids[0]!, ids.at(-1)!, 'missing', ids[0]!])).map(
+          (row) => row.id,
+        ),
+      ).toEqual([ids[0], ids.at(-1)])
+      expect(batches).toHaveBeenCalledTimes(1)
+      expect(batches.mock.calls[0]?.[1]).toHaveLength(3)
+      expect(keys).not.toHaveBeenCalled()
       expect(originals).not.toHaveBeenCalled()
       expect(await database.resourceListSummaries.bulkGet(['r-0', 'missing', 'r-0'])).toEqual([
         rows[0],
@@ -378,6 +405,423 @@ async function delayedDatabase() {
   }
 }
 
+it.each([false, true])(
+  'reads prepared gallery previews and changes gallery metadata without native original IO (vault=%s)',
+  async (encrypted) => {
+    const fixture = await delayedDatabase()
+    const { database, native } = fixture
+    const vault = encrypted ? new VaultService(database) : undefined
+    const binary = vi.spyOn(nativeAppDatabase, 'readBlob').mockImplementation(native.readBlob)
+    try {
+      await vault?.initialize()
+      await vault?.enable('test-password')
+      const assets = new IndexedDbAssetStore(database, vault)
+      const storage = new IndexedDbResourceStorage(database, vault, assets)
+      const owner = await routeResource('gallery-owner')
+      await storage.saveMany([owner, { ...owner, id: 'other-owner' }])
+      const picture = new Blob(['native picture'.repeat(10000)])
+      const image = {
+        ...owner,
+        id: 'gallery-image',
+        originalBlob: picture,
+        fileSize: picture.size,
+        contentHash: await hashCloudBlob(picture),
+        thumbnailBlob: new Blob(['prepared thumbnail'], { type: 'image/webp' }),
+        metadata: {
+          assetKind: RESOURCE_GALLERY_ASSET_KIND,
+          galleryOwnerId: owner.id,
+          galleryStorage: 'local',
+          retained: { nested: true },
+        },
+      }
+      await storage.save(image)
+      activateAndroidNativeAppDatabase()
+      const gallery = new ResourceGalleryService(
+        new NativeMirroredResourceStorage(storage, vault ?? new VaultService(database)),
+        undefined,
+        assets,
+      )
+      const originalGets = vi.spyOn(storage, 'get'),
+        reads = vi.spyOn(native, 'readBlob'),
+        writes = vi.spyOn(native, 'writeBlob')
+      binary.mockClear()
+      expect(await (await gallery.getImagePreview(owner.id, image.id)).blob?.text()).toBe(
+        'prepared thumbnail',
+      )
+      await gallery.setCategories(owner.id, [image.id, image.id], ['category'])
+      await moveResourceGallery(storage, owner.id, 'other-owner', [
+        (await storage.getSummary(image.id))!,
+      ])
+      expect(originalGets).not.toHaveBeenCalled()
+      for (const calls of [reads.mock.calls, writes.mock.calls, binary.mock.calls])
+        expect(
+          calls.some(
+            ([store, , path]) =>
+              store === 'resources' &&
+              (path.startsWith('$/original') || path.startsWith('$/thumbnail')),
+          ),
+        ).toBe(false)
+      database.close()
+      await database.open()
+      const saved = (await storage.get(image.id))!
+      expect(await saved.originalBlob.text()).toBe(await image.originalBlob.text())
+      expect(await saved.thumbnailBlob?.text()).toBe('prepared thumbnail')
+      expect(saved.metadata).toMatchObject({
+        galleryOwnerId: 'other-owner',
+        retained: { nested: true },
+      })
+      expect(saved.tags).toEqual(['category'])
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      binary.mockRestore()
+      await fixture.close()
+    }
+  },
+)
+
+it.each([false, true])(
+  'validates incoming bytes and reuses the native gallery original without changing it (vault=%s)',
+  async (encrypted) => {
+    const fixture = await delayedDatabase()
+    const { database, native } = fixture
+    const vault = encrypted ? new VaultService(database) : undefined
+    const binary = vi.spyOn(nativeAppDatabase, 'readBlob').mockImplementation(native.readBlob)
+    const thumbnail = vi.spyOn(
+      await import('../utils/createImageThumbnail'),
+      'createImageThumbnail',
+    )
+    try {
+      await vault?.initialize()
+      await vault?.enable('test-password')
+      const storage = new IndexedDbResourceStorage(database, vault)
+      const owner = await routeResource('gallery-owner')
+      const bytes = Uint8Array.from(
+        atob(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        ),
+        (value) => value.charCodeAt(0),
+      )
+      const file = new File([bytes], 'pixel.png', { type: 'image/png' })
+      // PNG decoding is exercised by the real-browser audit; this test covers the native DB adapter.
+      thumbnail.mockResolvedValue(new Blob([bytes], { type: 'image/png' }))
+      const image = {
+        ...owner,
+        id: 'gallery-pixel',
+        fileName: file.name,
+        mimeType: file.type,
+        originalBlob: file,
+        thumbnailBlob: new Blob([bytes], { type: 'image/png' }),
+        fileSize: file.size,
+        contentHash: await hashCloudBlob(file),
+        tags: ['keep'],
+        metadata: {
+          assetKind: RESOURCE_GALLERY_ASSET_KIND,
+          galleryOwnerId: owner.id,
+          galleryStorage: 'local',
+          galleryVisible: true,
+          retained: { nested: true },
+        },
+      }
+      await storage.saveMany([owner, image])
+      activateAndroidNativeAppDatabase()
+      const gallery = new ResourceGalleryService(
+        new NativeMirroredResourceStorage(storage, vault ?? new VaultService(database)),
+      )
+      const duplicate = await gallery.addFile(owner.id, file, ['keep'])
+      expect(thumbnail).toHaveBeenCalledOnce()
+      expect(duplicate.id).toBe(image.id)
+      expect(new Uint8Array(await duplicate.originalBlob.arrayBuffer())).toEqual(bytes)
+      expect(duplicate.metadata.retained).toEqual({ nested: true })
+      expect(duplicate.tags).toEqual(['keep'])
+      database.close()
+      await database.open()
+      expect((await storage.getSummary(image.id))?.contentHash).toBe(image.contentHash)
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      binary.mockRestore()
+      thumbnail.mockRestore()
+      await fixture.close()
+    }
+  },
+)
+
+it.each([false, true])(
+  'preserves migrated gallery slots through native atomic insertion (vault=%s)',
+  async (encrypted) => {
+    const fixture = await delayedDatabase(),
+      { database, native } = fixture
+    const vault = encrypted ? new VaultService(database) : undefined
+    const binary = vi.spyOn(nativeAppDatabase, 'readBlob').mockImplementation(native.readBlob)
+    const compare = vi
+      .spyOn(nativeAppDatabase, 'haveSameRecordKeys')
+      .mockImplementation(async (left, right) => {
+        const a = fixture.stores.get(left)!,
+          b = fixture.stores.get(right)!
+        return a.size === b.size && [...a.keys()].every((key) => b.has(key))
+      })
+    try {
+      await vault?.initialize()
+      await vault?.enable('test-password')
+      const storage = new IndexedDbResourceStorage(database, vault)
+      await storage.saveMany([await routeResource('a'), await routeResource('b')])
+      activateAndroidNativeAppDatabase()
+      const wrapped = new NativeMirroredResourceStorage(
+        storage,
+        vault ?? new VaultService(database),
+      )
+      const gallery = new ResourceGalleryService(wrapped),
+        url = 'https://example.com/native-image.png'
+      const first = await gallery.addUrl('a', url, false, ['migrated'])
+      await moveResourceGallery(wrapped, 'a', 'b')
+      const second = await gallery.addUrl('a', url, false, ['new'])
+      expect(second.id).not.toBe(first.id)
+      database.close()
+      await database.open()
+      const old = await gallery.getImage('b', first.id)
+      expect(old.tags).toEqual(['migrated'])
+      expect(old.metadata.galleryUrl).toBe(url)
+      expect(await hashCloudBlob(old.originalBlob)).toBe(first.contentHash)
+      expect((await gallery.list('a')).galleryCount).toBe(1)
+      expect((await gallery.list('b')).galleryCount).toBe(1)
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      binary.mockRestore()
+      compare.mockRestore()
+      await fixture.close()
+    }
+  },
+)
+
+it.each([false, true])(
+  'reads only selected plaintext backup originals through native scoped indexes (vault=%s)',
+  async (encrypted) => {
+    const fixture = await delayedDatabase(),
+      { database, native } = fixture
+    const vault = encrypted ? new VaultService(database) : undefined
+    const binary = vi.spyOn(nativeAppDatabase, 'readBlob').mockImplementation(native.readBlob)
+    const credentials = await import('../services/LocalCredentialStore')
+    const grant = vi
+      .spyOn(credentials.localCredentialStore, 'read')
+      .mockResolvedValue('viewing-password')
+    try {
+      await vault?.initialize()
+      await vault?.enable('test-password')
+      const storage = new IndexedDbResourceStorage(database, vault),
+        rows: Resource[] = []
+      for (const id of ['selected', 'outside', 'excluded']) {
+        const document = {
+          format: 'srl-personal-resource',
+          version: 1,
+          kind: 'secret',
+          name: id,
+          text: '',
+          url: '',
+          attachments: [],
+          fields: [],
+        }
+        const blob = new Blob([JSON.stringify(document)], { type: 'application/json' })
+        rows.push({
+          ...(await routeResource(id)),
+          type: RESOURCE_TYPE.SECRET,
+          originalBlob: blob,
+          fileSize: blob.size,
+          contentHash: await hashBlob(blob),
+          metadata: id === 'excluded' ? { cloudBackupExcluded: true } : {},
+        })
+      }
+      await storage.saveMany(rows)
+      await database.resourceListSummaries.delete('selected')
+      activateAndroidNativeAppDatabase()
+      const full = vi.spyOn(storage, 'listSummaries'),
+        read = vi.spyOn(storage, 'get')
+      const wrapped = new NativeMirroredResourceStorage(
+        storage,
+        vault ?? new VaultService(database),
+      )
+      const resources = new ResourceService(wrapped, new ResourceParserRegistry([]))
+      const copies = await cloudPlainSecretCopies(
+        {
+          provider: 'github',
+          owner: 'test',
+          repository: 'private',
+          retention: 7,
+          autoBackup: false,
+        },
+        resources,
+        { secret: true, resourceIds: ['selected', 'excluded'] },
+      )
+      expect(copies.map((copy) => copy.document.name)).toEqual(['selected'])
+      expect(full).not.toHaveBeenCalled()
+      expect(read.mock.calls).toEqual([['selected']])
+      expect((await storage.getResourceListSummary('selected'))?.type).toBe(RESOURCE_TYPE.SECRET)
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      grant.mockRestore()
+      binary.mockRestore()
+      await fixture.close()
+    }
+  },
+)
+
+it.each([false, true])(
+  'updates historical metadata without loading or rewriting native attachments (vault=%s)',
+  async (encrypted) => {
+    const fixture = await delayedDatabase()
+    const { database, native } = fixture
+    const vault = encrypted ? new VaultService(database) : undefined
+    const binary = vi.spyOn(nativeAppDatabase, 'readBlob').mockImplementation(native.readBlob)
+    try {
+      await vault?.initialize()
+      await vault?.enable('test-password')
+      const storage = new IndexedDbResourceStorage(database, vault)
+      const current = await routeResource('note-current')
+      await storage.save(current)
+      const history = {
+        ...current,
+        id: 'note-history',
+        versionGroupId: current.id,
+        thumbnailBlob: new Blob(['embedded thumbnail'], { type: 'image/webp' }),
+      }
+      await database.resourceVersions.put(vault ? await vault.encodeResource(history) : history)
+      await database.resourceVersionSummaries.put(
+        vault
+          ? await vault.encodeResourceSummary(toResourceListSummary(history))
+          : toResourceListSummary(history),
+      )
+      activateAndroidNativeAppDatabase()
+      const reads = vi.spyOn(native, 'readBlob'),
+        writes = vi.spyOn(native, 'writeBlob')
+      binary.mockClear()
+      await storage.updateVersion(history.id, {
+        metadata: { retained: 'changed' },
+        versionNote: 'note',
+      })
+      expect(
+        reads.mock.calls.some(
+          ([, , path]) => path.startsWith('$/original') || path.startsWith('$/thumbnail'),
+        ),
+      ).toBe(false)
+      expect(
+        binary.mock.calls.some(
+          ([, , path]) => path.startsWith('$/original') || path.startsWith('$/thumbnail'),
+        ),
+      ).toBe(false)
+      expect(
+        writes.mock.calls.some(
+          ([, , path]) => path.startsWith('$/original') || path.startsWith('$/thumbnail'),
+        ),
+      ).toBe(false)
+      database.close()
+      await database.open()
+      expect(await storage.getSummary(history.id, true)).toMatchObject({
+        versionNote: 'note',
+        metadata: { retained: 'changed' },
+      })
+      const saved = (await storage.getVersion(history.id))!
+      expect(await saved.originalBlob.text()).toBe(await current.originalBlob.text())
+      expect(await saved.thumbnailBlob?.text()).toBe('embedded thumbnail')
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      binary.mockRestore()
+      await fixture.close()
+    }
+  },
+)
+
+it('maintains prepared native cards with light batched history reads and no original hydration', async () => {
+  const fixture = await delayedDatabase()
+  const { database, native } = fixture
+  const storage = new IndexedDbResourceStorage(database)
+  const compare = vi
+    .spyOn(nativeAppDatabase, 'haveSameRecordKeys')
+    .mockImplementation(async (left, right) => {
+      const a = fixture.stores.get(left)!,
+        b = fixture.stores.get(right)!
+      return a.size === b.size && [...a.keys()].every((key) => b.has(key))
+    })
+  activateAndroidNativeAppDatabase()
+  try {
+    const current = {
+      ...(await routeResource('prepared-card')),
+      type: RESOURCE_TYPE.CHARACTER_CARD,
+      versionCount: 1,
+      metadata: {
+        cardContentHash: 'a'.repeat(64),
+        cardCoreHash: 'b'.repeat(64),
+        cardFingerprintVersion: CHARACTER_CARD_FINGERPRINT_VERSION,
+        card: { data: { creator: 'preserve' } },
+      },
+    }
+    await storage.save(current)
+    await storage.saveVersion({ ...current, id: 'prepared-history', versionGroupId: current.id })
+    await storage.listResourceListSummaries()
+    const binary = vi.spyOn(native, 'readBlob')
+    const fullCurrent = vi.spyOn(storage, 'listSummaries')
+    const fullHistory = vi.spyOn(storage, 'listVersionSummaries')
+    const individualHistory = vi.spyOn(native, 'getRecord')
+    const service = new ResourceService(storage, new ResourceParserRegistry([]))
+    expect(await service.backfillCardFingerprints(async () => undefined)).toBe(0)
+    expect(
+      binary.mock.calls.length + fullCurrent.mock.calls.length + fullHistory.mock.calls.length,
+    ).toBe(0)
+    expect(
+      individualHistory.mock.calls.filter(([store]) => store === 'resourceVersions').length,
+    ).toBe(0)
+    database.close()
+    await database.open()
+    expect((await storage.getSummary(current.id))?.metadata.card).toEqual(current.metadata.card)
+    expect((await storage.getSummary(current.id))?.versionCount).toBe(1)
+  } finally {
+    compare.mockRestore()
+    deactivateAndroidNativeAppDatabase()
+    await fixture.close()
+  }
+})
+
+it('deletes a folder through native metadata writes without hydrating originals', async () => {
+  const fixture = await delayedDatabase()
+  const { database, native } = fixture
+  const resources = new IndexedDbResourceStorage(database)
+  const categories = new IndexedDbCategoryStorage(database)
+  const compare = vi
+    .spyOn(nativeAppDatabase, 'haveSameRecordKeys')
+    .mockImplementation(async (left, right) => {
+      const a = fixture.stores.get(left)!,
+        b = fixture.stores.get(right)!
+      return a.size === b.size && [...a.keys()].every((key) => b.has(key))
+    })
+  activateAndroidNativeAppDatabase()
+  try {
+    const resource = await routeResource('folder-delete')
+    await resources.save({ ...resource, categoryId: 'remove', categoryIds: ['remove', 'keep'] })
+    await categories.save({
+      id: 'remove',
+      name: '删除',
+      color: '#486b5d',
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await resources.listResourceListSummaries()
+    const originals = vi.spyOn(native, 'readBlob')
+    await categories.deleteAndUnassign('remove')
+    expect(originals.mock.calls.length).toBe(0)
+    expect(await resources.getResourceListSummary(resource.id)).toMatchObject({
+      categoryId: 'keep',
+      categoryIds: ['keep'],
+    })
+    database.close()
+    await database.open()
+    expect(await database.categories.get('remove')).toBeUndefined()
+    expect(await (await resources.get(resource.id))?.originalBlob.text()).toBe(
+      await resource.originalBlob.text(),
+    )
+  } finally {
+    compare.mockRestore()
+    deactivateAndroidNativeAppDatabase()
+    await fixture.close()
+  }
+})
+
 it('persists selected metadata edits in the native adapter without reading or replacing originals', async () => {
   const fixture = await delayedDatabase()
   const { database, native, stores } = fixture
@@ -398,6 +842,12 @@ it('persists selected metadata edits in the native adapter without reading or re
     const originals = vi.spyOn(native, 'readBlob')
     const full = vi.spyOn(storage, 'list')
     const rewrites = vi.spyOn(storage, 'saveMany')
+    const companion = { ...selected, id: 'selected-companion' }
+    await storage.save(companion)
+    const service = new ResourceService(storage, new ResourceParserRegistry([]))
+    await service.linkResources([selected.id, companion.id])
+    await service.linkResources([selected.id, companion.id])
+    await service.restoreRelatedLinks([{ ...selected, relatedResourceIds: [companion.id] }])
     await moveManyToCategory(storage, [selected.id, selected.id, 'missing'], 'folder')
     await updateTagsMany(storage, [selected.id], 'new', 'add')
     const added = await addTagsPerResource(storage, [{ resourceId: selected.id, tags: ['AI'] }])
@@ -694,9 +1144,14 @@ it.each([false, true])(
   },
 )
 
-it.each([1000, 5000, 10000])(
-  'deletes one native resource among %i unrelated histories with only scoped version reads',
-  async (size) => {
+it.each(
+  [1000, 5000, 10000].flatMap((size) => [
+    { size, single: false },
+    { size, single: true },
+  ]),
+)(
+  'deletes one native resource among $size unrelated histories with scoped reads (single=$single)',
+  async ({ size, single }) => {
     const fixture = await delayedDatabase()
     const { database, native, stores } = fixture
     const storage = new IndexedDbResourceStorage(database)
@@ -725,7 +1180,8 @@ it.each([1000, 5000, 10000])(
     const reads = vi.spyOn(native, 'getRecord')
     try {
       const started = performance.now()
-      await mirror.deleteMany([selected.id])
+      if (single) await mirror.delete(selected.id)
+      else await mirror.deleteMany([selected.id])
       expect(allVersions).not.toHaveBeenCalled()
       expect(keys.mock.calls.some(([store]) => store === 'resourceVersions')).toBe(false)
       expect(binaryReads).not.toHaveBeenCalled()

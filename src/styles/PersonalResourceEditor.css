@@ -30,6 +30,18 @@
 .personal-resource-editor .field {
   min-width: 0;
 }
+.personal-resource-editor__text-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.personal-resource-editor__import {
+  min-height: 34px;
+  padding: 4px 10px;
+  font-size: 0.875rem;
+  line-height: 1.25;
+}
 .personal-resource-editor input,
 .personal-resource-editor textarea {
   max-width: 100%;
