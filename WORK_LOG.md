@@ -393,3 +393,10 @@
 - check工作流39134976124的隐私、候选准备和15项外观手册测试通过，随后结构门禁失败：ProductAssistant.vue2002>2000、ChatReaderView.js3135>2000、DiscordSetupService.ts3606>2897。逐文件与此前审计基线3660221比较，内容完全未变，属既有欠项；本轮不放宽门禁或扩大为无关重构，不能声称所有云端检查通过。
 - 用户已确认现有CF所连接的Fork，GitHub核实为本仓库的正常下游，当前仅落后上游，可通过Sync fork更新。当前维护账号对下游只有pull、没有push权限，没有代为写入该账号仓库；下游同步及CF构建命令由部署账号完成，配置步骤见README。私人登录邮箱、账号参数与站点URL不进入公开记录。
 - 本次仅补充现有进度和日志，源代码与已验证产物保持；以a4a0ab1为已审计基线做2文档增量核对后提交，不重复扫描旧内容。本条所属提交为下一内容基线，完整SHA/回读记于维护者既有日志。
+
+## 2026-10-18：原 Public 环境找回、配置写入与首次发行验证
+
+- 用户授权查找本机原签名/站点并代填配置，随后明确旧WebView不再使用。原Public PKCS12的证书SHA与既有发行基线一致，密钥/密码不输出；向本仓库写入6个加密Secrets及2个Variables，原签名延续，站点按本次目标统一，不复制官版签名。现有私有映射追加GitHub发行目标，旧回执与官版配置保持。
+- CF命令行Public登录可核对目标账号/Worker，但Builds接口返回403；改用已有独立浏览器小号会话，在同一个Worker保存Build命令pnpm public:web-build和NODE_VERSION=24，原模板部署命令/根目录/Fork保持，刷新后回读一致。没有修改大号登录或扩大Token权限。页面仍有GitHub账号详情获取警告，需实际部署验证；浏览器保存为键盘提交，非pointer验收。设置截图只留聊天outputs，不加入公开仓库。
+- 首轮真实GitHub发行run39136925956在android-actions/setup-android@v3默认tools包安装失败（Failed to find package tools），尚未到签名或发布。改为明确packages=platform-tools，现有后续步骤继续装Android36平台与build-tools；同时不再输出许可证全文。只核验该配置/引用与增量隐私，再由下一次真实云构建验证；原本地业务测试无需因配置变更全量重跑。
+- 公开增量基线e581b18e125dae1fbecf76aecf26b9ab6f70ace3，本轮仅工作流和现有记录，全部新增内容审计，不含二进制或真实私人地址/邮箱/密码。提交使用对应GitHub noreply；未使用实体手机，旧被拒清理目标和用户并行工作不动。
