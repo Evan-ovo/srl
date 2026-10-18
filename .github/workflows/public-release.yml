@@ -90,8 +90,7 @@ jobs:
       - name: 客户端回归、知识和功能合同
         if: steps.existing.outputs.published != 'true'
         run: |
-          # Hosted Windows runs hit fixture timeouts at four workers; preserve all tests and timeout limits.
-          pnpm exec vitest run --exclude "server/**" --exclude "**/.codex-tmp/**" --maxWorkers=2
+          pnpm test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm check:feature-contracts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

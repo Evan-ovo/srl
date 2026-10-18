@@ -6,7 +6,7 @@ import { IndexedDbArchiveStorage } from '../storage/IndexedDbArchiveStorage'
 import { IndexedDbCategoryStorage } from '../storage/IndexedDbCategoryStorage'
 import { ResourceParserRegistry } from '../parser/ResourceParser'
 import { JsonResourceParser } from '../parser/JsonResourceParser'
-import { type Resource, RESOURCE_TYPE } from '../types/Resource'
+import { type Resource, RESOURCE_TYPE, toResourceListSummary } from '../types/Resource'
 import { isResourceAttachment, resourceOwnedFileOwnerId } from '../types/ResourceAttachment'
 import { ResourceAttachmentService } from './ResourceAttachmentService'
 import { ResourceService } from './ResourceService'
@@ -122,9 +122,23 @@ describe('resource attachment lifecycle', () => {
 
   it('lists only OTHER summaries without reading bodies in a 10000-resource library', async () => {
     const f = await fixture()
-    await f.storage.saveMany(
-      Array.from({ length: 9999 }, (_, i) => ({ ...f.owner, id: `card-${i}` })),
+    const stored = await f.db.resources.get(f.owner.id)
+    if (!stored) throw new Error('stored fixture missing')
+    const fillers = Array.from({ length: 9999 }, (_, i) => ({ ...f.owner, id: `card-${i}` }))
+    const summaries = fillers.map(toResourceListSummary)
+    // This regression measures scoped list reads, not 9999 repetitions of binary preparation.
+    await f.db.transaction(
+      'rw',
+      [f.db.resources, f.db.resourceSummaries, f.db.resourceListSummaries],
+      async () => {
+        await f.db.resources.bulkPut(fillers.map(({ id }) => ({ ...stored, id })))
+        await f.db.resourceSummaries.bulkPut(summaries)
+        await f.db.resourceListSummaries.bulkPut(summaries)
+      },
     )
+    expect(await f.db.resources.count()).toBe(10000)
+    expect(await f.db.resourceSummaries.count()).toBe(10000)
+    expect(await f.db.resourceListSummaries.count()).toBe(10000)
     const a = await f.attachments.add('card', new File(['说明'], '说明.txt'))
     const get = vi.spyOn(f.storage, 'get').mockRejectedValue(new Error('不应读取原件'))
     const global = vi.spyOn(f.storage, 'listSummaries').mockRejectedValue(new Error('不应全库扫描'))
