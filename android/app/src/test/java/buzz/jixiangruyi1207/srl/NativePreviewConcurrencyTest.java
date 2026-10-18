@@ -21,10 +21,12 @@ public class NativePreviewConcurrencyTest {
 
     private void assertBatch(boolean enhanced, int limit) throws Exception {
         NativeExecutors.configurePreviewNetwork(enhanced);
+        ThreadPoolExecutor executor = (ThreadPoolExecutor) NativeExecutors.previewNetwork();
+        awaitIdlePreviewPool(executor, limit);
         AtomicInteger active = new AtomicInteger(), maximum = new AtomicInteger();
         CountDownLatch started = new CountDownLatch(limit), release = new CountDownLatch(1);
         NativePreviewAssetRequests<String> requests = new NativePreviewAssetRequests<>(
-            NativeExecutors.previewNetwork(), (url, control) -> {
+            executor, (url, control) -> {
                 maximum.accumulateAndGet(active.incrementAndGet(), Math::max);
                 started.countDown();
                 try { assertTrue(release.await(5, TimeUnit.SECONDS)); return url; }
@@ -42,6 +44,17 @@ public class NativePreviewConcurrencyTest {
             for (CompletableFuture<String> future : futures) future.get(5, TimeUnit.SECONDS);
             assertEquals(limit, maximum.get());
         } finally { requests.close(); NativeExecutors.configurePreviewNetwork(false); }
+    }
+
+    private void awaitIdlePreviewPool(ThreadPoolExecutor executor, int limit) throws Exception {
+        // Request futures complete before excess workers necessarily retire after 6 -> 3.
+        // Measure the next independent batch only after the previous pool has settled.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (executor.getActiveCount() != 0 || !executor.getQueue().isEmpty()
+                || executor.getPoolSize() > limit) {
+            assertTrue("previous preview batch did not settle", System.nanoTime() < deadline);
+            Thread.sleep(1);
+        }
     }
 
     @Test public void decreasingLimitDoesNotInterruptActiveDownloadsOrReplaceQueue() throws Exception {
