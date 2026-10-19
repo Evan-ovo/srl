@@ -51,7 +51,7 @@ import {
 } from './CloudStructuredSnapshot'
 
 import type { ExportService } from './ExportService'
-import type { RestoreTransferOptions } from './CloudBackupTransport'
+import type { CloudDownloadOptions, RestoreTransferOptions } from './CloudBackupTransport'
 
 import { type NativeRestoreObject, type NativeRestoreResource } from './NativeCloudTransfer'
 
@@ -250,6 +250,7 @@ export async function materializeStructuredArchive(
   options?: {
     onReceivedBytes?: RestoreTransferOptions['onReceivedBytes']
     onProgress?: (progress: { completed: number; total: number; writtenBytes: number }) => void
+    onReadFailures?: CloudDownloadOptions['onReadFailures']
   },
 ) {
   const controller = new AbortController()
@@ -279,6 +280,7 @@ export async function materializeStructuredArchive(
       snapshot.portableData.generatedImageAlbum?.map((entry) => [entry.item.id, entry]),
     )
     let completed = 0
+    const completedEntries = new Set<string>()
     let writtenBytes = 0
     const total =
       snapshot.resources.length +
@@ -286,24 +288,27 @@ export async function materializeStructuredArchive(
       album.size +
       (snapshot.portableData.communitySources?.attachments.length ?? 0)
     const report = () => options?.onProgress?.({ completed, total, writtenBytes })
+    const complete = (key: string) => {
+      if (completedEntries.has(key)) return
+      completedEntries.add(key)
+      completed++
+      report()
+    }
     const read = async (object: import('./GitHubBackupBundle').GitHubBundleManifest) => {
       const blob = await providerReader(object)
       controller.signal.throwIfAborted()
-      completed++
-      report()
       return blob
     }
     report()
     const { communitySources, ...portableData } = snapshot.portableData
-    const communitySourceAttachments = []
-    for (const entry of communitySources?.attachments ?? []) {
-      controller.signal.throwIfAborted()
-      const blob = await read(entry.object)
-      communitySourceAttachments.push({
-        assetId: entry.assetId,
-        blob: new Blob([blob], { type: entry.mimeType }),
-      })
-    }
+    const attachments = new Map(
+      communitySources?.attachments.map((entry) => [entry.assetId, entry]),
+    )
+    const placeholder = new Blob()
+    const communitySourceAttachments = [...attachments.keys()].map((assetId) => ({
+      assetId,
+      blob: placeholder,
+    }))
     return (
       await context.exportService.createArchivesFromSource(
         {
@@ -313,7 +318,9 @@ export async function materializeStructuredArchive(
             controller.signal.throwIfAborted()
             const record = (historical ? versions : resources).get(planned.id)
             if (!record) throw new Error(`备份缺少资源描述：${planned.fileName}`)
-            return materializeStructuredResource(record, read)
+            const resource = await materializeStructuredResource(record, read)
+            complete(`${historical ? 'version' : 'resource'}:${planned.id}`)
+            return resource
           },
         },
         snapshot.categories,
@@ -323,7 +330,9 @@ export async function materializeStructuredArchive(
           readAlbumFile: async (id) => {
             const entry = album.get(id)
             if (!entry?.object) throw new Error('云备份缺少相册原图描述')
-            return read(entry.object)
+            const blob = await read(entry.object)
+            complete(`album:${id}`)
+            return blob
           },
           ...(communitySources
             ? {
@@ -339,6 +348,14 @@ export async function materializeStructuredArchive(
         {
           signal: controller.signal,
           readAhead: { onFailure: (error: unknown) => controller.abort(error) },
+          onReadFailures: options?.onReadFailures,
+          readCommunityAttachment: async (assetId) => {
+            const entry = attachments.get(assetId)
+            if (!entry) throw new Error(`云备份缺少来源附件描述：${assetId}`)
+            const blob = new Blob([await read(entry.object)], { type: entry.mimeType })
+            complete(`attachment:${assetId}`)
+            return blob
+          },
           onProgress: (progress) => {
             writtenBytes = progress.writtenBytes
             report()

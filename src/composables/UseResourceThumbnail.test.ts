@@ -36,6 +36,41 @@ beforeEach(() => {
   getImagePreview.mockReset()
 })
 
+it('repairs a restored gallery thumbnail when its former-device asset ID is absent locally', async () => {
+  const repaired = new Blob(['repaired gallery thumbnail'])
+  getBlob.mockResolvedValueOnce(undefined)
+  getImagePreview.mockResolvedValueOnce({ blob: repaired, url: '' })
+  let thumbnail!: ReturnType<typeof useResourceThumbnail>
+  const wrapper = mount(
+    defineComponent({
+      setup() {
+        thumbnail = useResourceThumbnail(
+          () =>
+            ({
+              id: 'gallery-image',
+              contentHash: 'image-sha',
+              thumbnailAssetId: 'old-device-thumbnail',
+              metadata: {
+                assetKind: 'resource-gallery-image',
+                galleryOwnerId: 'owner',
+                galleryStorage: 'local',
+              },
+            }) as unknown as ResourceReference,
+        )
+        return () => h('div', String(Boolean(thumbnail.value)))
+      },
+    }),
+  )
+  try {
+    await flushPromises()
+    expect(getImagePreview).toHaveBeenCalledExactlyOnceWith('owner', 'gallery-image')
+    expect(thumbnail.value).toBe(repaired)
+    expect(getBlob).toHaveBeenCalledOnce()
+  } finally {
+    wrapper.unmount()
+  }
+})
+
 it('uses the preview owner for a custom cover and ignores a late image after switching covers', async () => {
   vi.stubGlobal('IntersectionObserver', undefined)
   let finish!: (preview: { blob?: Blob; url: string }) => void

@@ -22,6 +22,7 @@ import {
 } from '../types/Vault'
 import type { ArchiveRestoreProgress, ArchiveStorageAdapter } from './ArchiveStorageAdapter'
 import type { StagedArchiveRecord } from '../types/RestoreStaging'
+import { materializeResourceForIndexedDb } from './ResourceStorageClone'
 import { IndexedDbAssetStore } from './IndexedDbAssetStore'
 import {
   linkNativeResourceObjects,
@@ -78,6 +79,8 @@ export async function listBackupRecordSummaries(
     return summaries
   })
 }
+
+const RESTORE_INLINE_ORIGINAL_LIMIT = 1024 * 1024
 
 async function detachStoredBlob(
   blob: Blob,
@@ -277,6 +280,15 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
     await releaseReplacedNativeObjects(replacements).catch(() => undefined)
   }
 
+  private async stageOriginal(record: StagedArchiveRecord): Promise<StagedArchiveRecord> {
+    const resource = record.resource
+    if (isEncryptedResource(resource) || isNativeBackedResource(resource)) return record
+    const original = resource.originalBlob as Blob | ArrayBuffer
+    if (!(original instanceof Blob) || original.size > RESTORE_INLINE_ORIGINAL_LIMIT) return record
+    // Reuse ordinary byte-backed resource storage for small bodies, before the commit transaction.
+    return { ...record, resource: await materializeResourceForIndexedDb(resource) }
+  }
+
   private async restoreStaged<T extends Resource | NativeBackedResourceRecord>(
     categories: Category[],
     resources: T[],
@@ -293,7 +305,7 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
       : categories
     const jobId = checkpointId ? `commit:${checkpointId}` : crypto.randomUUID()
     try {
-      // Release each hydrated body after IndexedDB has cloned it. The plan stays lightweight.
+      // Small byte-backed originals avoid the local Blob loader; large originals retain its established path.
       const total = resources.length + versions.length
       const totalBytes = [...resources, ...versions].reduce(
         (sum, resource) => sum + Math.max(0, resource.fileSize),
@@ -311,8 +323,11 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
             total,
             fileName: records[index]!.fileName,
           })
+          // Older runtimes keep their legacy checkpoint paths and can rehydrate safely.
+          const path = `prepared/${scope}/${index}`
           const previous = checkpointId
-            ? await this.database.restoreStaging.get([jobId, `${scope}/${index}`])
+            ? ((await this.database.restoreStaging.get([jobId, path])) ??
+              (await this.database.restoreStaging.get([jobId, `${scope}/${index}`])))
             : undefined
           const planned = records[index]!
           if (
@@ -324,11 +339,11 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
           ) {
             throw new Error('恢复检查点与当前计划不一致，请重新预检')
           }
-          if (!previous?.record) {
-            const record = await prepare(planned)
+          if (!previous?.record || previous.path !== path) {
+            const record = await this.stageOriginal(previous?.record ?? (await prepare(planned)))
             await this.database.restoreStaging.put({
               jobId,
-              path: `${scope}/${index}`,
+              path,
               size: records[index]!.fileSize,
               sha256: records[index]!.contentHash,
               updatedAt: Date.now(),
@@ -368,7 +383,7 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
             await this.database.resourceVersionSummaries.clear()
           }
           if (storedCategories.length) await this.database.categories.bulkPut(storedCategories)
-          // Keep the final indexes atomic, including detaching staged file backing below.
+          // Small originals already use ordinary byte storage; larger Blob backing keeps its compatibility copy.
           let committed = 0
           let committedBytes = 0
           for (const [scope, records] of [
@@ -382,28 +397,38 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
                 total,
                 fileName: records[index]!.fileName,
               })
-              const staged = await this.database.restoreStaging.get([jobId, `${scope}/${index}`])
+              const path = `prepared/${scope}/${index}`
+              const staged = await this.database.restoreStaging
+                .get([jobId, path])
+                .catch((error: unknown) => {
+                  if (
+                    error instanceof Error &&
+                    ['AbortError', 'QuotaExceededError'].includes(error.name)
+                  )
+                    throw error
+                  throw new Error(`读取本机恢复暂存记录失败：${records[index]!.fileName}`, {
+                    cause: error,
+                  })
+                })
               const record = staged?.record
               if (!record) throw new Error('恢复暂存记录缺失，已取消索引提交')
               if (
                 !isEncryptedResource(record.resource) &&
-                !isNativeBackedResource(record.resource)
+                !isNativeBackedResource(record.resource) &&
+                record.resource.originalBlob instanceof Blob
               ) {
-                // WebKit can keep the source IDB file path when cloning a stored Blob. Clearing
-                // staging then breaks the final record. Read a fresh body without arrayBuffer.
                 record.resource.originalBlob = await Dexie.waitFor(
                   detachStoredBlob(
                     record.resource.originalBlob,
-                    (transferredBytes) => {
+                    (bytes) =>
                       onProgress?.({
                         phase: 'commit',
                         completed: committed,
                         total,
                         fileName: records[index]!.fileName,
-                        transferredBytes: committedBytes + transferredBytes,
+                        transferredBytes: committedBytes + bytes,
                         totalBytes,
-                      })
-                    },
+                      }),
                     records[index]!.fileName,
                   ),
                 )
@@ -416,7 +441,9 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
                 await this.database.resourceVersions.put(record.resource)
                 await this.database.resourceVersionSummaries.put(toStoredSummary(record.resource))
               }
-              await this.database.restoreStaging.delete([jobId, `${scope}/${index}`])
+              await this.database.restoreStaging.delete([jobId, path])
+              if (checkpointId)
+                await this.database.restoreStaging.delete([jobId, `${scope}/${index}`])
               committed += 1
               committedBytes += records[index]!.fileSize
               onProgress?.({

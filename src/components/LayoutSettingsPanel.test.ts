@@ -1,9 +1,13 @@
 /** @vitest-environment jsdom */
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Component } from 'vue'
 
 const runtime = vi.hoisted(() => ({
   android: false,
+  passwordConfigured: false,
+  passwordUnlocked: false,
+  savePassword: vi.fn(),
   checkUpdate: vi.fn(async () => 'APK 更新渠道尚未发布'),
   postMedia: false,
   save: vi.fn(),
@@ -31,6 +35,13 @@ const runtime = vi.hoisted(() => ({
     runtime.inboxStatus = 'off'
     runtime.inboxListeners.forEach((fn) => fn())
   }),
+}))
+vi.mock('../services/SecretResourceService', () => ({
+  secretResourceService: {
+    hasPassword: async () => runtime.passwordConfigured,
+    isUnlocked: () => runtime.passwordUnlocked,
+    setPassword: runtime.savePassword,
+  },
 }))
 vi.mock('../services/WebBackgroundKeepAlive', () => ({
   webBackgroundAudioState: () => ({
@@ -109,6 +120,63 @@ vi.mock('./ResourceHealthCenter.vue', () => ({ default: { template: '<div />' } 
 
 import LayoutSettingsPanel from './LayoutSettingsPanel.vue'
 
+it('saves an entered password from the settings footer before closing and waits for persistence', async () => {
+  const real = (await vi.importActual<{ default: Component }>('./SecretProtectionSettings.vue'))
+    .default
+  const wrapper = mountSettings({ SecretProtectionSettings: real })
+  await flushPromises()
+  await wrapper
+    .findAll('button')
+    .find((button) => button.text() === '设置统一密码')!
+    .trigger('click')
+  const fields = wrapper.findAll('.secret-protection-settings input')
+  await fields[0]!.setValue('shared-password')
+  await fields[1]!.setValue('shared-password')
+  const footer = wrapper.get('.layout-settings__footer button')
+  expect(footer.text()).toBe('保存统一密码并完成')
+  let finish!: () => void
+  runtime.savePassword.mockImplementation(async () => {
+    await new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    runtime.passwordConfigured = true
+    runtime.passwordUnlocked = true
+  })
+  await footer.trigger('click')
+  await flushPromises()
+  expect(runtime.savePassword).toHaveBeenCalledExactlyOnceWith('shared-password')
+  expect(footer.attributes('disabled')).toBeDefined()
+  expect(wrapper.emitted('close')).toBeUndefined()
+  finish()
+  await flushPromises()
+  expect(wrapper.emitted('close')).toHaveLength(1)
+})
+
+it('keeps settings open when the footer password confirmation or save fails', async () => {
+  const real = (await vi.importActual<{ default: Component }>('./SecretProtectionSettings.vue'))
+    .default
+  const wrapper = mountSettings({ SecretProtectionSettings: real })
+  await flushPromises()
+  await wrapper
+    .findAll('button')
+    .find((button) => button.text() === '设置统一密码')!
+    .trigger('click')
+  const fields = wrapper.findAll('.secret-protection-settings input')
+  await fields[0]!.setValue('shared-password')
+  await fields[1]!.setValue('different-password')
+  await wrapper.get('.layout-settings__footer button').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('两次密码不一致')
+  expect(runtime.savePassword).not.toHaveBeenCalled()
+  expect(wrapper.emitted('close')).toBeUndefined()
+  await fields[1]!.setValue('shared-password')
+  runtime.savePassword.mockRejectedValueOnce(new Error('凭据保存失败'))
+  await wrapper.get('.layout-settings__footer button').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('凭据保存失败')
+  expect(wrapper.emitted('close')).toBeUndefined()
+})
+
 const wrappers: Array<ReturnType<typeof shallowMount>> = []
 it('uses the APK update owner from the visible settings button', async () => {
   runtime.android = true
@@ -170,6 +238,8 @@ it('persists modified tag choice in system settings and restores it on reopen', 
   expect(localStorage.getItem('srl.modifiedResource.syncTags')).toBe('false')
 })
 afterEach(() => {
+  runtime.passwordConfigured = false
+  runtime.passwordUnlocked = false
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount())
   runtime.android = false
   runtime.postMedia = false
@@ -183,8 +253,9 @@ afterEach(() => {
   localStorage.clear()
 })
 
-function mountSettings() {
+function mountSettings(stubs: Record<string, Component> = {}) {
   const wrapper = shallowMount(LayoutSettingsPanel, {
+    global: { stubs },
     props: {
       vaultEnabled: false,
       allowRemotePreviews: true,

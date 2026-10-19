@@ -66,10 +66,10 @@ export function usePersonaResourceDelivery(getContext: () => PersonaResourceDeli
     const preserved = context.draft.value.connections.filter((connection) => {
       if (connection.type === 'group') return true
       const snapshot = context.draft.value.characterBindings[connection.id]
-      const snapshotDoesNotMatchLibrary =
-        !!snapshot &&
-        !context.characters.value.some((resource) => resource.contentHash === snapshot.hash)
-      return !knownCharacterIds.has(connection.id) || snapshotDoesNotMatchLibrary
+      // A saved hash can identify a renamed card even when the old filename no longer matches.
+      if (snapshot)
+        return !context.characters.value.some((resource) => resource.contentHash === snapshot.hash)
+      return !knownCharacterIds.has(connection.id)
     })
     const selected = context.characters.value
       .filter((resource) => context.selectedCharacterIds.value.has(resource.id))

@@ -31,7 +31,9 @@ import { Capacitor } from '@capacitor/core'
 
 import type { EmitFn } from 'vue'
 
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { withAbort } from '../utils/Abortable'
+import type { ArchiveReadFailure } from '../services/ArchiveZipWriter'
 
 import { confirmAction } from '../composables/UseConfirmDialog'
 
@@ -275,8 +277,20 @@ export function useCloudBackupCenter(
   const restoreFailures = ref<StructuredRestoreFailure[]>([])
   const downloadProgress = ref<CloudDownloadProgress>()
   const downloadOperation = ref('')
+  const downloadFailures = shallowRef<readonly ArchiveReadFailure[]>([])
+  let continueDownload: (() => void) | undefined
   let downloadController: AbortController | undefined
   const stopDownload = () => downloadOperation.value && taskCenter.cancel(downloadOperation.value)
+  const retryDownloadFailures = () => {
+    if (disposed || !continueDownload || downloadController?.signal.aborted) return
+    const resume = continueDownload
+    continueDownload = undefined
+    downloadFailures.value = []
+    taskCenter.setAction(downloadOperation.value)
+    taskCenter.update(downloadOperation.value, { phase: '正在补齐失败项并继续生成 ZIP' })
+    message.value = '正在重试失败项，已生成的 ZIP 内容保持不变…'
+    resume()
+  }
   let restoreController: AbortController | undefined
   const stopRestore = () => restoreOperation.value && taskCenter.cancel(restoreOperation.value)
 
@@ -978,7 +992,8 @@ export function useCloudBackupCenter(
             if (disposed) return
             restorePhase.value = progress.phase
             restoreProgress.value = progress
-            const phase = progress.phase === 'prepare' ? '下载、校验与准备' : '写入本机'
+            const phase =
+              progress.phase === 'prepare' ? '核对、下载与准备（含本机复用）' : '写入本机'
             message.value = progress.fileName ? `当前文件 · ${progress.fileName}` : phase
             if (progress.transferredBytes !== undefined)
               message.value += ` · ${formatMetricBytes(progress.transferredBytes)}${progress.totalBytes === undefined ? '' : ` / ${formatMetricBytes(progress.totalBytes)}`}`
@@ -1090,6 +1105,7 @@ export function useCloudBackupCenter(
     message.value = '正在读取、下载并生成备份归档…'
     const controller = new AbortController()
     downloadController = controller
+    downloadFailures.value = []
     downloadProgress.value = {
       phase: 'manifest',
       completed: 0,
@@ -1116,6 +1132,19 @@ export function useCloudBackupCenter(
     try {
       const blob = await cloudBackupService.downloadBackup(item, undefined, undefined, {
         signal: controller.signal,
+        onReadFailures: async (failures) => {
+          controller.signal.throwIfAborted()
+          if (disposed || downloadController !== controller)
+            throw new DOMException('下载页面已关闭', 'AbortError')
+          const retry = new Promise<void>((resolve) => {
+            continueDownload = resolve
+          })
+          downloadFailures.value = failures
+          message.value = `其余内容已生成，${failures.length} 项待补齐；重试只读取失败项。`
+          taskCenter.update(operationId, { phase: `${failures.length} 项下载失败，等待手动重试` })
+          taskCenter.setAction(operationId, { label: '重试失败项', run: retryDownloadFailures })
+          await withAbort(retry, controller.signal)
+        },
         onProgress: (progress) => {
           if (disposed || controller.signal.aborted || downloadController !== controller) return
           downloadProgress.value = progress
@@ -1156,6 +1185,9 @@ export function useCloudBackupCenter(
           ? error.message
           : '下载失败'
     } finally {
+      taskCenter.setAction(operationId)
+      continueDownload = undefined
+      downloadFailures.value = []
       acknowledgeStop()
       busyAction.value = ''
       downloadOperation.value = ''
@@ -1326,6 +1358,8 @@ export function useCloudBackupCenter(
     dismissRestoreFailures,
     downloadProgress,
     downloadOperation,
+    downloadFailures,
+    retryDownloadFailures,
     stopDownload,
     restorePhase,
     restoreOperation,

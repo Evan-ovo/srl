@@ -40,6 +40,19 @@ function avatarOwners(resources: ResourceSummary[]): Map<string, string[]> {
   return new Map([...owners].map(([id, hashes]) => [id, [...hashes].sort()]))
 }
 
+/** A local conversion aliases one encrypted source only while its current bytes remain unchanged. */
+export function restoredSecretSourceHash(resource: ResourceSummary): string | undefined {
+  const source = resource.metadata.restoredSecretSourceHash
+  const converted = resource.metadata.restoredSecretContentHash
+  return resource.type === RESOURCE_TYPE.SECRET &&
+    typeof source === 'string' &&
+    /^[a-f0-9]{64}$/iu.test(source) &&
+    typeof converted === 'string' &&
+    converted.toLowerCase() === resource.contentHash.toLowerCase()
+    ? source.toLowerCase()
+    : undefined
+}
+
 /** Same image bytes can represent different persona avatars. Preserve their identity. */
 export class RestoreDuplicateIndex {
   private readonly ids = new Map<string, string>()
@@ -47,10 +60,15 @@ export class RestoreDuplicateIndex {
 
   constructor(existing: ResourceSummary[], incoming: ResourceSummary[]) {
     const owners = avatarOwners(existing)
+    const aliases = new Map<string, string>()
     for (const resource of existing) {
       const key = this.key(resource, owners)
       if (!this.ids.has(key)) this.ids.set(key, resource.id)
+      const source = restoredSecretSourceHash(resource)
+      if (source && !aliases.has(source)) aliases.set(source, resource.id)
     }
+    for (const [source, id] of aliases)
+      if (!this.ids.has(`resource:${source}`)) this.ids.set(`resource:${source}`, id)
     this.incomingOwners = avatarOwners(incoming)
   }
 

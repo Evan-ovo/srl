@@ -17,6 +17,14 @@ export interface PlainSecretCopy {
   document: PersonalResourceDocument
 }
 
+/** Only the optional plaintext-copy step remains; encrypted originals and earlier extras stay saved. */
+export class PlainSecretCopyRestoreError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'PlainSecretCopyRestoreError'
+  }
+}
+
 export function includePersonalResource(
   resource: Pick<ResourceSummary, 'type'>,
   selection?: PersonalResourceSelection,

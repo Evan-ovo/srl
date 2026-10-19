@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { AppDatabase } from '../database/AppDatabase'
 import { IndexedDbArchiveStorage } from '../storage/IndexedDbArchiveStorage'
 import { IndexedDbAssetStore } from '../storage/IndexedDbAssetStore'
+import { hydrateResourceFromIndexedDb } from '../storage/ResourceStorageClone'
 import { IndexedDbCommunitySourceStorage } from '../storage/IndexedDbCommunitySourceStorage'
 import { MemoryRestoreStagingStore } from '../storage/RestoreStagingStore'
 import { RESOURCE_TYPE, type Resource, type ResourceSummary } from '../types/Resource'
@@ -510,52 +511,66 @@ describe('cloud backup registered content round trips', () => {
     expect(readAttachment).not.toHaveBeenCalled()
   })
 
-  it('includes attachment references in native download plans and converts cloud sidecars into offline ZIPs', async () => {
-    const blob = new Blob(['saved bytes'], { type: 'text/plain' })
-    const data = community(`asset-${await hashCloudBlob(blob)}`)
-    const created = await createStructuredSnapshot(
-      [],
-      [],
-      [],
-      { version: 1, communitySources: { data, attachments: [] } },
-      { readAttachment: async () => blob },
-    )
-    const readObject = reader(created)
-    const config = {
-      provider: 'webdav' as const,
-      baseUrl: 'https://example.test/dav',
-      folder: 'backup',
-      username: 'fixture',
-      retention: 1,
-      autoBackup: false,
-    }
-    const context = {
-      readWebDavStructuredSnapshot: async () => created.snapshot,
-      createWebDavObjectReader: () => readObject,
-      exportService: new ExportService(),
-    } as unknown as CloudBackupSnapshotOperationsContext
-    const plan = await buildNativeRestorePlan(context, created.snapshot, config, 'fixture')
-    expect(plan.resources).toHaveLength(1)
-    expect(plan.objects).toHaveLength(1)
-    expect(plan.resources[0]!.hash).toBe(await hashCloudBlob(blob))
-    const archive = await materializeStructuredArchive(
-      context,
-      { id: 'manifest', objectKey: 'snapshot.srlmanifest.v3.json.gz', size: 1, createdAt: 1 },
-      config,
-      'fixture',
-    )
-    const prepared = await new CommunitySourceRestoreService(
-      new IndexedDbArchiveStorage(new AppDatabase(`zip-${crypto.randomUUID()}`)),
-      new MemoryRestoreStagingStore(),
-      { restoreBackup: async () => {}, replaceAll: async () => {} },
-    ).prepare(new File([archive.blob], 'backup.zip'), [], [])
-    expect(prepared.communitySourceData?.messages[0]?.content === data.messages[0]!.content).toBe(
-      true,
-    )
-    expect(prepared.communitySourceAttachments).toHaveLength(1)
-    expect(await prepared.communitySourceAttachments![0]!.blob.text()).toBe('saved bytes')
-    expect(prepared.portableData?.communitySources).toBeUndefined()
-  })
+  it.each([false, true])(
+    'includes native attachment references and converts sidecars into complete offline ZIPs (retry=%s)',
+    async (retryAttachment) => {
+      const blob = new Blob(['saved bytes'], { type: 'text/plain' })
+      const data = community(`asset-${await hashCloudBlob(blob)}`)
+      const created = await createStructuredSnapshot(
+        [],
+        [],
+        [],
+        { version: 1, communitySources: { data, attachments: [] } },
+        { readAttachment: async () => blob },
+      )
+      const readObject = reader(created)
+      const config = {
+        provider: 'webdav' as const,
+        baseUrl: 'https://example.test/dav',
+        folder: 'backup',
+        username: 'fixture',
+        retention: 1,
+        autoBackup: false,
+      }
+      const context = {
+        readWebDavStructuredSnapshot: async () => created.snapshot,
+        createWebDavObjectReader: () => readObject,
+        exportService: new ExportService(),
+      } as unknown as CloudBackupSnapshotOperationsContext
+      const plan = await buildNativeRestorePlan(context, created.snapshot, config, 'fixture')
+      expect(plan.resources).toHaveLength(1)
+      expect(plan.objects).toHaveLength(1)
+      expect(plan.resources[0]!.hash).toBe(await hashCloudBlob(blob))
+      if (retryAttachment) readObject.mockRejectedValueOnce(new Error('attachment connection lost'))
+      const retry = vi.fn(async () => {})
+      const archive = await materializeStructuredArchive(
+        context,
+        { id: 'manifest', objectKey: 'snapshot.srlmanifest.v3.json.gz', size: 1, createdAt: 1 },
+        config,
+        'fixture',
+        { onReadFailures: retry },
+      )
+      expect(retry).toHaveBeenCalledTimes(retryAttachment ? 1 : 0)
+      if (retryAttachment)
+        expect(retry).toHaveBeenCalledWith([
+          {
+            fileName: data.messages[0]!.attachments[0]!.localAssetId,
+            error: 'attachment connection lost',
+          },
+        ])
+      const prepared = await new CommunitySourceRestoreService(
+        new IndexedDbArchiveStorage(new AppDatabase(`zip-${crypto.randomUUID()}`)),
+        new MemoryRestoreStagingStore(),
+        { restoreBackup: async () => {}, replaceAll: async () => {} },
+      ).prepare(new File([archive.blob], 'backup.zip'), [], [])
+      expect(prepared.communitySourceData?.messages[0]?.content === data.messages[0]!.content).toBe(
+        true,
+      )
+      expect(prepared.communitySourceAttachments).toHaveLength(1)
+      expect(await prepared.communitySourceAttachments![0]!.blob.text()).toBe('saved bytes')
+      expect(prepared.portableData?.communitySources).toBeUndefined()
+    },
+  )
 
   it('preserves every registered extra scope through JSON/gzip and selects each scope independently', async () => {
     const populated = {
@@ -685,7 +700,7 @@ describe('cloud backup registered content round trips', () => {
           metadata: { custom: 'preserved' },
         })
         if (!stored || !('originalBlob' in stored)) throw new Error('missing original')
-        expect(await stored.originalBlob.text()).toBe(text)
+        expect(await hydrateResourceFromIndexedDb(stored).originalBlob.text()).toBe(text)
         expect(await db.resourceVersions.count()).toBe(1)
         expect(await db.categories.get('folder')).toMatchObject({ name: 'saved folder' })
       } finally {

@@ -5,6 +5,7 @@ export interface ArchiveRestoreProgress {
   phase: 'prepare' | 'commit'
   completed: number
   total: number
+  items?: { resources: number; versions: number; album: number; communityAttachments: number }
   fileName?: string
   transferredBytes?: number
   totalBytes?: number

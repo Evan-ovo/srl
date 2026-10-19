@@ -9,16 +9,26 @@ import {
   type ArchivedResource,
 } from '../types/Backup'
 import type { Resource } from '../types/Resource'
+import { withAbort } from '../utils/Abortable'
 import type {
   CommunitySourceAttachmentArchiveEntry,
   CommunitySourceBackupData,
 } from '../types/CommunitySource'
 
 /** ZIP encoding owns backpressure; selection and resource mutation stay in ExportService. */
+export interface ArchiveReadFailure {
+  fileName: string
+  error: string
+}
+
 export interface ArchiveTransferOptions {
   createdAt?: string
   signal?: AbortSignal
   onProgress?: (progress: { writtenBytes: number; fileName?: string }) => void
+  /** Cloud ZIP only: resolve after an explicit retry, reject to end this operation. */
+  onReadFailures?: (failures: readonly ArchiveReadFailure[]) => Promise<void>
+  /** Cloud sources provide attachment bodies lazily, with the same cancellation and validation. */
+  readCommunityAttachment?: (assetId: string) => Promise<Blob>
   /** Opt in only when onFailure aborts the source reads using the same signal. */
   readAhead?: {
     concurrency?: number
@@ -182,6 +192,44 @@ export async function writeArchiveEntries(
     paths.push(path)
   }
   const descriptors = [new Map<string, Blob>(), new Map<string, Blob>()] as const
+  let deferredReads: Array<{ failure: ArchiveReadFailure; retry: () => Promise<void> }> = []
+  const deferRead = (fileName: string, error: unknown, retry: () => Promise<void>) => {
+    throwIfArchiveAborted(options.signal)
+    if (!options.onReadFailures) throw error
+    deferredReads.push({
+      failure: { fileName, error: error instanceof Error ? error.message : String(error) },
+      retry,
+    })
+  }
+  const attemptRead = async <T>(
+    fileName: string,
+    read: () => Promise<T>,
+    consume: (value: T) => Promise<void>,
+  ): Promise<void> => {
+    throwIfArchiveAborted(options.signal)
+    let value: T
+    try {
+      value = await read()
+      throwIfArchiveAborted(options.signal)
+    } catch (error) {
+      deferRead(fileName, error, () => attemptRead(fileName, read, consume))
+      return
+    }
+    // Encoding/storage errors are fatal: only source reads may be retried in-place.
+    await consume(value)
+  }
+  const writeResource = async (resource: Resource, historical: boolean, path: string) => {
+    const descriptor = options.describe(resource, historical)
+    const compress = !(
+      /^(image\/(png|jpeg|webp|gif)|audio\/|video\/)/i.test(resource.mimeType) ||
+      /\.(png|jpe?g|webp|gif|zip|gz|7z|rar|mp[34]|ogg|webm)$/i.test(resource.fileName)
+    )
+    const mtime = Number.isFinite(resource.updatedAt)
+      ? Math.min(Date.UTC(2107, 11, 31), Math.max(Date.UTC(1980, 0, 1), resource.updatedAt))
+      : Date.UTC(1980, 0, 1)
+    await emit(path, resource.originalBlob, { compress, mtime, descriptor })
+    descriptors[historical ? 1 : 0].set(resource.id, new Blob([JSON.stringify(descriptor)]))
+  }
   const entries: [Resource, boolean][] = [
     ...options.resources.map((resource): [Resource, boolean] => [resource, false]),
     ...options.versions.map((resource): [Resource, boolean] => [resource, true]),
@@ -193,7 +241,9 @@ export async function writeArchiveEntries(
     : 1
   const requestedBytes = options.readAhead?.maxPreparedBytes ?? 32 * 1024 * 1024
   const byteLimit = Math.max(1, Math.min(32 * 1024 * 1024, requestedBytes || 1))
-  type Prepared = { path: string } & ({ cached: ArchivedResource } | { resource: Resource })
+  type Prepared = { path: string } & (
+    { cached: ArchivedResource } | { resource: Resource } | { error: unknown }
+  )
   const pending = new Map<number, { promise: Promise<Prepared>; bytes: number }>()
   let next = 0
   let retainedBytes = 0
@@ -230,9 +280,15 @@ export async function writeArchiveEntries(
         const cached = await writer.cached?.(path)
         check()
         if (cached) return { path, cached }
-        const resource = await options.read(planned, historical)
-        check()
-        return { path, resource }
+        try {
+          const resource = await options.read(planned, historical)
+          check()
+          return { path, resource }
+        } catch (error) {
+          check()
+          if (!options.onReadFailures) throw error
+          return { path, error }
+        }
       })().catch((error: unknown) => {
         stop(error)
         throw error
@@ -254,24 +310,15 @@ export async function writeArchiveEntries(
       if ('cached' in ready) {
         descriptors[historical ? 1 : 0].set(planned.id, new Blob([JSON.stringify(ready.cached)]))
         paths.push(ready.path)
-      } else {
-        const { resource } = ready
-        const descriptor = options.describe(resource, historical)
-        const compress = !(
-          /^(image\/(png|jpeg|webp|gif)|audio\/|video\/)/i.test(resource.mimeType) ||
-          /\.(png|jpe?g|webp|gif|zip|gz|7z|rar|mp[34]|ogg|webm)$/i.test(resource.fileName)
+      } else if ('error' in ready) {
+        deferRead(planned.fileName, ready.error, () =>
+          attemptRead(
+            planned.fileName,
+            () => options.read(planned, historical),
+            (resource) => writeResource(resource, historical, ready.path),
+          ),
         )
-        const mtime = Number.isFinite(resource.updatedAt)
-          ? Math.min(Date.UTC(2107, 11, 31), Math.max(Date.UTC(1980, 0, 1), resource.updatedAt))
-          : Date.UTC(1980, 0, 1)
-        await emit(ready.path, resource.originalBlob, {
-          compress,
-          mtime,
-          descriptor,
-        })
-        check()
-        descriptors[historical ? 1 : 0].set(resource.id, new Blob([JSON.stringify(descriptor)]))
-      }
+      } else await writeResource(ready.resource, historical, ready.path)
       // Keep both the slot and bytes reserved until the sorted sink write finishes.
       retainedBytes -= entry.bytes
       pending.delete(index)
@@ -287,28 +334,51 @@ export async function writeArchiveEntries(
   }
   const albumPaths = new Set<string>()
   for (const entry of options.manifest.portableData?.generatedImageAlbum ?? []) {
+    await attemptRead(
+      entry.item.name,
+      async () => {
+        const blob = await options.readAlbumFile?.(entry.item.id)
+        throwIfArchiveAborted(options.signal)
+        if (!blob || blob.size !== entry.item.sizeBytes)
+          throw new Error(`相册原图缺失或已变化：${entry.item.name}`)
+        if (entry.object) {
+          if ((await hashCloudBlob(blob)).toLowerCase() !== entry.object.totalSha256.toLowerCase())
+            throw new Error(`相册原图校验失败：${entry.item.name}`)
+        } else entry.object = (await createGitHubBundle(blob, entry.item.name)).manifest
+        return { blob, path: albumArchivePath(entry.object.totalSha256) }
+      },
+      async ({ blob, path }) => {
+        if (!albumPaths.has(path))
+          await emit(path, blob, { compress: false, mtime: Date.parse(options.manifest.createdAt) })
+        albumPaths.add(path)
+      },
+    )
+  }
+  for (const attachment of options.communitySourceAttachments) {
+    await attemptRead(
+      attachment.assetId,
+      () =>
+        options.readCommunityAttachment?.(attachment.assetId) ?? Promise.resolve(attachment.blob),
+      (blob) =>
+        emit(COMMUNITY_SOURCE_ATTACHMENT_ARCHIVE_PREFIX + attachment.assetId, blob, {
+          compress: false,
+          mtime: Date.parse(options.manifest.createdAt),
+        }),
+    )
+  }
+  while (deferredReads.length) {
     throwIfArchiveAborted(options.signal)
-    const blob = await options.readAlbumFile?.(entry.item.id)
+    await withAbort(
+      options.onReadFailures!(deferredReads.map((entry) => entry.failure)),
+      options.signal,
+    )
     throwIfArchiveAborted(options.signal)
-    if (!blob || blob.size !== entry.item.sizeBytes)
-      throw new Error(`相册原图缺失或已变化：${entry.item.name}`)
-    if (entry.object) {
-      if ((await hashCloudBlob(blob)).toLowerCase() !== entry.object.totalSha256.toLowerCase())
-        throw new Error(`相册原图校验失败：${entry.item.name}`)
-    } else entry.object = (await createGitHubBundle(blob, entry.item.name)).manifest
-    const path = albumArchivePath(entry.object.totalSha256)
-    if (!albumPaths.has(path))
-      await emit(path, blob, { compress: false, mtime: Date.parse(options.manifest.createdAt) })
-    albumPaths.add(path)
+    const retry = deferredReads
+    deferredReads = []
+    for (const entry of retry) await entry.retry()
   }
   if (options.manifest.portableData?.generatedImageAlbum)
     parseAlbumBackup(options.manifest.portableData.generatedImageAlbum)
-  for (const attachment of options.communitySourceAttachments) {
-    await emit(COMMUNITY_SOURCE_ATTACHMENT_ARCHIVE_PREFIX + attachment.assetId, attachment.blob, {
-      compress: false,
-      mtime: Date.parse(options.manifest.createdAt),
-    })
-  }
   if (options.communitySourceData)
     await emit(
       COMMUNITY_SOURCE_ARCHIVE_PATH,

@@ -129,6 +129,63 @@ function target(github: boolean): CloudBackupConfig {
 
 describe('structured cloud archive descriptor lookup', () => {
   it.each([true, false])(
+    'keeps real ZIP successes and retries only failed current/history originals (github=%s)',
+    async (github) => {
+      const test = fixture(8)
+      test.context.exportService = new ExportService()
+      const attempts = new Map<string, number>()
+      const ordinaryRead = test.reader.getMockImplementation()!
+      test.reader.mockImplementation(async (object) => {
+        const count = (attempts.get(object.fileName) ?? 0) + 1
+        attempts.set(object.fileName, count)
+        if (
+          count === 1 &&
+          ['current-resource-0.json', 'history-resource-0.json'].includes(object.fileName)
+        )
+          throw new Error('connection interrupted')
+        return ordinaryRead(object)
+      })
+      const reports: Array<{ completed: number; total: number; writtenBytes: number }> = []
+      const retry = vi.fn(async (failures: readonly { fileName: string }[]) => {
+        expect(failures.map((failure) => failure.fileName).sort()).toEqual([
+          'current-resource-0.json',
+          'history-resource-0.json',
+        ])
+        expect(attempts.size).toBe(16)
+        expect(reports.at(-1)).toMatchObject({ completed: 14, total: 16 })
+        expect(reports.at(-1)!.writtenBytes).toBeGreaterThan(0)
+      })
+      const archive = await materializeStructuredArchive(
+        test.context,
+        item,
+        target(github),
+        'synthetic',
+        {
+          onReadFailures: retry,
+          onProgress: (progress) => reports.push(progress),
+        },
+      )
+      expect(retry).toHaveBeenCalledOnce()
+      expect(test.reader).toHaveBeenCalledTimes(18)
+      expect(reports.at(-1)?.completed).toBe(16)
+      expect(Math.max(...reports.map((progress) => progress.completed))).toBe(16)
+      const zip = unzipSync(new Uint8Array(await archive.blob.arrayBuffer()))
+      const manifest = JSON.parse(new TextDecoder().decode(zip['manifest.json']))
+      expect(manifest.resources).toHaveLength(8)
+      expect(manifest.versions).toHaveLength(8)
+      for (const [historical, records] of [
+        [false, manifest.resources],
+        [true, manifest.versions],
+      ] as const)
+        for (const record of records)
+          expect(JSON.parse(new TextDecoder().decode(zip[record.archivePath]))).toEqual({
+            id: record.id,
+            historical,
+          })
+    },
+  )
+
+  it.each([true, false])(
     'reports real reads and ZIP output and keeps every current/history byte (github=%s)',
     async (github) => {
       const test = fixture(8)
@@ -183,11 +240,11 @@ describe('structured cloud archive descriptor lookup', () => {
         readAlbumFile: expect.any(Function),
       },
       undefined,
-      {
+      expect.objectContaining({
         signal: expect.any(AbortSignal),
         readAhead: { onFailure: expect.any(Function) },
         onProgress: expect.any(Function),
-      },
+      }),
     )
     expect(test.readGitHub).toHaveBeenCalledTimes(github ? 1 : 0)
     expect(test.readWebDav).toHaveBeenCalledTimes(github ? 0 : 1)

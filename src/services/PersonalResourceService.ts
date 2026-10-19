@@ -94,6 +94,7 @@ export class PersonalResourceService {
     document: PersonalResourceDocument,
     added: Map<string, File>,
     current?: Resource,
+    restoredSourceHash?: string,
   ): Promise<Resource> {
     parsePersonalResource(document)
     const descriptor = new Blob([JSON.stringify(document)], { type: 'application/json' })
@@ -110,12 +111,20 @@ export class PersonalResourceService {
       await validateSecretResource(descriptor)
     }
     const file = await this.createFile(document, added, current)
-    if (current)
-      return this.resources.updatePersonalContent(
-        file,
-        personalResourceMetadata(document),
-        current.id,
+    const parsed = personalResourceMetadata(document)
+    if (restoredSourceHash) {
+      if (
+        document.kind !== 'secret' ||
+        current?.contentHash !== restoredSourceHash ||
+        !/^[a-f0-9]{64}$/iu.test(restoredSourceHash)
       )
+        throw new Error('密钥恢复来源与当前原件不一致')
+      parsed.metadata = {
+        ...parsed.metadata,
+        restoredSecretSourceHash: restoredSourceHash.toLowerCase(),
+      }
+    }
+    if (current) return this.resources.updatePersonalContent(file, parsed, current.id)
     const result = await this.resources.importPreparedFile(file, personalResourceMetadata(document))
     if (result.status === 'failed') throw new Error(result.message)
     if (result.status === 'versionCandidate') throw new Error('资源需要确认版本')

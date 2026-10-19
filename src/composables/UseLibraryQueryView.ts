@@ -71,6 +71,8 @@ export function useLibraryQueryView(context: LibraryQueryViewContext) {
         .map((resource) => resource.id),
     )
     for (const resource of managedResources.value) {
+      // Persona bindings describe where a persona applies, not hidden companion files.
+      if (resource.type === RESOURCE_TYPE.USER_PERSONA) continue
       const targets = resource.metadata.manuallyBoundResourceIds
       if (!Array.isArray(targets)) continue
       const related = new Set(getRelatedResourceIds(resource))

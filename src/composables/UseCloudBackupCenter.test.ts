@@ -181,6 +181,84 @@ it('publishes actual cloud download item/byte/ZIP progress and only then hands i
   wrapper.unmount()
 })
 
+it.each([true, false])(
+  'waits for explicit download failure retry in the existing task, without saving early (native=%s)',
+  async (native) => {
+    runtime.native = native
+    let retries = 0
+    runtime.download.mockImplementationOnce(
+      async (_item, _config, _secret, options: CloudDownloadOptions) => {
+        await options.onReadFailures!([{ fileName: 'failed.json', error: 'fetch failed' }])
+        retries++
+        return new Blob(['complete zip'])
+      },
+    )
+    const { center, wrapper } = mountCenter()
+    const pending = center.download(item)
+    await flushPromises()
+    const id = center.downloadOperation.value
+    expect(center.downloadFailures.value).toEqual([
+      { fileName: 'failed.json', error: 'fetch failed' },
+    ])
+    expect(taskCenter.list().find((task) => task.operationId === id)).toMatchObject({
+      status: 'running',
+      actionLabel: '重试失败项',
+      cancelable: true,
+    })
+    expect(runtime.saveFile).not.toHaveBeenCalled()
+    expect(retries).toBe(0)
+    expect(runtime.download).toHaveBeenCalledOnce()
+    await taskCenter.open(id)
+    await pending
+    expect(retries).toBe(1)
+    expect(runtime.download).toHaveBeenCalledOnce()
+    expect(runtime.saveFile).toHaveBeenCalledOnce()
+    expect(center.downloadFailures.value).toEqual([])
+    expect(taskCenter.list().find((task) => task.operationId === id)).toMatchObject({
+      status: 'completed',
+      actionLabel: undefined,
+    })
+    taskCenter.dismiss(id)
+    wrapper.unmount()
+  },
+)
+
+it.each(['stop', 'unmount'])(
+  'ends a download retry wait on %s and cannot revive it through a stale task action',
+  async (action) => {
+    let options!: CloudDownloadOptions
+    let retries = 0
+    runtime.download.mockImplementationOnce(
+      async (_item, _config, _secret, value: CloudDownloadOptions) => {
+        options = value
+        await value.onReadFailures!([{ fileName: 'failed.json', error: 'fetch failed' }])
+        retries++
+        return new Blob(['complete zip'])
+      },
+    )
+    const { center, wrapper } = mountCenter()
+    const pending = center.download(item)
+    await flushPromises()
+    const id = center.downloadOperation.value
+    if (action === 'stop') center.stopDownload()
+    else wrapper.unmount()
+    await pending
+    expect(options.signal?.aborted).toBe(true)
+    expect(center.downloadFailures.value).toEqual([])
+    expect(await taskCenter.open(id)).toBe(false)
+    center.retryDownloadFailures()
+    expect(retries).toBe(0)
+    expect(runtime.saveFile).not.toHaveBeenCalled()
+    expect(taskCenter.list().find((task) => task.operationId === id)?.status).toBe('cancelled')
+    await expect(
+      options.onReadFailures!([{ fileName: 'late.json', error: 'late' }]),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(center.downloadFailures.value).toEqual([])
+    taskCenter.dismiss(id)
+    if (action === 'stop') wrapper.unmount()
+  },
+)
+
 it('acknowledges a download stop only after it drains and ignores late progress/results', async () => {
   let resolve!: (blob: Blob) => void
   let options!: CloudDownloadOptions

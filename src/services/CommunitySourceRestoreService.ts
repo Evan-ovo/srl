@@ -11,6 +11,7 @@ import {
 } from './CommunitySourceAttachmentArchive'
 import type { CommunitySourceService } from './CommunitySourceService'
 import { RestoreService } from './RestoreService'
+import { hashCloudBlob } from './CloudArchiveCodec'
 
 type AttachmentRestore = (
   entries: readonly CommunitySourceAttachmentArchiveEntry[],
@@ -27,6 +28,7 @@ type AttachmentRestore = (
  */
 export class CommunitySourceRestoreService extends RestoreService {
   private readonly attachmentRestore?: AttachmentRestore
+  private readonly attachmentRead?: (assetId: string) => Promise<Blob | undefined>
 
   constructor(
     storage: ArchiveStorageAdapter,
@@ -37,9 +39,11 @@ export class CommunitySourceRestoreService extends RestoreService {
       import('./GeneratedImageAlbumService').GeneratedImageAlbumService,
       'importPortableState'
     >,
+    attachmentRead?: (assetId: string) => Promise<Blob | undefined>,
   ) {
     super(storage, staging, sourceOwner, albumOwner)
     this.attachmentRestore = attachmentRestore
+    this.attachmentRead = attachmentRead
   }
 
   override async prepare(...args: Parameters<RestoreService['prepare']>): Promise<PreparedRestore> {
@@ -111,6 +115,18 @@ export class CommunitySourceRestoreService extends RestoreService {
       try {
         signal?.throwIfAborted()
         if (!this.attachmentRestore) throw new Error('当前恢复服务没有接入 Discord 附件存储')
+        const local = await this.attachmentRead?.(entry.assetId)
+        signal?.throwIfAborted()
+        if (
+          local &&
+          local.size === entry.object.totalSize &&
+          (await hashCloudBlob(local)).toLowerCase() === entry.object.totalSha256.toLowerCase()
+        ) {
+          signal?.throwIfAborted()
+          onPrepared?.(entry.object.fileName)
+          continue
+        }
+        signal?.throwIfAborted()
         const original = await readObject(entry.object)
         signal?.throwIfAborted()
         if (original.size !== entry.object.totalSize)

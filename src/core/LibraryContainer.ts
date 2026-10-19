@@ -110,6 +110,7 @@ export const restoreService = new CommunitySourceRestoreService(
         ...args,
       ),
   },
+  (id) => assetStore.getBlob(id),
 )
 export const recycleBinService = new RecycleBinService(
   database,

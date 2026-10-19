@@ -21,7 +21,11 @@ import {
   type CloudBackupSnapshotOperationsContext,
 } from './CloudBackupSnapshotOperations'
 
-import { cloudPlainSecretCopies, type PersonalResourceSelection } from './PersonalResourceBackup'
+import {
+  cloudPlainSecretCopies,
+  PlainSecretCopyRestoreError,
+  type PersonalResourceSelection,
+} from './PersonalResourceBackup'
 
 import type { ArchivePortableData, PreparedRestore, RestoreReport } from '../types/Backup'
 
@@ -1047,6 +1051,7 @@ export class CloudBackupService extends CloudBackupTransport {
               {
                 onReceivedBytes: transfer.onReceivedBytes,
                 onProgress: (state) => report({ ...state, phase: 'archive' }),
+                onReadFailures: options.onReadFailures,
               },
             )
             report({}, true)
@@ -1520,11 +1525,17 @@ export class CloudBackupService extends CloudBackupTransport {
     try {
       await this.importPreparedPortableData(portableData, filter)
     } catch (error) {
+      const secretCopiesOnly = error instanceof PlainSecretCopyRestoreError
+      if (secretCopiesOnly && preview?.committed)
+        preview.committed.portableData = {
+          version: 1,
+          plaintextSecretCopies: portableData?.plaintextSecretCopies,
+        }
       report.failures = [
         {
           kind: 'portableData',
-          id: 'extras',
-          fileName: '附加设置与资料',
+          id: secretCopiesOnly ? 'plaintextSecretCopies' : 'extras',
+          fileName: secretCopiesOnly ? '明文密钥副本' : '附加设置与资料',
           error: error instanceof Error ? error.message : String(error),
         },
       ]

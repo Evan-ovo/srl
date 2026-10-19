@@ -22,6 +22,7 @@ import {
 import { ExportService as ArchiveExporter } from './ExportService'
 import type { CloudDownloadProgress } from './CloudBackupTransport'
 import { CloudBackupMaintenanceError } from './CloudBackupRetentionOperations'
+import { PlainSecretCopyRestoreError } from './PersonalResourceBackup'
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>()
@@ -1556,6 +1557,51 @@ describe('cloud restore selection session', () => {
     expect(snapshot).toHaveBeenCalledOnce()
     expect(restore.restoreStructured).toHaveBeenCalledOnce()
     expect(importer).toHaveBeenCalledTimes(2)
+  })
+
+  it('labels a plaintext-copy password failure precisely and retries only copies after earlier extras saved', async () => {
+    const importer = vi
+      .fn()
+      .mockRejectedValueOnce(new PlainSecretCopyRestoreError('password state unavailable'))
+      .mockResolvedValue(undefined)
+    const { service, snapshot, restore, item } = session(importer)
+    const loaded = createdSnapshot().snapshot
+    const copies: NonNullable<ArchivePortableData['plaintextSecretCopies']> = [
+      {
+        contentHash: loaded.resources[0]!.contentHash,
+        document: {
+          format: 'srl-personal-resource',
+          version: 1,
+          kind: 'secret',
+          name: 'fixture',
+          text: '',
+          url: '',
+          attachments: [],
+          fields: [],
+        },
+      },
+    ]
+    loaded.portableData = {
+      version: 1,
+      resourceGalleryCategories: {},
+      plaintextSecretCopies: copies,
+    }
+    snapshot.mockResolvedValue(loaded)
+    await service.listBackupRestoreContents(item)
+    const committed = vi.fn()
+    await service.restoreBackup(item, undefined, undefined, true, undefined, committed)
+    expect(committed).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        failures: [
+          expect.objectContaining({ id: 'plaintextSecretCopies', fileName: '明文密钥副本' }),
+        ],
+      }),
+    )
+    expect(importer.mock.calls[0]![0]).toHaveProperty('resourceGalleryCategories')
+    await service.restoreBackup(item)
+    expect(importer.mock.calls[1]![0]).toEqual({ version: 1, plaintextSecretCopies: copies })
+    expect(snapshot).toHaveBeenCalledOnce()
+    expect(restore.restoreStructured).toHaveBeenCalledOnce()
   })
 })
 

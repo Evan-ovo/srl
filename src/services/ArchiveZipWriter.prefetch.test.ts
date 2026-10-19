@@ -1,6 +1,7 @@
 /** @vitest-environment node */
 import { describe, expect, it, vi } from 'vitest'
 import { unzipSync } from 'fflate'
+import { createGitHubBundle } from './GitHubBackupBundle'
 import type { ArchivedResource } from '../types/Backup'
 import type { Resource } from '../types/Resource'
 import {
@@ -92,6 +93,184 @@ function prefetch(
 
 // All fixtures are synthetic. Declared byte budgets are tested without allocating large originals.
 describe('bounded archive resource prefetch', () => {
+  it('continues after an album SHA failure and never writes the corrupt image into the ZIP', async () => {
+    const options = prefetch(encoding([resource('resource')]))
+    const blobs = new Map([
+      ['a', new Blob(['Aa'])],
+      ['b', new Blob(['Bb'])],
+    ])
+    const albums = await Promise.all(
+      [...blobs].map(async ([id, blob]) => ({
+        item: {
+          id,
+          name: `${id}.png`,
+          source: 'imported' as const,
+          category: '',
+          mimeType: 'image/png',
+          sizeBytes: blob.size,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        object: (await createGitHubBundle(blob, `${id}.png`)).manifest,
+      })),
+    )
+    options.manifest.portableData = { version: 1, generatedImageAlbum: albums }
+    let corrupt = true
+    const readAlbumFile = vi.fn(async (id: string) => {
+      if (id === 'a' && corrupt) {
+        corrupt = false
+        return new Blob(['xx'])
+      }
+      return blobs.get(id)!
+    })
+    const writes = new Map<string, Blob>()
+    const onReadFailures = vi.fn(
+      async (failures: readonly { fileName: string; error: string }[]) => {
+        expect(failures).toEqual([{ fileName: 'a.png', error: '相册原图校验失败：a.png' }])
+        expect(writes.size).toBe(2)
+        expect(writes.has('manifest.json')).toBe(false)
+      },
+    )
+    await writeArchiveEntries(
+      { ...options, readAlbumFile, onReadFailures },
+      {
+        write: async (path, blob) => {
+          writes.set(path, blob)
+        },
+      },
+    )
+    expect(onReadFailures).toHaveBeenCalledOnce()
+    expect(readAlbumFile.mock.calls.map(([id]) => id)).toEqual(['a', 'b', 'a'])
+    expect(writes.size).toBe(4)
+    expect(await writes.get(`app-data/album/${albums[0]!.object.totalSha256}.bin`)!.text()).toBe(
+      'Aa',
+    )
+    expect(
+      JSON.parse(await writes.get('manifest.json')!.text()).portableData.generatedImageAlbum,
+    ).toHaveLength(2)
+  })
+
+  it('retains encoded successes across explicit retries and only finalizes a complete ZIP (1000 synthetic originals)', async () => {
+    // 1000 x 1 MiB are declarations only; payloads are tiny, not a real GB memory benchmark.
+    const records = Array.from({ length: 1000 }, (_, index) =>
+      resource(String(index).padStart(4, '0'), MiB),
+    )
+    const options = prefetch(encoding(records))
+    const attempts = new Map<string, number>()
+    options.read = async (record) => {
+      const count = (attempts.get(record.id) ?? 0) + 1
+      attempts.set(record.id, count)
+      if (record.id === '0000' && count < 3) throw new Error('network stalled')
+      return record
+    }
+    const retries = [deferred<void>(), deferred<void>()]
+    const onReadFailures = vi.fn(() => retries[onReadFailures.mock.calls.length - 1]!.promise)
+    const chunks: Uint8Array<ArrayBuffer>[] = []
+    const running = encodeArchive({ ...options, onReadFailures }, async (chunk) => {
+      chunks.push(chunk)
+    })
+    await vi.waitFor(() => expect(onReadFailures).toHaveBeenCalledTimes(1))
+    expect(onReadFailures.mock.calls[0]).toEqual([
+      [{ fileName: '0000.json', error: 'network stalled' }],
+    ])
+    expect(attempts.size).toBe(1000)
+    expect(options.controller.signal.aborted).toBe(false)
+    const written = chunks.reduce((total, chunk) => total + chunk.length, 0)
+    expect(written).toBeGreaterThan(0)
+    retries[0]!.resolve()
+    await vi.waitFor(() => expect(onReadFailures).toHaveBeenCalledTimes(2))
+    expect(chunks.reduce((total, chunk) => total + chunk.length, 0)).toBe(written)
+    expect(attempts.get('0000')).toBe(2)
+    retries[1]!.resolve()
+    await running
+    expect(options.readAhead.onFailure).not.toHaveBeenCalled()
+    expect(attempts.get('0000')).toBe(3)
+    expect([...attempts].filter(([id]) => id !== '0000').every(([, count]) => count === 1)).toBe(
+      true,
+    )
+    const zip = unzipSync(new Uint8Array(await new Blob(chunks).arrayBuffer()))
+    const manifest = JSON.parse(new TextDecoder().decode(zip['manifest.json']))
+    expect(manifest.resources).toHaveLength(1000)
+    expect(
+      new Set(manifest.resources.map((record: ArchivedResource) => record.archivePath)).size,
+    ).toBe(1000)
+    for (const record of records)
+      expect(new TextDecoder().decode(zip[options.path(record, false)])).toBe(
+        await record.originalBlob.text(),
+      )
+  })
+
+  it('aborts a manual retry wait even if the UI callback never settles; late approval cannot restart reads', async () => {
+    const options = prefetch(encoding([resource('a'), resource('b')]))
+    options.read = vi.fn(async (record) => {
+      if (record.id === 'a') throw new Error('failed a')
+      return record
+    })
+    const retry = deferred<void>()
+    const onReadFailures = vi.fn(() => retry.promise)
+    const write = vi.fn(async () => {})
+    const running = writeArchiveEntries({ ...options, onReadFailures }, { write })
+    const stopped = expect(running).rejects.toThrow('user stopped')
+    await vi.waitFor(() => expect(onReadFailures).toHaveBeenCalledOnce())
+    expect(write.mock.calls).toHaveLength(1)
+    options.controller.abort(new Error('user stopped'))
+    await stopped
+    retry.resolve()
+    await Promise.resolve()
+    expect(options.read).toHaveBeenCalledTimes(2)
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads attachments lazily, continues after a failed attachment and retries only that body', async () => {
+    const options = prefetch(encoding([resource('a')]))
+    options.communitySourceAttachments = ['one', 'two', 'three'].map((assetId) => ({
+      assetId,
+      blob: new Blob(),
+    }))
+    let failed = false
+    const readCommunityAttachment = vi.fn(async (assetId: string) => {
+      if (assetId === 'one' && !failed) {
+        failed = true
+        throw new Error('attachment disconnected')
+      }
+      return new Blob([assetId])
+    })
+    const write = vi.fn(async () => {})
+    const onReadFailures = vi.fn(async () => {
+      expect(readCommunityAttachment.mock.calls.map(([id]) => id)).toEqual(['one', 'two', 'three'])
+      expect(write.mock.calls).toHaveLength(3)
+    })
+    await writeArchiveEntries({ ...options, readCommunityAttachment, onReadFailures }, { write })
+    expect(onReadFailures).toHaveBeenCalledExactlyOnceWith([
+      { fileName: 'one', error: 'attachment disconnected' },
+    ])
+    expect(readCommunityAttachment.mock.calls.map(([id]) => id)).toEqual([
+      'one',
+      'two',
+      'three',
+      'one',
+    ])
+    expect(write).toHaveBeenCalledTimes(5)
+  })
+
+  it('keeps ZIP sink errors fatal even when read recovery is enabled', async () => {
+    const options = prefetch(encoding([resource('a')]))
+    const onReadFailures = vi.fn(async () => {})
+    const failure = new Error('disk quota')
+    await expect(
+      writeArchiveEntries(
+        { ...options, onReadFailures },
+        {
+          write: async () => {
+            throw failure
+          },
+        },
+      ),
+    ).rejects.toBe(failure)
+    expect(options.readAhead.onFailure).toHaveBeenCalledExactlyOnceWith(failure)
+    expect(onReadFailures).not.toHaveBeenCalled()
+  })
+
   it('starts at most three reads and preserves sorted writes under sink backpressure', async () => {
     const records = ['e', 'c', 'a', 'b', 'd'].map((id) => resource(id))
     const options = prefetch(encoding(records), { concurrency: 100 })

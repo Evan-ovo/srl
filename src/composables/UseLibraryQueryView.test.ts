@@ -65,6 +65,43 @@ function setup(resources: ResourceSummary[], categories: Category[] = []) {
 }
 
 describe('UseLibraryQueryView folder counts', () => {
+  it('keeps persona-linked resources visible while the manual-binding hiding switch still controls ordinary links', () => {
+    const { context, view } = setup([
+      resource('card'),
+      resource('book', { type: RESOURCE_TYPE.WORLD_BOOK }),
+      resource('persona', {
+        type: RESOURCE_TYPE.USER_PERSONA,
+        relatedResourceIds: ['card', 'book'],
+        metadata: { manuallyBoundResourceIds: ['card', 'book'] },
+      }),
+      resource('owner', {
+        relatedResourceIds: ['regex'],
+        metadata: { manuallyBoundResourceIds: ['regex'] },
+      }),
+      resource('regex', { type: RESOURCE_TYPE.REGEX }),
+    ])
+    context.showManuallyBoundResources.value = false
+    expect(view.filteredResources.value.map((item) => item.id).sort()).toEqual([
+      'book',
+      'card',
+      'owner',
+      'persona',
+    ])
+    expect(view.statistics.value).toEqual({ total: 4, characterCards: 2, worldBooks: 1 })
+    expect(view.countCategory(undefined)).toBe(4)
+    expect(context.resources.value[2]!.relatedResourceIds).toEqual(['card', 'book'])
+
+    context.showManuallyBoundResources.value = true
+    expect(view.filteredResources.value).toHaveLength(5)
+    context.showManuallyBoundResources.value = false
+    expect(view.filteredResources.value).toHaveLength(4)
+
+    // An independent ordinary binding still follows the user's hiding choice.
+    context.resources.value[3]!.relatedResourceIds!.push('card')
+    ;(context.resources.value[3]!.metadata.manuallyBoundResourceIds as string[]).push('card')
+    expect(view.filteredResources.value.map((item) => item.id)).not.toContain('card')
+  })
+
   it('keeps a chat-bound character visible even when legacy imports marked the link as manual', () => {
     const { context, view } = setup([
       resource('card'),

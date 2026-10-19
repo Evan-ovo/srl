@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { secretResourceService } from '../services/SecretResourceService'
 import {
   clearNativeSecretRecovery,
@@ -17,15 +17,30 @@ const password = ref('')
 const confirmation = ref('')
 const recovered = ref('')
 const busy = ref(true)
+const readFailed = ref(false)
 const message = ref('')
 const recovery = ref<NativeSecretRecoveryState | null>(null)
+const section = ref<HTMLElement | null>(null)
+const pendingPasswordAction = computed(() =>
+  editing.value && (password.value || confirmation.value)
+    ? configured.value
+      ? '解锁统一密码并完成'
+      : '保存统一密码并完成'
+    : '',
+)
 async function refresh() {
-  configured.value = await secretResourceService.hasPassword()
+  try {
+    configured.value = await secretResourceService.hasPassword()
+    readFailed.value = false
+  } catch (error) {
+    readFailed.value = true
+    throw error
+  }
   unlocked.value = secretResourceService.isUnlocked()
   if (native) recovery.value = await getNativeSecretRecoveryState().catch(() => null)
 }
 async function run(action: () => Promise<void>) {
-  if (busy.value) return
+  if (busy.value) return false
   busy.value = true
   message.value = ''
   recovered.value = ''
@@ -33,8 +48,10 @@ async function run(action: () => Promise<void>) {
     await action()
     await refresh()
     if (unlocked.value) emit('ready')
+    return true
   } catch (error) {
     message.value = error instanceof Error ? error.message : '操作未完成'
+    return false
   } finally {
     busy.value = false
   }
@@ -44,8 +61,8 @@ onMounted(async () => {
     await refresh()
     if (props.unlockOnly) editing.value = !unlocked.value
     if (unlocked.value) emit('ready')
-  } catch {
-    message.value = '读取密码设置失败'
+  } catch (error) {
+    message.value = `读取密码设置失败：${error instanceof Error ? error.message : '请稍后手动重新读取'}`
   } finally {
     busy.value = false
   }
@@ -62,8 +79,13 @@ function lock() {
   password.value = ''
   message.value = '统一密码已锁定'
 }
+async function reread() {
+  await run(async () => {})
+  if (props.unlockOnly && !readFailed.value) editing.value = !unlocked.value
+}
 async function save() {
-  await run(async () => {
+  if (readFailed.value) return false
+  return run(async () => {
     if (!configured.value && password.value !== confirmation.value)
       throw new Error('两次密码不一致')
     if (configured.value) await secretResourceService.unlock(password.value)
@@ -74,6 +96,14 @@ async function save() {
     message.value = '统一密码已解锁，本次使用有效；关闭页面后需重新解锁。'
   })
 }
+async function finishPendingPassword(): Promise<boolean> {
+  if (busy.value) return false
+  if (!pendingPasswordAction.value) return true
+  const saved = (await save()) && configured.value && unlocked.value
+  if (!saved) section.value?.scrollIntoView?.({ block: 'start' })
+  return saved
+}
+defineExpose({ pendingPasswordAction, busy, finishPendingPassword })
 async function enableRecovery() {
   await run(async () => {
     await secretResourceService.enableRecovery(password.value)
@@ -89,13 +119,28 @@ async function recover() {
 }
 </script>
 <template>
-  <section class="settings-section secret-protection-settings" aria-label="密钥统一密码">
+  <section
+    ref="section"
+    class="settings-section secret-protection-settings"
+    aria-label="密钥统一密码"
+  >
     <header>
       <h3>密钥统一密码</h3>
-      <span>{{ configured ? '已设置' : '未设置' }}</span>
+      <span>{{
+        readFailed ? '读取失败' : busy ? '正在读取' : configured ? '已设置' : '未设置'
+      }}</span>
     </header>
     <p>所有密钥资料共用一个密码。私密字段加密保存，导出和云备份的加密原件也使用它。</p>
-    <div v-if="!unlockOnly" class="secret-protection-settings__actions">
+    <button
+      v-if="readFailed"
+      class="button button--quiet"
+      type="button"
+      :disabled="busy"
+      @click="reread"
+    >
+      重新读取密码设置
+    </button>
+    <div v-if="!unlockOnly && !readFailed" class="secret-protection-settings__actions">
       <button
         class="button button--quiet"
         type="button"
@@ -114,7 +159,7 @@ async function recover() {
         锁定统一密码
       </button>
     </div>
-    <form v-if="editing" @submit.prevent="save">
+    <form v-if="editing && !readFailed" @submit.prevent="save">
       <label class="field"
         ><span>{{ configured ? '统一密码' : '设置统一密码' }}</span
         ><input
@@ -144,7 +189,7 @@ async function recover() {
         {{ configured ? '解锁' : '保存统一密码' }}
       </button>
     </form>
-    <template v-if="native && configured && !unlockOnly">
+    <template v-if="native && configured && !unlockOnly && !readFailed">
       <p>
         指纹找回仅限此
         APK、此设备。需提前开启；卸载应用或更改系统指纹后可能失效。恢复材料不进入云备份。

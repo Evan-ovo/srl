@@ -1,7 +1,13 @@
+import 'fake-indexeddb/auto'
 import { describe, expect, it, vi } from 'vitest'
+import { AppDatabase } from '../database/AppDatabase'
+import { IndexedDbResourceStorage } from '../storage/IndexedDbResourceStorage'
+import { ResourceParserRegistry } from '../parser/ResourceParser'
+import { JsonResourceParser } from '../parser/JsonResourceParser'
+import { VaultService } from './VaultService'
 
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
-import type { ResourceService } from './ResourceService'
+import { ResourceService } from './ResourceService'
 import { UserPersonaService } from './UserPersonaService'
 
 function personaResource(): Resource {
@@ -46,6 +52,82 @@ function avatarResource(): Resource {
 }
 
 describe('UserPersonaService', () => {
+  it('persists removal of an original character connection and both resource links after reopening storage', async () => {
+    const database = new AppDatabase(`persona-unbind-${crypto.randomUUID()}`)
+    try {
+      const vault = new VaultService(database)
+      await vault.initialize()
+      const storage = new IndexedDbResourceStorage(database, vault)
+      const resources = new ResourceService(
+        storage,
+        new ResourceParserRegistry([new JsonResourceParser()]),
+      )
+      const personas = new UserPersonaService(resources)
+      const backup = {
+        personas: { 'me.png': 'Me' },
+        persona_descriptions: {
+          'me.png': {
+            description: 'Preserved persona text',
+            connections: [
+              { type: 'character', id: 'old-character.png' },
+              { type: 'group', id: 'group-1' },
+            ],
+          },
+        },
+      }
+      const results = await resources.importFiles(
+        [
+          new File([JSON.stringify(backup)], 'persona.json', { type: 'application/json' }),
+          new File(
+            [
+              JSON.stringify({
+                spec: 'chara_card_v3',
+                spec_version: '3.0',
+                data: { name: 'Character', description: 'Preserved character text' },
+              }),
+            ],
+            'character.json',
+            { type: 'application/json' },
+          ),
+        ],
+        { detectVersions: false },
+      )
+      const [persona, character] = results
+      if (persona?.status !== 'imported' || character?.status !== 'imported')
+        throw new Error('Persona unlink fixture import failed')
+      await personas.save(persona.resource.id, backup, [character.resource.id])
+      expect((await storage.getSummary(character.resource.id))?.relatedResourceIds).toContain(
+        persona.resource.id,
+      )
+      const updated = structuredClone(backup)
+      updated.persona_descriptions['me.png'].connections = [{ type: 'group', id: 'group-1' }]
+      await personas.save(persona.resource.id, updated, [])
+      database.close()
+      await database.open()
+      const reopenedVault = new VaultService(database)
+      await reopenedVault.initialize()
+      const reopenedStorage = new IndexedDbResourceStorage(database, reopenedVault)
+      const reopened = new UserPersonaService(
+        new ResourceService(
+          reopenedStorage,
+          new ResourceParserRegistry([new JsonResourceParser()]),
+        ),
+      )
+      const loaded = await reopened.load(persona.resource.id)
+      expect(loaded.view.entries[0]?.connections).toEqual([{ type: 'group', id: 'group-1' }])
+      expect(loaded.view.entries[0]?.description).toBe('Preserved persona text')
+      expect(loaded.resource.relatedResourceIds).not.toContain(character.resource.id)
+      const savedCharacter = await reopenedStorage.get(character.resource.id)
+      expect(savedCharacter?.relatedResourceIds).not.toContain(persona.resource.id)
+      expect(savedCharacter?.contentHash).toBe(character.resource.contentHash)
+      expect(await savedCharacter?.originalBlob.text()).toBe(
+        await character.resource.originalBlob.text(),
+      )
+    } finally {
+      await database.delete()
+    }
+  })
+
   it('reads only verified avatar attachments after checking related metadata', async () => {
     const avatar = avatarResource()
     const getSummary = vi

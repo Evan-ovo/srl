@@ -62,7 +62,6 @@ const detailCategory = ref('')
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-hosting-mode
 const hostingMode = ref<GeneratedImageHostingMode>('self-hosted')
 // SRL-PUBLIC-SYNC: END REPLACE id=generated-album-hosting-mode
-
 const rememberedImageBed = frontendWorkshopImageHostingService.getSelfHostedConfiguration()
 const selfHostedOrigin = ref(rememberedImageBed?.origin ?? '')
 const selfHostedToken = ref(rememberedImageBed?.token ?? '')
@@ -593,7 +592,6 @@ onUnmounted(() => {
         </button>
       </template>
     </FeatureAppHeader>
-
     <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-settings-presentation -->
     <Teleport to="body">
       <div
@@ -805,7 +803,6 @@ onUnmounted(() => {
                 @submit="saveSelfHostedConnection"
               />
               <!-- SRL-PUBLIC-SYNC: END REPLACE id=generated-album-hosting-controls -->
-
               <div class="generated-album__actions">
                 <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-create-link-button -->
                 <button
@@ -994,7 +991,6 @@ onUnmounted(() => {
   color: var(--selection-color, var(--color-accent));
   background: var(--selection-background, var(--color-accent-soft));
 }
-
 /* SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-self-hosted-full-page */
 .generated-album__hosting-page {
   display: flex;

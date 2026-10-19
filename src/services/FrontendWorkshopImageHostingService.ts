@@ -222,7 +222,6 @@ function rootUploadUrl(source: URL): URL {
 
 export class FrontendWorkshopImageHostingService {
   private readonly request: typeof fetch
-
   private readonly credentialStore: LocalCredentialRepository
   private selfHostedConfig: FrontendWorkshopSelfHostedImageBedConfig | null = null
 
@@ -231,7 +230,6 @@ export class FrontendWorkshopImageHostingService {
     credentialStore: LocalCredentialRepository = localCredentialStore,
   ) {
     this.request = request
-
     this.credentialStore = credentialStore
     this.selfHostedConfig = this.readRememberedSelfHostedConfig()
   }

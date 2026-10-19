@@ -1097,6 +1097,8 @@ export class ExportService {
       readAlbumFile: options.readAlbumFile ?? this.readAlbumFile,
       signal: transfer?.signal,
       readAhead: transfer?.readAhead,
+      onReadFailures: transfer?.onReadFailures,
+      readCommunityAttachment: transfer?.readCommunityAttachment,
       onProgress: ({ writtenBytes }) => transfer?.onProgress?.({ writtenBytes, fileName }),
       resources: exportedResources,
       versions: exportedVersions,

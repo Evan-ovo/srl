@@ -109,6 +109,7 @@ const {
   updateProfileOverride,
   updateProfileAddition,
   unresolvedConnections,
+  removeUnresolvedConnection,
 } = useUserPersonaApp(props, emit)
 
 const versionActions = computed<ActionSheetAction[]>(() => {
@@ -715,9 +716,27 @@ onBeforeUnmount(cancelVersionLongPress)
               >
               <p v-if="!filteredCharacters.length">没有可选 char</p>
             </div>
-            <p v-if="unresolvedConnections.length">
-              保留酒馆原绑定：{{ unresolvedConnections.map((c) => c.id).join('、') }}
-            </p>
+            <div v-if="unresolvedConnections.length" class="persona-app__characters">
+              <div
+                v-for="connection in unresolvedConnections"
+                :key="`${connection.type}:${connection.id}`"
+                class="persona-app__toolbar persona-app__character"
+              >
+                <span
+                  >原{{ connection.type === 'group' ? '群组' : '角色' }}绑定：{{
+                    connection.id
+                  }}</span
+                >
+                <button
+                  class="button button--quiet"
+                  type="button"
+                  :aria-label="`解除${connection.type === 'group' ? '群组' : '角色'}绑定 ${connection.id}`"
+                  @click="removeUnresolvedConnection(connection)"
+                >
+                  解除绑定
+                </button>
+              </div>
+            </div>
             <small>绑定按酒馆名称匹配；关联的 char 和世界书需另行传入酒馆。</small>
           </details>
         </fieldset>

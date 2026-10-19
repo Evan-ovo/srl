@@ -17,10 +17,10 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-album-content-revision
   imageAlbum: 6,
   // SRL-PUBLIC-SYNC: END REPLACE id=image-album-content-revision
-  userPersona: 7,
+  userPersona: 8,
   tavernBridge: 9,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-content-revision
-  assistant: 52,
+  assistant: 53,
   // SRL-PUBLIC-SYNC: END REPLACE id=assistant-content-revision
 }
 

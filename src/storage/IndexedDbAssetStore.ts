@@ -45,11 +45,13 @@ export class IndexedDbAssetStore {
       remoteUrl?: string
       nativeRef?: string
       vaultProtected?: boolean
+      /** Verified restoration may replace a missing/corrupt body with the same content identity. */
+      replaceExistingFile?: boolean
     },
   ): Promise<AssetRecord> {
     const contentHash = await hashBlob(blob)
     const existing = await this.database.assets.where('contentHash').equals(contentHash).first()
-    if (existing) {
+    if (existing && !options.replaceExistingFile) {
       return this.promoteExisting(
         existing,
         blob,
@@ -60,7 +62,10 @@ export class IndexedDbAssetStore {
     }
 
     const assetId = `asset-${contentHash}`
-    const vaultProtected = options.vaultProtected === true || options.source === 'thumbnail'
+    const vaultProtected =
+      existing?.vaultProtected === true ||
+      options.vaultProtected === true ||
+      options.source === 'thumbnail'
     let storedBlob = blob
     let encrypted = false
     let encryptionIv: string | undefined
@@ -75,15 +80,15 @@ export class IndexedDbAssetStore {
       contentHash,
       mimeType: blob.type || 'application/octet-stream',
       size: blob.size,
-      source: options.source,
-      thumbnailRefs: {},
+      source: existing?.source ?? options.source,
+      thumbnailRefs: existing?.thumbnailRefs ?? {},
       webStorageRef: assetId,
-      nativeRef: options.nativeRef,
-      remoteUrl: options.remoteUrl,
+      nativeRef: options.nativeRef ?? existing?.nativeRef,
+      remoteUrl: existing?.remoteUrl ?? options.remoteUrl,
       vaultProtected,
       encrypted,
       encryptionIv,
-      createdAt: Date.now(),
+      createdAt: existing?.createdAt ?? Date.now(),
     }
     await this.database.transaction(
       'rw',

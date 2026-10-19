@@ -590,10 +590,24 @@ export async function updatePersonalContent(
   if (!isPersonalResourceType(current.type) || current.type !== parsed.type)
     throw new Error('只能更新同类型的个人资源')
   const contentHash = await hashFile(file)
+  const metadata = { ...current.metadata, ...parsed.metadata }
+  delete metadata.restoredSecretSourceHash
+  delete metadata.restoredSecretContentHash
+  const sourceHash = parsed.metadata?.restoredSecretSourceHash
+  if (
+    parsed.type === RESOURCE_TYPE.SECRET &&
+    typeof sourceHash === 'string' &&
+    /^[a-f0-9]{64}$/iu.test(sourceHash)
+  ) {
+    if (current.contentHash.toLowerCase() !== sourceHash.toLowerCase())
+      throw new Error('密钥恢复期间原件发生变化，请重新核对后导入')
+    metadata.restoredSecretSourceHash = sourceHash.toLowerCase()
+    metadata.restoredSecretContentHash = contentHash
+  }
   await storage.update(resourceId, {
     name: parsed.name,
     description: parsed.description,
-    metadata: { ...current.metadata, ...parsed.metadata },
+    metadata,
     originalBlob: file,
     fileName: file.name,
     mimeType: file.type,

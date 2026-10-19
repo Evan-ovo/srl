@@ -228,9 +228,17 @@ export function useResourceThumbnail(
               return
             }
           }
-          const preview = assetId
+          let preview = assetId
             ? { blob: await assetStore.getBlob(assetId), url: '' }
             : await resourceGalleryService.getImagePreview(galleryOwnerId(resource), resource.id)
+          if (currentGeneration !== generation) return
+          // Cloud descriptors can retain a thumbnail asset ID from the former device.
+          // Repair through the existing gallery owner, inside the same visible-image queue.
+          if (assetId && !preview.blob && isResourceGalleryImage(resource))
+            preview = await resourceGalleryService.getImagePreview(
+              galleryOwnerId(resource),
+              resource.id,
+            )
           if (currentGeneration === generation) {
             thumbnail.value = preview.blob
             if (remoteCoverUrl) remoteCoverUrl.value = preview.url

@@ -754,6 +754,53 @@ describe('人设列表和单页编辑', () => {
       false,
     )
   })
+  it('unbinds a previously saved character matched by hash after its filename changed and stays unbound on reopen', async () => {
+    const backup = structuredClone(multiBackup)
+    const hash = 'a'.repeat(64)
+    ;(
+      backup.persona_descriptions['b.png'] as Record<string, unknown>
+    ).srl_persona_character_bindings = {
+      'old.png': { avatar: 'old.png', name: '旧角色名', hash },
+    }
+    const character = { ...summary('renamed', RESOURCE_TYPE.CHARACTER_CARD), contentHash: hash }
+    mocks.userPersonaService.load.mockResolvedValue({
+      resource: { ...persona(backup), relatedResourceIds: ['manual-link', character.id] },
+      view: parseSillyTavernPersonaBackup(backup),
+    })
+    const w = render([persona(backup), character])
+    await openSecond(w)
+    const checkbox = w.get('.persona-app__characters input[type="checkbox"]')
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+    await checkbox.setValue(false)
+    await click(w, '保存')
+    const saved = mocks.userPersonaService.save.mock.calls[0]!
+    const entry = parseSillyTavernPersonaBackup(saved[1]).entries.find(
+      (item) => item.avatarId === 'b.png',
+    )!
+    expect(entry.connections).toEqual([{ type: 'group', id: 'group-1' }])
+    expect(entry.characterBindings).toEqual({})
+    expect(saved[2]).toEqual(['manual-link'])
+
+    const reopened = render([persona(saved[1]), character])
+    await openSecond(reopened)
+    expect(
+      (reopened.get('.persona-app__characters input').element as HTMLInputElement).checked,
+    ).toBe(false)
+  })
+
+  it('lets an unresolved original character binding be removed explicitly without removing group bindings', async () => {
+    const w = render([persona()])
+    await openSecond(w)
+    await w.get('button[aria-label="解除角色绑定 old.png"]').trigger('click')
+    expect(mocks.userPersonaService.save).not.toHaveBeenCalled()
+    await click(w, '保存')
+    const saved = mocks.userPersonaService.save.mock.calls[0]!
+    const entry = parseSillyTavernPersonaBackup(saved[1]).entries.find(
+      (item) => item.avatarId === 'b.png',
+    )!
+    expect(entry.connections).toEqual([{ type: 'group', id: 'group-1' }])
+    expect(saved[2]).toEqual(['manual-link'])
+  })
   it('asks on each changed save, preserves the draft on cancel, and passes the explicit history choice', async () => {
     const w = render([persona()])
     await openSecond(w)

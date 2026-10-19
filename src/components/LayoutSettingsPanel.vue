@@ -93,6 +93,11 @@ function requestIncreasedDownloads(event: Event): void {
 }
 
 const updateCheckResult = ref('')
+const passwordSettings = ref<InstanceType<typeof SecretProtectionSettings> | null>(null)
+async function finishSettings(): Promise<void> {
+  if (passwordSettings.value && !(await passwordSettings.value.finishPendingPassword())) return
+  emit('close')
+}
 const modifiedResourceSyncTags = ref(browserStorageService.getModifiedResourceSyncTags())
 function updateModifiedResourceSyncTags(event: Event): void {
   modifiedResourceSyncTags.value = (event.target as HTMLInputElement).checked
@@ -350,7 +355,7 @@ async function clearOfflineResources(): Promise<void> {
       </header>
 
       <div class="settings-sections">
-        <SecretProtectionSettings />
+        <SecretProtectionSettings ref="passwordSettings" />
         <MainApiSettings />
         <RelayWorkerSettings />
         <section class="settings-section">
@@ -711,7 +716,7 @@ async function clearOfflineResources(): Promise<void> {
             <span>
               <strong>是否显示手动绑定资源</strong>
               <small
-                >关闭后隐藏手动选中的配套项，保留主资源；关联查看、导出与备份不受影响。旧关系没有方向记录，可解除后重新绑定。</small
+                >关闭后隐藏普通手动绑定的配套项；“user才是老大”绑定的目标和聊天关联的角色卡仍显示。关联查看、导出与备份不受影响。</small
               >
             </span>
             <input
@@ -1010,8 +1015,19 @@ async function clearOfflineResources(): Promise<void> {
         <LocalDataResetControls />
       </div>
       <footer class="layout-settings__footer">
-        <span> API 配置需单独保存 </span>
-        <button class="button button--primary" type="button" @click="emit('close')">完成</button>
+        <span>{{
+          passwordSettings?.pendingPasswordAction
+            ? '验证并保存密码后关闭设置'
+            : 'API 配置需单独保存'
+        }}</span>
+        <button
+          class="button button--primary"
+          type="button"
+          :disabled="passwordSettings?.busy"
+          @click="finishSettings"
+        >
+          {{ passwordSettings?.pendingPasswordAction || '完成' }}
+        </button>
       </footer>
     </section>
     <!-- SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=worker-deploy-guide-page -->

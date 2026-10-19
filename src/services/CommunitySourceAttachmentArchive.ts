@@ -233,6 +233,7 @@ export async function restoreCommunitySourceLocalAttachments(
     const restored = await assetStore.put(entry.blob, {
       source: 'remote',
       vaultProtected: true,
+      replaceExistingFile: true,
     })
     if (restored.assetId !== entry.assetId) {
       throw new Error(`Discord 本地附件完整性校验失败：${entry.assetId}`)

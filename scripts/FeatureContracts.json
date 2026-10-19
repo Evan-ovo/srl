@@ -123,7 +123,7 @@
       "backup": {
         "policy": "supported",
         "scopes": ["extra.assistantData", "extra.appearance", "extra.credentials"],
-        "reason": "聊天、记忆、项目、模板、偏好和APK配置步骤元数据需单独选择蒜惹菈本地资料，续接/重开复用同一进度Owner；桌宠排查复用DiscordSourceConnectionService原连接检查，修复保留原任务对话，诊断许可只留运行期；助手备份只存模式与参数卡引用，参数卡需另选密钥资源范围；Bot私密字段沿原统一密码加密，配置浏览器Cookie、网页编辑全文与秘密不进入助手资料；作用域 CSS 随外观与 CSS 预设，API 密钥随凭据单独选择；桌宠图片为可重新下载的缓存"
+        "reason": "聊天、记忆、项目、模板、偏好和APK配置步骤元数据需单独选择蒜惹菈本地资料，续接/重开复用同一进度Owner；桌宠排查复用DiscordSourceConnectionService原连接检查，修复保留原任务对话，诊断许可只留运行期；助手备份只存模式与参数卡引用，参数卡需另选密钥资源范围；Bot私密字段沿原统一密码加密，配置浏览器Cookie、网页编辑全文与秘密不进入助手资料；作用域 CSS 随外观与 CSS 预设，API 密钥随凭据单独选择；桌宠图片为可重新下载的缓存 技能扩展原模板；选定技能快照及资料引用随原聊天备份，资料原件需另选对应资源范围，跨设备缺失/变化重新选择；无第二数据库。"
       },
       "starter": "none",
       "starterReason": "通用示例映射暂未声明助手专属示例；桌宠11种表情、独立被提起姿态、六帧透明跑步与尖角气泡由 ProductAssistantPet 管理",
@@ -200,7 +200,7 @@
       "backup": {
         "policy": "partial",
         "scopes": ["extra.communitySources"],
-        "reason": "已保存社区正文与现存附件可归档；显式清理后的媒体仅保留远程链接，远程失效时无法从链接恢复本地文件；云端短期收件任务与 Android 当前收件会话不作为本机恢复副本；未入库的接收暂存不作为资源备份，显式放弃后需重新分享或下载"
+        "reason": "已保存社区正文与现存附件可归档；显式清理后的媒体仅保留远程链接，远程失效时无法从链接恢复本地文件；云端短期收件任务与 Android/网页当前收件会话不作为本机恢复副本；独立网页音频对象和系统通知授权不随备份恢复，收件停止标记保留在当前浏览器；未入库的接收暂存不作为资源备份，显式放弃后需重新分享或下载"
       },
       "starter": "none",
       "starterReason": "收件箱已有运行样式，尚未登记通用 CSS 示例来源",
@@ -213,14 +213,41 @@
     "cloud": {
       "owner": "src/services/CloudBackupService.ts",
       "tests": [
+        "src/core/PersonalResourceContainer.test.ts",
+        "src/services/PersonalResourceService.test.ts",
+        "src/services/CommunitySourceRestoreService.test.ts",
+        "src/components/LayoutSettingsPanel.test.ts",
+        "src/components/SecretProtectionSettings.test.ts",
+        "src/services/SecretResourceService.test.ts",
+        "src/storage/IndexedDbArchiveStorage.test.ts",
+        "src/services/WebDiscordInboxNotifications.test.ts",
+        "src/services/WebNotificationWorker.test.ts",
+        "src/storage/NativeMirroredResourceStorage.test.ts",
         "src/services/CloudBackupService.test.ts",
+        "src/services/CloudBackupGitHubTransport.delete.test.ts",
+        "src/services/CloudBackupRetentionOperations.test.ts",
+        "src/services/NativeCloudTransfer.test.ts",
+        "src/services/CloudBackupPerformance.test.ts",
+        "src/services/CloudBackupJobStore.test.ts",
+        "src/services/CloudStructuredSnapshot.test.ts",
+        "src/services/GitHubBackupBundle.test.ts",
+        "src/storage/NativeResourceFileMirror.test.ts",
+        "src/storage/AndroidNativeDexieCore.test.ts",
+        "src/storage/ResourceStorageClone.test.ts",
+        "src/storage/AndroidNativeAppDatabaseRuntime.test.ts",
         "src/composables/UseCloudBackupCenter.test.ts",
+        "src/composables/UseCloudBackupDrafts.test.ts",
         "src/core/TaskCenter.test.ts",
-        "src/services/RestoreService.identity.test.ts"
+        "src/services/RestoreService.identity.test.ts",
+        "src/services/CloudBackupCoverage.test.ts",
+        "src/services/ChatReaderPortableData.test.ts",
+        "src/services/WebBackgroundKeepAlive.test.ts",
+        "src/composables/UseConfirmDialog.test.ts"
       ],
       "backup": {
         "policy": "supported",
-        "scopes": ["extra.cloudBackup", "extra.credentials"]
+        "scopes": ["extra.cloudBackup", "extra.credentials"],
+        "reason": "配置与用户选择的凭据沿原范围备份；网页运行/暂停/停止检查点、音频对象与系统通知授权仅本机保留，不随恢复自动运行"
       },
       "starter": "available",
       "cleanup": {
@@ -287,8 +314,13 @@
       "tests": ["src/services/FrontendWorkshopProjectService.test.ts"],
       "backup": {
         "policy": "partial",
-        "scopes": ["resource.beautification", "resource.regex"],
-        "reason": "落库资源可归档；现有 ZIP 选择合同未单独包含 Source 项目与组件库，不宣称整库归档覆盖工作台全部项目"
+        "scopes": [
+          "resource.beautification",
+          "resource.regex",
+          "extra.frontendWorkshopComponents",
+          "extra.frontendWorkshopProjects"
+        ],
+        "reason": "落库资源与 Source Component 沿原范围；前端项目与创作记录单独覆盖原始源码、last_good、收录关系及已保存AI会话，目标冲突另存并映射身份；不恢复未保存会话和外部网页授权"
       },
       "starter": "available",
       "cleanup": {
@@ -305,8 +337,8 @@
       ],
       "backup": {
         "policy": "partial",
-        "scopes": [],
-        "reason": "现有 ZIP 选择合同未单独声明生图配置与草稿；生成结果的导出复用相册专属流程"
+        "scopes": ["extra.imageGeneration", "extra.credentials"],
+        "reason": "生图非密钥连接配置、各供应商草稿和提示词模板随额外范围；已保存密钥需单独选择应用凭据，session密钥不导出；未保存参考图/编辑遮罩/结果需先保存相册"
       },
       "starter": "available",
       "cleanup": {
@@ -319,15 +351,19 @@
       "owner": "src/services/GeneratedImageAlbumService.ts",
       "tests": [
         "src/services/GeneratedImageAlbumService.test.ts",
+        "src/services/PortableAppMigration.test.ts",
+        "src/storage/IndexedDbGeneratedImageAlbumStorage.test.ts",
+        "src/storage/IndexedDbGeneratedImageAlbumStorage.native.test.ts",
+        "src/services/GeneratedImageAlbumBackup.native.test.ts",
         "src/components/GeneratedImageAlbumApp.test.ts",
         "src/components/SelfHostedFileBrowser.test.ts",
         "src/services/FrontendWorkshopSelfHostedFiles.test.ts",
         "src/core/SelfHostedFileListTransport.test.ts"
       ],
       "backup": {
-        "policy": "unsupported",
-        "scopes": [],
-        "reason": "现有 ZIP 选择合同没有生图相册范围；相册专属导出不能冒充资源库整库备份覆盖"
+        "policy": "supported",
+        "scopes": ["extra.generatedImageAlbum"],
+        "reason": "原图、生成参数/父图关系、分类、托管地址通过独立范围进入V3对象与ZIP侧文件；恢复重建缩略图、校验SHA并读回，目标冲突保留并映射；不包含仅运行期未保存的生成结果"
       },
       "starter": "available",
       "cleanup": {
@@ -338,11 +374,11 @@
     },
     "userPersona": {
       "owner": "src/services/UserPersonaService.ts",
-      "tests": ["src/services/UserPersonaService.test.ts"],
+      "tests": ["src/services/UserPersonaService.test.ts", "src/components/UserPersonaApp.test.ts"],
       "backup": {
         "policy": "partial",
-        "scopes": ["resource.userPersona"],
-        "reason": "已保存人设原件可归档；本机模板偏好未在现有额外范围中独立声明"
+        "scopes": ["resource.userPersona", "extra.generalPreferences"],
+        "reason": "已保存人设原件及头像随人设资源归档；已保存人设模板通过常用偏好导出/恢复，不包含未保存编辑状态"
       },
       "starter": "available",
       "cleanup": {

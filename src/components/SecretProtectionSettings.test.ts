@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({
   native: false,
   configured: false,
   unlocked: false,
+  hasPassword: vi.fn(),
   setPassword: vi.fn(),
   unlock: vi.fn(),
   lock: vi.fn(),
@@ -15,7 +16,7 @@ const state = vi.hoisted(() => ({
 }))
 vi.mock('../services/SecretResourceService', () => ({
   secretResourceService: {
-    hasPassword: async () => state.configured,
+    hasPassword: state.hasPassword,
     isUnlocked: () => state.unlocked,
     setPassword: state.setPassword,
     unlock: state.unlock,
@@ -36,6 +37,7 @@ beforeEach(() => {
   state.native = false
   state.configured = false
   state.unlocked = false
+  state.hasPassword.mockImplementation(async () => state.configured)
   state.setPassword.mockImplementation(async () => {
     state.configured = true
     state.unlocked = true
@@ -44,6 +46,23 @@ beforeEach(() => {
 function button(w: ReturnType<typeof mount>, label: string) {
   return w.findAll('button').find((b) => b.text() === label)!
 }
+it('distinguishes an unreadable password state from a missing password and permits manual reread', async () => {
+  state.hasPassword.mockRejectedValueOnce(new Error('凭据无法解密'))
+  state.configured = true
+  const w = mount(SecretProtectionSettings, { props: { unlockOnly: true } })
+  await flushPromises()
+  expect(w.get('header span').text()).toBe('读取失败')
+  expect(w.text()).toContain('凭据无法解密')
+  expect(w.find('form').exists()).toBe(false)
+  expect(state.setPassword).not.toHaveBeenCalled()
+  expect(state.hasPassword).toHaveBeenCalledTimes(1)
+  await button(w, '重新读取密码设置').trigger('click')
+  await flushPromises()
+  expect(w.get('header span').text()).toBe('已设置')
+  expect(w.findAll('input')).toHaveLength(1)
+  expect(state.hasPassword).toHaveBeenCalledTimes(2)
+  expect(state.setPassword).not.toHaveBeenCalled()
+})
 it('opens the existing password form immediately for task unlock and emits readiness only after success', async () => {
   const w = mount(SecretProtectionSettings, { props: { unlockOnly: true } })
   await flushPromises()

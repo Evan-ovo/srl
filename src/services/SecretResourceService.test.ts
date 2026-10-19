@@ -38,6 +38,12 @@ const document: PersonalResourceDocument = {
   ],
 }
 describe('shared secret password and native recovery', () => {
+  it('does not announce an unlocked password when persistence cannot be read back', async () => {
+    const { owner, credentials } = setup()
+    credentials.read.mockResolvedValue('')
+    await expect(owner.setPassword('test-password')).rejects.toThrow('读回')
+    expect(owner.isUnlocked()).toBe(false)
+  })
   it('requires explicit settings setup, shares one password across resources and keeps encrypted originals portable', async () => {
     const { owner, credentials } = setup()
     await expect(owner.protect(document, 'test-password')).rejects.toThrow('总设置')

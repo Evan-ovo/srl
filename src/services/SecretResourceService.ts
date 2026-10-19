@@ -156,7 +156,10 @@ export class SecretResourceService {
     const salt = base64(crypto.getRandomValues(new Uint8Array(16)))
     const raw = await this.derive(password, salt)
     try {
-      await this.credentials.save(CONFIG_ID, JSON.stringify(await this.seal(VERIFIER, raw, salt)))
+      const verifier = JSON.stringify(await this.seal(VERIFIER, raw, salt))
+      await this.credentials.save(CONFIG_ID, verifier)
+      if ((await this.credentials.read(CONFIG_ID)) !== verifier)
+        throw new Error('统一密码保存后未能读回确认，请重新打开密码设置核对；原有密钥内容未修改')
       this.sessionPassword = password
     } finally {
       raw.fill(0)

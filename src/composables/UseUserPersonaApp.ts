@@ -25,6 +25,7 @@ import {
   USER_PERSONA_ROLES,
   type SillyTavernPersonaBackup,
   type UserPersonaDraft,
+  type UserPersonaConnection,
   type UserPersonaEntry,
   type UserPersonaSectionOverride,
   type UserPersonaTemplate,
@@ -278,9 +279,19 @@ export function useUserPersonaApp(
     draft.value.connections.filter(
       (c) =>
         c.type === 'group' ||
-        !characters.value.some((r) => [characterAvatarId(r), r.fileName, r.name].includes(c.id)),
+        !characters.value.some((r) => {
+          const snapshot = draft.value.characterBindings[c.id]
+          return snapshot
+            ? r.contentHash === snapshot.hash
+            : [characterAvatarId(r), r.fileName, r.name].includes(c.id)
+        }),
     ),
   )
+  function removeUnresolvedConnection(connection: UserPersonaConnection): void {
+    draft.value.connections = draft.value.connections.filter(
+      (item) => item.type !== connection.type || item.id !== connection.id,
+    )
+  }
   const avatarPreviewUrl = computed(() => {
     if (pendingAvatarPreview.value) return pendingAvatarPreview.value
     const source = avatarSourceUrl.value.trim()
@@ -880,6 +891,7 @@ export function useUserPersonaApp(
     updateProfileAddition,
     toggleCharacter,
     unresolvedConnections,
+    removeUnresolvedConnection,
   }
 
   function getUsePersonaResourceActionsContext(): UsePersonaResourceActionsContext {

@@ -37,6 +37,8 @@ const {
   dismissRestoreFailures,
   downloadProgress,
   downloadOperation,
+  downloadFailures,
+  retryDownloadFailures,
   stopDownload,
   restorePhase,
   restoreOperation,
@@ -93,6 +95,13 @@ const scopeDialogOpen = ref(false)
 const scopeDraft = ref({ ...cloudScopeModel.value })
 const failureListOpen = ref(false)
 const visibleFailureCount = ref(50)
+const downloadFailureListOpen = ref(false)
+const visibleDownloadFailureCount = ref(50)
+
+function toggleDownloadFailureList(event: Event): void {
+  downloadFailureListOpen.value = (event.currentTarget as HTMLDetailsElement).open
+  if (!downloadFailureListOpen.value) visibleDownloadFailureCount.value = 50
+}
 
 function toggleFailureList(event: Event): void {
   failureListOpen.value = (event.currentTarget as HTMLDetailsElement).open
@@ -349,7 +358,11 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
         >
           <div class="cloud-restore-progress__heading">
             <strong>{{
-              downloadProgress.phase === 'manifest' ? '读取备份清单' : '下载并生成 ZIP'
+              downloadFailures.length
+                ? '等待补齐失败项'
+                : downloadProgress.phase === 'manifest'
+                  ? '读取备份清单'
+                  : '下载并生成 ZIP'
             }}</strong>
             <span v-if="downloadProgress.total"
               >已读取 {{ downloadProgress.completed }} / {{ downloadProgress.total }} 项</span
@@ -364,7 +377,54 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
             >已接收 {{ formatMetricBytes(downloadProgress.receivedBytes) }} · 已生成 ZIP
             {{ formatMetricBytes(downloadProgress.writtenBytes) }}</small
           >
-          <button v-if="downloadOperation" type="button" @click="stopDownload">停止下载</button>
+          <div v-if="downloadFailures.length" class="cloud-restore-result">
+            <div class="cloud-restore-result__heading">
+              <div>
+                <h3>{{ downloadFailures.length }} 项待重试</h3>
+                <p>成功内容已保留在本轮 ZIP 中。补齐后即可保存，无需全部重下。</p>
+              </div>
+            </div>
+            <details class="cloud-restore-failures" @toggle="toggleDownloadFailureList">
+              <summary>
+                <span>查看失败项</span><span>{{ downloadFailures.length }} 项</span>
+              </summary>
+              <ul v-if="downloadFailureListOpen">
+                <li
+                  v-for="(failure, index) in downloadFailures.slice(0, visibleDownloadFailureCount)"
+                  :key="index"
+                >
+                  <details>
+                    <summary>
+                      <strong>{{ failure.fileName }}</strong
+                      ><span>查看原因</span>
+                    </summary>
+                    <p>{{ failure.error }}</p>
+                  </details>
+                </li>
+              </ul>
+              <button
+                v-if="
+                  downloadFailureListOpen && visibleDownloadFailureCount < downloadFailures.length
+                "
+                class="cloud-restore-failures__more"
+                type="button"
+                @click="visibleDownloadFailureCount += 50"
+              >
+                继续显示失败项（还有
+                {{ downloadFailures.length - visibleDownloadFailureCount }} 项）
+              </button>
+            </details>
+            <div class="cloud-primary-actions cloud-restore-result__actions">
+              <button class="button--primary" type="button" @click="retryDownloadFailures">
+                重试失败项
+              </button>
+              <button type="button" @click="stopDownload">结束本轮</button>
+            </div>
+            <small>本轮暂存仅在当前页面有效。结束或关闭页面会丢弃未完成 ZIP。</small>
+          </div>
+          <button v-else-if="downloadOperation" type="button" @click="stopDownload">
+            停止下载
+          </button>
         </div>
         <div v-if="backups.length && !restorePicker" class="cloud-backup-list">
           <article v-for="item in backups" :key="item.id">
@@ -469,7 +529,7 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
               "
             >
               <div class="cloud-restore-progress__heading">
-                <strong>已保存</strong>
+                <strong>{{ restoreProgress.items ? '本轮进度' : '已保存' }}</strong>
                 <span>{{ restoreProgress.completed }} / {{ restoreProgress.total }} 项</span>
               </div>
               <progress
@@ -477,7 +537,15 @@ onUnmounted(() => window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleScope
                 :max="Math.max(1, restoreProgress.total)"
                 aria-label="当前导入阶段进度"
               />
-              <small
+              <small v-if="restoreProgress.items"
+                >本轮：新资源 {{ restoreProgress.items.resources }} · 历史
+                {{ restoreProgress.items.versions }} · 相册 {{ restoreProgress.items.album }} ·
+                帖子附件 {{ restoreProgress.items.communityAttachments }}</small
+              >
+              <small v-if="restoreProgress.items"
+                >已有资源跳过；相册和附件先核对本机副本，只补下载缺失或损坏内容。停止保留已保存内容。</small
+              >
+              <small v-else
                 >按所选内容统计，包含历史版本、相册和附件 ·
                 下载和校验后逐组保存；停止会保留已经保存的内容。</small
               >

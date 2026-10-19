@@ -5,6 +5,7 @@ import { IndexedDbArchiveStorage } from '../storage/IndexedDbArchiveStorage'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
 import { isEncryptedResource, isEncryptedResourceSummary } from '../types/Vault'
 import { RestoreService } from './RestoreService'
+import { hydrateResourceFromIndexedDb } from '../storage/ResourceStorageClone'
 import { CommunitySourceRestoreService } from './CommunitySourceRestoreService'
 import { MemoryRestoreStagingStore } from '../storage/RestoreStagingStore'
 import { VaultService } from './VaultService'
@@ -835,8 +836,10 @@ describe('structured cloud restore', () => {
       const restored = (await database.resources.get(source.id))!
       expect(isEncryptedResource(restored)).toBe(false)
       if (!isEncryptedResource(restored) && 'originalBlob' in restored) {
-        expect(await restored.originalBlob.text()).toBe(await source.originalBlob.text())
-        expect(restored.originalBlob.size).toBe(source.fileSize)
+        expect(await hydrateResourceFromIndexedDb(restored).originalBlob.text()).toBe(
+          await source.originalBlob.text(),
+        )
+        expect(hydrateResourceFromIndexedDb(restored).originalBlob.size).toBe(source.fileSize)
         expect(restored.metadata).toHaveProperty('card.data.name', source.id)
       }
     } finally {
@@ -875,7 +878,9 @@ describe('structured cloud restore', () => {
       const retained = (await database.resources.get(existing.id))!
       expect(isEncryptedResource(retained)).toBe(false)
       if ('originalBlob' in retained)
-        expect(await retained.originalBlob.text()).toBe(await existing.originalBlob.text())
+        expect(await hydrateResourceFromIndexedDb(retained).originalBlob.text()).toBe(
+          await existing.originalBlob.text(),
+        )
       expect(await database.restoreStaging.count()).toBe(0)
       expect(sourceOwner.restoreBackup).not.toHaveBeenCalled()
       expect(sourceOwner.replaceAll).not.toHaveBeenCalled()

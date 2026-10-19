@@ -964,12 +964,21 @@ export class RestoreService {
     const categoriesById = new Map(prepared.categories.map((category) => [category.id, category]))
     let completed = 0
     let preparedExtras = 0
-    const total =
-      records.length +
-      (prepared.portableData?.generatedImageAlbum?.length ?? 0) +
-      (prepared.portableData?.communitySources?.attachments.length ?? 0)
+    const items = {
+      resources: prepared.resources.length,
+      versions: prepared.versions.length,
+      album: prepared.portableData?.generatedImageAlbum?.length ?? 0,
+      communityAttachments: prepared.portableData?.communitySources?.attachments.length ?? 0,
+    }
+    const total = records.length + items.album + items.communityAttachments
     const publish = (phase: 'prepare' | 'commit', name?: string) =>
-      options.onProgress?.({ phase, completed: completed + preparedExtras, total, fileName: name })
+      options.onProgress?.({
+        phase,
+        completed: completed + preparedExtras,
+        total,
+        fileName: name,
+        items,
+      })
     const fail = (
       kind: StructuredRestoreFailure['kind'],
       id: string,

@@ -1,10 +1,17 @@
 import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
 
 import { describe, expect, it, vi } from 'vitest'
 
 import { AppDatabase } from '../database/AppDatabase'
 import { findHistoricalDuplicateGroups } from '../services/ResourceVersionMatcher'
-import { RESOURCE_TYPE, toResourceSummary, type Category, type Resource } from '../types/Resource'
+import {
+  RESOURCE_TYPE,
+  toResourceSummary,
+  toResourceListSummary,
+  type Category,
+  type Resource,
+} from '../types/Resource'
 import {
   IndexedDbArchiveStorage,
   getBackupRecordSummary,
@@ -14,8 +21,159 @@ import { IndexedDbResourceStorage } from './IndexedDbResourceStorage'
 import type { NativeBackedResourceRecord } from '../types/Vault'
 import * as nativeMirror from './NativeResourceFileMirror'
 import { restoreVersionKey } from '../utils/RestoreIdentity'
+import { VaultService } from '../services/VaultService'
+import { hydrateResourceFromIndexedDb } from './ResourceStorageClone'
+
+function stagedResource(id: string, blob: Blob): Resource {
+  return {
+    id,
+    type: RESOURCE_TYPE.OTHER,
+    name: id,
+    description: '',
+    fileName: `${id}.bin`,
+    mimeType: blob.type,
+    fileSize: blob.size,
+    contentHash: 'c'.repeat(64),
+    originalBlob: blob,
+    favorite: false,
+    categoryId: null,
+    tags: [],
+    metadata: {},
+    createdAt: 1,
+    updatedAt: 1,
+  }
+}
 
 describe('IndexedDbArchiveStorage', () => {
+  it('uses inline bytes only through 1 MiB and preserves the existing larger original path', async () => {
+    const database = new AppDatabase(`restore-inline-boundary-${crypto.randomUUID()}`)
+    const small = stagedResource('inline-limit', new Blob([new Uint8Array(1024 * 1024).fill(7)]))
+    const large = stagedResource('above-limit', new Blob([new Uint8Array(1024 * 1024 + 1).fill(9)]))
+    const read = vi.spyOn(globalThis, 'fetch')
+    try {
+      await new IndexedDbArchiveStorage(database).restore([], [small, large])
+      expect(read).toHaveBeenCalledTimes(1)
+      const smallStored = await database.resources.get(small.id)
+      const largeStored = await database.resources.get(large.id)
+      expect(smallStored).toHaveProperty('originalBlob', expect.any(ArrayBuffer))
+      expect(largeStored).toHaveProperty('originalBlob', expect.any(Blob))
+      const reopened = new IndexedDbResourceStorage(database)
+      for (const source of [small, large]) {
+        const actual = await reopened.get(source.id)
+        expect(new Uint8Array(await actual!.originalBlob.arrayBuffer())).toEqual(
+          new Uint8Array(await source.originalBlob.arrayBuffer()),
+        )
+      }
+      expect(await database.restoreStaging.count()).toBe(0)
+    } finally {
+      read.mockRestore()
+      database.close()
+      await database.delete()
+    }
+  })
+  it('converts legacy Blob checkpoints once, retaining originals without downloading again', async () => {
+    const database = new AppDatabase(`restore-legacy-stage-${crypto.randomUUID()}`)
+    const storage = new IndexedDbArchiveStorage(database)
+    const source = stagedResource('legacy', new Blob(['legacy verified body']))
+    const checkpoint = crypto.randomUUID(),
+      jobId = `commit:${checkpoint}`
+    try {
+      await database.restoreStaging.put({
+        jobId,
+        path: 'current/0',
+        size: source.fileSize,
+        sha256: source.contentHash,
+        updatedAt: 1,
+        record: { resource: source, listSummary: toResourceListSummary(source) },
+      })
+      const hydrate = vi.fn(async () => {
+        throw new Error('must reuse the verified checkpoint')
+      })
+      await storage.restore([], [source], [], hydrate, undefined, checkpoint)
+      expect(hydrate).not.toHaveBeenCalled()
+      expect(await database.restoreStaging.count()).toBe(0)
+      expect(await database.restoreStagingChunks.count()).toBe(0)
+      const stored = await database.resources.get(source.id)
+      if (!stored || !('originalBlob' in stored)) throw new Error('Original missing')
+      expect(await hydrateResourceFromIndexedDb(stored).originalBlob.text()).toBe(
+        'legacy verified body',
+      )
+    } finally {
+      database.close()
+      await database.delete()
+    }
+  })
+
+  it('keeps vault originals encrypted and never writes their plaintext into staging chunks', async () => {
+    const database = new AppDatabase(`restore-vault-stage-${crypto.randomUUID()}`)
+    const vault = new VaultService(database)
+    try {
+      await vault.initialize()
+      await vault.enable('fixture-password')
+      const source = stagedResource('vault', new Blob(['private verified body']))
+      const writes = vi.spyOn(database.restoreStagingChunks, 'put')
+      await new IndexedDbArchiveStorage(database, vault).restore([], [source])
+      expect(writes).not.toHaveBeenCalled()
+      const stored = await database.resources.get(source.id)
+      expect(stored).toHaveProperty('encrypted', true)
+      expect(await (await vault.decodeResource(stored!)).originalBlob.text()).toBe(
+        'private verified body',
+      )
+    } finally {
+      database.close()
+      await database.delete()
+    }
+  })
+
+  it('restores verified originals without the local blob URL loader or external waits inside the commit', async () => {
+    const database = new AppDatabase(`restore-no-blob-fetch-${crypto.randomUUID()}`)
+    const storage = new IndexedDbArchiveStorage(database)
+    const blob = new Blob(['verified local original'])
+    const record: Resource = {
+      id: 'local-original',
+      type: RESOURCE_TYPE.OTHER,
+      name: 'local',
+      description: '',
+      fileName: 'local.txt',
+      mimeType: 'text/plain',
+      fileSize: blob.size,
+      contentHash: 'a'.repeat(64),
+      originalBlob: blob,
+      favorite: false,
+      categoryId: null,
+      tags: [],
+      metadata: {},
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const ordinaryFetch = globalThis.fetch.bind(globalThis)
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).startsWith('blob:')) throw new TypeError('Failed to fetch')
+      return ordinaryFetch(input, init)
+    })
+    const waits = vi.spyOn(Dexie, 'waitFor')
+    try {
+      await storage.restore([], [record])
+      expect(fetch).not.toHaveBeenCalled()
+      expect(waits).not.toHaveBeenCalled()
+      expect(await database.restoreStaging.count()).toBe(0)
+      expect(await database.restoreStagingChunks.count()).toBe(0)
+      database.close()
+      await database.open()
+      const stored = await database.resources.get(record.id)
+      if (!stored || !('originalBlob' in stored))
+        throw new Error('Original missing after reopening')
+      expect(await hydrateResourceFromIndexedDb(stored).originalBlob.text()).toBe(
+        'verified local original',
+      )
+    } finally {
+      fetch.mockRestore()
+      waits.mockRestore()
+      database.close()
+      await database.delete()
+    }
+  })
+
   it.each([1000, 5000, 10000])(
     'reads only 501 relevant historical metadata rows from %i rows in three batches',
     async (count) => {
@@ -275,7 +433,10 @@ describe('IndexedDbArchiveStorage', () => {
     try {
       await storage.restore([], records, [], hydrate)
       expect(reads).toBe(3)
-      expect(await database.resources.get('web-2')).toHaveProperty('originalBlob.size', 1024)
+      expect(await new IndexedDbResourceStorage(database).get('web-2')).toHaveProperty(
+        'originalBlob.size',
+        1024,
+      )
       expect(await database.restoreStaging.count()).toBe(0)
       const before = await database.resources.count()
       let attempts = 0
@@ -295,20 +456,20 @@ describe('IndexedDbArchiveStorage', () => {
       })
       expect(await database.resources.count()).toBe(before)
       expect(await database.restoreStaging.count()).toBe(0)
-      const fetchBlob = globalThis.fetch.bind(globalThis)
       const read = vi
-        .spyOn(globalThis, 'fetch')
-        .mockImplementationOnce(fetchBlob)
-        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+        .spyOn(database.restoreStaging, 'get')
+        .mockRejectedValueOnce(new TypeError('Temporary local file unavailable'))
       try {
         await expect(
           storage.restore(
             [],
             records.map((r) => ({ ...r, id: `new-${r.id}` })),
+            [],
+            async (record) => ({ ...record, originalBlob: new Blob(['x'.repeat(1024)]) }),
           ),
         ).rejects.toMatchObject({
           message: expect.stringContaining('本机恢复暂存'),
-          cause: { message: 'Failed to fetch' },
+          cause: { message: 'Temporary local file unavailable' },
         })
         expect(await database.resources.count()).toBe(before)
         expect(await database.restoreStaging.count()).toBe(0)
@@ -364,6 +525,7 @@ describe('IndexedDbArchiveStorage', () => {
         'x'.repeat(256 * 1024),
       )
       expect(await database.restoreStaging.count()).toBe(0)
+      expect(await database.restoreStagingChunks.count()).toBe(0)
       expect(records[0]?.metadata).toEqual({})
     } finally {
       database.close()

@@ -19,6 +19,7 @@ import { zipSync, strToU8 } from 'fflate'
 import { CloudBackupService } from './CloudBackupService'
 import type { CategoryService } from './CategoryService'
 import type { CreatedStructuredSnapshot } from './CloudStructuredSnapshot'
+import { RestoreDuplicateIndex } from '../utils/RestoreIdentity'
 
 const databases: AppDatabase[] = []
 afterEach(async () => {
@@ -61,6 +62,50 @@ function secrets() {
 }
 
 describe('personal resource lifecycle', () => {
+  it('recognizes a restored secret after local re-encryption, but invalidates that identity after a real edit', async () => {
+    const { personal, resources, database } = setup()
+    const origin = secrets(),
+      local = secrets()
+    await origin.setPassword('origin-password')
+    await local.setPassword('local-password')
+    const plain = {
+      ...document('secret'),
+      fields: [{ id: 'key', label: 'Key', value: 'synthetic-private-value', private: true }],
+    }
+    const source = await personal.save(await origin.protect(plain), new Map())
+    const migrated = await personal.save(
+      await local.protect(plain),
+      new Map(),
+      source,
+      source.contentHash,
+    )
+    expect(migrated.contentHash).not.toBe(source.contentHash)
+    database.close()
+    await database.open()
+    let existing = await resources.listResourceListSummaries()
+    expect(new RestoreDuplicateIndex(existing, [source]).find(source)).toBe(migrated.id)
+    expect(
+      (
+        await new RestoreService(new IndexedDbArchiveStorage(database)).prepareStructured(
+          [source],
+          [],
+          [],
+          { version: 1 },
+          existing,
+          [],
+          'same-backup',
+        )
+      ).resources,
+    ).toHaveLength(0)
+    const changed = { ...plain, fields: [{ ...plain.fields[0]!, value: 'edited-private-value' }] }
+    const updated = await personal.save(await local.protect(changed), new Map(), migrated)
+    existing = await resources.listResourceListSummaries()
+    expect(new RestoreDuplicateIndex(existing, [source]).find(source)).toBeUndefined()
+    expect(updated.metadata.restoredSecretSourceHash).toBeUndefined()
+    expect((await local.reveal(await personal.read(updated)))[0]?.value).toBe(
+      'edited-private-value',
+    )
+  })
   it('retains multi-chunk APK bytes during a second save using IndexedDB staging', async () => {
     const { personal } = setup(true)
     const bytes = zipSync(

@@ -106,7 +106,6 @@ describe('GeneratedImageAlbumApp', () => {
     expect(albumService.getOriginalBlob).not.toHaveBeenCalled()
   })
   // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-album-own-hosting-entry-tests
-
   afterEach(() => vi.useRealTimers())
   beforeEach(() => {
     vi.clearAllMocks()

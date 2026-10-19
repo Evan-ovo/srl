@@ -5,6 +5,7 @@ import type {
   WebDavBackupConfig,
 } from '../types/CloudBackup'
 import { isCapacitorApp } from '../utils/CapacitorDetection'
+import type { ArchiveReadFailure } from './ArchiveZipWriter'
 import {
   acquireRelayWorkerTarget,
   relayWorkerEndpoint,
@@ -57,6 +58,7 @@ export interface CloudDownloadProgress {
 export interface CloudDownloadOptions {
   signal?: AbortSignal
   onProgress?: (progress: CloudDownloadProgress) => void
+  onReadFailures?: (failures: readonly ArchiveReadFailure[]) => Promise<void>
 }
 
 export class CloudBackupTransport {

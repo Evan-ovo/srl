@@ -5,7 +5,7 @@ import { IndexedDbArchiveStorage } from '../storage/IndexedDbArchiveStorage'
 import { IndexedDbResourceStorage } from '../storage/IndexedDbResourceStorage'
 import { IndexedDbRestoreStagingStore } from '../storage/IndexedDbRestoreStagingStore'
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
-import type { StructuredResource } from './CloudStructuredSnapshot'
+import type { StructuredResource, StructuredSnapshot } from './CloudStructuredSnapshot'
 import { ExportService } from './ExportService'
 import { hashBlob } from './HashService'
 import { RestoreService } from './RestoreService'
@@ -71,6 +71,83 @@ function structured(resource: Resource): StructuredResource {
 }
 
 describe('restore the same backup repeatedly', () => {
+  it('downloads only 2 of 297 selected originals with 295 already local, then none after unrelated local additions', async () => {
+    const database = new AppDatabase(`restore-297-reuse-${crypto.randomUUID()}`)
+    const storage = new IndexedDbArchiveStorage(database)
+    const library = new IndexedDbResourceStorage(database)
+    const service = new RestoreService(storage)
+    try {
+      const base = (await fixture())[0]!
+      const records: Resource[] = []
+      const bodies = new Map<string, Blob>()
+      for (let index = 0; index < 298; index++) {
+        const blob = new Blob([`original ${index}`])
+        const hash = await hashBlob(blob)
+        bodies.set(hash, blob)
+        records.push({
+          ...base,
+          id: `selected-${index}`,
+          type: RESOURCE_TYPE.OTHER,
+          relatedResourceIds: [],
+          originalBlob: blob,
+          contentHash: hash,
+          fileSize: blob.size,
+          fileName: `selected-${index}.bin`,
+        })
+      }
+      await storage.restore([], records.slice(0, 295))
+      const snapshot: StructuredSnapshot = {
+        format: 'srl-structured-cloud-snapshot',
+        version: 3,
+        createdAt: new Date(1).toISOString(),
+        resources: records.slice(0, 297).map(structured),
+        versions: [],
+        categories: [],
+        portableData: { version: 1 },
+      }
+      const read = vi.fn(async (object: StructuredResource['object']) =>
+        bodies.get(object.totalSha256)!,
+      )
+      const progress = vi.fn()
+      const first = await service.restoreStructured(
+        snapshot,
+        read,
+        await library.listResourceListSummaries(),
+        [],
+        'selected',
+        { onProgress: progress },
+      )
+      expect(first.restoredResources).toBe(2)
+      expect(first.skippedDuplicates).toBe(295)
+      expect(read.mock.calls.map(([object]) => object.fileName).sort()).toEqual([
+        'selected-295.bin',
+        'selected-296.bin',
+      ])
+      expect(progress).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          total: 2,
+          completed: 2,
+          items: { resources: 2, versions: 0, album: 0, communityAttachments: 0 },
+        }),
+      )
+      await storage.restore([], [records[297]!])
+      read.mockClear()
+      const second = await service.restoreStructured(
+        snapshot,
+        read,
+        await library.listResourceListSummaries(),
+        [],
+        'selected',
+      )
+      expect(second.restoredResources).toBe(0)
+      expect(second.skippedDuplicates).toBe(297)
+      expect(read).not.toHaveBeenCalled()
+      expect(await database.resources.count()).toBe(298)
+    } finally {
+      database.close()
+      await database.delete()
+    }
+  })
   it('replans verified ZIP staging against new conflicts without re-extracting or reading original bodies', async () => {
     const db = new AppDatabase(`zip-replan-${crypto.randomUUID()}`)
     const staging = new IndexedDbRestoreStagingStore(db)
