@@ -590,3 +590,13 @@
 - 第二轮39216478833：26隔离项通过，其余6465通过/1失败/2既有跳过，前轮3项修正全部通过；未生成APK或更新CF。剩余ArchiveZipWriter.prefetch千条合成原件测试的vi.waitFor默认1秒先于失败汇总回调，改先共享测试Owner再Public投影，以两次deferred回调握手替代固定1秒轮询，与运行任务race透传提前结束/拒绝；不增加产品timeout/retry，不改5秒总时限、并发、1000项/显式重试/成功不重读/完整ZIP断言。
 - 两库三文件各42项通过，Public tests1.86s；定向lint/格式/diff通过。增量审计自已审计推送基线02be7597a8e1989f9aba745c84aa88a4c068dbb5仅1份测试及既有记录，无新文件/二进制/地址/个人邮箱，新提交noreply核验后推送新候选，重新完整发行。
 - 当前常规check 39216478995失败已核为既有3个行数门禁（ProductAssistant2002/ChatReader3135/DiscordSetup3606），没有放宽或作无关拆分；独立发行完整检查另外执行。旧线上/清理拒绝/未手机边界保持。
+
+## 2026-10-19 Public 0.0.246 APK与网页已正式更新（p6m2，本条所属提交）
+
+- 产品2f6c6cd912a1e6a56781bec2ace561c2d6e31407，run39217474578完整success；显示0.0.246/code1000055，6492客户端项通过（26隔离+6466其余）/2既有跳过、598测试文件通过/2跳过，305知识Owner/功能合同/生产包/原签名/JVM与Release lint通过。前两轮在APK前停止，真实失败取证和最小测试修正见前文；没有放宽门禁、增加产品timeout/retry或跳过测试。
+- Release三资产已公开，实际重新下载APK14992152bytes/SHA256 172e7c4293ec50948df4cc4c9e66c4ac1e374c2453ac0cf4034e7a545d8a89c6，包名app.srl.publicedition、SRL_Pubilc和原证书40f56d6a4ba259a703abbe0039f62193f9522bff6c6cf2714d774633894cc7bd保持。与已发行245比对WebView hostname/scheme相同、无remote首页；292宿主文件逐项SHA/大小与网页包同字节，0可选预装/0个.srlapp，9当前APP包及manifest全验。outputs独立交付APK副本SHA一致；没有安装/运行于实体手机。
+- 小号Fork已CLI正常快进同产品；CF15135aa2-f60a-4a63-b7f8-90c60978c93e Ready（3m19s）、Worker58cb4274为100%生产流量。公网/api/version为public-sync-release-1000055-v1000055且no-store；首页、缺失脚本404、inventory/catalog与APK同字节、9个APP包远端SHA全部通过。GitHub latest静态清单200/code1000055，0 REST API请求。现有签名/Worker/Fork/构建命令未重配，自部署保持。
+- 线上设置回读Logs/Traces/Issues均关闭，模板observability false已随部署生效；不承诺托管商不处理IP/路径/请求头等基础信息。DC首楼文案已按实际行为交付为两条966/1370字（均<2000），含实际分发地址、源码/AFPL、非白名单域名、数据去向/拒绝方式/日志边界，只交付用户复制，不代发帖。私人站点地址只在仓库外交付文案和部署材料，不进入公开源码/本记录。
+- 隐私审计链：bfef9a7起78路径人工地址复核无私域/个人邮箱/凭据/新增二进制，后续仅a8a10ad→02be759的4路径、02be759→2f6c6cd的3路径逐增量审核；各提交author/committer均为对应GitHub noreply并已远端回读。当前已审计基线2f6c6cd912a1e6a56781bec2ace561c2d6e31407，本条只维护两份既有记录，不改变产品候选，推送前仍增量核验邮箱/地址，不重扫历史。
+- 清理：本轮新根.codex-tmp/20261019-public-release-p6m2逐项检查普通文件/无链接后，Native PowerShell按3个确切LiteralPath成功删除重复APK、89428021bytes网页包和临时校验脚本，合104424420bytes；保留3份最小JSON共1730bytes用于本版问题复核，下个正式版本验证完成且无需回溯可退役。所有旧被拒清理范围未触碰，无任何新拒绝。未改用户其他工作或官版已上线APK/CF。
+- 未决：常规check仍停在既有3处源码行数门禁，未作无关拆分或宣称所有工作流绿色；真实用户图床/云端、实体手机/原生TCP取消和GB峰值不在本轮验收范围。仅共享既有源与本聊天优化，官版其他任务后续新功能未顺带同步。本条推送后再快进Fork，文档同步复用同一Release网页/APK。
