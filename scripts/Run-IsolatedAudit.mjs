@@ -9,6 +9,9 @@ import { startAuditPreview } from './AuditPreviewServer.mjs'
 import { createAuditApiFixture } from './AuditEnvironment.mjs'
 
 export const AUDIT_SUITES = {
+  // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=privacy-audit-suite
+  'public-privacy': 'scripts/PublicPrivacyAudit.mjs',
+  // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=privacy-audit-suite
   'album-controls': 'scripts/AlbumControlsAudit.mjs',
   'safe-area-overlays': 'scripts/SafeAreaOverlaysAudit.mjs',
   startup: 'scripts/StartupLoadingAudit.mjs',
@@ -179,6 +182,9 @@ export async function runIsolatedAudit(options, validation) {
         'discord-setup',
         'preview-loading',
         'album-controls',
+        // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=privacy-audit-isolated
+        'public-privacy',
+        // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=privacy-audit-isolated
         'startup',
       ].includes(options.suite)
     ) {
@@ -196,6 +202,9 @@ export async function runIsolatedAudit(options, validation) {
                   : options.suite === 'discord-inbox'
                     ? '收件箱组件隔离浏览器审计'
                     : 'Worker 接收页隔离浏览器审计'
+      // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=privacy-audit-label
+      if (options.suite === 'public-privacy') phase = 'Public隐私说明与联网偏好隔离浏览器审计'
+      // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=privacy-audit-label
       await runAuditCommand(AUDIT_SUITES[options.suite], [], {
         ...process.env,
         SRL_AUDIT_MODE: 'fixture',

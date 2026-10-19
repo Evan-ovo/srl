@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import ProjectNoticeDialog from './ProjectNoticeDialog.vue'
+import {
+  getAutomaticApkUpdateChecks,
+  setAutomaticApkUpdateChecks,
+} from '../services/BrowserDevicePreferences'
 import { platform } from '../core/PlatformService'
 import { resetPerformanceMonitorPosition } from '../core/PerformanceMonitor'
 import { forceRefresh, manualCheckForUpdate } from '../core/ServiceWorkerUpdate'
@@ -93,6 +98,26 @@ function requestIncreasedDownloads(event: Event): void {
 }
 
 const updateCheckResult = ref('')
+const automaticApkUpdates = ref(getAutomaticApkUpdateChecks())
+const automaticUpdateError = ref('')
+const noticeReview = ref(false)
+const noticeOpener = ref<HTMLButtonElement>()
+async function closeNoticeReview(): Promise<void> {
+  noticeReview.value = false
+  await nextTick()
+  noticeOpener.value?.focus()
+}
+function changeAutomaticApkUpdates(event: Event): void {
+  const input = event.target as HTMLInputElement
+  try {
+    setAutomaticApkUpdateChecks(input.checked)
+    automaticApkUpdates.value = input.checked
+    automaticUpdateError.value = ''
+  } catch {
+    input.checked = automaticApkUpdates.value
+    automaticUpdateError.value = '设置未能保存，请重试。'
+  }
+}
 const passwordSettings = ref<InstanceType<typeof SecretProtectionSettings> | null>(null)
 async function finishSettings(): Promise<void> {
   if (passwordSettings.value && !(await passwordSettings.value.finishPendingPassword())) return
@@ -990,6 +1015,24 @@ async function clearOfflineResources(): Promise<void> {
             </span>
             <i>→</i>
           </button>
+          <button ref="noticeOpener" type="button" @click="noticeReview = true">
+            <span><strong>隐私与网络说明</strong><small>数据范围、联网选择与使用前说明</small></span
+            ><i aria-hidden="true">→</i>
+          </button>
+          <label v-if="isNativeApk" class="settings-toggle">
+            <span
+              ><strong>自动检查 APK 更新</strong
+              ><small>默认关闭；开启后每 12 小时最多检查一次。关闭不影响手动更新。</small
+              ><small v-if="automaticUpdateError" role="alert">{{
+                automaticUpdateError
+              }}</small></span
+            >
+            <input
+              type="checkbox"
+              :checked="automaticApkUpdates"
+              @change="changeAutomaticApkUpdates"
+            />
+          </label>
           <button type="button" @click="handleCheckUpdate">
             <span>
               <strong>{{ isNativeApk ? '检查 APK 版本更新' : '检查网页更新' }}</strong>
@@ -1014,6 +1057,7 @@ async function clearOfflineResources(): Promise<void> {
         </section>
         <LocalDataResetControls />
       </div>
+      <ProjectNoticeDialog :open="noticeReview" review @acknowledged="closeNoticeReview" />
       <footer class="layout-settings__footer">
         <span>{{
           passwordSettings?.pendingPasswordAction

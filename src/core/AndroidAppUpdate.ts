@@ -5,6 +5,13 @@ import { chooseAction } from '../composables/UseConfirmDialog'
 import { loadAndroidApkRelease } from './GitHubAndroidApkRelease'
 // SRL-PUBLIC-SYNC: END REPLACE id=android-apk-release-provider
 import { taskCenter } from './TaskCenter'
+import {
+  AUTOMATIC_APK_UPDATE_CHANGED,
+  PROJECT_NOTICE_ACKNOWLEDGED_EVENT,
+  getAutomaticApkUpdateChecks,
+  hasAcknowledgedProjectNotice,
+  hasAcknowledgedProjectNoticePersisted,
+} from '../services/BrowserDevicePreferences'
 
 const REMIND_LATER_MS = 24 * 60 * 60 * 1000
 const AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
@@ -36,6 +43,8 @@ interface ApkUpdateManifest {
 const apkUpdater = registerPlugin<NativeApkUpdater>('ApkUpdater')
 let updateCheck: Promise<string> | undefined
 let manualCheckRequested = false
+let updateAbort: AbortController | undefined
+let stopAutomaticChecks: (() => void) | undefined
 
 export function isAndroidApk(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
@@ -146,7 +155,14 @@ async function promptForUpdate(release: ApkUpdateManifest): Promise<string> {
 /** APK 专属检查；网页端不会调用此路径或替代 Service Worker 更新。 */
 export function checkForAndroidAppUpdate(manual = false): Promise<string> {
   if (!isAndroidApk()) return Promise.resolve('当前不是 Android APK')
+  if (!manual && !getAutomaticApkUpdateChecks())
+    return Promise.resolve('APK 自动检查已关闭，仍可手动检查')
   if (updateCheck) {
+    if (updateAbort?.signal.aborted)
+      return updateCheck.then(
+        () => checkForAndroidAppUpdate(manual),
+        () => checkForAndroidAppUpdate(manual),
+      )
     manualCheckRequested ||= manual
     return updateCheck
   }
@@ -156,17 +172,37 @@ export function checkForAndroidAppUpdate(manual = false): Promise<string> {
   manualCheckRequested = manual
   updateCheck = runUpdateCheck().finally(() => {
     updateCheck = undefined
+    updateAbort = undefined
   })
   return updateCheck
 }
 
 async function runUpdateCheck(): Promise<string> {
+  if (!manualCheckRequested && !(await hasAcknowledgedProjectNoticePersisted()))
+    return '请先阅读使用前说明'
+  if (!manualCheckRequested && !getAutomaticApkUpdateChecks()) return 'APK 自动检查已关闭'
+  const controller = new AbortController()
+  updateAbort = controller
   localStorage.setItem(LAST_UPDATE_CHECK_KEY, String(Date.now()))
-
-  const [current, result] = await Promise.all([
-    apkUpdater.getCurrentVersion(),
-    loadAndroidApkRelease(),
-  ])
+  let current: { versionCode: number; versionName: string }
+  let result: Awaited<ReturnType<typeof loadAndroidApkRelease>>
+  try {
+    ;[current, result] = await Promise.all([
+      apkUpdater.getCurrentVersion(),
+      loadAndroidApkRelease(controller.signal),
+    ])
+  } catch (error) {
+    if (controller.signal.aborted && !manualCheckRequested) {
+      localStorage.removeItem(LAST_UPDATE_CHECK_KEY)
+      return 'APK 自动检查已关闭'
+    }
+    throw error
+  }
+  if (controller.signal.aborted || (!manualCheckRequested && !getAutomaticApkUpdateChecks())) {
+    localStorage.removeItem(LAST_UPDATE_CHECK_KEY)
+    return 'APK 自动检查已关闭'
+  }
+  updateAbort = undefined
   if (result.status === 404) return 'APK 更新渠道尚未发布'
   if (result.status < 200 || result.status >= 300)
     return '检查更新失败（HTTP ' + result.status + '）'
@@ -184,10 +220,28 @@ async function runUpdateCheck(): Promise<string> {
  * 仅在原生 APK 内安装自动检查：启动、回到前台和重新联网时检查。
  * 它不运行在网页端，因此不会影响网页 Service Worker 的既有检查周期。
  */
-export function installAndroidAppUpdateChecks(): void {
-  if (!isAndroidApk()) return
+export function installAndroidAppUpdateChecks(): () => void {
+  if (!isAndroidApk()) return () => undefined
+  if (stopAutomaticChecks) return stopAutomaticChecks
   const check = () => void checkForAndroidAppUpdate().catch(() => undefined)
-  window.setTimeout(check, 3000)
+  const preferenceChanged = () => {
+    if (!getAutomaticApkUpdateChecks()) {
+      if (!manualCheckRequested) updateAbort?.abort()
+    } else if (hasAcknowledgedProjectNotice()) check()
+  }
+  const startup = window.setTimeout(check, 3000)
   window.addEventListener('srl:native-active', check)
   window.addEventListener('online', check)
+  window.addEventListener(PROJECT_NOTICE_ACKNOWLEDGED_EVENT, check)
+  window.addEventListener(AUTOMATIC_APK_UPDATE_CHANGED, preferenceChanged)
+  stopAutomaticChecks = () => {
+    window.clearTimeout(startup)
+    window.removeEventListener('srl:native-active', check)
+    window.removeEventListener('online', check)
+    window.removeEventListener(PROJECT_NOTICE_ACKNOWLEDGED_EVENT, check)
+    window.removeEventListener(AUTOMATIC_APK_UPDATE_CHANGED, preferenceChanged)
+    if (!manualCheckRequested) updateAbort?.abort()
+    stopAutomaticChecks = undefined
+  }
+  return stopAutomaticChecks
 }

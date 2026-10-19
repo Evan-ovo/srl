@@ -46,11 +46,14 @@ export function parseGitHubApkRelease(value: unknown, repository = APK_RELEASE_R
   }
 }
 
-export async function loadAndroidApkRelease(): Promise<{ status: number; release?: unknown }> {
+export async function loadAndroidApkRelease(
+  signal?: AbortSignal,
+): Promise<{ status: number; release?: unknown }> {
   if (!/^[\w.-]+\/[\w.-]+$/u.test(APK_RELEASE_REPOSITORY)) throw new Error('APK 更新仓库配置无效')
   const response = await fetch(
     `https://github.com/${APK_RELEASE_REPOSITORY}/releases/latest/download/public-release.json`,
     {
+      signal,
       headers: { accept: 'application/json' },
       credentials: 'omit',
       redirect: 'follow',

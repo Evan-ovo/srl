@@ -192,3 +192,30 @@
     scroll-behavior: auto;
   }
 }
+
+.project-notice__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-height: var(--size-touch);
+  padding-block: 0.35rem;
+  cursor: pointer;
+}
+.project-notice__option input {
+  flex: 0 0 auto;
+  margin-top: 0.3rem;
+  accent-color: var(--color-accent);
+}
+.project-notice__option span {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.project-notice__option strong {
+  font-size: 0.9rem;
+}
+.project-notice__option small {
+  font-size: 0.78rem;
+  line-height: 1.65;
+  color: var(--color-ink-soft);
+}

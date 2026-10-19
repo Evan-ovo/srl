@@ -62,7 +62,9 @@
         "src/components/AppearanceUiEditor.test.ts",
         "src/core/AndroidAppUpdate.test.ts",
         "src/core/GitHubAndroidApkRelease.test.ts",
-        "scripts/PublicRelease.test.ts"
+        "scripts/PublicRelease.test.ts",
+        "src/components/ProjectNoticeDialog.test.ts",
+        "src/core/AndroidAppUpdatePrivacy.test.ts"
       ],
       "backup": {
         "policy": "supported",

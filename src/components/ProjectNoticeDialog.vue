@@ -1,16 +1,29 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
+// SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-network-disclosure-import
+import PublicNetworkDisclosure from './PublicNetworkDisclosure.vue'
+// SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-network-disclosure-import
+import { isAndroidApk } from '../core/AndroidAppUpdate'
+import {
+  getAutomaticApkUpdateChecks,
+  setAutomaticApkUpdateChecks,
+} from '../services/BrowserDevicePreferences'
+
 import { triggerNativeHaptic } from '../core/NativeHaptics'
 
 const props = defineProps<{
   open: boolean
+  review?: boolean
 }>()
 
 const emit = defineEmits<{
   acknowledged: []
 }>()
 
+const nativeApk = isAndroidApk()
+const automaticUpdates = ref(getAutomaticApkUpdateChecks())
+const preferenceError = ref('')
 const READING_SECONDS = 5
 const SCROLL_END_TOLERANCE_PX = 6
 const secondsRemaining = ref(READING_SECONDS)
@@ -19,8 +32,11 @@ const dialog = ref<HTMLElement>()
 const body = ref<HTMLElement>()
 let countdownTimer: number | undefined
 
-const canAcknowledge = computed(() => secondsRemaining.value === 0 && reachedEnd.value)
+const canAcknowledge = computed(
+  () => props.review || (secondsRemaining.value === 0 && reachedEnd.value),
+)
 const confirmLabel = computed(() => {
+  if (props.review) return '关闭说明'
   if (canAcknowledge.value) return '我已阅读，进入资源库'
   if (!reachedEnd.value && secondsRemaining.value > 0)
     return `请阅读并滑至底部 · ${secondsRemaining.value} 秒`
@@ -28,7 +44,8 @@ const confirmLabel = computed(() => {
   return `请阅读 ${secondsRemaining.value} 秒`
 })
 const readingHint = computed(() => {
-  if (canAcknowledge.value) return '感谢阅读。本说明仅在这台设备首次启动时显示。'
+  if (props.review) return '此处仅查看说明，不会重新授权或更改设置。'
+  if (canAcknowledge.value) return '已记录本次说明版本，可在设置中随时重看。'
   if (!reachedEnd.value) return '请完整阅读并滑动到正文底部。'
   return '已阅读到正文底部，请等待倒计时结束。'
 })
@@ -56,7 +73,9 @@ function checkReachedEnd(): void {
 
 async function resetReadingState(): Promise<void> {
   reachedEnd.value = false
-  startCountdown()
+  automaticUpdates.value = getAutomaticApkUpdateChecks()
+  preferenceError.value = ''
+  if (!props.review) startCountdown()
   await nextTick()
   if (body.value) body.value.scrollTop = 0
   checkReachedEnd()
@@ -67,10 +86,19 @@ function preventDismiss(event: KeyboardEvent): void {
   if (!props.open || event.key !== 'Escape') return
   event.preventDefault()
   event.stopPropagation()
+  if (props.review) acknowledge()
 }
 
 function acknowledge(): void {
   if (!canAcknowledge.value) return
+  if (!props.review && nativeApk && automaticUpdates.value !== getAutomaticApkUpdateChecks()) {
+    try {
+      setAutomaticApkUpdateChecks(automaticUpdates.value)
+    } catch {
+      preferenceError.value = '未能保存选择，请重试或取消勾选后继续。'
+      return
+    }
+  }
   triggerNativeHaptic('confirm')
   emit('acknowledged')
 }
@@ -129,18 +157,23 @@ onUnmounted(() => {
           </p>
           <!-- SRL-PUBLIC-SYNC: END REPLACE id=project-notice-lead -->
 
-          <section>
-            <h2>数据与隐私</h2>
-            <p>
-              <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=project-notice-privacy -->
-              角色卡、世界书、预设、外观配置与大多数资源数据默认保存在当前设备，不会因为打开 SRL
-              而自动上传。
-              <!-- SRL-PUBLIC-SYNC: END REPLACE id=project-notice-privacy -->
-            </p>
-            <p>
-              当你主动使用第三方插件、AI API、外部资源、图床或 GitHub
-              备份等功能时，相关数据可能按对应第三方服务的规则离开本机。请自行确认其来源、权限、隐私政策与安全性。
-            </p>
+          <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=project-notice-privacy -->
+          <PublicNetworkDisclosure />
+          <!-- SRL-PUBLIC-SYNC: END REPLACE id=project-notice-privacy -->
+
+          <section v-if="nativeApk && !review">
+            <h2>更新偏好</h2>
+            <label class="project-notice__option">
+              <input v-model="automaticUpdates" type="checkbox" />
+              <span
+                ><strong>自动检查 APK 更新</strong
+                ><small
+                  >可选，默认关闭；开启后在启动、回到前台或联网时检查，12
+                  小时内最多一次。关闭后仍可在设置中手动检查。</small
+                ></span
+              >
+            </label>
+            <p v-if="preferenceError" role="alert">{{ preferenceError }}</p>
           </section>
 
           <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=project-notice-source-terms -->

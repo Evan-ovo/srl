@@ -34,7 +34,26 @@ export interface BridgeTransferDraft {
   }>
 }
 
-export const PROJECT_NOTICE_VERSION = '2026-09-21-v2'
+export const PROJECT_NOTICE_VERSION = '2026-10-19-v3'
+
+export const AUTOMATIC_APK_UPDATE_CHANGED = 'srl:automatic-apk-updates-changed'
+export const PROJECT_NOTICE_ACKNOWLEDGED_EVENT = 'srl:project-notice-acknowledged'
+const AUTOMATIC_APK_UPDATE_KEY = 'srl.apk-update.automatic-enabled.v1'
+
+/** Device-only opt-in; restoring general preferences must not enable network checks. */
+export function getAutomaticApkUpdateChecks(): boolean {
+  try {
+    return localStorage.getItem(AUTOMATIC_APK_UPDATE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+export function setAutomaticApkUpdateChecks(enabled: boolean): void {
+  localStorage.setItem(AUTOMATIC_APK_UPDATE_KEY, String(enabled))
+  if (getAutomaticApkUpdateChecks() !== enabled) throw new Error('未能保存自动更新检查设置')
+  window.dispatchEvent(new Event(AUTOMATIC_APK_UPDATE_CHANGED))
+}
 
 export const PRESET_STITCH_DRAFT_KEY = 'srl.stitch.draft'
 
@@ -474,6 +493,7 @@ export function acknowledgeProjectNotice(): void {
   } catch {
     // 这是设备侧的首次阅读提示；两种本地存储都不可用时，本次仍可继续使用。
   }
+  window.dispatchEvent(new Event(PROJECT_NOTICE_ACKNOWLEDGED_EVENT))
   void getNativeProjectNoticeStorage()
     ?.setAcknowledgedVersion({ version: PROJECT_NOTICE_VERSION })
     .catch(() => undefined)

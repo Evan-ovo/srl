@@ -191,6 +191,38 @@ it('uses the APK update owner from the visible settings button', async () => {
   expect(runtime.checkUpdate).toHaveBeenCalledWith(true)
   expect(wrapper.text()).toContain('APK 更新渠道尚未发布')
 })
+it('opens the persistent notice in review mode and returns without acknowledging first reading', async () => {
+  const wrapper = mountSettings()
+  const opener = wrapper
+    .findAll('button')
+    .find((button) => button.text().includes('隐私与网络说明'))!
+  expect(opener.exists()).toBe(true)
+  await opener.trigger('click')
+  expect(wrapper.get('project-notice-dialog-stub').attributes('open')).toBe('true')
+  expect(wrapper.get('project-notice-dialog-stub').attributes('review')).toBe('true')
+  expect(localStorage.getItem('srl.projectNotice.acknowledgedVersion')).toBeNull()
+})
+it('persists the automatic APK update opt-in across reopening and can turn it off', async () => {
+  runtime.android = true
+  const first = mountSettings()
+  const toggle = first
+    .findAll('label')
+    .find((label) => label.text().includes('自动检查 APK 更新'))!
+    .get('input')
+  expect((toggle.element as HTMLInputElement).checked).toBe(false)
+  await toggle.setValue(true)
+  expect(localStorage.getItem('srl.apk-update.automatic-enabled.v1')).toBe('true')
+  first.unmount()
+  const reopened = mountSettings()
+  const saved = reopened
+    .findAll('label')
+    .find((label) => label.text().includes('自动检查 APK 更新'))!
+    .get('input')
+  expect((saved.element as HTMLInputElement).checked).toBe(true)
+  await saved.setValue(false)
+  expect(localStorage.getItem('srl.apk-update.automatic-enabled.v1')).toBe('false')
+  expect(runtime.checkUpdate).not.toHaveBeenCalled()
+})
 it('places factory reset last in the scrollable settings sections before the footer', () => {
   const view = mountSettings()
   expect(view.get('.settings-sections > :last-child').element.tagName.toLowerCase()).toBe(

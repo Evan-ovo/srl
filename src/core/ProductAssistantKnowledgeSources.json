@@ -1,5 +1,5 @@
 {
-  "knowledgeSha256": "b63b5f43c5ad33a7b645095da641eb587a7c65671062fd7f2031db64fa5e6978",
+  "knowledgeSha256": "08895a2e83c2a9863525f5dbff72ce9a2837edfab42d0db23ccc7181a09f5421",
   "sources": [
     {
       "path": "src/components/SelfHostedFileBrowser.vue",
@@ -915,9 +915,10 @@
       "guides": [
         "user-persona",
         "stitch",
-        "bridge"
+        "bridge",
+        "background-notifications"
       ],
-      "sha256": "dd8899b45b31fa3bd3df522e04f2fb013dccabdc59966f989efcc8c9d1d2bb51"
+      "sha256": "7aed0382f26a6257afae2a60e9ea7e1e624978c50f316758de7227f859cf3061"
     },
     {
       "path": "src/services/CloudBackupRetentionOperations.ts",
@@ -1051,7 +1052,7 @@
         "background-notifications",
         "personal-resources"
       ],
-      "sha256": "e2216b302fcb46700825d508bd4d0434d1644c5e09e313c3e0523ba225b29b67"
+      "sha256": "02571c1e10954fb6fb16b007088f87cd29172a849f78c44eed5284deb148c581"
     },
     {
       "path": "src/composables/UseLibraryFileImport.ts",
@@ -1910,7 +1911,7 @@
       "guides": [
         "background-notifications"
       ],
-      "sha256": "f1ca40f8d3664ae177ba90126d045c291e335aedc7fec91e671883251db4370a"
+      "sha256": "33ca0d8686bb26a88bf5b3a2ff747a1a49e3ebbff372ff8ca1277e6ec682247c"
     },
     {
       "path": "src/core/NativeSafBackup.ts",
@@ -2197,7 +2198,21 @@
       "guides": [
         "background-notifications"
       ],
-      "sha256": "690ea3112a81c799bb6224e6d3b845188457ab8fdfa3e94ef9b17a6634b4131e"
+      "sha256": "74acf32c93a1a4a337905d94727ec71e10b9da871626dd5fdf77176ed80a8968"
+    },
+    {
+      "path": "src/components/ProjectNoticeDialog.vue",
+      "guides": [
+        "background-notifications"
+      ],
+      "sha256": "2ae8fcb83a865122520532819868d71de48534abaaa8631913f26efd56e62381"
+    },
+    {
+      "path": "src/components/PublicNetworkDisclosure.vue",
+      "guides": [
+        "background-notifications"
+      ],
+      "sha256": "5cc213a9769d4f65aebf4d3662423413ddf5c532ba0fe13a1a39fb83b5328b2b"
     }
   ]
 }

@@ -134,7 +134,7 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     entry: ['设置', '后台与通知'],
     steps: [
       // SRL-PUBLIC-SYNC: BEGIN REPLACE id=apk-release-check-help
-      '设置最下方可检查 APK 版本；Public 从发行者配置的 GitHub Releases 静态版本清单查询更新，不使用 GitHub REST API 或用户 Token；旧 API 版遇限流需从 Releases 手动覆盖安装一次静态清单版，未发布时提示渠道尚未发布；新版本需主动确认下载，校验后由 Android 系统确认安装。可稍后提醒或忽略当前版本，手动检查仍可更新。网页更新只更新网页，不能替换 APK 原生代码。',
+      '设置最下方可检查 APK 版本；Public 从发行者配置的 GitHub Releases 静态版本清单查询更新，不使用 GitHub REST API 或用户 Token；旧 API 版遇限流需从 Releases 手动覆盖安装一次静态清单版，未发布时提示渠道尚未发布；新版本需主动确认下载，校验后由 Android 系统确认安装。可稍后提醒或忽略当前版本，手动检查仍可更新。自动检查默认关闭，需阅读新版使用前说明并另行开启；设置 → 自动检查 APK 更新可随时关闭，正在查询的清单会取消且迟到结果不提示；手动检查保留。设置 → 隐私与网络说明可随时重看，查看不重新授权；偏好只留本机，不随通用备份恢复。网页更新只更新网页，不能替换 APK 原生代码。',
       // SRL-PUBLIC-SYNC: END REPLACE id=apk-release-check-help
       // SRL-PUBLIC-SYNC: BEGIN REPLACE id=public-assistant-guide-2
       '系统通知权限须在系统或浏览器设置撤销；浏览器通知仅在用户主动授权后启用。',

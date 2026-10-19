@@ -1,6 +1,6 @@
 // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-apk-update-tests
 /** @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   currentVersion: vi.fn(async () => ({ versionCode: 1, versionName: '0.0.1' })),
@@ -29,6 +29,14 @@ vi.mock('../composables/UseConfirmDialog', () => ({ chooseAction: mocks.chooseAc
 
 import { checkForAndroidAppUpdate } from './AndroidAppUpdate'
 import { taskCenter } from './TaskCenter'
+import {
+  acknowledgeProjectNotice,
+  setAutomaticApkUpdateChecks,
+} from '../services/BrowserDevicePreferences'
+beforeEach(() => {
+  acknowledgeProjectNotice()
+  setAutomaticApkUpdateChecks(true)
+})
 
 const release = {
   versionCode: 2,
