@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto'
+import { Buffer } from 'node:buffer'
 import Dexie from 'dexie'
 
 import { describe, expect, it, vi } from 'vitest'
@@ -60,9 +61,11 @@ describe('IndexedDbArchiveStorage', () => {
       const reopened = new IndexedDbResourceStorage(database)
       for (const source of [small, large]) {
         const actual = await reopened.get(source.id)
-        expect(new Uint8Array(await actual!.originalBlob.arrayBuffer())).toEqual(
-          new Uint8Array(await source.originalBlob.arrayBuffer()),
-        )
+        expect(
+          Buffer.from(await actual!.originalBlob.arrayBuffer()).equals(
+            Buffer.from(await source.originalBlob.arrayBuffer()),
+          ),
+        ).toBe(true)
       }
       expect(await database.restoreStaging.count()).toBe(0)
     } finally {

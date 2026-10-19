@@ -4,6 +4,7 @@ import { unzipSync } from 'fflate'
 import { AppDatabase } from '../database/AppDatabase'
 import { IndexedDbArchiveStorage } from '../storage/IndexedDbArchiveStorage'
 import { IndexedDbRestoreStagingStore } from '../storage/IndexedDbRestoreStagingStore'
+import { hydrateResourceFromIndexedDb } from '../storage/ResourceStorageClone'
 import { toResourceListSummary, RESOURCE_TYPE, type Resource } from '../types/Resource'
 import { ExportService } from './ExportService'
 import { RestoreService } from './RestoreService'
@@ -79,11 +80,11 @@ describe('streamed archive round trip', () => {
       expect(progress.some((entry) => (entry.totalBytes ?? 0) > 0)).toBe(true)
       expect(progress.some((entry) => (entry.transferredBytes ?? 0) > 0)).toBe(true)
       for (const expected of records) {
-        const stored = (await db.resources.get(expected.id)) as Resource
+        const stored = hydrateResourceFromIndexedDb((await db.resources.get(expected.id))!)
         expect(await hashBlob(stored.originalBlob)).toBe(expected.contentHash)
         expect(stored.metadata).toEqual(expected.metadata)
       }
-      const old = (await db.resourceVersions.toArray())[0] as Resource
+      const old = hydrateResourceFromIndexedDb((await db.resourceVersions.toArray())[0]!)
       expect(await hashBlob(old.originalBlob)).toBe(version.contentHash)
       expect(old.versionGroupId).toBe('b')
       expect(await db.restoreStaging.count()).toBe(0)
@@ -179,7 +180,11 @@ describe('streamed archive round trip', () => {
       expect(await db.resources.get(original.id)).toBeDefined()
       const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('copy failed'))
       try {
-        await expect(storage.replace([], [replacement])).rejects.toThrow('copy failed')
+        // Small originals now use byte-backed storage without the Blob loader.
+        const originalBlob = new Blob([new Uint8Array(1024 * 1024 + 1)])
+        await expect(
+          storage.replace([], [{ ...replacement, originalBlob, fileSize: originalBlob.size }]),
+        ).rejects.toThrow('copy failed')
       } finally {
         fetch.mockRestore()
       }
