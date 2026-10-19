@@ -1,5 +1,11 @@
 # 当前进度
 
+## 2026-10-19 当前：Public 静态版本检查修复已发行并上线（n6k2）
+
+- 产品903485f0b72e2e80a868f7210d762ec01bdb77e3，Public0.0.245/code1000049，run39155656504完整成功；6420客户端项通过/2既有跳过、595文件覆盖、生产/原签名/JVM/Release lint通过。APK14978128bytes/SHA256 1cd73d5f8e3ae043af1a76e934c32a92e83ff7cfa774a42381fbb4fd5631dfc4，289宿主资产、0可选预装/0个.srlapp通过，outputs有已验交付包。
+- 更新检查改读已有GitHub Releases静态清单，真实公网200/1000049、1逻辑fetch/0 REST API请求，不需要Token/新CF服务；APK固定到清单对应提交，原完整性/原签名/停止与系统确认保持。共享原生白名单兼容当前GitHub asset/路径并保留旧asset-路径和HTTPS/域名边界；Main f0505904与Public同实现。旧API版需先手动覆盖安装此修复版一次。
+- 小号Fork已代同步，CF2d61598b Ready、线上public-sync-release-1000049-v1000049；网页/APK inventory/catalog/更新模块同字节，9当前APP包SHA全过。后续仅记录提交复用同候选，无需用户重新配置或手动同步。原生路径正式JUnit4项先红后绿、电脑真实下载流/SHA通过；未用实体手机，旧WebKit/行数门禁与旧清理拒绝限制保持。本轮临时探针/下载根已清空移除，其他用户工作未动。
+
 ## 2026-10-19 当前：Public APK 更新403修复候选（n6k2）
 
 - 原生下载另发现当前GitHub asset/路径被旧asset-白名单拒绝；已从主库f0505904同步2份Java，正式JUnit先红后绿4项及真实Java下载流/SHA通过。旧run39154430206已取消且未公开，新候选完整重跑发行。

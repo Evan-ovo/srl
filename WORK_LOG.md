@@ -510,3 +510,13 @@
 - 在等待0f227be发行期间，用真实正式APK的HEAD确认GitHub已使用/github-production-release-asset/<repoId>/<assetId>路径；旧共享ApkUpdateUrlPolicy只接受asset-路径，原生下载会拒绝该302。主库先修f05059047e628787ec301ae99f8863bc2b7cb8d3，再将2份Java原样同步Public；仅兼容当前路径前缀并保留旧路径、HTTPS和两个官方资产域名及原校验，无新代理/重试。
 - 正式JUnit新增真实路径回归先红（4项/1失败），修复后原Policy与正式JUnit在电脑JDK直接编译运行4项全过，伪装域名/HTTP/端口/凭据/片段/穿越/空仓库仍拒绝，官版原直连保持。额外电脑Java原Policy+HttpURLConnection真实跟随当前APK的1次跳转，完整流式读取14978200bytes/SHA256匹配，不落盘重复APK；非手机/Android安装实测。
 - run39154430206已主动取消，客户端回归/生产构建阶段通过但未公开发行，latest仍1a08c958；该候选不冒充完整通过。新候选将完整重跑客户端、签名APK、JVM与lint。公开增量基线0f227be636db0e2ed34d54c20a7159d84dddd34f，仅共享Policy/正式JUnit和既有记录，无新增二进制，地址仅GitHub官方域名及example.invalid占位符，author/committer为对应noreply。本条所属提交为下一审计基线。
+
+## 2026-10-19：Public 静态更新修复版发行与 CF 上线完成（n6k2）
+
+- 最终产品903485f0b72e2e80a868f7210d762ec01bdb77e3，Release public-903485f0b72e2e80a868f7210d762ec01bdb77e3，run39155656504完整成功。原始云端日志实际26+6394=6420通过/2既有跳过，595文件覆盖；生产构建、原签名APK、JVM与Release lint通过。旧0f候选39154430206主动取消且未公开，不作为完整发行凭证。
+- 正式Public0.0.245/code1000049，buildId srl-public-0.0.245-v1000049。公开APK14978128bytes，SHA256 1cd73d5f8e3ae043af1a76e934c32a92e83ff7cfa774a42381fbb4fd5631dfc4；web ZIP89376026bytes，SHA256 66a2fd0f6b645cf549711fc9ed77aa1d498f947f97ceefcf6aa52859518a8c79。公开重下载验签保持40f56d6a4ba259a703abbe0039f62193f9522bff6c6cf2714d774633894cc7bd，aapt确认app.srl.publicedition/0.0.245/1000049，Packaged/原WebView及资产来源保持；289宿主文件逐个大小/SHA通过，27可选文件实际0预装、0个.srlapp。DEX已含当前asset/与旧asset-路径、正确发行仓库；当前shell清单中的更新器含静态入口且无REST API URL。
+- 新loader真实访问公开latest/download/public-release.json得到200/1000049，1次逻辑fetch/0 REST API调用，下载URL固定到903485f且SHA匹配公开APK。大小/哈希/包名/较高版本/原签名、用户确认安装和TaskCenter停止均沿既有Owner。原生跳转兼容的4项正式JUnit先红后绿与真实Java流/SHA证据见上；未使用实体手机或声称已实机安装。旧API版需要先手动覆盖安装一次，README和助手已有明确步骤。
+- 已代用户将既有小号Fork从a70742d0非强制快进到903485f，两个已审计原提交无merge/重写；CF构建2d61598b-2402-4320-b4e0-da53079ac286 Ready（1m15s，版本431df540），线上public-sync-release-1000049-v1000049。公网inventory/API2 catalog与APK逐字节一致，更新模块字节一致，9个当前APP包全部大小/SHA通过。没有更改小号Worker配置、默认CF/GitHub身份或凭据、签名和自部署方式；后续记录提交仍复用同一个产品候选。
+- 已验APK从本轮.codex-tmp/20261019-static-update-release-n6k2移动至本聊天outputs/SRL_Pubilc-0.0.245-v1000049.apk独立交付，移动前后SHA相同，空临时根已移除；Main一次性Java探针4文件10849bytes/5空目录也已逐项核清删除。旧拒绝范围、用户旧交付和Main并行文档WIP保持。本轮没有新增遗留测试目录；原WebKit附加未完成与3处行数门禁仍为既有边界，未放宽或声称全部CI绿色。
+- 验证脚本初次把126bytes兼容helper误算为第二更新器、把可选路径字符串清单假设成对象；读取真实清单后改为当前shellFiles定位更新器及27路径逐项核对，全部通过，无产品补丁。日志首次下载EOF，原始ZIP后按ANSI清洗读得上述实际汇总；预估计数不用作结论。
+- 增量公开审计分段a70742d0→0f227be→903485f已通过；本次仅2既有记录，基线903485f0b72e2e80a868f7210d762ec01bdb77e3，无新增二进制/私人邮箱/域名/基础设施，公开前后复核身份与地址，本条所属提交作为下一已审计内容基线。主库共享源f05059047e628787ec301ae99f8863bc2b7cb8d3，两库1693路径投影一致0差异，本机同步游标已推进到该已提交源；此次Public独立发行适配仍按原标记保留。
