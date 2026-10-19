@@ -164,12 +164,18 @@ describe('bounded archive resource prefetch', () => {
       return record
     }
     const retries = [deferred<void>(), deferred<void>()]
-    const onReadFailures = vi.fn(() => retries[onReadFailures.mock.calls.length - 1]!.promise)
+    const failuresSeen = [deferred<void>(), deferred<void>()]
+    const onReadFailures = vi.fn(() => {
+      const index = onReadFailures.mock.calls.length - 1
+      failuresSeen[index]!.resolve()
+      return retries[index]!.promise
+    })
     const chunks: Uint8Array<ArrayBuffer>[] = []
     const running = encodeArchive({ ...options, onReadFailures }, async (chunk) => {
       chunks.push(chunk)
     })
-    await vi.waitFor(() => expect(onReadFailures).toHaveBeenCalledTimes(1))
+    await Promise.race([failuresSeen[0]!.promise, running])
+    expect(onReadFailures).toHaveBeenCalledTimes(1)
     expect(onReadFailures.mock.calls[0]).toEqual([
       [{ fileName: '0000.json', error: 'network stalled' }],
     ])
@@ -178,7 +184,8 @@ describe('bounded archive resource prefetch', () => {
     const written = chunks.reduce((total, chunk) => total + chunk.length, 0)
     expect(written).toBeGreaterThan(0)
     retries[0]!.resolve()
-    await vi.waitFor(() => expect(onReadFailures).toHaveBeenCalledTimes(2))
+    await Promise.race([failuresSeen[1]!.promise, running])
+    expect(onReadFailures).toHaveBeenCalledTimes(2)
     expect(chunks.reduce((total, chunk) => total + chunk.length, 0)).toBe(written)
     expect(attempts.get('0000')).toBe(2)
     retries[1]!.resolve()
