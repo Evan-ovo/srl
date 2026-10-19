@@ -1,6 +1,6 @@
 # SillyTavern Resource Library
 
-SRL 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作工具。本仓库保留本地与自部署功能，不包含维护者账号系统、账号依赖的资源广场、公告、公共图床、管理后台、反馈服务、官版 APK 更新服务或账号依赖的在线组件分享。Public APK 使用本仓库 GitHub Releases 的独立发行通道；需要云端基础设施的能力仍由部署者自行配置。功能边界与服务配置见 [Public 版本边界与自部署](docs/PUBLIC_RELEASE_DIFFERENCES.md)。
+SRL Public 是一个本地优先的 SillyTavern 资源整理、预览、互传与创作工具，无需注册账号即可使用本地功能。提供网页/PWA与 Android APK，支持用户自行部署；APK通过本仓库 GitHub Releases 发行和更新。需要联网服务的能力由使用者自行配置并控制。功能范围与服务配置见 [Public 功能与自部署](docs/PUBLIC_RELEASE_DIFFERENCES.md)。
 
 ## 隐私与网络说明
 
@@ -264,7 +264,7 @@ pnpm secret:scan --base <上次已审计的完整提交SHA>
 
 ## Android 源码构建
 
-需要 Android Studio、Android SDK（包含 Android 36 平台和 Build Tools）、JDK 21，以及前述 Node.js/pnpm 环境。当前默认应用名为 `SRL_Pubilc`，应用 ID 为 `app.srl.publicedition`，与官版独立，可同时安装。两个版本的本地资料相互隔离，可通过备份迁移。
+需要 Android Studio、Android SDK（包含 Android 36 平台和 Build Tools）、JDK 21，以及前述 Node.js/pnpm 环境。当前默认应用名为 `SRL_Pubilc`，应用 ID 为 `app.srl.publicedition`。资料保存在应用私有存储中，设备间迁移请使用备份与恢复。
 
 ### 打包网页功能的离线 APK（推荐）
 
@@ -313,7 +313,7 @@ APK 构建脚本已生成网页并同步到 Android。签名包完成后，再�
    - `PUBLIC_ANDROID_STORE_PASSWORD`、`PUBLIC_ANDROID_KEY_ALIAS`、`PUBLIC_ANDROID_KEY_PASSWORD`：同一密钥的密码和别名。
    - `PUBLIC_WEB_ORIGIN`：首次 Public 发行确定的本地 WebView 来源，后续保持不变。
    - `PUBLIC_ASSET_ORIGIN`：托管网页及 APP 包的公开 HTTPS 站点来源。
-2. 同页 Variables 添加 `PUBLIC_ANDROID_CERT_SHA256`（原 Public 发行证书 SHA-256，64 位十六进制，无冒号）及 `PUBLIC_APK_RELEASE_ENABLED=true`。先完成所有配置再开启；Fork 默认不会发行 APK，也不会获得上游 Secrets。已有安装必须沿用原 Public 密钥，不能拿官版密钥或临时 Debug 密钥替代。
+2. 同页 Variables 添加 `PUBLIC_ANDROID_CERT_SHA256`（原 Public 发行证书 SHA-256，64 位十六进制，无冒号）及 `PUBLIC_APK_RELEASE_ENABLED=true`。先完成所有配置再开启；Fork 默认不会发行 APK，也不会获得上游 Secrets。已有安装必须沿用原 Public 密钥，不能使用其他密钥或临时 Debug 密钥替代。
 3. 在 **Actions → Public release → Run workflow** 触发首次发行；之后推送产品更新自动发行。Android versionCode 由完整 Git 历史的提交数生成独立递增号；保留 `main` 历史并快进更新，不重建或压缩已发行历史。
 4. 小号 CF 已连接的 GitHub Fork 保持原 Worker 与账号，只修改 **Settings → Builds → Build configuration**：Build command 为 `pnpm public:web-build`；Deploy command 为 `pnpm exec wrangler deploy --config wrangler.example.jsonc`；构建环境 `NODE_VERSION=24`。Repository 处显示实际的 `owner/repo`，CF 登录邮箱不是仓库名。不需要另建账号或 Worker，也不需要给 CF 签名密钥或 GitHub Token。
 5. 首次 Release 成功后，在该 Fork 点击 **Sync fork → Update branch**，CF 自动取得该产品提交对应的 Release 网页包并部署；核对部署成功与 `/api/version`。以后按“上游推送并发行成功 → 同步 Fork → CF 自动部署”更新即可。
