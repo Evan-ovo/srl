@@ -9,6 +9,7 @@ import { startAuditPreview } from './AuditPreviewServer.mjs'
 import { createAuditApiFixture } from './AuditEnvironment.mjs'
 
 export const AUDIT_SUITES = {
+  'album-controls': 'scripts/AlbumControlsAudit.mjs',
   'safe-area-overlays': 'scripts/SafeAreaOverlaysAudit.mjs',
   startup: 'scripts/StartupLoadingAudit.mjs',
   'installable-appearance': 'scripts/InstallableAppearanceAudit.mjs',
@@ -177,6 +178,7 @@ export async function runIsolatedAudit(options, validation) {
         'discord-inbox',
         'discord-setup',
         'preview-loading',
+        'album-controls',
         'startup',
       ].includes(options.suite)
     ) {

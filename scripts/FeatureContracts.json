@@ -317,7 +317,13 @@
     },
     "imageAlbum": {
       "owner": "src/services/GeneratedImageAlbumService.ts",
-      "tests": ["src/services/GeneratedImageAlbumService.test.ts"],
+      "tests": [
+        "src/services/GeneratedImageAlbumService.test.ts",
+        "src/components/GeneratedImageAlbumApp.test.ts",
+        "src/components/SelfHostedFileBrowser.test.ts",
+        "src/services/FrontendWorkshopSelfHostedFiles.test.ts",
+        "src/core/SelfHostedFileListTransport.test.ts"
+      ],
       "backup": {
         "policy": "unsupported",
         "scopes": [],

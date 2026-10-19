@@ -17,6 +17,7 @@ import type {
 } from '../types/GeneratedImageAlbum'
 import FeatureAppHeader from './FeatureAppHeader.vue'
 import ImageHostingConnectionForm from './ImageHostingConnectionForm.vue'
+import SelfHostedFileBrowser from './SelfHostedFileBrowser.vue'
 
 defineEmits<{ back: [] }>()
 
@@ -35,9 +36,13 @@ const mimeType = ref('')
 const category = ref('')
 const hostedStatus = ref<GeneratedImageHostedStatus>('all')
 const settingsOpen = ref(false)
+const settingsMode = ref<'filters' | 'hosting'>('filters')
+const hostingSettingsLoading = ref(false)
+let settingsRequest = 0
+let settingsReturnFocus: HTMLElement | undefined
 const settingsButton = ref<HTMLButtonElement>()
 const settingsPanel = ref<HTMLElement>()
-const settingsCloseButton = ref<HTMLButtonElement>()
+const settingsInitialFocus = ref<HTMLElement>()
 const statusOptions: { id: GeneratedImageHostedStatus; label: string }[] = [
   { id: 'all', label: '全部' },
   { id: 'hosted', label: '已有直链' },
@@ -57,11 +62,13 @@ const detailCategory = ref('')
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-hosting-mode
 const hostingMode = ref<GeneratedImageHostingMode>('self-hosted')
 // SRL-PUBLIC-SYNC: END REPLACE id=generated-album-hosting-mode
+
 const rememberedImageBed = frontendWorkshopImageHostingService.getSelfHostedConfiguration()
 const selfHostedOrigin = ref(rememberedImageBed?.origin ?? '')
 const selfHostedToken = ref(rememberedImageBed?.token ?? '')
 const rememberSelfHosted = ref(rememberedImageBed?.remember ?? false)
 const selfHostedReady = ref(Boolean(rememberedImageBed))
+const selfHostedRevision = ref(0)
 let searchTimer: number | undefined
 let swipeStartX = 0
 let detailTrigger: HTMLElement | null = null
@@ -359,6 +366,10 @@ async function deleteItem(item: GeneratedImageAlbumItem): Promise<void> {
 }
 
 async function saveSelfHostedConnection(): Promise<void> {
+  if (busy.value) return
+  busy.value = true
+  error.value = ''
+  notice.value = ''
   try {
     const saved = await frontendWorkshopImageHostingService.saveSelfHostedConfiguration({
       origin: selfHostedOrigin.value,
@@ -368,9 +379,11 @@ async function saveSelfHostedConnection(): Promise<void> {
     selfHostedOrigin.value = saved.origin
     selfHostedToken.value = saved.token
     selfHostedReady.value = true
-    notice.value = saved.remember ? '自建图床连接已保存在本机。' : '自建图床仅在本次打开期间连接。'
+    selfHostedRevision.value++
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '自建图床连接无效'
+  } finally {
+    busy.value = false
   }
 }
 
@@ -409,14 +422,39 @@ function handleEscape(event: KeyboardEvent): void {
   else closeDetail()
 }
 
-function openSettings(): void {
+async function openSettings(
+  mode: 'filters' | 'hosting' = 'filters',
+  opener: HTMLElement | undefined = settingsButton.value,
+): Promise<void> {
+  if (!settingsOpen.value) settingsReturnFocus = opener
+  settingsMode.value = mode
   settingsOpen.value = true
-  void nextTick(() => settingsCloseButton.value?.focus({ preventScroll: true }))
+  const request = ++settingsRequest
+  hostingSettingsLoading.value = mode === 'hosting'
+  void nextTick(() => settingsInitialFocus.value?.focus({ preventScroll: true }))
+  if (mode !== 'hosting') return
+  error.value = ''
+  notice.value = ''
+  try {
+    await frontendWorkshopImageHostingService.initializeCredentials()
+    if (disposed || request !== settingsRequest || !settingsOpen.value) return
+    const config = frontendWorkshopImageHostingService.getSelfHostedConfiguration()
+    selfHostedOrigin.value = config?.origin ?? ''
+    selfHostedToken.value = config?.token ?? ''
+    rememberSelfHosted.value = config?.remember ?? false
+    selfHostedReady.value = Boolean(config)
+  } catch (cause) {
+    if (!disposed && request === settingsRequest)
+      error.value = cause instanceof Error ? cause.message : '读取自建图床连接失败'
+  } finally {
+    if (request === settingsRequest) hostingSettingsLoading.value = false
+  }
 }
 
 function closeSettings(): void {
   settingsOpen.value = false
-  void nextTick(() => settingsButton.value?.focus({ preventScroll: true }))
+  settingsRequest++
+  void nextTick(() => (settingsReturnFocus ?? settingsButton.value)?.focus({ preventScroll: true }))
 }
 
 function selectHostedStatus(status: GeneratedImageHostedStatus): void {
@@ -426,8 +464,13 @@ function selectHostedStatus(status: GeneratedImageHostedStatus): void {
 
 function keepSettingsFocus(event: KeyboardEvent): void {
   const buttons = Array.from(
-    settingsPanel.value?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [],
-  )
+    settingsPanel.value?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary',
+    ) ?? [],
+  ).filter((element) => {
+    const collapsed = element.closest('details:not([open])')
+    return !collapsed || collapsed.querySelector('summary') === element
+  })
   const index = buttons.findIndex((button) => button === document.activeElement)
   event.preventDefault()
   buttons[(index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length]?.focus()
@@ -471,9 +514,59 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="generated-album" data-srl-controls>
+  <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-page-root -->
+  <section
+    v-if="settingsOpen && settingsMode === 'hosting'"
+    ref="settingsInitialFocus"
+    class="generated-album generated-album__hosting-page"
+    tabindex="-1"
+    aria-label="自建图床"
+    data-srl-controls
+  >
+    <FeatureAppHeader title="自建图床" back-label="返回相册" @back="closeSettings" />
+    <main class="generated-album__hosting-content">
+      <p v-if="hostingSettingsLoading" role="status">正在读取本机图床连接…</p>
+      <details :open="!selfHostedReady" class="generated-album__connection">
+        <summary>连接设置</summary>
+        <ImageHostingConnectionForm
+          v-model:origin="selfHostedOrigin"
+          v-model:token="selfHostedToken"
+          v-model:remember="rememberSelfHosted"
+          :connected="selfHostedReady"
+          :busy="hostingSettingsLoading || busy"
+          @submit="saveSelfHostedConnection"
+        />
+      </details>
+      <p v-if="error" role="alert">{{ error }}</p>
+      <p v-else-if="notice" role="status">{{ notice }}</p>
+      <SelfHostedFileBrowser
+        v-if="selfHostedReady && !hostingSettingsLoading"
+        :revision="selfHostedRevision"
+        :origin="frontendWorkshopImageHostingService.getSelfHostedConfiguration()?.origin ?? ''"
+      />
+    </main>
+  </section>
+  <section
+    v-show="!(settingsOpen && settingsMode === 'hosting')"
+    class="generated-album"
+    data-srl-controls
+  >
+    <!-- SRL-PUBLIC-SYNC: END REPLACE id=generated-album-page-root -->
     <FeatureAppHeader title="生图相册" @back="$emit('back')">
       <template #actions>
+        <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-shared-hosting-entry -->
+        <button
+          class="feature-header-action"
+          type="button"
+          aria-label="自建图床设置"
+          aria-haspopup="dialog"
+          :aria-expanded="settingsOpen && settingsMode === 'hosting'"
+          :disabled="busy"
+          @click="openSettings('hosting', $event.currentTarget as HTMLElement)"
+        >
+          自建图床
+        </button>
+        <!-- SRL-PUBLIC-SYNC: END REPLACE id=generated-album-shared-hosting-entry -->
         <button
           ref="settingsButton"
           class="feature-header-action feature-header-action--icon"
@@ -482,7 +575,7 @@ onUnmounted(() => {
           title="相册设置"
           aria-haspopup="dialog"
           :aria-expanded="settingsOpen"
-          @click="openSettings"
+          @click="openSettings()"
         >
           <svg
             viewBox="0 0 24 24"
@@ -500,9 +593,11 @@ onUnmounted(() => {
         </button>
       </template>
     </FeatureAppHeader>
+
+    <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-settings-presentation -->
     <Teleport to="body">
       <div
-        v-if="settingsOpen"
+        v-if="settingsOpen && settingsMode === 'filters'"
         class="generated-album__settings-backdrop"
         role="presentation"
         @click.self="closeSettings"
@@ -520,7 +615,7 @@ onUnmounted(() => {
           <header>
             <h2>相册设置</h2>
             <button
-              ref="settingsCloseButton"
+              ref="settingsInitialFocus"
               type="button"
               aria-label="关闭相册设置"
               @click="closeSettings"
@@ -528,6 +623,7 @@ onUnmounted(() => {
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg>
             </button>
           </header>
+          <button type="button" @click="openSettings('hosting')">自建图床连接</button>
           <p>直链状态</p>
           <div class="generated-album__status-options">
             <button
@@ -547,6 +643,7 @@ onUnmounted(() => {
         </section>
       </div>
     </Teleport>
+    <!-- SRL-PUBLIC-SYNC: END REPLACE id=generated-album-settings-presentation -->
 
     <section class="generated-album__toolbar" aria-label="查找和导入图片">
       <label class="generated-album__search">
@@ -610,8 +707,10 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <p v-if="error" class="generated-album__message is-error" role="alert">{{ error }}</p>
-    <p v-else-if="notice" class="generated-album__message" role="status">{{ notice }}</p>
+    <template v-if="!(settingsOpen && settingsMode === 'hosting')">
+      <p v-if="error" class="generated-album__message is-error" role="alert">{{ error }}</p>
+      <p v-else-if="notice" class="generated-album__message" role="status">{{ notice }}</p>
+    </template>
 
     <Teleport to="body">
       <div
@@ -706,6 +805,7 @@ onUnmounted(() => {
                 @submit="saveSelfHostedConnection"
               />
               <!-- SRL-PUBLIC-SYNC: END REPLACE id=generated-album-hosting-controls -->
+
               <div class="generated-album__actions">
                 <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=generated-album-create-link-button -->
                 <button
@@ -819,6 +919,31 @@ onUnmounted(() => {
   color: var(--color-ink);
 }
 
+.generated-album__settings--hosting {
+  width: min(100%, 52rem);
+}
+
+.generated-album__settings--hosting > header {
+  position: sticky;
+  top: -0.75rem;
+  z-index: 1;
+  margin: -0.75rem -0.75rem 0;
+  padding: 0.75rem;
+  background: var(--color-surface-raised);
+}
+
+.generated-album__connection {
+  margin: 0.4rem 0 0.8rem;
+  border-bottom: 1px solid var(--color-line);
+}
+
+.generated-album__connection > summary {
+  min-height: 44px;
+  padding: 0.65rem 0.25rem;
+  cursor: pointer;
+  font-size: var(--text-body);
+}
+
 .generated-album__settings header,
 .generated-album__settings button {
   display: flex;
@@ -869,4 +994,26 @@ onUnmounted(() => {
   color: var(--selection-color, var(--color-accent));
   background: var(--selection-background, var(--color-accent-soft));
 }
+
+/* SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-self-hosted-full-page */
+.generated-album__hosting-page {
+  display: flex;
+  flex-direction: column;
+  height: var(--app-viewport-height, 100dvh);
+  min-height: 0;
+  overflow: hidden;
+  outline: none;
+}
+.generated-album__hosting-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 0.5rem max(0.5rem, var(--safe-bottom));
+}
+.generated-album__hosting-content > p {
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--color-ink-soft);
+}
+/* SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-self-hosted-full-page */
 </style>

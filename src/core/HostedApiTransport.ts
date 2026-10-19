@@ -178,9 +178,49 @@ function validateSelfHostedDeleteUrl(url: URL): void {
 }
 
 /**
- * 自建 ImgBed 图片删除入口。只允许标准 `/api/manage/delete/<fileId>`，不会扩成任意
- * 管理 API。网页端直接访问用户图床；原生端使用 CapacitorHttp 绕开 WebView CORS。
+ * 自建 ImgBed 文件列表入口，仅允许只读 list，不接受索引管理 action。
+ * 网页直接请求，原生端使用 CapacitorHttp，取消后丢弃原生迟到响应。
  */
+export async function selfHostedFileList(
+  request: typeof fetch,
+  url: URL,
+  options: SelfHostedImageDeleteOptions,
+): Promise<Response> {
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.pathname !== '/api/manage/list' ||
+    url.searchParams.has('action')
+  )
+    throw new TypeError('自建图床列表只允许 HTTPS 文件列表接口')
+  const headers = { Authorization: options.authorization, Accept: 'application/json' }
+  if (!isNativeApp())
+    return request(url, {
+      method: 'GET',
+      headers,
+      signal: options.signal,
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'error',
+    })
+  options.signal?.throwIfAborted()
+  const result = await CapacitorHttp.request({
+    url: url.toString(),
+    method: 'GET',
+    headers,
+    responseType: 'text',
+    disableRedirects: true,
+  })
+  options.signal?.throwIfAborted()
+  const responseHeaders = browserSafeNativeHeaders(result.headers)
+  return new Response(responseBody(result.data, result.status, responseHeaders), {
+    status: result.status,
+    headers: responseHeaders,
+  })
+}
+
+/** Standard single-file deletion; never enables folder deletion. */
 export async function selfHostedImageDelete(
   request: typeof fetch,
   url: URL,

@@ -520,3 +520,36 @@
 - 已验APK从本轮.codex-tmp/20261019-static-update-release-n6k2移动至本聊天outputs/SRL_Pubilc-0.0.245-v1000049.apk独立交付，移动前后SHA相同，空临时根已移除；Main一次性Java探针4文件10849bytes/5空目录也已逐项核清删除。旧拒绝范围、用户旧交付和Main并行文档WIP保持。本轮没有新增遗留测试目录；原WebKit附加未完成与3处行数门禁仍为既有边界，未放宽或声称全部CI绿色。
 - 验证脚本初次把126bytes兼容helper误算为第二更新器、把可选路径字符串清单假设成对象；读取真实清单后改为当前shellFiles定位更新器及27路径逐项核对，全部通过，无产品补丁。日志首次下载EOF，原始ZIP后按ANSI清洗读得上述实际汇总；预估计数不用作结论。
 - 增量公开审计分段a70742d0→0f227be→903485f已通过；本次仅2既有记录，基线903485f0b72e2e80a868f7210d762ec01bdb77e3，无新增二进制/私人邮箱/域名/基础设施，公开前后复核身份与地址，本条所属提交作为下一已审计内容基线。主库共享源f05059047e628787ec301ae99f8863bc2b7cb8d3，两库1693路径投影一致0差异，本机同步游标已推进到该已提交源；此次Public独立发行适配仍按原标记保留。
+
+## 2026-10-19 相册导入材质与自建图床入口（v7q2，本地未发布）
+
+- 目标与取证：修复生图相册导入按钮外层点击区继承 Foundation 阴影、与内层材质叠出双框的问题；旧提交浏览器截图及 computedStyle 可复现。只在现有外层规则清除 box-shadow，保留内层材质、44px 命中与紧凑可见面。
+- 入口：复用原相册设置弹窗、ImageHostingConnectionForm 与原凭据 Service，增加“相册设置 → 自建图床连接”，空相册即可配置；Public 页头补“自建图床”，主库原“我的图床 → 自建图床”保持。初始化失败真实提示、关闭后迟到读取不回填、键盘 Tab 与关闭回焦点保持；连接反馈只显示在当前弹窗，不重复显示在背后。未增加图床后端、凭据存储或自动上传。
+- 验证：主库25/Public23项相册回归通过；两边 Chromium/WebKit 各320/375/390/430宽×浅深8场景，共32场景通过，真实 touch、文件选择器、同一个真实图床 Service 配合内存凭据适配器、单次列表读取及保存反馈通过。原图导入落库使用隔离夹具，未把 chooser 检查冒充实际数据库/真实图床网络验收。定向 lint/Prettier、差异检查、共享相册组件/测试/CSS/审计脚本标记投影一致通过；新 AlbumControlsAudit.mjs 为可重复回归，旧基线对照由可选 SRL_ALBUM_BEFORE_REF 指定，默认不依赖 HEAD 必须有缺陷。
+- 版本与边界：相册内容修订4→5；助手入口说明及对应相册 Owner 指纹更新，其他并行 Owner 不盲刷。未提交、推送、发行 APK 或部署 CF，未操作实体手机/用户真实图床；现有线上0.0.245不含本轮 UI。
+
+- Public 快照：HEAD/已公开审计基线仍为bfef9a7492e517d5ab027691eebf7f9c6934e354，无本轮新提交；开始工作树干净。290知识Owner、14APP/33范围合同、完整类型及生产构建通过，9当前+51既有包/27可选资产边界检查通过；构建保留既有分块体积警告。助手修订50→51，主库账号入口仍通过 REPLACE 保持边界；不恢复共享图床账号接口，不修改自部署方式、签名或发行配置。
+
+- 收尾限制：已只读核对本轮8根普通文件/属性/规范化路径，5291～5294均无监听；最终截图已独立交付。functions.exec→exec_command 调用 PowerShell 对核清清单逐文件 Remove-Item -LiteralPath 并删空目录，被 CreateProcess 审批整体拒绝，原始理由为“rejected: blocked by policy”，没有更具体原因；没有删除执行、重试或换 API。拟删102文件3423454bytes原样保留，原计划保留最终8个结果JSON；旧拒绝范围完全未触碰。后续仅在允许该范围清理的条件变化后复核处理。
+
+- 本库遗留范围为 .codex-tmp/20261019-album-controls-v7q2-public、-public-webkit、-public-final、-public-webkit-final；拟删51文件1657390bytes，另4个最小结果JSON原计划保留。未清理当前 dist 或旧拒绝目录，未提交截图/凭据/安装包；本轮没有新增公开提交邮箱或隐私审计基线。
+
+## 2026-10-19 自建图床远端文件与Public紧凑整页（r8m3，本地未发布）
+
+- 目标/实现：用户确认需要自建 ImgBed 的全部远端直链文件，不限本地相册或图片。沿原 FrontendWorkshopImageHostingService 增加只读 listSelfHosted，HostedApiTransport 增加精确 list GET（禁止管理 action、URL凭据和跳转，原生复用 CapacitorHttp），每页50项；解析真实 FileType/FileSizeBytes 与文档旧键，支持图片/视频/音频/其他、目录、递归、搜索、分页。单文件删除复用原 deleteSelfHosted 与统一 confirmAction，确认内显示真实来源/路径；删除只更新远端列表，不改本地相册或原件，不扫本地原图、不新增存储/后台服务/自动重试。AUTH_CODE与list/delete权限不足、无分页索引、CORS失败真实提示。
+- UI/交互：SelfHostedFileBrowser 为两版共用紧凑列表，44px小缩略图与68px实测行高、搜索/类型同排、右侧复制/删除图标；Public按用户后续要求改独立整页，返回相册，连接配置折叠，删除“仅在本次打开期间连接”小字。页码参考现有WorldBookBrowser/角色详情的 inline-page-jump：焦点全选、失焦/Enter提交、非法值恢复、越界夹到末页、同页零重复请求；不保留额外跳转按钮。最初单字符宽+Foundation高度导致细竖框；只压高度后仍过窄，新增实际尺寸断言后定位 Public整页 #app 通用子元素 min-width:0 覆盖局部最小宽度。已撤掉失败的最小宽度补丁，最终明确 width:max(32px,Nch)、flex:none、高28，label命中高44；不改全局规则。最后两引擎四宽浅深均实测输入框32×28、图标命中≥44、行高≤68、无横溢。临时级联调试字段已移除，保留尺寸回归。
+- 验证：相关回归主库6文件67项/Public5文件50项通过；之后页码交互、无小字/保存互斥的受影响2文件主库31/Public29项最终通过，其余方法未再改。最终Chromium/WebKit分别320/375/390/430×浅深、两库共32场景通过，真实tap、剪贴板调用、其他类型、目录、筛选、分页与页码Enter、删除取消/确认、键盘Tab、返回焦点、导入chooser均通过；远端HTTP/文件列表/缩略图/删除为隔离路由夹具，实际组件和Service/统一确认参与，凭据为内存适配器，没有访问用户真实ImgBed或操作实体手机。服务/原生桥单测还覆盖401/403、AUTH_CODE、非法路径、非分页响应、取消后的原生迟到响应；原生HTTP在已发出后不能由当前桥物理中止，页面明确丢弃迟到响应。
+- 共享/构建：9个本轮共享路径按 MAIN-ONLY/PUBLIC-ONLY/REPLACE 投影核对一致；Public整页/主库弹窗用配对REPLACE保留，其余后续任务源码没有复制。定向eslint/Prettier、差异检查、Main完整vue-tsc、Public完整生产构建通过；最终局部外观补正再做隔离生产构建及9当前+51既有包/27可选资产完整检查通过。知识Owner最终326/293、合同15/14APP与33范围通过；只登记/刷新本轮图床Owner与说明，其它任务指纹保持。入口、权限与自部署文档已更新。
+- 边界：本轮无新提交、推送、APK发行或CF部署，线上0.0.245仍不含本轮；没有测试真实图床网络权限、实际删除或手机安装。删除成功会使旧直链失效，用户本地旧链接记录不自动重写；文件打开沿原公开链接，不能保证所有格式都可在浏览器内预览。网页仍需用户图床允许管理接口跨域。上游依据为 https://cfbed.sanyue.de/api/list.html 、 https://cfbed.sanyue.de/api/delete.html 及上游list/delete源码；DELETE支持已由上游源核对，无试探性更改删除协议。
+
+- Public快照/修订：HEAD及公开审计基线仍bfef9a7492e517d5ab027691eebf7f9c6934e354，原v7q2相册修改保持并继续完成；相册5→6、助手51→52，工作台8/生图10保持，主库差异修订有配对REPLACE。293知识Owner、完整类型/生产/包体检查通过；原FeatureContracts的相册备份边界本轮未改。Public身份、签名、默认服务/自部署参数未变，无新增公开SHA或邮箱。
+- 本库拒绝清理范围：D:/cunchu/SillyTavernResourceLibrary-Public/.codex-tmp/20261019-remote-files-r8m3-* 的11个本轮根，suffix为public-complete、public-final、public-inline、public-inline-webkit、public-page、public-pager、public-pager-cascade、public-pager-proof、public-pager-webkit、public-verified、public-verified-webkit；拟删674文件114853355bytes，另4JSON原计划保留。
+
+- 收尾：最终浅深截图独立交付到当前聊天outputs，4个最终浏览器根的8个结果JSON为最小证据。24个本轮r8m3根已只读核对路径/普通属性/链接及端口退出；计划删可再生fixture、重复截图和隔离final-build共917文件124577292bytes，未碰当前dist或旧v7q2/其它拒绝范围。functions.exec→exec_command 调用PowerShell按核清清单 Remove-Item -LiteralPath 逐文件再删空目录，CreateProcess整体拒绝，原始理由“rejected: blocked by policy”，无更具体原因；删除未执行、不重试、不换API。全部925文件（含原计划保留8JSON）保持，待允许该范围清理的条件变化后复核。
+
+- 收尾并行变化补记：最后一次全知识复核时 Public293仍通过；Main在本轮阶段326通过后，另外任务继续修改9个Owner（PersonalResourceBackup、PersonalResourceEditor、PersonalResourceService、SecretResourceService、UseCloudBackupCenter、UseLibraryArchive、BackupScopeRegistry、PersonalResourceContainer、SecretProtectionSettings），当前全知识门禁因此待核，本轮图床Owner指纹和格式仍匹配，不代刷这些并行指纹。前述类型与326通过均为当时快照，不声明最新整个Main工作树所有门禁绿色；未提交/推送/发布状态保持。
+
+## 2026-10-19 图床优化保存main并准备接收共享提交（t5k9，本条所属提交）
+
+- 用户要求两库main保存图床/UI优化并同步官版已提交内容。本提交先保存v7q2/r8m3完整Public实现、独立整页、inline页码、测试及边界说明；原HEAD bfef9a7492e517d5ab027691eebf7f9c6934e354为既有公开审计基线。图床67/50项及最终31/29项、双引擎32场景、Public类型/构建/包体验证沿用本轮已通过证据。
+- 后续只从固定的官版已提交源码做三方同步，人设/云备份已提交优化纳入，其他未提交施工不带入。仓库级author/committer使用对应GitHub noreply，Public账号/整页/签名/自部署边界保持。本轮仅本地提交与同步，不推送/发行/部署/手机测试；所有旧拒绝清理目标保持，不重试。

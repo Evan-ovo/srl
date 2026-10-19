@@ -11,14 +11,16 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=frontend-workshop-content-revision
   frontendWorkshop: 8,
   // SRL-PUBLIC-SYNC: END REPLACE id=frontend-workshop-content-revision
+  // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-generation-content-revision
   imageGeneration: 10,
+  // SRL-PUBLIC-SYNC: END REPLACE id=image-generation-content-revision
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-album-content-revision
-  imageAlbum: 4,
+  imageAlbum: 6,
   // SRL-PUBLIC-SYNC: END REPLACE id=image-album-content-revision
   userPersona: 7,
   tavernBridge: 9,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-content-revision
-  assistant: 50,
+  assistant: 52,
   // SRL-PUBLIC-SYNC: END REPLACE id=assistant-content-revision
 }
 

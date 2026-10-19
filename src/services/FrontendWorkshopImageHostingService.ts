@@ -1,4 +1,8 @@
-import { selfHostedImageDelete, selfHostedImageUpload } from '../core/HostedApiTransport'
+import {
+  selfHostedFileList,
+  selfHostedImageDelete,
+  selfHostedImageUpload,
+} from '../core/HostedApiTransport'
 import { isCapacitorApp } from '../utils/CapacitorDetection'
 import { generatedImageToBlob } from './GeneratedImageData'
 import type { FrontendWorkshopGeneratedImage } from '../types/ImageGeneration'
@@ -18,6 +22,39 @@ export interface FrontendWorkshopHostedImage {
 }
 
 export type FrontendWorkshopSelfHostedAuthMode = 'auto' | 'bearer' | 'auth-code'
+
+export type SelfHostedFileType = 'image' | 'video' | 'audio' | 'other'
+export interface SelfHostedRemoteFile {
+  fileId: string
+  name: string
+  url: string
+  managementOrigin: string
+  mimeType: string
+  sizeBytes: number | null
+  createdAt: number | null
+  type: SelfHostedFileType
+}
+export interface SelfHostedFilePage {
+  files: SelfHostedRemoteFile[]
+  directories: string[]
+  total: number
+}
+
+function safeRemotePath(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.split('/').every((part) => part && part !== '.' && part !== '..') &&
+    !Array.from(value).some((character) => character === '\\' || character.charCodeAt(0) < 32)
+  )
+}
+
+function nonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  if (value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : null
+}
 
 export interface FrontendWorkshopSelfHostedImageBedConfig {
   /** 完整上传 API；旧版仅保存站点根地址时会自动迁移到 /upload。 */
@@ -185,6 +222,7 @@ function rootUploadUrl(source: URL): URL {
 
 export class FrontendWorkshopImageHostingService {
   private readonly request: typeof fetch
+
   private readonly credentialStore: LocalCredentialRepository
   private selfHostedConfig: FrontendWorkshopSelfHostedImageBedConfig | null = null
 
@@ -193,6 +231,7 @@ export class FrontendWorkshopImageHostingService {
     credentialStore: LocalCredentialRepository = localCredentialStore,
   ) {
     this.request = request
+
     this.credentialStore = credentialStore
     this.selfHostedConfig = this.readRememberedSelfHostedConfig()
   }
@@ -421,6 +460,107 @@ export class FrontendWorkshopImageHostingService {
       createdAt: Date.now(),
       managementOrigin,
       upstreamFileId,
+    }
+  }
+
+  async listSelfHosted(
+    options: {
+      start?: number
+      directory?: string
+      search?: string
+      type?: SelfHostedFileType | ''
+      recursive?: boolean
+      signal?: AbortSignal
+    } = {},
+  ): Promise<SelfHostedFilePage> {
+    const config = this.selfHostedConfig
+    if (!config?.token) throw new Error('请先保存自建图床连接，并使用包含 list 权限的 API Token。')
+    if (normalizedAuthMode(config.authMode) === 'auth-code' && !isImgBedApiToken(config.token))
+      throw new Error('AUTH_CODE 只能上传。查看远端文件需要包含 list 权限的 API Token。')
+    const directory = options.directory ?? ''
+    if (directory && !safeRemotePath(directory)) throw new Error('图床目录无效')
+    if (options.type && !['image', 'video', 'audio', 'other'].includes(options.type))
+      throw new Error('文件类型无效')
+    const origin = new URL(config.origin).origin
+    const url = new URL('/api/manage/list', origin)
+    const recursive = options.recursive !== false
+    url.search = new URLSearchParams({
+      start: String(Math.max(0, Math.floor(options.start ?? 0))),
+      count: '50',
+      dir: directory,
+      search: options.search?.trim() ?? '',
+      fileType: options.type ?? '',
+      recursive: String(recursive),
+    }).toString()
+    let response: Response
+    try {
+      response = await selfHostedFileList(this.request, url, {
+        authorization: `Bearer ${config.token}`,
+        signal: options.signal,
+      })
+    } catch (cause) {
+      options.signal?.throwIfAborted()
+      throw new Error(
+        '无法读取自建图床文件列表，请检查网络及 /api/manage/list 的跨域 CORS 配置。',
+        { cause },
+      )
+    }
+    if (response.status === 401 || response.status === 403)
+      throw new Error('当前图床凭据没有文件列表权限，请使用包含 list 权限的 API Token。')
+    if (!response.ok) throw new Error(`读取自建图床列表失败（HTTP ${response.status}）`)
+    const payload = await jsonPayload<{
+      files?: { name?: unknown; metadata?: Record<string, unknown> }[]
+      directories?: unknown[]
+      totalCount?: unknown
+      directFileCount?: unknown
+      isIndexedResponse?: boolean
+    }>(response, '图床没有返回有效的文件列表')
+    if (
+      !Array.isArray(payload.files) ||
+      payload.files.length > 50 ||
+      payload.isIndexedResponse === false
+    )
+      throw new Error('图床未返回分页索引，请在 ImgBed 后台检查或重建文件索引后重试。')
+    const files = payload.files.map((file) => {
+      if (!file || !safeRemotePath(file.name)) throw new Error('图床返回了无效的文件路径')
+      const metadata = file.metadata ?? {}
+      const mimeType = String(metadata.FileType ?? metadata['File-Mime'] ?? '')
+      const type: SelfHostedFileType = mimeType.startsWith('image/')
+        ? 'image'
+        : mimeType.startsWith('video/')
+          ? 'video'
+          : mimeType.startsWith('audio/')
+            ? 'audio'
+            : 'other'
+      return {
+        fileId: file.name,
+        name:
+          typeof metadata.FileName === 'string' && metadata.FileName
+            ? metadata.FileName
+            : file.name.split('/').at(-1)!,
+        url: new URL(
+          `/file/${file.name.split('/').map(encodeURIComponent).join('/')}`,
+          origin,
+        ).toString(),
+        managementOrigin: origin,
+        mimeType,
+        type,
+        sizeBytes: nonNegativeNumber(metadata.FileSizeBytes ?? metadata['File-Size']),
+        createdAt: nonNegativeNumber(metadata.TimeStamp),
+      }
+    })
+    return {
+      files,
+      directories: (payload.directories ?? []).filter(
+        (path): path is string =>
+          safeRemotePath(path) &&
+          path !== directory &&
+          (!directory || path.startsWith(directory + '/')),
+      ),
+      total:
+        nonNegativeNumber(
+          recursive ? payload.totalCount : (payload.directFileCount ?? payload.totalCount),
+        ) ?? files.length,
     }
   }
 

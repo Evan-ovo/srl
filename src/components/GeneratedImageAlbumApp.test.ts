@@ -19,6 +19,8 @@ const { albumService, hostingService } = vi.hoisted(() => ({
     delete: vi.fn(),
   },
   hostingService: {
+    listSelfHosted: vi.fn(async () => ({ files: [], directories: [], total: 0 })),
+    initializeCredentials: vi.fn(async () => {}),
     getSelfHostedConfiguration: vi.fn(() => null),
     saveSelfHostedConfiguration: vi.fn((value) => value),
     status: vi.fn(async () => ({
@@ -83,6 +85,28 @@ function pendingPreviews(page: GeneratedImageAlbumPage) {
 }
 
 describe('GeneratedImageAlbumApp', () => {
+  // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-album-own-hosting-entry-tests
+  it('opens the self-hosted form directly from the empty album header and returns focus', async () => {
+    const empty = await albumPage(0)
+    albumService.list.mockResolvedValue(empty)
+    const wrapper = mount(GeneratedImageAlbumApp, { attachTo: document.body })
+    await flushPromises()
+    const button = wrapper.get('[aria-label="自建图床设置"]')
+    await button.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[aria-label="自建图床"]')).not.toBeNull()
+    expect(document.body.querySelector('.image-hosting-connection')).not.toBeNull()
+    expect(document.body.querySelector('[role="dialog"][aria-label="自建图床"]')).toBeNull()
+    expect(document.body.querySelector('.generated-album__hosting-page')).not.toBeNull()
+    document.body
+      .querySelector<HTMLButtonElement>('[aria-label="关闭自建图床设置"], [aria-label="返回相册"]')!
+      .click()
+    await flushPromises()
+    expect(document.activeElement).toBe(button.element)
+    expect(albumService.getOriginalBlob).not.toHaveBeenCalled()
+  })
+  // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-album-own-hosting-entry-tests
+
   afterEach(() => vi.useRealTimers())
   beforeEach(() => {
     vi.clearAllMocks()
@@ -120,6 +144,71 @@ describe('GeneratedImageAlbumApp', () => {
       categories: ['背景'],
       mimeTypes: ['image/png'],
     })
+  })
+
+  it('opens self-hosted connection from an empty album without loading an original or uploading', async () => {
+    const empty = await albumPage(0)
+    albumService.list.mockResolvedValue(empty)
+    const wrapper = mount(GeneratedImageAlbumApp, { attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[aria-label="相册设置"]').trigger('click')
+    await flushPromises()
+    const own = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>('.generated-album__settings button'),
+    ).find((button) => button.textContent === '自建图床连接')!
+    own.click()
+    await flushPromises()
+    const form = document.body.querySelector<HTMLFormElement>('.image-hosting-connection')!
+    expect(form).not.toBeNull()
+    expect(hostingService.initializeCredentials).toHaveBeenCalledTimes(1)
+    const fields = form.querySelectorAll<HTMLInputElement>('input')
+    fields[0]!.value = 'https://img.example'
+    fields[0]!.dispatchEvent(new Event('input', { bubbles: true }))
+    fields[1]!.value = 'example-token'
+    fields[1]!.dispatchEvent(new Event('input', { bubbles: true }))
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(hostingService.saveSelfHostedConfiguration).toHaveBeenCalledWith({
+      origin: 'https://img.example',
+      token: 'example-token',
+      remember: false,
+    })
+    expect(document.body.querySelector('[aria-label="自建图床"]')!.textContent).not.toContain(
+      '自建图床仅在本次打开期间连接。',
+    )
+    form.closest('details')!.open = true
+    fields[0]!.focus()
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    fields[0]!.dispatchEvent(tab)
+    if (document.body.querySelector('[role="dialog"][aria-label="自建图床"]'))
+      expect(document.activeElement).toBe(fields[1])
+    else expect(tab.defaultPrevented).toBe(false)
+    expect(albumService.getOriginalBlob).not.toHaveBeenCalled()
+    expect(hostingService.uploadBlobSelfHosted).not.toHaveBeenCalled()
+    expect(albumService.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fill a closed connection dialog from a late credential read', async () => {
+    const reading = deferred<void>()
+    hostingService.initializeCredentials.mockReturnValueOnce(reading.promise)
+    const wrapper = mount(GeneratedImageAlbumApp, { attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[aria-label="相册设置"]').trigger('click')
+    await flushPromises()
+    Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>('.generated-album__settings button'),
+    )
+      .find((button) => button.textContent === '自建图床连接')!
+      .click()
+    await flushPromises()
+    document.body
+      .querySelector<HTMLButtonElement>('[aria-label="关闭自建图床设置"], [aria-label="返回相册"]')!
+      .click()
+    reading.resolve()
+    await flushPromises()
+    expect(document.body.querySelector('.generated-album__settings')).toBeNull()
+    expect(hostingService.saveSelfHostedConfiguration).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(wrapper.get('[aria-label="相册设置"]').element)
   })
 
   it('serializes a burst of filters and only prepares the latest requested page', async () => {

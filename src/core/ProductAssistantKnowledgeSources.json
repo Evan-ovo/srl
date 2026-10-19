@@ -1,6 +1,21 @@
 {
-  "knowledgeSha256": "eca00e26ec31b30d9af09255cff81b75dc361f5d857cc47ab14123b27c6da219",
+  "knowledgeSha256": "21744c07589b7d65b30514033d36ace9cea70dc32f876e7b8a0fb1b5e8f67a98",
   "sources": [
+    {
+      "path": "src/components/SelfHostedFileBrowser.vue",
+      "guides": ["image-album"],
+      "sha256": "7baa2f60c1b740b393c88c1109840496628555c02f8a7405ce4b732c7998c8df"
+    },
+    {
+      "path": "src/core/HostedApiTransport.ts",
+      "guides": ["image-album"],
+      "sha256": "68039cfc7ff1216459e0bce292acc81479c1148bafe4b43c3e1bc3ce71dd7299"
+    },
+    {
+      "path": "src/services/FrontendWorkshopImageHostingService.ts",
+      "guides": ["image-album"],
+      "sha256": "d44c3921c61026e50ddef6210c441a5be40a5de90d12e0717511716ebc785409"
+    },
     {
       "path": "src/components/RecycleBinPanel.vue",
       "guides": ["resource-attachments", "data-protection"],
@@ -475,7 +490,7 @@
     {
       "path": "src/components/GeneratedImageAlbumApp.vue",
       "guides": ["image-album"],
-      "sha256": "04a9b6efda161fde25b1d0b1ec25c50c85d38e6358bb5eb133c2b378232b12fd"
+      "sha256": "deadadc169c315a0d2968ca28bb2c93e2ee369661b77285140924ec875ef3f4c"
     },
     {
       "path": "src/components/ImageHostingConnectionForm.vue",

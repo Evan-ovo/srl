@@ -28,7 +28,7 @@ Public 以维护者主库作为功能源码上游。除依赖维护者账号或�
 - **Cloudflare**：部署本仓库的静态网页；部署期 Worker 功能另行从 `SRL-Worker-Public` 部署。
 - **Koofr 与 WebDAV**：在应用中填写自己的服务地址与凭据；数据保存到使用者选择的云端目标。
 - **Discord Bridge**：使用者部署并配置自己的 Discord Worker/Bot。它不使用通用 SRL Worker 地址。
-- **ImgBed**：在应用中填写自己的 ImgBed 地址与 Token；需要时可单独部署仓库提供的 ImgBed 跨域代理。
+- **ImgBed**：生图相册 → 自建图床进入独立整页，在折叠的连接设置中填写自己的 ImgBed 地址与 API Token。远端文件支持全部类型、目录/搜索/筛选、分页及页码跳转、复制直链与确认删除；列出文件需要 `list` 权限，删除需要 `delete` 权限，AUTH_CODE 仅能上传。网页需图床管理接口允许跨域。
 - **AI/API**：使用者自行填写服务地址与 API Key。
 
 ## Android 公共版身份

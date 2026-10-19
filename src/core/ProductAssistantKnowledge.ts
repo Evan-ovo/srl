@@ -731,6 +731,11 @@ export const ASSISTANT_FEATURE_GUIDES: readonly AssistantFeatureGuide[] = [
     steps: [
       '从生图结果选择“保存到相册”，或在相册中导入本地图片。',
       '按名称、分类、格式和排序查找图片；需要按托管状态筛选时查看相册设置。',
+      '相册设置 → 自建图床连接可在空相册配置自己的 ImgBed 地址和上传凭据；未选择设备保存时只在本次打开期间连接。保存连接不会上传图片，也不代表远端连接已验证。',
+      '自建图床的“远端文件”直接列出当前 ImgBed 的文件，包含其他设备上传的图片、视频、音频和其他文件；支持目录、搜索、类型筛选、每页50项与页码跳转、复制直链和打开文件。查看列表需要 list 权限，确认删除需要 delete 权限；AUTH_CODE 仅能上传。删除远端文件不删除本地相册或资源，原直链会失效。',
+      // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=public-album-own-hosting-help
+      '相册页头“自建图床”或相册设置中的自建图床入口，会打开独立整页管理；顶部返回相册，连接设置默认折叠，远端文件以紧凑列表显示。',
+      // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=public-album-own-hosting-help
       '打开图片可查看或管理原图；托管地址、预览图和原图是分别保存的数据。',
     ],
     troubleshooting: [
