@@ -320,10 +320,7 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
           portableData.resourceGalleryCategories = await resourceGalleryService.exportCategories()
         if (details.portableSelection.aiTaggingState) {
           const { aiTaggingDraftService } = await loadArchiveServices()
-          portableData.aiTaggingState = {
-            draft: aiTaggingDraftService.loadDraft(),
-            undo: aiTaggingDraftService.loadUndo(),
-          }
+          portableData.aiTaggingState = aiTaggingDraftService.exportPortableState()
         }
         if (details.portableSelection.externalApps) {
           portableData.externalApps = await (
@@ -357,7 +354,17 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
       }
       checkCancelled()
       const allResources = source.resources
-      if (!resumed && details.portableSelection.plaintextSecretCopy) {
+      const secretCopies = details.portableSelection.plaintextSecretCopy
+        ? allResources.filter(
+            (resource) =>
+              resource.type === 'secret' &&
+              resource.metadata.secretProtection !== 'none' &&
+              resource.metadata.privateFieldCount !== 0 &&
+              includePersonalResource(resource, details.portableSelection.personalResources) &&
+              (details.mode === 'full' || details.resourceIds?.includes(resource.id)),
+          )
+        : []
+      if (!resumed && secretCopies.length) {
         const confirmed = await confirmAction({
           title: '明文密钥副本',
           message:
@@ -369,23 +376,15 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
           return
         }
         checkCancelled()
-        const password = await requestSecretPassword('输入查看密码，为所选密钥卡生成明文副本。')
-        if (!password) {
-          taskCenter.cancelled(operationId)
-          return
-        }
-        checkCancelled()
-        const selected = allResources.filter(
-          (resource) =>
-            includePersonalResource(resource, details.portableSelection.personalResources) &&
-            (details.mode === 'full' || details.resourceIds?.includes(resource.id)),
-        )
         portableData.plaintextSecretCopies = []
-        for (const summary of selected) {
+        for (const summary of secretCopies) {
           checkCancelled()
-          if (summary.type !== 'secret') continue
           portableData.plaintextSecretCopies.push(
-            ...(await plaintextSecretCopies([await source.read(summary, false)], password)),
+            ...(await plaintextSecretCopies([await source.read(summary, false)], undefined, () =>
+              requestSecretPassword(
+                '输入这批密钥卡的原查看密码，同一来源在本次页面内只需输入一次。',
+              ),
+            )),
           )
         }
       }
@@ -569,15 +568,10 @@ export function useLibraryArchive(getContext: () => LibraryArchiveContext) {
       await apply('图库分类', () =>
         resourceGalleryService.importCategories(data.resourceGalleryCategories!),
       )
-    if (data.aiTaggingState?.draft)
-      await apply('AI 草稿', async () => {
+    if (data.aiTaggingState)
+      await apply('AI 标签工作区', async () => {
         const { aiTaggingDraftService } = await loadArchiveServices()
-        aiTaggingDraftService.saveDraft(data.aiTaggingState!.draft!)
-      })
-    if (data.aiTaggingState?.undo)
-      await apply('AI 撤销', async () => {
-        const { aiTaggingDraftService } = await loadArchiveServices()
-        aiTaggingDraftService.saveUndo(data.aiTaggingState!.undo!)
+        aiTaggingDraftService.importPortableState(data.aiTaggingState!)
       })
     if (data.externalApps)
       await apply('应用数据', async () =>

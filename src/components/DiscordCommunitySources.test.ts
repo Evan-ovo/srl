@@ -7,8 +7,6 @@ import {
   COMMUNITY_SOURCE_ATTACHMENT_LOCAL_STATE,
   COMMUNITY_SOURCE_MESSAGE_KIND,
   COMMUNITY_SOURCE_PLATFORM,
-  COMMUNITY_SOURCE_REFRESH_MODE,
-  COMMUNITY_SOURCE_REMOTE_STATE,
   toCommunitySourceSummary,
   type ResourceCommunitySourceSummary,
   type ResourceCommunitySourceView,
@@ -16,25 +14,13 @@ import {
 import DiscordCommunitySources from './DiscordCommunitySources.vue'
 
 const runtime = vi.hoisted(() => ({
-  clearRemoteAvailability: vi.fn(),
   getAttachmentBlob: vi.fn(),
   getForResource: vi.fn(),
   listSummariesForResource: vi.fn(),
-  recordMessageRemoteCheck: vi.fn(),
-  recordManualRefresh: vi.fn(),
-  recordRemoteCheck: vi.fn(),
-}))
-
-const refreshRuntime = vi.hoisted(() => ({
-  readDiscordSourceRemote: vi.fn(),
 }))
 
 vi.mock('../core/CommunitySourceRuntime', () => ({
   communitySourceService: runtime,
-}))
-
-vi.mock('../services/DiscordSourceRefreshService', () => ({
-  readDiscordSourceRemote: refreshRuntime.readDiscordSourceRemote,
 }))
 
 function sourceView(): ResourceCommunitySourceView {
@@ -187,6 +173,12 @@ describe('DiscordCommunitySources lazy local reads', () => {
 
     expect(runtime.getForResource).toHaveBeenCalledWith('resource-1', 'source-1')
     expect(document.body.textContent).toContain('正文')
+    expect(document.body.textContent).not.toContain('检查更新')
+    expect(document.body.textContent).not.toContain('重试自动检查')
+    const original = [...document.querySelectorAll('a')].find((link) =>
+      link.textContent?.includes('打开 Discord 原帖'),
+    )
+    expect(original?.href).toBe(view.source.canonicalUrl)
     wrapper.unmount()
   })
 
@@ -273,184 +265,6 @@ describe('DiscordCommunitySources lazy local reads', () => {
 
     expect(runtime.getForResource).toHaveBeenCalledTimes(2)
     expect(runtime.listSummariesForResource).toHaveBeenCalledTimes(1)
-    wrapper.unmount()
-  })
-
-  it('does not persist pending missing/restored message state before the user decides', async () => {
-    const view = sourceView()
-    runtime.listSummariesForResource.mockResolvedValue([sourceSummary(view)])
-    runtime.getForResource.mockResolvedValue(view)
-    runtime.getAttachmentBlob.mockResolvedValue(undefined)
-    runtime.recordRemoteCheck.mockResolvedValue(view.source)
-    refreshRuntime.readDiscordSourceRemote.mockResolvedValue({
-      state: 'available',
-      captures: [],
-      missingMessageIds: ['33333'],
-      diff: {
-        hasChanges: true,
-        newMessages: 0,
-        changedMessages: 0,
-        missingMessages: 1,
-        restoredMessages: 0,
-        contentChanges: 0,
-        embedChanges: 0,
-        attachmentChanges: 0,
-        sourceMetadataChanges: 0,
-        changes: [
-          {
-            messageId: '33333',
-            type: 'missing',
-            authorName: 'Author',
-            authorBot: false,
-            summary: '正文',
-          },
-        ],
-      },
-      syncState: {
-        remoteScanCursor: { lastSeenMessageId: '33333' },
-        savedMessageCheckCursor: '33333',
-      },
-      rateLimited: false,
-    })
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-    })
-
-    const wrapper = mount(DiscordCommunitySources, {
-      props: { resourceId: 'resource-1' },
-      attachTo: document.body,
-    })
-    await flushPromises()
-    await wrapper.get('.discord-source-open').trigger('click')
-    await flushPromises()
-    const checkButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.trim() === '检查更新',
-    )
-    expect(checkButton).toBeDefined()
-    if (!checkButton) throw new Error('refresh button missing')
-    checkButton.click()
-    await flushPromises()
-
-    expect(runtime.recordRemoteCheck).toHaveBeenCalledWith('source-1', 'available', true, undefined)
-    expect(runtime.recordMessageRemoteCheck).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('原消息已删除')
-    wrapper.unmount()
-  })
-
-  it('reports a partial check instead of no updates when Discord rate limits health checks', async () => {
-    const view = sourceView()
-    runtime.listSummariesForResource.mockResolvedValue([sourceSummary(view)])
-    runtime.getForResource.mockResolvedValue(view)
-    runtime.getAttachmentBlob.mockResolvedValue(undefined)
-    runtime.recordRemoteCheck.mockResolvedValue(view.source)
-    refreshRuntime.readDiscordSourceRemote.mockResolvedValue({
-      state: 'available',
-      captures: [],
-      missingMessageIds: [],
-      diff: {
-        hasChanges: false,
-        newMessages: 0,
-        changedMessages: 0,
-        missingMessages: 0,
-        restoredMessages: 0,
-        contentChanges: 0,
-        embedChanges: 0,
-        attachmentChanges: 0,
-        sourceMetadataChanges: 0,
-        changes: [],
-      },
-      syncState: {
-        remoteScanCursor: { lastSeenMessageId: '33333' },
-        savedMessageCheckCursor: '33333',
-      },
-      rateLimited: true,
-    })
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-    })
-
-    const wrapper = mount(DiscordCommunitySources, {
-      props: { resourceId: 'resource-1' },
-      attachTo: document.body,
-    })
-    await flushPromises()
-    await wrapper.get('.discord-source-open').trigger('click')
-    await flushPromises()
-    const checkButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.trim() === '检查更新',
-    )
-    expect(checkButton).toBeDefined()
-    if (!checkButton) throw new Error('refresh button missing')
-    checkButton.click()
-    await flushPromises()
-
-    expect(runtime.recordRemoteCheck).toHaveBeenCalledWith('source-1', 'available', false, {
-      remoteScanCursor: { lastSeenMessageId: '33333' },
-      savedMessageCheckCursor: '33333',
-    })
-    expect(runtime.recordMessageRemoteCheck).toHaveBeenCalledWith('source-1', [], [])
-    expect(document.body.textContent).toContain(
-      'Discord 暂时限流，本次只完成部分旧消息检查，检查进度已保留，请稍后再次检查。',
-    )
-    expect(document.body.textContent).not.toContain('未发现更新')
-    wrapper.unmount()
-  })
-
-  it('clears a stale unavailable state and shows one accurate notice when the Bot cannot check', async () => {
-    const view = sourceView()
-    view.source.remoteState = COMMUNITY_SOURCE_REMOTE_STATE.UNAVAILABLE
-    runtime.listSummariesForResource.mockImplementation(async () => [sourceSummary(view)])
-    runtime.getForResource.mockImplementation(async () => view)
-    runtime.getAttachmentBlob.mockResolvedValue(undefined)
-    runtime.recordManualRefresh.mockImplementation(async () => {
-      delete view.source.remoteState
-      delete view.source.hasRemoteUpdate
-      view.source.discordRefreshMode = COMMUNITY_SOURCE_REFRESH_MODE.MANUAL
-      return view.source
-    })
-    refreshRuntime.readDiscordSourceRemote.mockResolvedValue({
-      state: 'uncheckable',
-      reason: 'bot_access',
-      stage: 'channel',
-    })
-    Object.defineProperty(Element.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: vi.fn(),
-    })
-
-    const wrapper = mount(DiscordCommunitySources, {
-      props: { resourceId: 'resource-1' },
-      attachTo: document.body,
-    })
-    await flushPromises()
-    await wrapper.get('.discord-source-open').trigger('click')
-    await flushPromises()
-    expect(document.body.textContent).toContain('原帖当前不可访问')
-
-    const checkButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-      (button) => button.textContent?.trim() === '检查更新',
-    )
-    expect(checkButton).toBeDefined()
-    if (!checkButton) throw new Error('refresh button missing')
-    checkButton.click()
-    await flushPromises()
-
-    expect(runtime.recordManualRefresh).toHaveBeenCalledWith('source-1')
-    expect(runtime.clearRemoteAvailability).not.toHaveBeenCalled()
-    expect(runtime.recordRemoteCheck).not.toHaveBeenCalled()
-    expect(runtime.recordMessageRemoteCheck).not.toHaveBeenCalled()
-    expect(document.body.textContent).not.toContain('原帖当前不可访问')
-    expect(document.body.textContent?.match(/因此使用手动更新/g)).toHaveLength(1)
-    expect(document.body.textContent).toContain('手动更新')
-    expect(document.body.textContent).toContain('前往 Discord 更新')
-    expect(document.body.textContent).toContain('重试自动检查')
-    expect(refreshRuntime.readDiscordSourceRemote).toHaveBeenCalledOnce()
-
-    const manualLink = document.querySelector<HTMLAnchorElement>('.discord-thread-toolbar__primary')
-    expect(manualLink?.href).toBe('https://discord.com/channels/11111/22222/33333')
-    expect(refreshRuntime.readDiscordSourceRemote).toHaveBeenCalledOnce()
     wrapper.unmount()
   })
 })

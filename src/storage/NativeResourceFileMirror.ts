@@ -1,14 +1,40 @@
 import { isResourceOwnedFile } from '../types/ResourceAttachment'
-import { Capacitor, registerPlugin } from '@capacitor/core'
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 
 import { transferNativeStream } from '../core/NativeStreamTransfer'
-import { nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
+import { nativeFileSize, nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
 import { isUserPersonaAvatarAttachment, type Resource } from '../types/Resource'
 import type { NativeVersionMatchReference, ParsedResource } from '../types/Import'
+import type { ResourceByteSource } from '../types/ResourceReadSource'
+import { withAbort } from '../utils/Abortable'
 
 type NativeResourceScope = 'current' | 'versions'
 
 interface NativeLibraryPlugin {
+  importObjectFile(
+    options: { probe: true } | { uri: string; contentHash: string; size: number },
+  ): Promise<void>
+  readObjectChunk(options: {
+    contentHash: string
+    size: number
+    offset: number
+    length: number
+  }): Promise<{ data: string; size: number; sha256: string; offset: number }>
+  planBackupObject(options: {
+    contentHash: string
+    size: number
+    fixedPartSize?: number
+    requestId: string
+  }): Promise<{
+    totalSize: number
+    totalSha256: string
+    parts: Array<{ size: number; sha256: string }>
+  }>
+  cancelHashFile(options: { requestId: string }): Promise<void>
+  addListener(
+    event: 'backupPlanProgress',
+    listener: (event: { requestId: string; processed: number }) => void,
+  ): Promise<PluginListenerHandle>
   deleteRecoveryCandidates(options: {
     candidates: NativeRecoveryCandidate[]
     confirmed: true
@@ -291,6 +317,34 @@ export async function releaseReplacedNativeObjects(
   await nativeLibrary.releaseReplacedObjects({ records })
 }
 
+export async function canImportNativeResourceObjects(): Promise<boolean> {
+  if (!isAndroidNativeResourceMirrorAvailable()) return false
+  try {
+    await nativeLibrary.importObjectFile({ probe: true })
+    return true
+  } catch (error) {
+    if ((error as { code?: string }).code === 'UNIMPLEMENTED') return false
+    throw error
+  }
+}
+
+export async function importNativeResourceObject(resource: Resource): Promise<boolean> {
+  if (!isAndroidNativeResourceMirrorAvailable()) return false
+  const uri = nativeFileSource(resource.originalBlob)
+  if (!uri) return false
+  try {
+    await nativeLibrary.importObjectFile({
+      uri,
+      contentHash: resource.contentHash,
+      size: resource.fileSize,
+    })
+    return true
+  } catch (error) {
+    if ((error as { code?: string }).code === 'UNIMPLEMENTED') return false
+    throw error
+  }
+}
+
 export async function stageNativeResourceFile(
   resource: Resource,
   scope: NativeResourceScope,
@@ -305,7 +359,7 @@ export async function stageNativeResourceFile(
     resourceType: resource.type,
     hiddenFromDocuments: isUserPersonaAvatarAttachment(resource) || isResourceOwnedFile(resource),
     contentHash: resource.contentHash,
-    size: resource.originalBlob.size,
+    size: nativeFileSize(resource.originalBlob),
     updatedAt: resource.updatedAt,
   })
   const replacedHashes = [
@@ -473,18 +527,149 @@ export async function readNativeResourceObject(
   contentHash: string,
   size: number,
   mimeType: string,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   if (!isAndroidNative()) throw new Error('当前不是 Android 原生资源环境')
-  const result = await nativeLibrary.getObjectPath({ contentHash, size })
+  signal?.throwIfAborted()
+  const result = await withAbort(nativeLibrary.getObjectPath({ contentHash, size }), signal)
   if (result.size !== size) throw new Error('Android 原生资源大小与索引不一致')
-  const response = await fetch(Capacitor.convertFileSrc(result.path), { cache: 'no-store' })
+  const response = await fetch(Capacitor.convertFileSrc(result.path), { cache: 'no-store', signal })
   if (!response.ok) throw new Error(`Android 原生资源读取失败（${response.status}）`)
-  const blob = await response.blob()
+  const blob = await withAbort(response.blob(), signal)
+  signal?.throwIfAborted()
   if (blob.size !== size) throw new Error('Android 原生资源读取不完整')
   return rememberNativeFile(
     blob.type === mimeType ? blob : new Blob([blob], { type: mimeType }),
     result.path,
   )
+}
+
+/** Immutable CAS bytes without first fetching an entire nativeOriginal into WebView. */
+export async function openNativeResourceByteSource(
+  contentHash: string,
+  size: number,
+  signal?: AbortSignal,
+): Promise<ResourceByteSource | undefined> {
+  if (!isAndroidNative()) return undefined
+  const read = async (offset: number, length: number, readSignal = signal) => {
+    readSignal?.throwIfAborted()
+    const result = await withAbort(
+      nativeLibrary.readObjectChunk({ contentHash, size, offset, length }),
+      readSignal,
+    )
+    readSignal?.throwIfAborted()
+    if (result.size !== size || result.sha256 !== contentHash || result.offset !== offset)
+      throw new Error('Android 原生对象读取身份已变化')
+    const binary = atob(result.data)
+    if (binary.length !== length) throw new Error('Android 原生对象分块读取不完整')
+    const bytes = new Uint8Array(length)
+    for (let index = 0; index < length; index++) bytes[index] = binary.charCodeAt(index)
+    return bytes
+  }
+  try {
+    // Probe the actual method, not a build number. Old APKs keep their established whole-read path.
+    await read(0, Math.min(1, size))
+  } catch (error) {
+    if ((error as { code?: string }).code === 'UNIMPLEMENTED') return undefined
+    throw error
+  }
+  const readBytes = async (start: number, end: number, readSignal = signal) => {
+    const bytes = new Uint8Array(end - start)
+    for (let offset = start; offset < end; offset += 1024 * 1024)
+      bytes.set(await read(offset, Math.min(1024 * 1024, end - offset), readSignal), offset - start)
+    return bytes.buffer
+  }
+  return {
+    size,
+    contentIdentity: contentHash,
+    async nativeFile() {
+      const result = await withAbort(nativeLibrary.getObjectPath({ contentHash, size }), signal)
+      signal?.throwIfAborted()
+      if (result.size !== size) throw new Error('Android 原生资源大小与索引不一致')
+      return rememberNativeFile(new Blob(), result.path, size)
+    },
+    slice(start = 0, end = size) {
+      const bound = (value: number) => Math.max(0, Math.min(size, value < 0 ? size + value : value))
+      const from = bound(start),
+        to = Math.max(from, bound(end))
+      return { arrayBuffer: (readSignal = signal) => readBytes(from, to, readSignal) }
+    },
+    async text() {
+      const decoder = new TextDecoder('utf-8')
+      let text = ''
+      for (let offset = 0; offset < size; offset += 1024 * 1024)
+        text += decoder.decode(await read(offset, Math.min(1024 * 1024, size - offset)), {
+          stream: true,
+        })
+      return text + decoder.decode()
+    },
+    async planParts(options) {
+      const readSignal = options.signal ?? signal
+      readSignal?.throwIfAborted()
+      const requestId = crypto.randomUUID()
+      let listener: PluginListenerHandle | undefined
+      let processed = 0
+      const cancel = () => {
+        void nativeLibrary.cancelHashFile({ requestId }).catch(() => undefined)
+      }
+      readSignal?.addEventListener('abort', cancel, { once: true })
+      try {
+        if (options.onRead)
+          listener = await nativeLibrary.addListener('backupPlanProgress', (event) => {
+            if (event.requestId !== requestId || readSignal?.aborted) return
+            if (
+              Number.isSafeInteger(event.processed) &&
+              event.processed > processed &&
+              event.processed <= size
+            ) {
+              options.onRead?.(event.processed - processed, event.processed)
+              processed = event.processed
+            }
+          })
+        readSignal?.throwIfAborted()
+        const result = await withAbort(
+          nativeLibrary.planBackupObject({
+            contentHash,
+            size,
+            requestId,
+            ...(options.fixedPartSize === undefined
+              ? {}
+              : { fixedPartSize: options.fixedPartSize }),
+          }),
+          readSignal,
+        )
+        readSignal?.throwIfAborted()
+        if (
+          result.totalSize !== size ||
+          result.totalSha256 !== contentHash ||
+          !Array.isArray(result.parts) ||
+          !result.parts.length
+        )
+          throw new Error('Android 原生备份摘要与原件不一致')
+        let total = 0
+        for (const part of result.parts) {
+          if (
+            !Number.isSafeInteger(part.size) ||
+            part.size < 0 ||
+            (part.size === 0 && size !== 0) ||
+            part.size > (options.fixedPartSize ?? 32 * 1024 * 1024) ||
+            !/^[a-f0-9]{64}$/u.test(part.sha256)
+          )
+            throw new Error('Android 原生备份分块描述无效')
+          total += part.size
+        }
+        if (total !== size) throw new Error('Android 原生备份分块大小不一致')
+        if (processed < size) options.onRead?.(size - processed, size)
+        return { totalSha256: result.totalSha256, parts: result.parts }
+      } catch (error) {
+        if ((error as { code?: string }).code === 'UNIMPLEMENTED') return undefined
+        throw error
+      } finally {
+        readSignal?.removeEventListener('abort', cancel)
+        await listener?.remove()
+      }
+    },
+  }
 }
 
 export async function linkNativeResourceObjects(

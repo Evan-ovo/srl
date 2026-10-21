@@ -510,32 +510,33 @@ summary {
     --image-generation-safe-bottom: 0px;
   }
 
-  :root[data-ios-keyboard-open='true'] .image-generation-app > .feature-app-header {
+  :root[data-visual-viewport-reduced='true'] .image-generation-app > .feature-app-header {
     --feature-header-row-height: 44px;
   }
 
-  :root[data-ios-keyboard-open='true']
+  :root[data-visual-viewport-reduced='true']
     .image-generation-app
     :is(.feature-app-header__trailing, .providerbar, .tabs) {
     display: none;
   }
 
-  :root[data-ios-keyboard-open='true'] .image-generation-app .editor {
+  :root[data-visual-viewport-reduced='true'] .image-generation-app .editor {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  :root[data-ios-keyboard-open='true'] .image-generation-app .scroll {
+  :root[data-visual-viewport-reduced='true'] .image-generation-app .scroll {
     padding: 6px 10px;
+    container-type: size;
   }
 
-  :root[data-ios-keyboard-open='true'] .image-generation-app :is(.footerbar, .quick-sizes) {
+  :root[data-visual-viewport-reduced='true'] .image-generation-app :is(.footerbar, .quick-sizes) {
     display: none;
   }
 
-  :root[data-ios-keyboard-open='true'] .image-generation-app textarea:focus {
-    height: 72px;
-    min-height: 72px;
-    max-height: 72px;
+  :root[data-visual-viewport-reduced='true'] .image-generation-app textarea:focus {
+    height: clamp(44px, 100cqh, 72px);
+    min-height: clamp(44px, 100cqh, 72px);
+    max-height: clamp(44px, 100cqh, 72px);
     resize: none;
   }
 }

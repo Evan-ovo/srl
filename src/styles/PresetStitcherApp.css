@@ -609,7 +609,7 @@
 .stitch__focus-toolbar {
   position: fixed;
   z-index: 301;
-  top: max(0.3rem, var(--safe-top));
+  top: calc(var(--visual-viewport-offset-top, 0px) + max(0.3rem, var(--safe-top)));
   right: max(0.3rem, var(--safe-right));
   display: flex;
   gap: 0.3rem;
@@ -2164,17 +2164,22 @@ span.stitch-entry__copy {
   }
 }
 
-@media (max-width: 52rem) {
-  .stitch {
-    padding-top: 0;
-  }
-
+@media (max-width: 53.75rem) {
   .stitch-editor-backdrop {
     position: fixed;
     z-index: 350;
     inset: 0;
     display: block;
     background: var(--overlay-background);
+  }
+  :root[data-ios-keyboard-open='true'] .stitch-editor-backdrop {
+    background: var(--color-canvas);
+  }
+}
+
+@media (max-width: 52rem) {
+  .stitch {
+    padding-top: 0;
   }
 
   .stitch__notice {

@@ -2,6 +2,12 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 
 import { transferNativeStream } from '../core/NativeStreamTransfer'
 import { taskCenter } from '../core/TaskCenter'
+import { hashNativeFile } from '../core/NativeFileSource'
+import {
+  readNativeResourceObject,
+  retainNativeResourceFiles,
+} from '../storage/NativeResourceFileMirror'
+import { withAbort } from '../utils/Abortable'
 import type {
   CloudBackupConfig,
   CloudBackupMetrics,
@@ -195,6 +201,37 @@ function nativeJobMetrics(state: NativeCloudJobStatus): Partial<CloudBackupMetri
 
 export function isNativeCloudTransferAvailable(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
+}
+
+/** A cloud original already on this device needs verification, not another network transfer. */
+export async function readVerifiedNativeCloudObject(
+  hash: string,
+  size: number,
+  signal?: AbortSignal,
+): Promise<Blob | undefined> {
+  if (!isNativeCloudTransferAvailable()) return undefined
+  signal?.throwIfAborted()
+  const release = retainNativeResourceFiles()
+  try {
+    let probe: { available: boolean; size: number }
+    try {
+      probe = await withAbort(
+        nativeTransfer.probeLibraryObject({ sourceHash: hash, minimumSize: size }),
+        signal,
+      )
+    } catch (error) {
+      if ((error as { code?: string }).code === 'UNIMPLEMENTED') return undefined
+      throw error
+    }
+    signal?.throwIfAborted()
+    if (!probe.available || probe.size !== size) return undefined
+    const blob = await readNativeResourceObject(hash, size, 'application/octet-stream', signal)
+    const actual = await withAbort(hashNativeFile(blob, signal), signal)
+    signal?.throwIfAborted()
+    return actual === hash ? blob : undefined
+  } finally {
+    release()
+  }
 }
 
 function hasValidNativeSource(object: NativeUploadObject): boolean {

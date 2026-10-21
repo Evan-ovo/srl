@@ -91,20 +91,78 @@ public final class NativeAppDatabaseTest {
         }
     }
     @Test public void compactionReclaimsPagesWithoutChangingAuthoritativeRows() throws Exception {
+        checkCompactionScenario(0);
+    }
+
+    @Test public void compactionAcceptsSpaceAlreadyReclaimedByAutoVacuum() throws Exception {
+        checkCompactionScenario(1);
+    }
+
+    @Test public void compactionPreservesRowsWithPlatformDefaultAutoVacuum() throws Exception {
+        checkCompactionScenario(-1);
+    }
+
+    private static long pragma(android.database.sqlite.SQLiteDatabase database, String name) {
+        return android.database.DatabaseUtils.longForQuery(database, "PRAGMA " + name, null);
+    }
+
+    private static void assertCompactionContents(NativeAppDatabase database, JSONObject original) throws Exception {
+        assertEquals(1, database.countRecords("resources"));
+        assertEquals(original.toString(), database.getRecord("resources", "\"keep\"").toString());
+        assertEquals(1, database.countRecords("resourceSummaries"));
+        assertEquals("{\"id\":\"keep\"}", database.getRecord("resourceSummaries", "\"keep\"").toString());
+        assertEquals(1, database.getIndexEntries("resources", "name", "\"keep\"").length());
+        assertEquals("保留设置", database.getState("compaction-test"));
+        try (android.database.Cursor cursor = database.getReadableDatabase().rawQuery("PRAGMA quick_check", null)) {
+            assertTrue(cursor.moveToFirst());
+            assertEquals("ok", cursor.getString(0));
+        }
+    }
+
+    private void checkCompactionScenario(int requestedAutoVacuum) throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         String name = "srl-compaction-test-" + UUID.randomUUID();
         NativeAppDatabase database = new NativeAppDatabase(context, name);
         JSONObject original = new JSONObject().put("id", "keep").put("content", "完整原件");
         try {
-            database.putRecords("resources", new JSONArray().put(new JSONObject().put("key", "\"keep\"").put("value", original)));
+            android.database.sqlite.SQLiteDatabase sqlite = database.getWritableDatabase();
+            if (requestedAutoVacuum >= 0) {
+                // Test databases only: explicitly control whether committed deletes reclaim pages.
+                // Changing an existing database's auto_vacuum mode requires a rebuild.
+                sqlite.execSQL("PRAGMA auto_vacuum = " + requestedAutoVacuum);
+                sqlite.execSQL("VACUUM");
+                assertEquals(requestedAutoVacuum, pragma(sqlite, "auto_vacuum"));
+            }
+            database.putRecords("resources", new JSONArray().put(new JSONObject().put("key", "\"keep\"").put("value", original)
+                .put("indexes", new JSONArray().put(new JSONObject().put("name", "name").put("keys", new JSONArray().put("\"keep\""))))));
+            database.putState("compaction-test", "保留设置");
             String repeated = new String(new char[256 * 1024]).replace('\0', 'x');
             database.putRecords("resourceSummaries", new JSONArray().put(new JSONObject().put("key", "\"keep\"").put("value", new JSONObject().put("id", "keep").put("content", repeated))));
             database.putRecords("resourceSummaries", new JSONArray().put(new JSONObject().put("key", "\"keep\"").put("value", new JSONObject().put("id", "keep"))));
+            long mode = pragma(sqlite, "auto_vacuum");
+            long freePages = pragma(sqlite, "freelist_count");
+            if (requestedAutoVacuum == 0) assertTrue("Fixture must leave reclaimable pages", freePages > 0);
+            if (requestedAutoVacuum == 1) assertEquals("Fixture must auto-reclaim free pages", 0, freePages);
+            long beforeBytes = pragma(sqlite, "page_count") * pragma(sqlite, "page_size");
+            assertCompactionContents(database, original);
             JSONObject report = database.compact();
-            assertTrue(report.getLong("afterBytes") < report.getLong("beforeBytes"));
-            assertEquals(1, database.countRecords("resources"));
-            assertEquals(original.toString(), database.getRecord("resources", "\"keep\"").toString());
-            assertEquals(1, database.countRecords("resourceSummaries"));
+            assertCompactionContents(database, original);
+            assertEquals(0, pragma(sqlite, "freelist_count"));
+            long afterBytes = pragma(sqlite, "page_count") * pragma(sqlite, "page_size");
+            database.close();
+            database = new NativeAppDatabase(context, name);
+            assertCompactionContents(database, original);
+            // Verify data before size assertions, so a space-accounting failure cannot mask data checks.
+            assertEquals(beforeBytes, report.getLong("beforeBytes"));
+            assertEquals(afterBytes, report.getLong("afterBytes"));
+            if (freePages > 0) assertTrue(report.toString(), afterBytes < beforeBytes);
+            else assertTrue(report.toString(), afterBytes <= beforeBytes);
+            JSONObject repeatedReport = database.compact();
+            assertCompactionContents(database, original);
+            assertEquals(afterBytes, repeatedReport.getLong("beforeBytes"));
+            assertEquals(afterBytes, repeatedReport.getLong("afterBytes"));
+            android.util.Log.i("SRLCompactionTest", "auto_vacuum=" + mode + "; freePages=" + freePages
+                + "; logicalPageBytes=" + beforeBytes + "->" + afterBytes + "; repeated/stored-data/reopen=ok");
         } finally { database.close(); context.deleteDatabase(name); }
     }
     @Test public void storageUsageIsReadOnlyAndCountsUtf8AndSharedBlobReferences() throws Exception {

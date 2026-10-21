@@ -33,9 +33,12 @@ const draft = ref<PersonalResourceDocument>({
   url: '',
   attachments: [],
   fields: [],
+  ...(props.kind === 'secret' ? { protection: 'none' as const } : {}),
 })
 const currentResource = ref(props.resource)
 const editing = ref(!props.resource)
+const notesEditorAvailable = ref(props.kind === 'pocketPhone')
+const notesEditorOpen = ref(false)
 const inline = computed(() => props.embedded && !editing.value)
 const loaded = ref(false)
 const typeTitle = { extraStory: '番外指令', pocketPhone: '小手机', secret: '密钥资料' }
@@ -75,12 +78,46 @@ const status = ref('')
 const native = isNativeSecurityAvailable()
 let stored: PersonalResourceDocument | undefined
 const needsPassword = computed(
-  () => draft.value.fields.some((field) => field.private) && !locked.value,
+  () =>
+    draft.value.protection !== 'none' &&
+    draft.value.fields.some((field) => field.private) &&
+    !locked.value,
 )
+const encryptFields = computed({
+  get: () => draft.value.protection !== 'none',
+  set: (encrypt: boolean) => {
+    if (locked.value) return
+    if (encrypt) {
+      delete draft.value.protection
+      void refreshProtection().catch((error: unknown) => {
+        status.value = error instanceof Error ? error.message : '读取密码设置失败'
+      })
+    } else {
+      draft.value.protection = 'none'
+      delete draft.value.protected
+    }
+  },
+})
+function showProtectionHelp() {
+  void confirmAction({
+    title: '密钥加密说明',
+    message: encryptFields.value
+      ? '勾选私密的字段使用统一密码加密，名称和备注可直接读取。导出和云备份保留加密，换机查看时仍需原密码。'
+      : '未启用密码加密。字段在本机原件和备份中以明文保存，有文件或云端访问权限的人可以读取。保存和恢复无需设置统一密码。',
+    confirmLabel: '知道了',
+    cancelLabel: '关闭',
+  })
+}
 
 async function refreshProtection() {
+  if (props.kind !== 'secret' || (draft.value.protection === 'none' && !draft.value.protected)) {
+    sessionReady.value = secretResourceService.isUnlocked()
+    return
+  }
   passwordExists.value = await secretResourceService.hasPassword()
-  sessionReady.value = secretResourceService.isUnlocked()
+  sessionReady.value =
+    secretResourceService.isUnlocked() ||
+    (!editing.value && secretResourceService.hasRememberedPassword(draft.value))
 }
 watch(
   () => props.settingsOpen,
@@ -93,13 +130,14 @@ watch(
 onMounted(async () => {
   busy.value = true
   try {
-    await refreshProtection()
     if (props.resource) {
       stored = toRaw(await personalResourceService.read(props.resource))
       draft.value = structuredClone(stored)
       draft.value.name = props.resource.name
       locked.value = Boolean(stored.protected)
+      if (props.kind === 'secret' && !stored.protected) draft.value.protection = 'none'
     }
+    await refreshProtection()
     editBaseline = JSON.stringify(draft.value)
     loaded.value = true
   } catch (error) {
@@ -113,9 +151,14 @@ function startEditing() {
   if (props.resource) draft.value.name = props.resource.name
   editBaseline = JSON.stringify(draft.value)
   status.value = ''
+  notesEditorAvailable.value =
+    props.kind === 'pocketPhone' || (props.kind === 'secret' && Boolean(draft.value.text))
+  notesEditorOpen.value = Boolean(draft.value.text)
   editing.value = true
+  sessionReady.value = secretResourceService.isUnlocked()
 }
 function handleEnter(event: KeyboardEvent) {
+  if (event.isComposing) return
   if (
     inline.value &&
     locked.value &&
@@ -147,6 +190,8 @@ async function leaveEditing(): Promise<boolean> {
   }
   if (stored) draft.value = structuredClone(stored)
   locked.value = Boolean(stored?.protected)
+  sessionReady.value =
+    secretResourceService.isUnlocked() || secretResourceService.hasRememberedPassword(draft.value)
   password.value = ''
   files.clear()
   status.value = ''
@@ -228,7 +273,8 @@ async function unlock(biometric = false) {
       ? await secretResourceService.revealBiometric(draft.value)
       : await secretResourceService.reveal(draft.value, password.value || undefined)
     locked.value = false
-    sessionReady.value = secretResourceService.isUnlocked()
+    sessionReady.value =
+      secretResourceService.isUnlocked() || secretResourceService.hasRememberedPassword(draft.value)
     if (sessionReady.value) password.value = ''
     status.value = ''
   } catch (error) {
@@ -294,7 +340,7 @@ async function save() {
     if (props.kind === 'pocketPhone' && !draft.value.url.trim() && !draft.value.attachments.length)
       throw new Error('请填写访问网址或添加文件')
     let document = structuredClone(toRaw(draft.value))
-    if (props.kind === 'secret' && !locked.value) {
+    if (props.kind === 'secret' && !locked.value && document.protection !== 'none') {
       document = await secretResourceService.protect(
         document,
         secretResourceService.isUnlocked() ? undefined : password.value || undefined,
@@ -333,9 +379,12 @@ async function exportPlain() {
   )
     return
   downloadBlob(
-    new Blob([JSON.stringify({ ...draft.value, protected: undefined }, null, 2)], {
-      type: 'application/json',
-    }),
+    new Blob(
+      [JSON.stringify({ ...draft.value, protection: 'none', protected: undefined }, null, 2)],
+      {
+        type: 'application/json',
+      },
+    ),
     `${draft.value.name || '部署资料'}-明文.srl-resource.json`,
   )
 }
@@ -544,15 +593,37 @@ async function exportPlain() {
               </li>
             </ul>
             <template v-if="kind === 'secret'">
-              <p class="personal-resource-editor__hint">
+              <div v-if="editing" class="personal-resource-editor__protection">
+                <label class="personal-resource-editor__privacy">
+                  <input v-model="encryptFields" type="checkbox" aria-label="使用统一密码加密" />
+                  使用统一密码加密（可选）
+                </label>
+                <button
+                  class="personal-resource-editor__help"
+                  type="button"
+                  aria-label="密钥加密说明"
+                  @click="showProtectionHelp"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4" stroke-linecap="round" />
+                    <circle cx="12" cy="16.5" r=".8" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+              </div>
+              <p v-else class="personal-resource-editor__hint">
                 {{
-                  editing
-                    ? '字段由你添加；勾选私密的内容使用统一密码加密，名称公开显示。'
-                    : locked
-                      ? '私密内容已锁定，解锁后可查看、复制和编辑。'
-                      : stored?.protected
-                        ? '私密内容已解锁，离开后会重新锁定。'
-                        : '此资料没有加密字段。'
+                  locked
+                    ? '私密内容已锁定，解锁后可查看、复制和编辑。'
+                    : stored?.protected
+                      ? '私密内容已解锁，离开后会重新锁定。'
+                      : '此资料未使用密码加密，备份保留原有内容。'
                 }}
               </p>
               <div
@@ -663,8 +734,9 @@ async function exportPlain() {
               </details>
             </template>
             <details
-              v-if="editing && (kind === 'pocketPhone' || (kind === 'secret' && draft.text))"
-              :open="Boolean(draft.text)"
+              v-if="editing && notesEditorAvailable"
+              :open="notesEditorOpen"
+              @toggle="notesEditorOpen = ($event.target as HTMLDetailsElement).open"
             >
               <summary>备注（可选，公开显示）</summary>
               <label class="field"

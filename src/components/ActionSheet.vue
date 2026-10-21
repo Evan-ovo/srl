@@ -165,7 +165,8 @@ onBeforeUnmount(() => {
 .action-sheet {
   position: fixed;
   z-index: 1200;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top, 0px) 0 auto;
+  height: var(--app-viewport-height, 100dvh);
   display: grid;
   align-items: end;
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) 0 max(1rem, var(--safe-left));
@@ -186,7 +187,7 @@ onBeforeUnmount(() => {
 
 .action-sheet__panel {
   width: min(100%, 34rem);
-  max-height: min(78dvh, 42rem);
+  max-height: min(78dvh, 42rem, 100%);
   margin: 0 auto;
   overflow: auto;
   padding-bottom: var(--safe-bottom);

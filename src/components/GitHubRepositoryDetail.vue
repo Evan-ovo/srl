@@ -254,7 +254,8 @@ async function navigateTo(id: string): Promise<void> {
 .github-repository-detail-overlay {
   position: fixed;
   z-index: 1180;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top, 0px) 0 auto;
+  height: var(--app-viewport-height, 100dvh);
   background: var(--color-surface);
 }
 .github-repository-detail {

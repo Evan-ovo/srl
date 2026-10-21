@@ -302,7 +302,7 @@
 .external-app-host__exit-handle {
   position: fixed;
   z-index: 2002;
-  top: max(0.5rem, calc(var(--safe-top) + 0.25rem));
+  top: calc(var(--visual-viewport-offset-top, 0px) + max(0.5rem, calc(var(--safe-top) + 0.25rem)));
   left: max(0.5rem, calc(var(--safe-left) + 0.25rem));
   display: grid;
   width: var(--size-touch);

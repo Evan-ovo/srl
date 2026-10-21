@@ -149,12 +149,24 @@
   }
 }
 .assistant-pet-dialog {
+  --pet-dialog-visible-height: min(
+    var(--pet-dialog-height, 340px),
+    max(0px, calc(var(--app-viewport-height, 100dvh) - 16px))
+  );
   position: fixed;
+  top: clamp(
+    calc(var(--visual-viewport-offset-top, 0px) + 8px),
+    var(--pet-dialog-top, 8px),
+    calc(
+      var(--visual-viewport-offset-top, 0px) + var(--app-viewport-height, 100dvh) -
+        var(--pet-dialog-visible-height) - 8px
+    )
+  );
   z-index: 35;
   display: flex;
   flex-direction: column;
   width: min(300px, calc(100vw - 16px));
-  height: min(340px, calc(100dvh - 16px));
+  height: var(--pet-dialog-visible-height);
   box-sizing: border-box;
   max-width: none;
   max-height: none;

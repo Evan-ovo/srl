@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import '../styles/ConfirmDialog.css'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { defineAsyncComponent } from 'vue'
 
 import { useConfirmDialogState, type ConfirmDialogResponse } from '../composables/UseConfirmDialog'
@@ -58,6 +58,8 @@ watch(
     confirmationText.value = ''
     composing.value = false
     if (!dialog) {
+      // Release native modality before v-if removes the node and clears its ref.
+      modal.value?.close()
       await nextTick()
       if (!activeDialog.value && returnFocus?.isConnected)
         returnFocus.focus({ preventScroll: true })
@@ -128,7 +130,7 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown, true)
   window.addEventListener(SRL_BACK_REQUEST_EVENT, handleBack, true)
 })
-onUnmounted(() => {
+onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown, true)
   window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleBack, true)
   if (typeof modal.value?.close === 'function') modal.value.close()

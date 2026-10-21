@@ -11,10 +11,12 @@ import {
   clearPlainSecretExportGrant,
   selectCloudResources,
   cloudPlainSecretCopies,
+  plaintextSecretCopies,
 } from './PersonalResourceBackup'
 import { RESOURCE_TYPE, toResourceListSummary, type Resource } from '../types/Resource'
 import { ResourceService } from './ResourceService'
 import type { PersonalResourceDocument } from '../types/PersonalResource'
+import { secretResourceService, SecretResourceService } from './SecretResourceService'
 const stored = vi.hoisted(() => new Map<string, string>())
 vi.mock('./LocalCredentialStore', () => ({
   localCredentialStore: {
@@ -166,11 +168,11 @@ describe('selected plaintext cloud copies', () => {
     ).toEqual([])
   })
 
-  it('keeps explicit empty selection empty while preserving the destination grant check', async () => {
+  it('keeps explicit empty selection empty without requiring a destination grant', async () => {
     const data = backend([secret('other')])
-    await expect(
-      cloudPlainSecretCopies(target, data.resources, { secret: true, resourceIds: [] }),
-    ).rejects.toThrow('尚未授权')
+    expect(
+      await cloudPlainSecretCopies(target, data.resources, { secret: true, resourceIds: [] }),
+    ).toEqual([])
     expect(data.full).not.toHaveBeenCalled()
     expect(data.light).not.toHaveBeenCalled()
     await savePlainSecretExportGrant(target, 'viewing-password')
@@ -178,6 +180,14 @@ describe('selected plaintext cloud copies', () => {
       await cloudPlainSecretCopies(target, data.resources, { secret: true, resourceIds: [] }),
     ).toEqual([])
     expect(data.read).not.toHaveBeenCalled()
+  })
+  it('does not read originals or require a plaintext grant for explicitly unencrypted cards', async () => {
+    const row = secret('plain')
+    row.metadata.secretProtection = 'none'
+    const data = backend([row])
+    expect(await cloudPlainSecretCopies(target, data.resources, { secret: true })).toEqual([])
+    expect(data.read).not.toHaveBeenCalled()
+    expect(stored.size).toBe(0)
   })
 
   it('does no credential or resource work when secret copies are explicitly excluded', async () => {
@@ -234,6 +244,51 @@ describe('selected plaintext cloud copies', () => {
   })
 })
 describe('plaintext companion target consent', () => {
+  it('asks once for foreign imported cards across separate export calls and asks again after an explicit lock', async () => {
+    secretResourceService.lock()
+    const values = new Map<string, string>()
+    const origin = new SecretResourceService({
+      read: async (id) => values.get(id) ?? '',
+      save: async (id, value) => {
+        values.set(id, value)
+      },
+      clear: async (id) => {
+        values.delete(id)
+      },
+    })
+    await origin.setPassword('old-device-password')
+    const rows = []
+    for (const id of ['one', 'two']) {
+      const row = secret(id)
+      const document = JSON.parse(await row.originalBlob.text())
+      document.fields[0].private = true
+      row.originalBlob = new Blob([JSON.stringify(await origin.protect(document))])
+      rows.push(row)
+    }
+    const prompt = vi.fn(async () => 'old-device-password')
+    for (const row of rows)
+      expect(
+        (await plaintextSecretCopies([row], undefined, prompt))[0]?.document.fields[0]?.value,
+      ).toBe('test-value')
+    expect(prompt).toHaveBeenCalledOnce()
+    secretResourceService.lock()
+    prompt.mockResolvedValueOnce('')
+    await expect(plaintextSecretCopies([rows[0]!], undefined, prompt)).rejects.toMatchObject({
+      name: 'AbortError',
+    })
+    expect(prompt).toHaveBeenCalledTimes(2)
+  })
+  it('authorizes the chosen target with the already verified session and cannot reuse it after locking', async () => {
+    secretResourceService.lock()
+    await secretResourceService.setPassword('verified-test-password')
+    await savePlainSecretExportGrant(target)
+    expect(await readPlainSecretExportGrant(target)).toBe('verified-test-password')
+    secretResourceService.lock()
+    await expect(savePlainSecretExportGrant({ ...target, repository: 'other' })).rejects.toThrow(
+      '解锁',
+    )
+    expect(await readPlainSecretExportGrant({ ...target, repository: 'other' })).toBe('')
+  })
   it('does not carry an authorization to a different destination and clears it explicitly', async () => {
     const target = {
       provider: 'github' as const,

@@ -37,6 +37,7 @@ import { NativeMirroredResourceStorage } from '../storage/NativeMirroredResource
 import { NativeRestoreStagingStore } from '../storage/NativeRestoreStagingStore'
 import { hashBytes } from '../services/HashService'
 import { isCapacitorApp } from '../utils/CapacitorDetection'
+import type { Resource } from '../types/Resource'
 
 export { database }
 
@@ -171,11 +172,23 @@ async function syncNativeResourceFilesOnce(): Promise<void> {
     )
   }
   for (const summary of current) {
-    const resource = await indexedDbStorage.get(summary.id)
+    const source = await indexedDbStorage.getReadSource(summary.id)
+    const bytes = source?.originalSource
+    const nativeFile = bytes && 'nativeFile' in bytes ? await bytes.nativeFile?.() : undefined
+    const resource =
+      nativeFile && source
+        ? ({ ...source, originalBlob: nativeFile } as Resource)
+        : await indexedDbStorage.get(summary.id)
     if (resource) await mirrorNativeResourceFile(resource, 'current')
   }
   for (const summary of versions) {
-    const version = await indexedDbStorage.getVersion(summary.id)
+    const source = await indexedDbStorage.getReadSource(summary.id, true)
+    const bytes = source?.originalSource
+    const nativeFile = bytes && 'nativeFile' in bytes ? await bytes.nativeFile?.() : undefined
+    const version =
+      nativeFile && source
+        ? ({ ...source, originalBlob: nativeFile } as Resource)
+        : await indexedDbStorage.getVersion(summary.id)
     if (version) await mirrorNativeResourceFile(version, 'versions')
   }
   const repaired = await getNativeResourceStorageInfo(false)

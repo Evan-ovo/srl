@@ -38,8 +38,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('uses 320 only for a small measured card and upgrades to 640 after a resize', async () => {
-  let height = 150,
+function mockCardSize(initialHeight: number) {
+  let height = initialHeight,
     resized!: ResizeObserverCallback
   let target!: Element
   vi.stubGlobal('devicePixelRatio', 2)
@@ -59,14 +59,57 @@ it('uses 320 only for a small measured card and upgrades to 640 after a resize',
       disconnect() {}
     },
   )
+  return (nextHeight: number) => {
+    height = nextHeight
+    resized([{ target } as ResizeObserverEntry], {} as ResizeObserver)
+  }
+}
+
+it('uses 320 for a small card, upgrades once to 640, and retains the larger image across later resizes', async () => {
+  const resize = mockCardSize(150)
+  getImageUrl.mockImplementation(async (id, level) => `https://localhost/${id}-${level}.webp`)
   const wrapper = mount(ResourceCard, { props: { resource: resource(), blurThumbnails: false } })
   await flushPromises()
   expect(getImageUrl).toHaveBeenCalledExactlyOnceWith('a', 'card')
-  height = 240
-  resized([{ target } as ResizeObserverEntry], {} as ResizeObserver)
+  resize(240)
   await flushPromises()
   expect(getImageUrl).toHaveBeenLastCalledWith('a', 'preview')
+  for (const height of [150, 240, 150]) {
+    resize(height)
+    await flushPromises()
+    expect(getImageUrl).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('img').attributes('src')).toBe('https://localhost/a-preview.webp')
+  }
+  await wrapper.setProps({ resource: resource('b') })
+  await flushPromises()
+  expect(getImageUrl).toHaveBeenLastCalledWith('b', 'card')
+  expect(getImageUrl).toHaveBeenCalledTimes(3)
   expect(getBlob).not.toHaveBeenCalled()
+  wrapper.unmount()
+})
+
+it('keeps an in-flight 640 request when the appearance shrinks its card and still falls back on a display error', async () => {
+  const resize = mockCardSize(240)
+  let complete!: (url: string) => void
+  getImageUrl.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        complete = resolve
+      }),
+  )
+  const wrapper = mount(ResourceCard, { props: { resource: resource() } })
+  await flushPromises()
+  expect(getImageUrl).toHaveBeenCalledExactlyOnceWith('a', 'preview')
+  resize(150)
+  await flushPromises()
+  complete('https://localhost/large.webp')
+  await flushPromises()
+  expect(getImageUrl).toHaveBeenCalledTimes(1)
+  expect(wrapper.get('img').attributes('src')).toBe('https://localhost/large.webp')
+  await wrapper.get('img').trigger('error')
+  await flushPromises()
+  expect(getBlob).toHaveBeenCalledExactlyOnceWith('a')
+  expect(wrapper.get('img').attributes('src')).toBe('blob:fallback')
   wrapper.unmount()
 })
 

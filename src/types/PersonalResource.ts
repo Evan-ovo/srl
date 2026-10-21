@@ -31,6 +31,8 @@ export interface PersonalResourceDocument {
   url: string
   attachments: Array<{ path: string; name: string; kind: 'apk' | 'source'; size: number }>
   fields: SecretField[]
+  /** Explicit user choice; absent on legacy/encrypted cards. */
+  protection?: 'none'
   protected?: SecretEnvelope
   icons?: PhoneIcon[]
   iconSource?: PhoneIconSource
@@ -118,6 +120,11 @@ export function parsePersonalResource(value: unknown): PersonalResourceDocument 
       throw new Error('密钥字段格式无效')
     ids.add(field.id)
   }
+  if (
+    value.protection !== undefined &&
+    (value.protection !== 'none' || value.kind !== 'secret' || value.protected)
+  )
+    throw new Error('密钥保护方式无效')
   if (
     value.protected &&
     (!isRecord(value.protected) ||

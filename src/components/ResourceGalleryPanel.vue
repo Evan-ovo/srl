@@ -93,6 +93,11 @@ async function createCategory() {
     notice.value = '分类已新建'
   })
 }
+function createCategoryOnEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  event.preventDefault()
+  void createCategory()
+}
 function editorKey(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     event.stopPropagation()
@@ -514,7 +519,11 @@ defineExpose({
   <div
     class="resource-gallery"
     :aria-busy="busy || loadingGallery"
-    @keydown.enter="($event.target as HTMLElement).tagName === 'INPUT' && $event.preventDefault()"
+    @keydown.enter="
+      !$event.isComposing &&
+      ($event.target as HTMLElement).tagName === 'INPUT' &&
+      $event.preventDefault()
+    "
   >
     <div class="resource-gallery__controls">
       <div class="resource-gallery__toolbar">
@@ -655,7 +664,7 @@ defineExpose({
                 placeholder="新分类名称"
                 maxlength="60"
                 :disabled="busy"
-                @keydown.enter.prevent="!$event.isComposing && createCategory()"
+                @keydown.enter="createCategoryOnEnter"
               />
               <button
                 class="button"
@@ -676,7 +685,7 @@ defineExpose({
                 placeholder="输入新分类名称"
                 maxlength="60"
                 :disabled="busy"
-                @keydown.enter.prevent="!$event.isComposing && createCategory()"
+                @keydown.enter="createCategoryOnEnter"
               />
               <button
                 class="button"

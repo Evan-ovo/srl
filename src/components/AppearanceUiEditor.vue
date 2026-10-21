@@ -243,6 +243,12 @@ textarea {
   tab-size: 2;
   line-height: 1.5;
 }
+@media (max-width: 53.75rem) {
+  :root[data-visual-viewport-reduced='true'] .appearance-ui-editor__source textarea {
+    min-height: min(11rem, calc(var(--visual-viewport-height, 100dvh) / 2));
+    max-height: calc(var(--visual-viewport-height, 100dvh) / 2);
+  }
+}
 .appearance-ui-editor__project-actions button {
   cursor: pointer;
 }

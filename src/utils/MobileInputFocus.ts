@@ -13,6 +13,13 @@ interface ElementBounds {
 export type MobileEditableElement =
   HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLElement
 
+/** Native focus is retargeted to the host of built-in open shadow surfaces. */
+export function getMobileActiveElement(): Element | null {
+  let active = document.activeElement
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement
+  return active
+}
+
 export function isMobileEditableElement(element: Element | null): element is MobileEditableElement {
   if (
     element instanceof HTMLInputElement ||
@@ -118,7 +125,7 @@ export function restorePersonalInputScroll(): void {
   personalAvoidance = undefined
   if (!previous || !previous.restorable || !previous.target.isConnected) return
   const before = previous.container.scrollTop
-  const active = document.activeElement
+  const active = getMobileActiveElement()
   if (isMobileEditableElement(active) && active !== previous.target) return
   const { container } = previous
   const expected = Math.min(

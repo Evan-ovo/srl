@@ -65,6 +65,11 @@ export interface AiTaggingRuleTemplate {
   taxonomyTemplateId: string
   mergeAliases: boolean
 }
+export interface AiTaggingStateBackup {
+  draft?: AiTaggingDraft
+  undo?: AiTaggingUndoRecord
+  ruleTemplates?: AiTaggingRuleTemplate[]
+}
 
 function storage(): Storage | undefined {
   try {
@@ -203,34 +208,97 @@ function parseUndo(value: unknown): AiTaggingUndoRecord | undefined {
   }
 }
 
+function parseRuleTemplates(value: unknown): AiTaggingRuleTemplate[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 30).flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const template = item as Partial<AiTaggingRuleTemplate>
+    const id = text(template.id, 80).trim()
+    const name = text(template.name, 80).trim()
+    const prompt = text(template.prompt, 4_000).trim()
+    return id && name && prompt
+      ? [
+          {
+            id,
+            name,
+            prompt,
+            ...(typeof template.systemPrompt === 'string'
+              ? { systemPrompt: text(template.systemPrompt, AI_TAGGING_MAX_SYSTEM_PROMPT) }
+              : {}),
+            taxonomyTemplateId: text(template.taxonomyTemplateId, 80) || 'free',
+            mergeAliases: template.mergeAliases === true,
+          },
+        ]
+      : []
+  })
+}
+
 export class AiTaggingDraftService {
   loadRuleTemplates(): AiTaggingRuleTemplate[] {
     try {
-      const value: unknown = JSON.parse(storage()?.getItem(RULE_TEMPLATES_KEY) ?? '[]')
-      if (!Array.isArray(value)) return []
-      return value.slice(0, 30).flatMap((item) => {
-        if (!item || typeof item !== 'object') return []
-        const template = item as Partial<AiTaggingRuleTemplate>
-        const id = text(template.id, 80).trim()
-        const name = text(template.name, 80).trim()
-        const prompt = text(template.prompt, 4_000).trim()
-        return id && name && prompt
-          ? [
-              {
-                id,
-                name,
-                prompt,
-                ...(typeof template.systemPrompt === 'string'
-                  ? { systemPrompt: text(template.systemPrompt, AI_TAGGING_MAX_SYSTEM_PROMPT) }
-                  : {}),
-                taxonomyTemplateId: text(template.taxonomyTemplateId, 80) || 'free',
-                mergeAliases: template.mergeAliases === true,
-              },
-            ]
-          : []
-      })
+      return parseRuleTemplates(JSON.parse(storage()?.getItem(RULE_TEMPLATES_KEY) ?? '[]'))
     } catch {
       return []
+    }
+  }
+  exportPortableState(): AiTaggingStateBackup {
+    return {
+      draft: this.loadDraft(),
+      undo: this.loadUndo(),
+      ruleTemplates: this.loadRuleTemplates(),
+    }
+  }
+  importPortableState(value: AiTaggingStateBackup): void {
+    if (value.ruleTemplates !== undefined) {
+      if (!Array.isArray(value.ruleTemplates)) throw new Error('AI 标注规则模板格式无效')
+      const incoming = parseRuleTemplates(value.ruleTemplates)
+      if (incoming.length !== value.ruleTemplates.length)
+        throw new Error('AI 标注规则模板格式无效或超过30项')
+      const merged = this.loadRuleTemplates()
+      for (const item of incoming) {
+        if (
+          merged.some(
+            (row) =>
+              row.name === item.name &&
+              row.prompt === item.prompt &&
+              row.systemPrompt === item.systemPrompt &&
+              row.taxonomyTemplateId === item.taxonomyTemplateId &&
+              row.mergeAliases === item.mergeAliases,
+          )
+        )
+          continue
+        merged.push(
+          merged.some((row) => row.id === item.id) ? { ...item, id: crypto.randomUUID() } : item,
+        )
+      }
+      if (merged.length > 30) throw new Error('合并后的 AI 标注规则模板超过30项，现有模板已保留')
+      const target = storage(),
+        encoded = JSON.stringify(merged)
+      if (!target) throw new Error('本机存储不可用，AI 标注规则模板未恢复')
+      try {
+        target.setItem(RULE_TEMPLATES_KEY, encoded)
+        if (target.getItem(RULE_TEMPLATES_KEY) !== encoded) throw new Error('readback failed')
+      } catch {
+        throw new Error('AI 标注规则模板保存失败，请检查本机存储后重试')
+      }
+    }
+    if (value.draft) {
+      const expected = parseDraft(value.draft)
+      if (
+        !expected ||
+        !this.saveDraft(expected) ||
+        JSON.stringify(this.loadDraft()) !== JSON.stringify(expected)
+      )
+        throw new Error('AI 标注草稿保存失败，请检查数据和本机存储后重试')
+    }
+    if (value.undo) {
+      const expected = parseUndo(value.undo)
+      if (
+        !expected ||
+        !this.saveUndo(expected) ||
+        JSON.stringify(this.loadUndo()) !== JSON.stringify(expected)
+      )
+        throw new Error('AI 标注撤销记录保存失败，请检查数据和本机存储后重试')
     }
   }
 

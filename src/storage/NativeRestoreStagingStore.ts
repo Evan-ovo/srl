@@ -1,5 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { nativeFileSize, nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
+import { canImportNativeResourceObjects } from './NativeResourceFileMirror'
+import { isAndroidNativeAppDatabaseActive } from './AndroidNativeDexieCore'
 import type { ArchiveStageProgress } from '../services/ArchiveExtraction'
 import type { RestoreStagingEntry, RestoreStagingMetadata } from '../types/RestoreStaging'
 import { IndexedDbRestoreStagingStore } from './IndexedDbRestoreStagingStore'
@@ -38,6 +40,18 @@ const plugin = registerPlugin<NativeArchivePlugin>('NativeArchive')
 
 /** Native file staging only; manifest validation and restore transactions keep their owners. */
 export class NativeRestoreStagingStore extends IndexedDbRestoreStagingStore {
+  private nativeFilesAvailable?: Promise<boolean>
+
+  async getNativeFile(jobId: string, path: string): Promise<RestoreStagingEntry | undefined> {
+    if (!jobId.startsWith('native-zip-') || !isAndroidNativeAppDatabaseActive()) return undefined
+    this.nativeFilesAvailable ??= canImportNativeResourceObjects()
+    if (!(await this.nativeFilesAvailable)) return undefined
+    const { entry } = await plugin.readArchiveEntry({ jobId, path })
+    return entry
+      ? { ...entry, blob: rememberNativeFile(new Blob(), entry.uri, entry.size) }
+      : undefined
+  }
+
   async stageNativeArchive(
     file: File,
     selectedPaths?: string[],

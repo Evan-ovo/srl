@@ -129,6 +129,48 @@ function target(github: boolean): CloudBackupConfig {
 
 describe('structured cloud archive descriptor lookup', () => {
   it.each([true, false])(
+    'streams the complete ZIP into the supplied sink (github=%s)',
+    async (github) => {
+      const test = fixture(3)
+      test.context.exportService = new ExportService()
+      const chunks: Uint8Array<ArrayBuffer>[] = []
+      const commit = vi.fn(async () => undefined)
+      const abort = vi.fn(async () => undefined)
+      const archive = await materializeStructuredArchive(
+        test.context,
+        item,
+        target(github),
+        'synthetic',
+        {
+          writerFactory: async () => ({
+            write: async (chunk) => {
+              chunks.push(chunk.slice())
+            },
+            commit,
+            abort,
+          }),
+        },
+      )
+      expect(archive.blob.size).toBe(0)
+      expect(commit).toHaveBeenCalledOnce()
+      expect(abort).not.toHaveBeenCalled()
+      const zip = unzipSync(new Uint8Array(await new Blob(chunks).arrayBuffer()))
+      const manifest = JSON.parse(new TextDecoder().decode(zip['manifest.json']))
+      for (const [historical, records] of [
+        [false, manifest.resources],
+        [true, manifest.versions],
+      ] as const) {
+        expect(records).toHaveLength(3)
+        for (const record of records)
+          expect(JSON.parse(new TextDecoder().decode(zip[record.archivePath]))).toEqual({
+            id: record.id,
+            historical,
+          })
+      }
+    },
+  )
+
+  it.each([true, false])(
     'keeps real ZIP successes and retries only failed current/history originals (github=%s)',
     async (github) => {
       const test = fixture(8)

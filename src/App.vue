@@ -1253,7 +1253,12 @@ const isBatchBarVisible = computed(
         />
       </section>
 
-      <nav v-if="filteredResourceCount > pageSize" class="pagination" aria-label="资源分页">
+      <nav
+        v-if="filteredResourceCount > pageSize"
+        class="pagination"
+        aria-label="资源分页"
+        data-srl-native-root
+      >
         <button
           type="button"
           :disabled="currentPage <= 1"

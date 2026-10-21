@@ -14,12 +14,16 @@ import {
 import { isRecord } from '../utils/UnknownValue'
 import {
   createGitHubBundle,
+  planGitHubBundle,
+  type BundleReadOptions,
   parseGitHubBundleManifest,
   type GitHubBundleManifest,
   type GitHubBundlePart,
 } from './GitHubBackupBundle'
 import { hashCloudBlob } from './CloudArchiveCodec'
 import { nativeFileSource } from '../core/NativeFileSource'
+import type { ResourceReadSource } from '../types/ResourceReadSource'
+import { withAbort } from '../utils/Abortable'
 import { collectCommunitySourceLocalAssetIds } from './CommunitySourceAttachmentArchive'
 import { parseAlbumBackup } from './GeneratedImageAlbumBackup'
 import { parseFrontendWorkshopBackup } from '../storage/FrontendWorkshopProjectStorage'
@@ -61,7 +65,7 @@ export interface CloudObjectPlan {
   hash: string
   size: number
   blob?: Blob
-  loadBlob?: () => Promise<Blob>
+  loadBlob?: (signal?: AbortSignal) => Promise<Blob>
   source: CloudObjectSource
   contentType: string
 }
@@ -71,6 +75,7 @@ export interface StructuredResourceCandidate {
   summaryIsPartial?: boolean
   loadSummary?: () => Promise<ResourceSummary>
   load: () => Promise<Resource>
+  loadSource?: (signal?: AbortSignal) => Promise<ResourceReadSource>
 }
 
 type StructuredResourceInput = Resource | StructuredResourceCandidate
@@ -224,6 +229,59 @@ async function restoreStructuredMetadata(
   return { ...parsed.metadata, ...resource.metadata, card }
 }
 
+type SourceIdentity = Pick<
+  ResourceSummary,
+  'id' | 'contentHash' | 'updatedAt' | 'fileSize' | 'fileName' | 'mimeType'
+>
+
+async function openCandidateSource(
+  candidate: StructuredResourceCandidate,
+  expected: SourceIdentity,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
+  const source = await withAbort(candidate.loadSource!(signal), signal)
+  if (
+    source.id !== expected.id ||
+    source.contentHash !== expected.contentHash ||
+    source.updatedAt !== expected.updatedAt ||
+    source.originalSource.size !== expected.fileSize
+  )
+    throw new Error(`云备份期间资源发生变化：${expected.fileName}`)
+  return source
+}
+
+function candidateChunkLoader(
+  candidate: StructuredResourceCandidate,
+  resource: ResourceReference,
+  offset: number,
+  size: number,
+) {
+  const expected: SourceIdentity = {
+    id: resource.id,
+    contentHash: resource.contentHash,
+    updatedAt: resource.updatedAt,
+    fileSize: resource.fileSize,
+    fileName: resource.fileName,
+    mimeType: resource.mimeType,
+  }
+  return async (signal?: AbortSignal): Promise<Blob> => {
+    signal?.throwIfAborted()
+    if (candidate.loadSource) {
+      const source = (await openCandidateSource(candidate, expected, signal)).originalSource
+      if (source instanceof Blob) return source.slice(offset, offset + size)
+      const bytes = await withAbort(source.slice(offset, offset + size).arrayBuffer(signal), signal)
+      signal?.throwIfAborted()
+      return new Blob([bytes], { type: expected.mimeType })
+    }
+    const hydrated = await withAbort(candidate.load(), signal)
+    signal?.throwIfAborted()
+    if (hydrated.contentHash !== expected.contentHash || hydrated.updatedAt !== expected.updatedAt)
+      throw new Error(`云备份期间资源发生变化：${expected.fileName}`)
+    return hydrated.originalBlob.slice(offset, offset + size)
+  }
+}
+
 async function addResource(
   input: StructuredResourceInput,
   target: StructuredResource[],
@@ -232,11 +290,13 @@ async function addResource(
   objectPlans: Map<string, CloudObjectPlan>,
   descriptorUpdates: CreatedStructuredSnapshot['descriptorUpdates'],
   historical: boolean,
+  options: BundleReadOptions = {},
 ): Promise<number> {
+  options.signal?.throwIfAborted()
   const candidate = 'summary' in input ? (input as StructuredResourceCandidate) : undefined
   let resource: ResourceReference = candidate ? candidate.summary : (input as Resource)
   if (candidate?.summaryIsPartial) {
-    const full = await (candidate.loadSummary?.() ?? candidate.load())
+    const full = await withAbort(candidate.loadSummary?.() ?? candidate.load(), options.signal)
     if (
       full.id !== resource.id ||
       full.contentHash !== resource.contentHash ||
@@ -269,10 +329,7 @@ async function addResource(
           size: part.size,
           blob: loaded,
           loadBlob: candidate
-            ? async () => {
-                const hydrated = await candidate.load()
-                return hydrated.originalBlob.slice(partOffset, partOffset + part.size)
-              }
+            ? candidateChunkLoader(candidate, resource, partOffset, part.size)
             : undefined,
           source,
           contentType: 'application/octet-stream',
@@ -282,8 +339,72 @@ async function addResource(
     }
     return 0
   }
+  if (candidate?.loadSource) {
+    const opened = await openCandidateSource(candidate, resource, options.signal)
+    const source = opened.originalSource
+    if (opened.requiresWholeRead) {
+      // Keep the established single materialization for legacy/encrypted records instead of
+      // repeating whole-file reads/decryption once per part. New plain Blob/native rows are ranged.
+      if (!(source instanceof Blob)) throw new Error('完整读取来源缺少原件')
+      const { originalSource: _source, requiresWholeRead: _whole, ...summary } = opened
+      return addResource(
+        { ...summary, originalBlob: source },
+        target,
+        chunks,
+        nativeSources,
+        objectPlans,
+        descriptorUpdates,
+        historical,
+        options,
+      )
+    }
+    const manifest = await planGitHubBundle(
+      source,
+      resource.fileName,
+      options,
+      source.size <= SMALL_OBJECT_LIMIT ? SMALL_OBJECT_LIMIT : undefined,
+    )
+    if (manifest.totalSha256 !== resource.contentHash.toLowerCase())
+      throw new Error(`资源原文件摘要与索引不一致：${resource.fileName}`)
+    target.push(withoutBlobs(resource, manifest))
+    let offset = 0
+    const parts: NonNullable<ResourceBackupDescriptor['parts']> = []
+    for (const part of manifest.parts) {
+      const range: CloudObjectSource = {
+        kind: 'range',
+        contentHash: manifest.totalSha256,
+        offset,
+        size: part.size,
+      }
+      nativeSources.set(part.name, range)
+      if (!objectPlans.has(part.name))
+        objectPlans.set(part.name, {
+          name: part.name,
+          hash: part.sha256,
+          size: part.size,
+          loadBlob: candidateChunkLoader(candidate, resource, offset, part.size),
+          source: range,
+          contentType: 'application/octet-stream',
+        })
+      parts.push({ name: part.name, size: part.size, sha256: part.sha256, offset })
+      offset += part.size
+    }
+    descriptorUpdates.push({
+      id: resource.id,
+      historical,
+      descriptor: {
+        version: 2,
+        resourceId: resource.id,
+        contentHash: manifest.totalSha256,
+        size: resource.fileSize,
+        updatedAt: resource.updatedAt,
+        parts,
+      },
+    })
+    return source.size
+  }
   if (candidate && !('originalBlob' in resource)) {
-    const full = await candidate.load()
+    const full = await withAbort(candidate.load(), options.signal)
     if (
       full.id !== resource.id ||
       full.contentHash !== resource.contentHash ||
@@ -294,7 +415,7 @@ async function addResource(
   }
   const hydrated = resource as Resource
   if (hydrated.originalBlob.size <= SMALL_OBJECT_LIMIT) {
-    const actualHash = await hashCloudBlob(hydrated.originalBlob)
+    const actualHash = await withAbort(hashCloudBlob(hydrated.originalBlob), options.signal)
     if (actualHash !== hydrated.contentHash.toLowerCase()) {
       throw new Error(`资源原文件摘要与索引不一致：${hydrated.fileName}`)
     }
@@ -344,6 +465,7 @@ async function addResource(
     hydrated.fileName,
     undefined,
     hydrated.contentHash,
+    options,
   )
   target.push(withoutBlobs(hydrated, manifest))
   let offset = 0
@@ -397,6 +519,7 @@ export async function createStructuredSnapshot(
     readAttachment?: (assetId: string) => Promise<Blob | undefined>
     readAlbumFile?: (id: string) => Promise<Blob>
     signal?: AbortSignal
+    onProgress?: (message: string) => void
   } = {},
 ): Promise<CreatedStructuredSnapshot> {
   const chunks = new Map<string, Blob>()
@@ -415,6 +538,13 @@ export async function createStructuredSnapshot(
       objectPlans,
       descriptorUpdates,
       false,
+      {
+        signal: community.signal,
+        onRead: (_, bytes) =>
+          community.onProgress?.(
+            `正在分块：${'summary' in resource ? resource.summary.fileName : resource.fileName}（${(bytes / 1048576).toFixed(1)} MiB）`,
+          ),
+      },
     )
   for await (const version of versions)
     localReadBytes += await addResource(
@@ -425,6 +555,13 @@ export async function createStructuredSnapshot(
       objectPlans,
       descriptorUpdates,
       true,
+      {
+        signal: community.signal,
+        onRead: (_, bytes) =>
+          community.onProgress?.(
+            `正在分块历史：${'summary' in version ? version.summary.fileName : version.fileName}（${(bytes / 1048576).toFixed(1)} MiB）`,
+          ),
+      },
     )
   const addPortableParts = (original: Blob, manifest: GitHubBundleManifest, blobs: Blob[]) => {
     const uri = nativeFileSource(original)
@@ -456,7 +593,13 @@ export async function createStructuredSnapshot(
       community.signal?.throwIfAborted()
       if (!original || original.size !== entry.item.sizeBytes)
         throw new Error(`相册原图缺失或已变化，未提交备份：${entry.item.name}`)
-      const { manifest, blobs } = await createGitHubBundle(original, entry.item.name)
+      const { manifest, blobs } = await createGitHubBundle(
+        original,
+        entry.item.name,
+        undefined,
+        undefined,
+        { signal: community.signal },
+      )
       community.signal?.throwIfAborted()
       addPortableParts(original, manifest, blobs)
       album.push({ item: entry.item, object: manifest })
@@ -472,7 +615,13 @@ export async function createStructuredSnapshot(
       const original = await community.readAttachment?.(assetId)
       community.signal?.throwIfAborted()
       if (!original) throw new Error(`Discord 本地附件缺失，未提交备份：${assetId}`)
-      const { manifest, blobs } = await createGitHubBundle(original, assetId)
+      const { manifest, blobs } = await createGitHubBundle(
+        original,
+        assetId,
+        undefined,
+        undefined,
+        { signal: community.signal },
+      )
       community.signal?.throwIfAborted()
       if (assetId !== `asset-${manifest.totalSha256}`)
         throw new Error(`Discord 本地附件完整性校验失败：${assetId}`)
@@ -491,6 +640,7 @@ export async function createStructuredSnapshot(
     size: plan.size,
     sha256: plan.hash,
   }))
+  community.signal?.throwIfAborted()
   return {
     snapshot: {
       format: STRUCTURED_SNAPSHOT_FORMAT,

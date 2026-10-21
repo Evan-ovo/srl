@@ -35,9 +35,9 @@ interface ResourceVersionsContext {
  * 任何一步都不改写原文件内容。
  */
 export function useResourceVersions(context: ResourceVersionsContext) {
-  async function reloadVersionState(resourceId: string): Promise<void> {
+  async function reloadVersionState(resourceId: string, changedIds?: string[]): Promise<void> {
     context.organizingVersions.value = await resourceService.listVersions(resourceId)
-    await context.loadResources()
+    await context.loadResources(changedIds)
   }
 
   async function handleActivateVersion(versionId: string): Promise<void> {
@@ -103,7 +103,7 @@ export function useResourceVersions(context: ResourceVersionsContext) {
         context.organizingResource.value = await resourceService.updateMetadata(resource.id, {
           characterContentEdits: migratedEdits.edits,
         })
-      await reloadVersionState(resource.id)
+      await reloadVersionState(resource.id, [resource.id])
       const migratedCount = migratedEdits
         ? migratedEdits.edits.length -
           readCharacterCardContentEdits(selectedVersion.metadata.characterContentEdits).length
@@ -150,7 +150,7 @@ export function useResourceVersions(context: ResourceVersionsContext) {
     try {
       await resourceService.deleteVersions(resource.id, versionIds)
       context.organizingResource.value = await resourceService.get(resource.id)
-      await reloadVersionState(resource.id)
+      await reloadVersionState(resource.id, [resource.id])
       context.showNotice('历史版本已删除')
     } catch (error) {
       context.showNotice(error instanceof Error ? error.message : '历史版本删除失败')
@@ -176,7 +176,7 @@ export function useResourceVersions(context: ResourceVersionsContext) {
     try {
       await resourceService.detachVersion(resource.id, versionId)
       context.organizingResource.value = await resourceService.get(resource.id)
-      await reloadVersionState(resource.id)
+      await reloadVersionState(resource.id, [resource.id, versionId])
       await context.refreshStorageHealth()
       context.showNotice('封装已解除绑定，并作为独立资源保留')
     } catch (error) {
@@ -248,7 +248,7 @@ export function useResourceVersions(context: ResourceVersionsContext) {
         resource.id,
         file,
       )
-      await reloadVersionState(resource.id)
+      await reloadVersionState(resource.id, [resource.id])
       context.showNotice('新卡面已保存为当前 PNG 封装，原卡面和原文件仍保留在同一版本中')
     } catch (error) {
       context.showNotice(error instanceof Error ? error.message : '更换卡面失败')

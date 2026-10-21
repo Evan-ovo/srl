@@ -685,7 +685,7 @@ describe('ResourceService', () => {
   })
 
   it('detects a likely update and stores both versions under one resource', async () => {
-    const { service } = createServiceWithStorage()
+    const { service, storage } = createServiceWithStorage()
     const card = (version: string, description: string) =>
       new File(
         [
@@ -754,7 +754,11 @@ describe('ResourceService', () => {
     expect(notedVersion.resource.versionNote).toBe('最初导入的原版')
     expect(await notedVersion.resource.originalBlob.text()).toBe(originalOldFile)
 
+    const historyReads = vi.spyOn(storage, 'listVersions')
     const restored = await service.activateVersion(initial.resource.id, oldVersion.resource.id)
+    expect(historyReads).toHaveBeenCalledExactlyOnceWith(initial.resource.id)
+    historyReads.mockRestore()
+    expect(await restored.originalBlob.text()).toBe(originalOldFile)
     expect(restored.metadata.characterVersion).toBe('1.0')
     expect(restored.metadata.authorNote).toBe('我备注的作者')
     expect(restored.versionNote).toBe('最初导入的原版')

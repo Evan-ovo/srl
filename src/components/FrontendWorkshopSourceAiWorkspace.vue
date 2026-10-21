@@ -79,6 +79,11 @@ const {
   submitInstruction,
   frontendWorkshopSourceAiSessionService,
 } = controller
+function submitOnEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  event.preventDefault()
+  void submitInstruction()
+}
 const previewGreetingIndex = ref(0)
 watch(
   () => props.projectId,
@@ -633,7 +638,7 @@ const beforeGreetingIndex = computed(() => {
                   : '询问当前源码'
           "
           :disabled="busy"
-          @keydown.enter.exact.prevent="submitInstruction"
+          @keydown.enter.exact="submitOnEnter"
         ></textarea>
         <button
           v-if="session?.pending"

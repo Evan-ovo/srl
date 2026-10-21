@@ -99,7 +99,7 @@ const actions = computed<ActionSheetAction[]>(() => [
 function trapTab(event: KeyboardEvent) {
   const controls = [
     ...(root.value?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled),input:not([hidden]):not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],iframe',
+      'button:not(:disabled),input:not([hidden]):not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],iframe,audio[controls],video[controls],[tabindex="0"]',
     ) ?? []),
   ].filter((element) => element.getClientRects().length)
   const first = controls[0],
@@ -586,6 +586,7 @@ defineExpose({ requestBack })
         v-else-if="current"
         :key="`${current.id}:${current.contentHash}:${current.fileName}`"
         :resource="current"
+        :active="!historyTarget"
       />
       <ActionSheet
         v-model:open="menuOpen"

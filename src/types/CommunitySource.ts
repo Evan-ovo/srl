@@ -139,20 +139,20 @@ export interface CommunitySource {
   messageCount?: number
   missingMessageCount?: number
   latestMessagePreview?: string
-  /** 只有真实 Worker / Discord 检查后才写入；未检查时保持 undefined。 */
+  /** LEGACY-REQUIRED：旧版检查状态，仅为存量来源和备份兼容保留，不再发起远端检查。 */
   remoteState?: CommunitySourceRemoteState
-  /** Bot 无法进入来源社区时改为手动重新保存；不参与 source identity。 */
+  /** LEGACY-REQUIRED：旧版刷新模式，不参与 source identity。 */
   discordRefreshMode?: CommunitySourceRefreshMode
-  /** 最近一次真实远端检查发现是否存在尚未应用的更新。 */
+  /** LEGACY-REQUIRED：旧版远端检查结果。 */
   hasRemoteUpdate?: boolean
   lastCheckedAt?: number
-  /** 用户在更新确认里明确取消勾选的新消息；下次检查不再反复提示。 */
+  /** LEGACY-REQUIRED：旧版忽略列表，仅为存量数据/备份兼容保留。 */
   ignoredRemoteMessageIds?: string[]
-  /** 已确认可作为下一次增量读取起点的远端扫描进度；不参与 identity / 目录 summary。 */
+  /** LEGACY-REQUIRED：旧版增量扫描进度，不再执行扫描。 */
   remoteScanCursor?: DiscordSourceRemoteScanCursor
-  /** 已保存消息轻量健康检查的轮转位置；只用于公平覆盖，不参与 identity / 目录 summary。 */
+  /** LEGACY-REQUIRED：旧版消息健康检查位置，不再执行检查。 */
   savedMessageCheckCursor?: string
-  /** 仅在用户明确选择“保留上一版本”时生成；随 Source 一起进入 Vault / Backup。 */
+  /** 旧版已有历史及恢复前的回退版本；随 Source 一起进入 Vault / Backup。 */
   revisions?: CommunitySourceRevision[]
   /** Snapshot time of the source display metadata, independent from message edit versions. */
   metadataCapturedAt?: number

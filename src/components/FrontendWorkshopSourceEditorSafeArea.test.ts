@@ -27,7 +27,6 @@ describe('FrontendWorkshopSourceEditor safe areas', () => {
     expect(source).toContain('max(8px, var(--safe-right))')
     expect(source).toContain('max(8px, var(--safe-left))')
     expect(source).toContain('grid-template-rows: auto minmax(0, 1fr)')
-    expect(source).toContain('flex: 1 1 0')
     expect(source).toContain('overflow: auto')
   })
 })

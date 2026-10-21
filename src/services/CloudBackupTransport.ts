@@ -12,6 +12,7 @@ import {
   resolveRelayWorkerTarget,
 } from './RelayWorkerSettingsService'
 import { hashCloudBlob } from './CloudArchiveCodec'
+import { withAbort } from '../utils/Abortable'
 import * as CloudBackupGitHubTransport from './CloudBackupGitHubTransport'
 import {
   cloudProxyUnavailableError,
@@ -38,7 +39,12 @@ import {
   type StructuredSnapshot,
 } from './CloudStructuredSnapshot'
 import { type GitHubBundleManifest } from './GitHubBackupBundle'
-import { isNativeCloudTransferAvailable, nativeWebDavFetch } from './NativeCloudTransfer'
+import type { ArchiveStreamWriter } from './ExportService'
+import {
+  isNativeCloudTransferAvailable,
+  nativeWebDavFetch,
+  readVerifiedNativeCloudObject,
+} from './NativeCloudTransfer'
 
 /** Shared transport state and provider dispatch for one backup service instance. */
 export interface RestoreTransferOptions {
@@ -57,6 +63,8 @@ export interface CloudDownloadProgress {
 
 export interface CloudDownloadOptions {
   signal?: AbortSignal
+  /** Structured snapshots can stream directly into the caller's existing save/share sink. */
+  writerFactory?: (fileName: string) => Promise<ArchiveStreamWriter>
   onProgress?: (progress: CloudDownloadProgress) => void
   onReadFailures?: (failures: readonly ArchiveReadFailure[]) => Promise<void>
 }
@@ -136,7 +144,7 @@ export class CloudBackupTransport {
       }
       scoped.materializeCloudObject = async (plan) => {
         signal.throwIfAborted()
-        const blob = await this.materializeCloudObject(plan)
+        const blob = await withAbort(this.materializeCloudObject(plan, signal), signal)
         signal.throwIfAborted()
         return blob
       }
@@ -204,6 +212,11 @@ export class CloudBackupTransport {
       },
       cloudFetch: (...args) => this.cloudFetch(...args),
       readResponseBlob: (response) => response.blob(),
+      readLocalObject: isNativeCloudTransferAvailable()
+        ? function (this: CloudBackupTransportContext, object: GitHubBundleManifest) {
+            return readVerifiedNativeCloudObject(object.totalSha256, object.totalSize, this.signal)
+          }
+        : undefined,
       githubFetch: (...args) => this.githubFetch(...args),
       ensureGitHubInitialCommit: (...args) => this.ensureGitHubInitialCommit(...args),
       getGitHubRelease: (...args) => this.getGitHubRelease(...args),
@@ -401,14 +414,34 @@ export class CloudBackupTransport {
     )
   }
 
-  protected async materializeCloudObject(plan: CloudObjectPlan): Promise<Blob> {
+  protected async materializeCloudObject(
+    plan: CloudObjectPlan,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    signal?.throwIfAborted()
     const hydratedLazily = !plan.blob
-    const blob = plan.blob ?? (await plan.loadBlob?.())
+    let blob =
+      plan.blob ?? (await withAbort(plan.loadBlob?.(signal) ?? Promise.resolve(undefined), signal))
+    signal?.throwIfAborted()
     if (!blob) throw new Error(`云备份对象缺少本机来源：${plan.name}`)
     if (blob.size !== plan.size) throw new Error(`云备份对象本机大小已变化：${plan.name}`)
-    if (hydratedLazily && (await hashCloudBlob(blob)) !== plan.hash.toLowerCase()) {
+    // WebKit can read an IDB Blob slice correctly but send different backing bytes via fetch.
+    // Detach this upload chunk with bounded reads, never the complete resource or archive.
+    const parts: Blob[] = []
+    for (let offset = 0; offset < blob.size; offset += 1024 * 1024) {
+      signal?.throwIfAborted()
+      const bytes = await withAbort(blob.slice(offset, offset + 1024 * 1024).arrayBuffer(), signal)
+      signal?.throwIfAborted()
+      parts.push(new Blob([bytes]))
+    }
+    blob = new Blob(parts, { type: blob.type })
+    if (
+      hydratedLazily &&
+      (await withAbort(hashCloudBlob(blob), signal)) !== plan.hash.toLowerCase()
+    ) {
       throw new Error(`云备份对象本机摘要校验失败：${plan.name}`)
     }
+    signal?.throwIfAborted()
     return blob
   }
 

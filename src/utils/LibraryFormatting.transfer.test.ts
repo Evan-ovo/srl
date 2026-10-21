@@ -44,7 +44,7 @@ vi.mock('@capacitor/share', () => ({
 }))
 vi.mock('../types/Resource', () => ({ RESOURCE_TYPE: {}, RESOURCE_TYPE_LABELS: {} }))
 
-import { downloadBlob } from './LibraryFormatting'
+import { downloadBlob, shareNativeStream } from './LibraryFormatting'
 import { taskCenter } from '../core/TaskCenter'
 
 beforeEach(() => {
@@ -119,4 +119,60 @@ it('supports empty files without reporting a fictional byte total', async () => 
   assert.deepEqual(state.chunks, [''])
   assert.equal(state.shared.length, 1)
   assert.equal(taskCenter.list()[0]?.status, 'completed')
+})
+
+it('streams an archive into the existing cache with one owning task and shares only complete bytes', async () => {
+  const bytes = Uint8Array.from({ length: 1_200_007 }, (_, index) => index % 251)
+  const operationId = taskCenter.start({ name: '下载云备份', cancelable: true })
+  const onHandoff = vi.fn()
+  state.onShare = async () => {
+    assert.deepEqual(
+      Buffer.concat(state.chunks.map((value) => Buffer.from(value, 'base64'))),
+      Buffer.from(bytes),
+    )
+    assert.equal(taskCenter.list().length, 1)
+    assert.equal(onHandoff.mock.calls.length, 1)
+  }
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    },
+  })
+  await shareNativeStream(stream, 'cloud.zip', { operationId, onHandoff })
+  assert.equal(state.chunks.length, 3)
+  assert.equal(state.shared.length, 1)
+  assert.equal(taskCenter.list()[0]?.status, 'running') // The existing download owner finishes its own task.
+})
+
+it('cancels a streaming archive during a native write and clears its partial file before handoff', async () => {
+  const controller = new AbortController()
+  const operationId = taskCenter.start({ name: '下载云备份', cancelable: true })
+  const onHandoff = vi.fn()
+  state.onWrite = async () => controller.abort(new DOMException('停止下载', 'AbortError'))
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(1_200_007))
+      controller.close()
+    },
+  })
+  await assert.rejects(
+    shareNativeStream(stream, 'cloud.zip', { operationId, signal: controller.signal, onHandoff }),
+    { name: 'AbortError' },
+  )
+  assert.equal(state.chunks.length, 1)
+  assert.equal(state.deleted.length, 1)
+  assert.equal(state.shared.length, 0)
+  assert.equal(onHandoff.mock.calls.length, 0)
+})
+
+it('preserves an empty streaming archive as an actual empty file', async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.close()
+    },
+  })
+  await shareNativeStream(stream, 'empty.zip')
+  assert.deepEqual(state.chunks, [''])
+  assert.equal(state.shared.length, 1)
 })

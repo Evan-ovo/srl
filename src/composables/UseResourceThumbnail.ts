@@ -8,8 +8,13 @@ const nearViewport = new Map<Element, (near: boolean) => void>()
 let visibilityObserver: IntersectionObserver | undefined
 const resizeCallbacks = new Map<Element, () => void>()
 let thumbnailResizeObserver: ResizeObserver | undefined
-const readQueue: Array<{ read: () => Promise<void>; priority?: () => number }> = []
-let activeReads = 0
+const readQueue: Array<{
+  read: () => Promise<void>
+  priority?: () => number
+  kind: 'blob' | 'source'
+}> = []
+const activeReads = { blob: 0, source: 0 }
+const readLimits = { blob: 4, source: 32 }
 let drainScheduled = false
 function scheduleReads(): void {
   if (drainScheduled) return
@@ -21,11 +26,13 @@ function drainReads(): void {
   // Read geometry once per drain, never on a scroll listener or every animation frame.
   const priorities = new Map(readQueue.map((entry) => [entry, entry.priority?.() ?? 1]))
   readQueue.sort((a, b) => priorities.get(b)! - priorities.get(a)!)
-  while (activeReads < 4 && readQueue.length) {
-    const { read } = readQueue.shift()!
-    activeReads++
+  for (;;) {
+    const index = readQueue.findIndex((entry) => activeReads[entry.kind] < readLimits[entry.kind])
+    if (index < 0) break
+    const { read, kind } = readQueue.splice(index, 1)[0]!
+    activeReads[kind]++
     void read().finally(() => {
-      activeReads--
+      activeReads[kind]--
       scheduleReads()
     })
   }
@@ -34,8 +41,10 @@ function drainReads(): void {
 export function enqueueThumbnailRead(
   read: () => Promise<void>,
   priority?: () => number,
+  kind: 'blob' | 'source' = 'blob',
 ): () => void {
-  const entry = { read, priority }
+  // Address-only reads fill the existing 32-key native batch; Blob reads stay at four.
+  const entry = { read, priority, kind }
   readQueue.push(entry)
   scheduleReads()
   return () => {
@@ -77,8 +86,11 @@ export function useResourceThumbnail(
   let cancelRead: (() => void) | undefined
   let observedHost: Element | undefined
   let failedAssetId = ''
+  let loadedNativeLevel: 'card' | 'preview' | undefined
+  let pendingNativeLevel: 'card' | 'preview' | undefined
   function cancelQueued(): void {
     generation++
+    pendingNativeLevel = undefined
     cancelRead?.()
     cancelRead = undefined
   }
@@ -179,7 +191,6 @@ export function useResourceThumbnail(
         previous.blob === blob &&
         previous.assetId === assetId &&
         previous.contentHash === resource?.contentHash &&
-        previous.level === level &&
         !previous.coverId,
       )
       const nativeFailed = Boolean(
@@ -188,13 +199,20 @@ export function useResourceThumbnail(
         nativeDisplay?.url.value &&
         failedUrl === nativeDisplay.url.value,
       )
+      // A layout shrink can reuse the larger source, including its in-flight read.
+      // Identity changes still reload; a small native source still upgrades on growth.
       if (
         !nativeFailed &&
         sameImage &&
-        (thumbnail.value instanceof Blob || nativeDisplay?.url.value)
+        (thumbnail.value instanceof Blob ||
+          (nativeDisplay?.url.value && !(loadedNativeLevel === 'card' && level === 'preview')) ||
+          (pendingNativeLevel === 'preview' && level === 'card'))
       )
         return
-      if (!sameImage) failedAssetId = ''
+      if (!sameImage) {
+        failedAssetId = ''
+        loadedNativeLevel = undefined
+      }
       if (nativeFailed) failedAssetId = assetId ?? ''
       cancelQueued()
       const currentGeneration = generation
@@ -220,14 +238,6 @@ export function useResourceThumbnail(
             thumbnail.value = cover.blob
             return
           }
-          if (assetId && nativeDisplay && failedAssetId !== assetId) {
-            const url = await assetStore.getImageUrl(assetId, level)
-            if (currentGeneration !== generation) return
-            if (url) {
-              nativeDisplay.url.value = url
-              return
-            }
-          }
           let preview = assetId
             ? { blob: await assetStore.getBlob(assetId), url: '' }
             : await resourceGalleryService.getImagePreview(galleryOwnerId(resource), resource.id)
@@ -247,7 +257,35 @@ export function useResourceThumbnail(
           // A missing cover must not prevent browsing or surface as an unhandled app error.
         }
       }
-      cancelRead = enqueueThumbnailRead(read, readPriority)
+      if (
+        !coverId &&
+        assetId &&
+        nativeDisplay &&
+        assetStore.supportsImageUrls &&
+        failedAssetId !== assetId
+      ) {
+        cancelRead = enqueueThumbnailRead(
+          async () => {
+            if (currentGeneration !== generation) return
+            stopObserving()
+            pendingNativeLevel = level
+            try {
+              const url = await assetStore.getImageUrl(assetId, level)
+              if (currentGeneration !== generation) return
+              if (url) {
+                loadedNativeLevel = level
+                nativeDisplay.url.value = url
+              } else cancelRead = enqueueThumbnailRead(read, readPriority)
+            } catch {
+              // Preserve actual native errors; missing capabilities return undefined above.
+            } finally {
+              if (currentGeneration === generation) pendingNativeLevel = undefined
+            }
+          },
+          readPriority,
+          'source',
+        )
+      } else cancelRead = enqueueThumbnailRead(read, readPriority)
     },
     { immediate: true },
   )

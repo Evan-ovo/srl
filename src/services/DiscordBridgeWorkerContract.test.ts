@@ -60,7 +60,6 @@ describe('Discord Bridge Worker contract', () => {
           'DiscordWorkerHttp.ts',
           'DiscordSourceProtocol.ts',
           'DiscordSourceCapture.ts',
-          'DiscordSourceReader.ts',
         ].map((name) => readFile(resolve(BRIDGE_DIR, 'src', name), 'utf8')),
       ).then((parts) => parts.join('\n')),
       readFile(WORKER_PACKAGE, 'utf8'),

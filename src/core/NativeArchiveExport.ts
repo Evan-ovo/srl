@@ -1,5 +1,5 @@
 import { registerPlugin } from '@capacitor/core'
-import { nativeFileSource } from './NativeFileSource'
+import { nativeFileSource, nativeFileSize } from './NativeFileSource'
 import { transferNativeStream } from './NativeStreamTransfer'
 import { writeArchiveEntries, type ArchiveEntryInfo } from '../services/ArchiveZipWriter'
 import type { ArchiveStreamWriter } from '../services/ExportService'
@@ -51,49 +51,52 @@ export async function openCheckpointArchiveWriter(
         options.onProgress?.({ writtenBytes })
       }
       let missingPath: string | undefined
-      const paths = await writeArchiveEntries(options, {
-        cached: async (path) => {
-          const { entry } = await plugin.getArchiveEntry({ id, path })
-          missingPath = entry ? undefined : path
-          if (entry?.descriptor) progress(entry.bytes)
-          return entry?.descriptor
-        },
-        write: async (path, blob, info) => {
-          // Traversal is sequential; native compression rechecks the checkpoint
-          // after preparation, including one created since cached() missed it.
-          const missing = missingPath === path
-          missingPath = undefined
-          if (!missing) {
+      const paths = await writeArchiveEntries(
+        { ...options, read: (resource, historical) => options.read(resource, historical, true) },
+        {
+          cached: async (path) => {
             const { entry } = await plugin.getArchiveEntry({ id, path })
-            if (entry) {
-              progress(entry.bytes)
-              return
+            missingPath = entry ? undefined : path
+            if (entry?.descriptor) progress(entry.bytes)
+            return entry?.descriptor
+          },
+          write: async (path, blob, info) => {
+            // Traversal is sequential; native compression rechecks the checkpoint
+            // after preparation, including one created since cached() missed it.
+            const missing = missingPath === path
+            missingPath = undefined
+            if (!missing) {
+              const { entry } = await plugin.getArchiveEntry({ id, path })
+              if (entry) {
+                progress(entry.bytes)
+                return
+              }
             }
-          }
-          const uri = nativeFileSource(blob)
-          if (!uri) {
-            await plugin.resetArchiveInput({ id, path })
-            let offset = 0
-            await transferNativeStream(blob, {
-              signal: options.signal,
-              append: async (data) => {
-                await plugin.appendArchiveInput({ id, path, offset, data })
-                offset +=
-                  Math.floor((data.length * 3) / 4) -
-                  (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
-              },
+            const uri = nativeFileSource(blob)
+            if (!uri) {
+              await plugin.resetArchiveInput({ id, path })
+              let offset = 0
+              await transferNativeStream(blob, {
+                signal: options.signal,
+                append: async (data) => {
+                  await plugin.appendArchiveInput({ id, path, offset, data })
+                  offset +=
+                    Math.floor((data.length * 3) / 4) -
+                    (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
+                },
+              })
+            }
+            const result = await plugin.compressArchiveEntry({
+              id,
+              path,
+              uri,
+              size: nativeFileSize(blob),
+              ...info,
             })
-          }
-          const result = await plugin.compressArchiveEntry({
-            id,
-            path,
-            uri,
-            size: blob.size,
-            ...info,
-          })
-          progress(result.bytes)
+            progress(result.bytes)
+          },
         },
-      })
+      )
       return (await plugin.assembleArchive({ id, paths })).bytes ?? writtenBytes
     },
     commit: async () => {

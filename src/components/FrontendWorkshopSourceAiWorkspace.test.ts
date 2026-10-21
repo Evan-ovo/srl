@@ -795,6 +795,29 @@ describe('FrontendWorkshopSourceAiWorkspace', () => {
     )
   })
 
+  it('中文候选确认不提前发送指令或清空草稿', async () => {
+    const wrapper = mountWorkspace()
+    await flushPromises()
+    const input = wrapper.get('textarea')
+    await input.setValue('调整中文标题')
+    const composing = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    input.element.dispatchEvent(composing)
+    await flushPromises()
+    expect(mocks.request).not.toHaveBeenCalled()
+    expect((input.element as HTMLTextAreaElement).value).toBe('调整中文标题')
+    expect(composing.defaultPrevented).toBe(false)
+    await input.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(mocks.request).toHaveBeenCalledWith(
+      expect.objectContaining({ instruction: '调整中文标题' }),
+    )
+  })
+
   it('通过 SVG 加号选择参考图片并随当前请求发送', async () => {
     const wrapper = mountWorkspace()
     const input = wrapper.get('input[type="file"]')

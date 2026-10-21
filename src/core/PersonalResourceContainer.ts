@@ -26,27 +26,29 @@ export async function restorePlainSecretCopies(
       (copy) => byHash.has(copy.contentHash) && !completed.has(copy.contentHash),
     )
     if (!pending.length) return
-    const { confirmAction } = await import('../composables/UseConfirmDialog')
-    if (
-      !(await confirmAction({
-        title: '恢复明文密钥副本',
-        message: `备份包含 ${pending.length} 张尚未转换的密钥卡明文副本。是否使用本机查看密码重新加密保存？取消则只保留已恢复的加密原件。`,
-        confirmLabel: '重新加密保存',
-      }))
-    )
-      return
+    const { chooseAction } = await import('../composables/UseConfirmDialog')
+    const choice = await chooseAction({
+      title: '恢复明文密钥副本',
+      message: `备份包含 ${pending.length} 张尚未转换的密钥卡明文副本。可不加密保存，或使用本机统一密码重新加密。不加密时，有本机原件或备份访问权限的人可以读取这些字段；取消则保留已恢复的加密原件。`,
+      confirmLabel: '不加密保存',
+      alternativeLabel: '重新加密保存',
+      cancelLabel: '保留加密原件',
+    })
+    if (choice === 'cancel') return
+    const encrypt = choice === 'alternative'
     const { secretResourceService } = await import('../services/SecretResourceService')
     const { requestSecretPassword } = await import('../composables/UseSecretPasswordPrompt')
-    if (!(await secretResourceService.hasPassword()))
+    if (encrypt && !(await secretResourceService.hasPassword()))
       throw new PlainSecretCopyRestoreError(
         '加密原件已保留；当前未读取到本机统一密码设置。请在总设置核对保存状态，再重试明文密钥副本。',
       )
-    const password = secretResourceService.isUnlocked()
-      ? undefined
-      : await requestSecretPassword(
-          '输入本机总设置中的统一密码，用于重新加密明文副本。取消不影响加密原件。',
-        )
-    if (!password && !secretResourceService.isUnlocked()) return
+    const password =
+      !encrypt || secretResourceService.isUnlocked()
+        ? undefined
+        : await requestSecretPassword(
+            '输入本机总设置中的统一密码，用于重新加密明文副本。取消不影响加密原件。',
+          )
+    if (encrypt && !password && !secretResourceService.isUnlocked()) return
     const { parsePersonalResource } = await import('../types/PersonalResource')
     const prepared = []
     for (const copy of pending) {
@@ -58,7 +60,9 @@ export async function restorePlainSecretCopies(
       if (!resource) continue
       prepared.push({
         resource,
-        document: await secretResourceService.protect(document, password),
+        document: encrypt
+          ? await secretResourceService.protect(document, password)
+          : { ...document, protection: 'none' as const, protected: undefined },
         sourceHash: copy.contentHash,
       })
     }

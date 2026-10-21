@@ -4,7 +4,7 @@ import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import type { RestoreStagingStore } from '../storage/RestoreStagingStore'
 
-export const RESTORE_STAGING_CHUNK_BYTES = 1024 * 1024
+export const RESTORE_STAGING_CHUNK_BYTES = 8 * 1024 * 1024
 
 export interface ArchiveStageProgress {
   phase: 'reading' | 'staging' | 'complete'
@@ -33,7 +33,13 @@ export async function stageArchive(
   selectEntry?: (path: string) => boolean,
   onProgress?: (progress: ArchiveStageProgress) => void,
   signal?: AbortSignal,
+  options: { chunkBytes?: number } = {},
 ): Promise<string> {
+  const requested = options.chunkBytes ?? RESTORE_STAGING_CHUNK_BYTES
+  const chunkBytes =
+    Number.isSafeInteger(requested) && requested > 0
+      ? Math.min(RESTORE_STAGING_CHUNK_BYTES, requested)
+      : RESTORE_STAGING_CHUNK_BYTES
   const throwIfAborted = () => {
     if (signal?.aborted) {
       const error = new Error('已停止备份识别')
@@ -146,11 +152,11 @@ export async function stageArchive(
           return
         }
         for (let offset = 0; offset < data.length;) {
-          const end = Math.min(data.length, offset + RESTORE_STAGING_CHUNK_BYTES - bufferedBytes)
+          const end = Math.min(data.length, offset + chunkBytes - bufferedBytes)
           buffered.push(new Uint8Array(data.subarray(offset, end)))
           bufferedBytes += end - offset
           offset = end
-          if (bufferedBytes === RESTORE_STAGING_CHUNK_BYTES) flush()
+          if (bufferedBytes === chunkBytes) flush()
         }
         if (!final) return
         flush()

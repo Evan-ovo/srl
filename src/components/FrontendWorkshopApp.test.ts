@@ -406,6 +406,15 @@ describe('FrontendWorkshopApp', () => {
 
     await wrapper.get('.frontend-workshop__text-styles summary').trigger('click')
     await wrapper.get('.frontend-workshop__text-style-add input').setValue('小字')
+    const composing = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    wrapper.get('.frontend-workshop__text-style-add input').element.dispatchEvent(composing)
+    expect(wrapper.find('.frontend-workshop__text-styles article').exists()).toBe(false)
+    expect(composing.defaultPrevented).toBe(false)
     await wrapper.get('.frontend-workshop__text-style-add button').trigger('click')
     expect(wrapper.get('.frontend-workshop__text-styles article').text()).toContain('小字')
 
@@ -630,6 +639,21 @@ describe('FrontendWorkshopApp', () => {
     expect(collapseInteraction?.attributes('aria-pressed')).toBe('true')
     expect(wrapper.get('.frontend-workshop__image-urls').text()).toContain('成品图片直链')
     expect(wrapper.get('.frontend-workshop__image-urls input').attributes('inputmode')).toBe('url')
+    const imageInput = wrapper.get('.frontend-workshop__image-urls input')
+    await imageInput.setValue('https://example.com/图片.png')
+    const composing = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    imageInput.element.dispatchEvent(composing)
+    expect(wrapper.find('.frontend-workshop__image-urls li').exists()).toBe(false)
+    expect(composing.defaultPrevented).toBe(false)
+    await imageInput.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.get('.frontend-workshop__image-urls li').text()).toContain(
+      new URL('https://example.com/图片.png').href,
+    )
     wrapper.unmount()
   })
 

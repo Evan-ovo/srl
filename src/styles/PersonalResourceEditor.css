@@ -27,6 +27,19 @@
   display: grid;
   gap: 12px;
 }
+@media (max-width: 53.75rem) {
+  :root[data-visual-viewport-reduced='true'] .personal-resource-editor {
+    height: 100%;
+  }
+  :root[data-visual-viewport-reduced='true'] .personal-resource-editor .editor-form {
+    container-type: size;
+  }
+  :root[data-visual-viewport-reduced='true'] .personal-resource-editor textarea {
+    /* Fit the real form scroller below its header; rows alone can hide the caret. */
+    min-height: min(8rem, max(44px, calc(100cqh - 24px)));
+    max-height: max(44px, calc(100cqh - 24px));
+  }
+}
 .personal-resource-editor .field {
   min-width: 0;
 }
@@ -71,6 +84,32 @@
   min-height: var(--size-touch);
   gap: 4px;
   white-space: nowrap;
+}
+.personal-resource-editor__protection {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.personal-resource-editor__help {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 32px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+}
+.personal-resource-editor__help svg {
+  width: 15px;
+  height: 15px;
+}
+.personal-resource-editor__help:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 .personal-resource-editor__body {
   display: grid;

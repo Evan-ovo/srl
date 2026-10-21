@@ -5,14 +5,14 @@ import type { OfficialAppId } from '../types/OfficialApp.js'
  * Shell rebuilds and generated file hashes do not change these revisions.
  */
 export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
-  chatReader: 14,
+  chatReader: 15,
   draw: 1,
-  stitch: 16,
+  stitch: 19,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=frontend-workshop-content-revision
-  frontendWorkshop: 8,
+  frontendWorkshop: 11,
   // SRL-PUBLIC-SYNC: END REPLACE id=frontend-workshop-content-revision
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-generation-content-revision
-  imageGeneration: 10,
+  imageGeneration: 12,
   // SRL-PUBLIC-SYNC: END REPLACE id=image-generation-content-revision
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-album-content-revision
   imageAlbum: 6,
@@ -20,7 +20,7 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   userPersona: 8,
   tavernBridge: 9,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-content-revision
-  assistant: 54,
+  assistant: 61,
   // SRL-PUBLIC-SYNC: END REPLACE id=assistant-content-revision
 }
 

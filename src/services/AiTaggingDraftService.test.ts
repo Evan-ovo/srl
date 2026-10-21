@@ -1,10 +1,79 @@
 /** @vitest-environment jsdom */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AiTaggingDraftService, type AiTaggingDraft } from './AiTaggingDraftService'
 
 describe('AiTaggingDraftService', () => {
   beforeEach(() => localStorage.clear())
+  it('reports storage failures and over-limit template merges without dropping existing templates', () => {
+    const service = new AiTaggingDraftService()
+    service.saveRuleTemplate('local', 'original', 'free', false)
+    const backup = service.exportPortableState()
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    try {
+      expect(() => service.importPortableState(backup)).toThrow('保存失败')
+    } finally {
+      write.mockRestore()
+    }
+    expect(service.loadRuleTemplates()).toEqual(backup.ruleTemplates)
+    for (let i = 1; i < 30; i++)
+      service.saveRuleTemplate('local ' + i, 'original ' + i, 'free', false)
+    expect(() =>
+      service.importPortableState({
+        ruleTemplates: [
+          {
+            id: 'another',
+            name: 'incoming',
+            prompt: 'new',
+            taxonomyTemplateId: 'free',
+            mergeAliases: false,
+          },
+        ],
+      }),
+    ).toThrow('超过30')
+    expect(service.loadRuleTemplates()).toHaveLength(30)
+    expect(service.loadRuleTemplates()[0]?.prompt).toBe('original')
+    const discard = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => undefined)
+    try {
+      expect(() =>
+        service.importPortableState({
+          undo: {
+            version: 1,
+            appliedAt: 100,
+            additions: [{ resourceId: 'r1', resourceName: 'saved', tags: ['tag'] }],
+          },
+        }),
+      ).toThrow('撤销记录保存失败')
+    } finally {
+      discard.mockRestore()
+    }
+  })
+  it('round-trips saved rule templates including system prompts, keeps local conflicts and is idempotent', () => {
+    const service = new AiTaggingDraftService()
+    service.saveRuleTemplate('换机规则', 'saved rule', 'free', true, 'saved system prompt')
+    const backup = JSON.parse(JSON.stringify(service.exportPortableState()))
+    expect(backup.ruleTemplates[0].systemPrompt).toBe('saved system prompt')
+    localStorage.clear()
+    const target = new AiTaggingDraftService()
+    target.importPortableState(backup)
+    expect(target.exportPortableState()).toEqual(backup)
+    target.importPortableState(backup)
+    expect(target.loadRuleTemplates()).toHaveLength(1)
+    const conflict = structuredClone(backup)
+    conflict.ruleTemplates[0].prompt = 'different imported rule'
+    target.importPortableState(conflict)
+    target.importPortableState(conflict)
+    expect(target.loadRuleTemplates()).toHaveLength(2)
+    expect(new Set(target.loadRuleTemplates().map((row) => row.id)).size).toBe(2)
+    expect(target.loadRuleTemplates().map((row) => row.prompt)).toEqual([
+      'saved rule',
+      'different imported rule',
+    ])
+    target.importPortableState({})
+    expect(target.loadRuleTemplates()).toHaveLength(2)
+  })
 
   it('保存并恢复审核草稿，但永远不持久化临时 API Key', () => {
     const service = new AiTaggingDraftService()

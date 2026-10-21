@@ -116,7 +116,8 @@
 
 .discord-source-detail-overlay {
   position: fixed;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top, 0px) 0 auto;
+  height: var(--app-viewport-height, 100dvh);
   z-index: 1180;
   display: grid;
   place-items: center;
@@ -204,7 +205,7 @@
   color: var(--button-primary-color, var(--color-on-accent));
 }
 
-:is(.discord-thread-toolbar, .discord-refresh-actions, .discord-attachment-local-state)
+:is(.discord-thread-toolbar, .discord-revision-actions, .discord-attachment-local-state)
   button:disabled {
   cursor: wait;
   opacity: 0.6;
@@ -770,7 +771,7 @@
   font-size: 0.56rem;
 }
 
-.discord-refresh-sheet-wrap {
+.discord-revision-sheet-wrap {
   position: fixed;
   inset: 0;
   z-index: 1210;
@@ -779,8 +780,6 @@
   justify-content: center;
   background: var(--overlay-background);
 }
-
-.discord-refresh-sheet,
 .discord-revision-sheet {
   width: min(100%, 720px);
   max-height: min(86dvh, 820px, 100%);
@@ -794,134 +793,21 @@
   box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
-.discord-refresh-sheet h3 {
-  margin: 0;
-  font-size: 0.87rem;
-}
-
-.discord-refresh-sheet > p {
-  margin: 6px 0 14px;
-  color: var(--color-ink-soft);
-  font-size: 0.64rem;
-  line-height: 1.55;
-}
-
-.discord-refresh-diff {
-  overflow: hidden;
-  border: 1px solid var(--color-line);
-  border-radius: 7px;
-}
-
-.discord-refresh-diff > div {
-  display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
-  gap: 8px;
-  padding: 8px 9px;
-  border-top: 1px solid var(--color-line);
-  font-size: 0.63rem;
-}
-
-.discord-refresh-diff > div:first-child {
-  border-top: 0;
-}
-
-.discord-refresh-diff span {
-  color: var(--color-ink-soft);
-}
-
-.discord-refresh-change-list {
-  margin-top: 10px;
-  border-top: 1px solid var(--color-line);
-}
-
-.discord-refresh-change {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 8px;
-  padding: 9px 2px;
-  border-bottom: 1px solid var(--color-line);
-}
-
-.discord-refresh-change > input {
-  margin-top: 2px;
-}
-
-.discord-refresh-change__marker {
-  width: 7px;
-  height: 7px;
-  margin: 5px auto 0;
-  border-radius: 50%;
-  background: var(--color-accent-soft);
-}
-
-.discord-refresh-change strong,
-.discord-refresh-change small,
-.discord-refresh-change em {
-  display: block;
-}
-
-.discord-refresh-change strong {
-  font-size: 0.66rem;
-}
-
-.discord-refresh-change small {
-  margin-top: 3px;
-  color: var(--color-ink-soft);
-  font-size: 0.57rem;
-}
-
-.discord-refresh-change em {
-  margin-top: 4px;
-  overflow: hidden;
-  color: var(--color-ink-soft);
-  font-size: 0.61rem;
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.discord-refresh-choice {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px 2px;
-  border-top: 1px solid var(--color-line);
-}
-
-.discord-refresh-choice:first-of-type {
-  margin-top: 10px;
-}
-
-.discord-refresh-choice strong,
-.discord-refresh-choice small {
-  display: block;
-}
-
-.discord-refresh-choice strong {
-  font-size: 0.68rem;
-}
-
-.discord-refresh-choice small {
-  margin-top: 3px;
-  color: var(--color-ink-soft);
-  font-size: 0.57rem;
-}
-
-.discord-refresh-actions {
+.discord-revision-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
 }
 
-.discord-refresh-actions button {
+.discord-revision-actions button {
   min-height: 35px;
   padding: 0 10px;
   font-size: 0.66rem;
   font-weight: 850;
 }
 
-.discord-refresh-actions__primary:is(a, button) {
+.discord-revision-actions__primary:is(a, button) {
   border-color: var(--button-primary-border, var(--color-accent));
   background: var(--button-primary-background, var(--color-accent));
   color: var(--button-primary-color, var(--color-on-accent));
@@ -1100,12 +986,10 @@
 }
 
 @media (min-width: 768px) {
-  .discord-refresh-sheet-wrap {
+  .discord-revision-sheet-wrap {
     align-items: center;
     padding: 16px;
   }
-
-  .discord-refresh-sheet,
   .discord-revision-sheet {
     border-bottom: 1px solid var(--color-line);
     border-radius: var(--dialog-radius, var(--glass-radius-panel));

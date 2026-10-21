@@ -36,6 +36,7 @@ import {
 import ProductAssistantComparison from './ProductAssistantComparison.vue'
 import ProductAssistantResultViewer from './ProductAssistantResultViewer.vue'
 import { useProductAssistantMessageActions } from '../composables/UseProductAssistantMessageActions'
+import { useProductAssistantChatLayout } from '../composables/UseProductAssistantChatLayout'
 import { useProductAssistantContext } from '../composables/UseProductAssistantContext'
 import ProductAssistantNavigationLink from './ProductAssistantNavigationLink.vue'
 import {
@@ -259,6 +260,12 @@ const resultViewer =
 const fileInput = ref<HTMLInputElement>()
 const inputElement = ref<HTMLTextAreaElement>()
 const messages = ref<HTMLElement>()
+const scrollToLatest = useProductAssistantChatLayout(
+  messages,
+  inputElement,
+  input,
+  () => settingsOpen.value || Boolean(runningTool.value),
+)
 const actionMenu = useTemplateRef<HTMLDialogElement>('actionMenu')
 const {
   actionsOpen,
@@ -758,17 +765,6 @@ onBeforeUnmount(() => {
   alive = false
   controller?.abort()
   appSession.clear()
-})
-async function scrollToLatest(): Promise<void> {
-  await nextTick()
-  if (messages.value) messages.value.scrollTop = messages.value.scrollHeight
-}
-watch([input, settingsOpen, runningTool], async () => {
-  await nextTick()
-  if (inputElement.value && !settingsOpen.value && !runningTool.value) {
-    inputElement.value.style.height = 'auto'
-    inputElement.value.style.height = `${Math.min(112, Math.max(44, inputElement.value.scrollHeight))}px`
-  }
 })
 async function attachFiles(event: Event): Promise<void> {
   const element = event.target as HTMLInputElement
@@ -1401,7 +1397,7 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         <button
           v-if="isBrowserTaskChat"
           type="button"
-          class="feature-header-action"
+          class="feature-header-action feature-header-action--icon"
           aria-label="网页协助操作"
           @click="openBrowserTaskControls"
         >
@@ -1415,7 +1411,7 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         <button
           v-if="settingsOpen && historyPage"
           type="button"
-          class="feature-header-action"
+          class="feature-header-action feature-header-action--icon"
           aria-label="历史设置"
           aria-haspopup="dialog"
           @click="settings?.openHistoryRecovery()"
@@ -1436,7 +1432,7 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         <button
           v-if="settingsOpen && templatesPage"
           type="button"
-          class="feature-header-action"
+          class="feature-header-action feature-header-action--icon"
           aria-label="新建模板"
           @click="settings?.newTemplate()"
         >
@@ -1453,7 +1449,7 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         <button
           v-if="settingsOpen && projectsPage"
           type="button"
-          class="feature-header-action"
+          class="feature-header-action feature-header-action--icon"
           aria-label="接续说明"
           @click="
             confirmAction({
@@ -1481,7 +1477,7 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
         <button
           v-if="compact"
           type="button"
-          class="feature-header-action"
+          class="feature-header-action feature-header-action--icon"
           aria-label="展开完整对话"
           :disabled="initializing"
           @click="expandChat"
@@ -1874,8 +1870,8 @@ function viewToolResult(result: AssistantExecution['toolResult']) {
           maxlength="8000"
           :placeholder="remoteBusy ? '另一个对话窗口正在等待回复…' : '说说你想改什么…'"
           :disabled="busy || initializing"
-          @keydown.ctrl.enter.prevent="!$event.isComposing && send()"
-          @keydown.meta.enter.prevent="!$event.isComposing && send()"
+          @keydown.ctrl.enter="!$event.isComposing && ($event.preventDefault(), send())"
+          @keydown.meta.enter="!$event.isComposing && ($event.preventDefault(), send())"
         />
         <button
           v-if="isBrowserTaskChat && (busy || discordSetupSession.agentRunning) && !remoteBusy"

@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RESOURCE_TYPE, type Resource } from '../types/Resource'
-import { rememberNativeFile } from '../core/NativeFileSource'
+import { rememberNativeFile, nativeFileSource, nativeFileSize } from '../core/NativeFileSource'
 
 const nativePlugin = vi.hoisted(() => ({
   getStorageInfo: vi.fn(),
   beginWrite: vi.fn(),
   appendWrite: vi.fn(),
   appendFile: vi.fn(),
+  importObjectFile: vi.fn(),
   commitWrite: vi.fn(),
   abortWrite: vi.fn(),
   remove: vi.fn(),
@@ -16,6 +17,10 @@ const nativePlugin = vi.hoisted(() => ({
   releaseReplacedObjects: vi.fn(),
   clearTemporaryCaches: vi.fn(),
   getObjectPath: vi.fn(),
+  readObjectChunk: vi.fn(),
+  planBackupObject: vi.fn(),
+  cancelHashFile: vi.fn(),
+  addListener: vi.fn(),
   linkObjects: vi.fn(),
   matchCharacterCardCandidates: vi.fn(),
   beginCharacterCardParse: vi.fn(),
@@ -43,11 +48,154 @@ import {
   matchNativeCharacterCardCandidates,
   parseNativeCharacterCardFile,
   readNativeResourceObject,
+  openNativeResourceByteSource,
+  importNativeResourceObject,
   stageNativeResourceFile,
   removeNativeResourceFiles,
   releaseReplacedNativeObjects,
   retainNativeResourceFiles,
 } from './NativeResourceFileMirror'
+
+describe('native immutable backup byte source', () => {
+  it('imports only file-backed originals, preserves native validation failures and falls back for old APKs', async () => {
+    const originalBlob = new Blob(['original'])
+    const resource = {
+      originalBlob,
+      contentHash: 'a'.repeat(64),
+      fileSize: originalBlob.size,
+    } as Resource
+    expect(await importNativeResourceObject(resource)).toBe(false)
+    rememberNativeFile(originalBlob, 'file:///allowed/source')
+    nativePlugin.importObjectFile.mockResolvedValue(undefined)
+    expect(await importNativeResourceObject(resource)).toBe(true)
+    expect(nativePlugin.importObjectFile).toHaveBeenLastCalledWith({
+      uri: 'file:///allowed/source',
+      contentHash: resource.contentHash,
+      size: 8,
+    })
+    nativePlugin.importObjectFile.mockRejectedValue({ code: 'UNIMPLEMENTED' })
+    expect(await importNativeResourceObject(resource)).toBe(false)
+    nativePlugin.importObjectFile.mockRejectedValue(new Error('checksum failed'))
+    await expect(importNativeResourceObject(resource)).rejects.toThrow('checksum failed')
+  })
+  beforeEach(() => {
+    nativePlugin.readObjectChunk.mockReset()
+    nativePlugin.planBackupObject.mockReset()
+    nativePlugin.cancelHashFile.mockReset()
+    nativePlugin.addListener.mockReset()
+  })
+  it('opens a declared native file reference without fetching the body', async () => {
+    const hash = 'a'.repeat(64)
+    nativePlugin.readObjectChunk.mockResolvedValue({
+      size: 5,
+      sha256: hash,
+      offset: 0,
+      data: btoa('x'),
+    })
+    nativePlugin.getObjectPath.mockResolvedValueOnce({ path: 'file:///original', size: 5 })
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    try {
+      const source = await openNativeResourceByteSource(hash, 5)
+      const reference = await source!.nativeFile!()
+      expect(reference.size).toBe(0)
+      expect(nativeFileSize(reference)).toBe(5)
+      expect(nativeFileSource(reference)).toBe('file:///original')
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+  it('plans without fetching file bodies and bounds range reads to one MiB', async () => {
+    const size = 1024 * 1024 + 19,
+      hash = 'a'.repeat(64)
+    nativePlugin.readObjectChunk.mockImplementation(async ({ offset, length }) => ({
+      size,
+      sha256: hash,
+      offset,
+      data: btoa('x'.repeat(length)),
+    }))
+    nativePlugin.planBackupObject.mockResolvedValue({
+      totalSize: size,
+      totalSha256: hash,
+      parts: [{ size, sha256: hash }],
+    })
+    const source = await openNativeResourceByteSource(hash, size)
+    expect(nativePlugin.readObjectChunk.mock.calls.map(([call]) => call.length)).toEqual([1])
+    const result = await source!.planParts!({ fixedPartSize: 4 * 1024 * 1024 })
+    expect(result?.totalSha256).toBe(hash)
+    expect(nativePlugin.readObjectChunk).toHaveBeenCalledTimes(1)
+    expect((await source!.slice(0, size).arrayBuffer()).byteLength).toBe(size)
+    expect(nativePlugin.readObjectChunk.mock.calls.slice(1).map(([call]) => call.length)).toEqual([
+      1024 * 1024,
+      19,
+    ])
+  })
+
+  it('keeps old APK compatibility only for an actually unimplemented range method', async () => {
+    nativePlugin.readObjectChunk.mockRejectedValueOnce({ code: 'UNIMPLEMENTED' })
+    await expect(openNativeResourceByteSource('a'.repeat(64), 1)).resolves.toBeUndefined()
+    nativePlugin.readObjectChunk.mockRejectedValueOnce(new Error('File missing'))
+    await expect(openNativeResourceByteSource('a'.repeat(64), 1)).rejects.toThrow('File missing')
+  })
+
+  it('rejects changed identity, incomplete ranges and malformed native plans', async () => {
+    const hash = 'a'.repeat(64)
+    nativePlugin.readObjectChunk.mockResolvedValueOnce({
+      size: 1,
+      sha256: 'b'.repeat(64),
+      offset: 0,
+      data: btoa('x'),
+    })
+    await expect(openNativeResourceByteSource(hash, 1)).rejects.toThrow('身份')
+    nativePlugin.readObjectChunk.mockResolvedValueOnce({
+      size: 1,
+      sha256: hash,
+      offset: 0,
+      data: '',
+    })
+    await expect(openNativeResourceByteSource(hash, 1)).rejects.toThrow('不完整')
+    nativePlugin.readObjectChunk.mockResolvedValue({
+      size: 1,
+      sha256: hash,
+      offset: 0,
+      data: btoa('x'),
+    })
+    const source = await openNativeResourceByteSource(hash, 1)
+    nativePlugin.planBackupObject.mockResolvedValue({
+      totalSize: 1,
+      totalSha256: hash,
+      parts: [{ size: 2, sha256: hash }],
+    })
+    await expect(source!.planParts!({})).rejects.toThrow('大小不一致')
+  })
+
+  it('cancels the actual native request and removes its progress listener', async () => {
+    const hash = 'a'.repeat(64),
+      remove = vi.fn(async () => {})
+    nativePlugin.readObjectChunk.mockResolvedValue({
+      size: 1,
+      sha256: hash,
+      offset: 0,
+      data: btoa('x'),
+    })
+    nativePlugin.addListener.mockResolvedValue({ remove })
+    nativePlugin.cancelHashFile.mockResolvedValue(undefined)
+    nativePlugin.planBackupObject.mockImplementation(() => new Promise(() => {}))
+    const source = await openNativeResourceByteSource(hash, 1)
+    const controller = new AbortController(),
+      onRead = vi.fn()
+    const promise = source!.planParts!({ signal: controller.signal, onRead })
+    await vi.waitFor(() => expect(nativePlugin.planBackupObject).toHaveBeenCalled())
+    controller.abort()
+    await expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+    expect(nativePlugin.cancelHashFile).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledOnce()
+    const listener = nativePlugin.addListener.mock.calls[0]![1]
+    listener({ requestId: nativePlugin.planBackupObject.mock.calls[0]![0].requestId, processed: 1 })
+    expect(onRead).not.toHaveBeenCalled()
+  })
+})
 
 function resource(body = 'hello'): Resource {
   return {
@@ -70,6 +218,17 @@ function resource(body = 'hello'): Resource {
 }
 
 describe('NativeResourceFileMirror', () => {
+  it('uses the declared native size when repairing an existing file reference', async () => {
+    const item = resource()
+    item.originalBlob = rememberNativeFile(new Blob(), 'file:///native-original', 33554432)
+    nativePlugin.beginWrite.mockResolvedValueOnce({ alreadyPresent: true, token: 'native-ref' })
+    const handle = await stageNativeResourceFile(item, 'current')
+    expect(nativePlugin.beginWrite).toHaveBeenLastCalledWith(
+      expect.objectContaining({ size: 33554432 }),
+    )
+    await handle.commit()
+    expect(nativePlugin.appendWrite).not.toHaveBeenCalled()
+  })
   it.each(['commit', 'abort'] as const)(
     'settles an already-present staged link only at %s, without retransferring the original',
     async (action) => {

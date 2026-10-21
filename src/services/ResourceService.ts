@@ -290,9 +290,11 @@ export class ResourceService {
     return resource ? toResourceSummary(resource) : undefined
   }
 
-  async getReadSource(id: string) {
-    if (this.storage.getReadSource) return this.storage.getReadSource(id)
-    const resource = await this.get(id)
+  async getReadSource(id: string, historical = false, signal?: AbortSignal) {
+    signal?.throwIfAborted()
+    if (this.storage.getReadSource) return this.storage.getReadSource(id, historical, signal)
+    const resource = historical ? await this.getVersion(id) : await this.get(id)
+    signal?.throwIfAborted()
     return resource
       ? { ...toResourceSummary(resource), originalSource: resource.originalBlob }
       : undefined
@@ -555,8 +557,15 @@ export class ResourceService {
     file: File,
     parsed: ParsedResource,
     resourceId: string,
+    expectedContentHash?: string,
   ): Promise<Resource> {
-    return versionOperations.updatePersonalContent(this.storage, file, parsed, resourceId)
+    return versionOperations.updatePersonalContent(
+      this.storage,
+      file,
+      parsed,
+      resourceId,
+      expectedContentHash,
+    )
   }
 
   async updatePersonalMetadata(current: Resource, parsed: ParsedResource): Promise<Resource> {

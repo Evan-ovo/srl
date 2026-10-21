@@ -85,7 +85,7 @@ export const DISCORD_SETUP_STEPS = [
     id: 'discord-endpoint',
     title: '回填 Discord 交互地址',
     site: 'discord',
-    hint: '打开同一个 Discord App 的 General Information，Interactions Endpoint URL 填 Worker 根链接加 /interactions，再保存并确认 Discord 验证成功。',
+    hint: '打开同一个 Discord App 的 General Information，Interactions Endpoint URL 填 Worker 根链接加 /interactions。按教程打开隐私说明，核对适用后将公开链接填入 Privacy Policy URL；修改过数据处理或对外服务时先完善自己的说明及私密数据请求渠道。点击 Save Changes，确认保存成功及 Discord 交互地址验证成功；不要把连接健康检查当作隐私政策已保存的证据。',
   },
   {
     id: 'discord-install',

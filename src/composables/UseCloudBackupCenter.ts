@@ -17,6 +17,7 @@ import {
 } from './UseCloudBackupDrafts'
 
 import { requestSecretPassword } from './UseSecretPasswordPrompt'
+import { secretResourceService } from '../services/SecretResourceService'
 
 import {
   readPlainSecretExportGrant,
@@ -67,7 +68,7 @@ import {
   type BackupSelectionTreeState,
 } from '../services/BackupScopeRegistry'
 
-import { downloadBlob } from '../utils/LibraryFormatting'
+import { downloadBlob, shareNativeStream } from '../utils/LibraryFormatting'
 import type { StructuredRestoreFailure } from '../types/Backup'
 import type { CloudDownloadProgress } from '../services/CloudBackupTransport'
 
@@ -385,7 +386,7 @@ export function useCloudBackupCenter(
     const labels: string[] = []
     if (personalBackupSelection.value.extraStory) labels.push('番外')
     if (personalBackupSelection.value.pocketPhone) labels.push('小手机')
-    if (personalBackupSelection.value.secret) labels.push('加密密钥')
+    if (personalBackupSelection.value.secret) labels.push('密钥资料')
     if (activeContentSelection.value.plaintextSecretCopy) labels.push('明文密钥副本')
     if (activeContentSelection.value.credentials) labels.push('API 配置与本机密钥')
     if (activeContentSelection.value.aiTaggingState) labels.push('AI 标签草稿')
@@ -536,7 +537,25 @@ export function useCloudBackupCenter(
         activeContentSelection.value.plaintextSecretCopy &&
         personalBackupSelection.value.secret
       ) {
-        if (!(await readPlainSecretExportGrant(activeConfig.value))) {
+        const selectedIds = activeContentSelection.value.resourceIds
+          ? new Set(activeContentSelection.value.resourceIds)
+          : undefined
+        const candidates = (
+          selectedIds?.size === 0
+            ? []
+            : await resourceService.listResourceListSummaries({
+                types: ['secret'],
+                ids: selectedIds ? [...selectedIds] : undefined,
+              })
+        ).filter(
+          (summary) =>
+            summary.type === 'secret' &&
+            summary.metadata.cloudBackupExcluded !== true &&
+            summary.metadata.secretProtection !== 'none' &&
+            summary.metadata.privateFieldCount !== 0 &&
+            (!selectedIds || selectedIds.has(summary.id)),
+        )
+        if (candidates.length && !(await readPlainSecretExportGrant(activeConfig.value))) {
           if (
             !(await confirmAction({
               title: '允许明文密钥副本',
@@ -546,13 +565,14 @@ export function useCloudBackupCenter(
             }))
           )
             return false
-          const password = await requestSecretPassword(
-            '输入查看密码。授权仅用于当前云备份目标；关闭明文副本会清除该目标的授权。',
-          )
-          if (!password) return false
+          const password = secretResourceService.isUnlocked()
+            ? undefined
+            : await requestSecretPassword(
+                '输入查看密码。授权仅用于当前云备份目标；关闭明文副本会清除该目标的授权。',
+              )
+          if (!password && !secretResourceService.isUnlocked()) return false
           const secrets = []
-          for (const summary of await resourceService.listSummaries()) {
-            if (summary.type !== 'secret' || summary.metadata.cloudBackupExcluded === true) continue
+          for (const summary of candidates) {
             const resource = await resourceService.get(summary.id)
             if (resource) secrets.push(resource)
           }
@@ -1129,9 +1149,44 @@ export function useCloudBackupCenter(
       },
     })
     downloadOperation.value = operationId
+    let nativeSharing: Promise<void> | undefined
+    let abortNativeSharing: (() => Promise<void>) | undefined
+    const beginHandoff = () => {
+      controller.signal.throwIfAborted()
+      taskCenter.update(operationId, { phase: '等待保存或系统分享', cancelable: false })
+      downloadOperation.value = ''
+      downloadController = undefined
+      message.value = '归档已生成，正在交给系统保存或分享…'
+    }
     try {
       const blob = await cloudBackupService.downloadBackup(item, undefined, undefined, {
         signal: controller.signal,
+        writerFactory:
+          nativeTransport &&
+          typeof TransformStream !== 'undefined' &&
+          (item.kind === 'githubSnapshot' || item.kind === 'webdavSnapshot')
+            ? async () => {
+                const stream = new TransformStream<Uint8Array>()
+                const writer = stream.writable.getWriter()
+                nativeSharing = shareNativeStream(
+                  stream.readable,
+                  item.archiveName ?? item.objectKey,
+                  {
+                    signal: controller.signal,
+                    operationId,
+                    onHandoff: beginHandoff,
+                  },
+                )
+                void nativeSharing.catch(() => undefined)
+                abortNativeSharing = () =>
+                  writer.abort(controller.signal.reason).catch(() => undefined)
+                return {
+                  write: (chunk) => writer.write(chunk),
+                  commit: () => writer.close(),
+                  abort: () => abortNativeSharing!(),
+                }
+              }
+            : undefined,
         onReadFailures: async (failures) => {
           controller.signal.throwIfAborted()
           if (disposed || downloadController !== controller)
@@ -1161,16 +1216,20 @@ export function useCloudBackupCenter(
         },
       })
       controller.signal.throwIfAborted()
-      taskCenter.update(operationId, { phase: '等待保存或系统分享', cancelable: false })
-      downloadOperation.value = ''
-      downloadController = undefined
-      message.value = '归档已生成，正在交给系统保存或分享…'
-      await downloadBlob(blob, item.archiveName ?? item.objectKey)
+      if (nativeSharing) await nativeSharing
+      else {
+        beginHandoff()
+        await downloadBlob(blob, item.archiveName ?? item.objectKey)
+      }
       taskCenter.complete(operationId)
       message.value = nativeTransport
         ? '已交给系统分享；请在目标应用中确认保存'
         : '已交给浏览器下载；保存结果请查看浏览器下载列表'
     } catch (error) {
+      if (nativeSharing) {
+        await abortNativeSharing?.()
+        await nativeSharing.catch(() => undefined)
+      }
       const cancelled =
         controller.signal.aborted ||
         (typeof error === 'object' &&

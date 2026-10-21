@@ -13,6 +13,33 @@ vi.mock('../composables/UseConfirmDialog', () => ({
 }))
 
 describe('CharacterCardContentWorkbench', () => {
+  it('leaves IME confirmation untouched before accepting the normal save shortcut', async () => {
+    const wrapper = mount(CharacterCardContentWorkbench, {
+      props: { card: { data: { first_mes: '原开场' } }, edits: [] },
+    })
+    try {
+      await wrapper.findAll('.card-content-workbench__header button')[2]!.trigger('click')
+      const field = wrapper.get('textarea')
+      await field.setValue('中文候选确认后的草稿')
+      const composing = new KeyboardEvent('keydown', {
+        key: 'Enter',
+        ctrlKey: true,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      })
+      field.element.dispatchEvent(composing)
+      await flushPromises()
+      expect(composing.defaultPrevented).toBe(false)
+      expect(wrapper.emitted('update:edits')).toBeUndefined()
+      expect(wrapper.get('textarea').element.value).toBe('中文候选确认后的草稿')
+      await field.trigger('keydown', { key: 'Enter', ctrlKey: true })
+      await flushPromises()
+      expect(wrapper.emitted('update:edits')).toHaveLength(1)
+    } finally {
+      wrapper.unmount()
+    }
+  })
   it('keeps exit, import, new and the parent save in that order while editing an entry', async () => {
     const wrapper = mount(CharacterCardContentWorkbench, {
       props: { card: { data: { first_mes: '原开场' } }, edits: [] },

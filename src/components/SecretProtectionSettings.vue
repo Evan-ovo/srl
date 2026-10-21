@@ -130,7 +130,9 @@ async function recover() {
         readFailed ? '读取失败' : busy ? '正在读取' : configured ? '已设置' : '未设置'
       }}</span>
     </header>
-    <p>所有密钥资料共用一个密码。私密字段加密保存，导出和云备份的加密原件也使用它。</p>
+    <p>
+      密码加密为可选功能，在密钥卡中选择开启。已加密的卡片共用此密码，导出和云备份保留各卡片的保护方式。
+    </p>
     <button
       v-if="readFailed"
       class="button button--quiet"

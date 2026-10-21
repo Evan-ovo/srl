@@ -22,7 +22,7 @@ describe('Discord manual deployment bundle', () => {
       },
     }
     const response = await worker.fetch(
-      new Request('https://bridge.example/source/read', { method: 'POST' }),
+      new Request('https://bridge.example/setup/register', { method: 'POST' }),
       env,
       {},
     )
@@ -36,7 +36,7 @@ describe('Discord manual deployment bundle', () => {
     )
     const initializedStatements = [...statements]
     const again = await worker.fetch(
-      new Request('https://bridge.example/source/read', { method: 'POST' }),
+      new Request('https://bridge.example/setup/register', { method: 'POST' }),
       env,
       {},
     )

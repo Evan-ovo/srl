@@ -258,8 +258,8 @@ describe('bounded GitHub chunk read ahead', () => {
     }
   })
 
-  it('deduplicates simultaneous reads of a shared chunk and keeps only the last verified cache', async () => {
-    const test = await fixture([['shared'], ['shared'], ['other']])
+  it('deduplicates shared reads, retains the larger verified chunk, and evicts it for a larger one', async () => {
+    const test = await fixture([['shared'], ['shared'], ['other'], ['larger-chunk']])
     const reader = await createGitHubObjectReader(test.context, config, 'fixture')
     const first = reader(test.objects[0]!),
       second = reader(test.objects[1]!)
@@ -271,7 +271,10 @@ describe('bounded GitHub chunk read ahead', () => {
     expect(test.started).toEqual([1])
     await reader(test.objects[2]!)
     await reader(test.objects[0]!)
-    expect(test.started).toEqual([1, 2, 1])
+    expect(test.started).toEqual([1, 2])
+    await reader(test.objects[3]!)
+    await reader(test.objects[0]!)
+    expect(test.started).toEqual([1, 2, 3, 1])
   })
 
   it('does not deadlock shared chunks referenced in a different resource order', async () => {

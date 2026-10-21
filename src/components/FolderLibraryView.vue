@@ -26,6 +26,7 @@ const {
   moveFolderByKeyboard,
   coverResources,
   thumbnailUrls,
+  handleThumbnailError,
   openRename,
   handleCoverFile,
   selectedResourceIds,
@@ -175,6 +176,7 @@ const {
                       :key="resource.id"
                       :src="thumbnailUrls.get(resource.id)"
                       alt=""
+                      @error="handleThumbnailError(resource.id, $event)"
                     />
                   </span>
                   <span v-else class="visual-folder__empty-art" aria-hidden="true">
@@ -259,6 +261,7 @@ const {
                     v-if="thumbnailUrls.get(entry.resource.id)"
                     :src="thumbnailUrls.get(entry.resource.id)"
                     alt=""
+                    @error="handleThumbnailError(entry.resource.id, $event)"
                   />
                   <strong v-else aria-hidden="true">{{
                     RESOURCE_TYPE_LABELS[entry.resource.type].slice(0, 2)
@@ -397,6 +400,7 @@ const {
                 v-if="thumbnailUrls.get(resource.id)"
                 :src="thumbnailUrls.get(resource.id)"
                 alt=""
+                @error="handleThumbnailError(resource.id, $event)"
               />
               <i v-else>{{ RESOURCE_TYPE_LABELS[resource.type].slice(0, 1) }}</i>
             </span>
@@ -460,6 +464,7 @@ const {
               v-if="thumbnailUrls.get(resource.id)"
               :src="thumbnailUrls.get(resource.id)"
               alt=""
+              @error="handleThumbnailError(resource.id, $event)"
             />
             <i v-else>{{ RESOURCE_TYPE_LABELS[resource.type].slice(0, 1) }}</i>
           </span>
@@ -591,6 +596,7 @@ const {
                   v-if="thumbnailUrls.get(resource.id)"
                   :src="thumbnailUrls.get(resource.id)"
                   alt=""
+                  @error="handleThumbnailError(resource.id, $event)"
                 />
                 <i v-else>{{ RESOURCE_TYPE_LABELS[resource.type].slice(0, 1) }}</i>
               </span>

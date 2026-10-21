@@ -16,6 +16,8 @@ export interface RestoreStagingStore {
   complete(entry: RestoreStagingMetadata): Promise<void>
   getMetadata(jobId: string, path: string): Promise<RestoreStagingMetadata | undefined>
   get(jobId: string, path: string): Promise<RestoreStagingEntry | undefined>
+  /** Explicit native sink only: the Blob carries a file URI and declared size, not its body. */
+  getNativeFile?(jobId: string, path: string): Promise<RestoreStagingEntry | undefined>
   deleteJob(jobId: string): Promise<void>
 }
 

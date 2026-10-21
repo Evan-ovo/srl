@@ -63,12 +63,13 @@ onBeforeUnmount(() => {
 <style scoped>
 .assistant-ui-preview {
   position: fixed;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top, 0px) 0
+    calc(100% - var(--visual-viewport-offset-top, 0px) - var(--app-viewport-height, 100dvh));
   margin: auto;
   padding: 0;
   width: min(34rem, calc(100vw - 1.5rem));
   max-width: calc(100vw - 1.5rem);
-  max-height: calc(100dvh - 2rem);
+  max-height: calc(var(--app-viewport-height, 100dvh) - 2rem);
   border: 1px solid var(--dialog-border, var(--color-line));
   border-radius: var(--dialog-radius, var(--radius-panel));
   color: var(--color-ink);
@@ -113,8 +114,8 @@ svg {
   stroke-width: 1.7;
 }
 .assistant-ui-preview__canvas {
-  height: min(34rem, calc(100dvh - 8rem));
-  min-height: 12rem;
+  height: min(34rem, calc(var(--app-viewport-height, 100dvh) - 8rem));
+  min-height: min(12rem, calc(var(--app-viewport-height, 100dvh) - 8rem));
   overflow: hidden;
 }
 footer {

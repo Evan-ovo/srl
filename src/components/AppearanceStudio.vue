@@ -64,6 +64,7 @@ import {
   type UiFontScale,
 } from '../services/BrowserStorageService'
 import { downloadBlob } from '../utils/LibraryFormatting'
+import type { PalettePorts } from '../composables/AppearancePaletteController.js'
 import { runAssistantPageScript } from '../services/ProductAssistantScript'
 
 const props = withDefaults(
@@ -117,6 +118,10 @@ const emit = defineEmits<{
 }>()
 
 const storage = new BrowserStorageService()
+const AppearancePalette = createAsyncPanel('调色', () => import('./AppearancePalette.vue'))
+const paletteOpen = ref(
+  !props.assistantOnly && storage.getAppearancePaletteDraft()?.page === 'palette',
+)
 // SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-assistant-layout-state
 const ProductAssistant = createAsyncPanel('AI 助手', () => import('./OfficialAssistantGate.vue'))
 const AssistantUiPreview = createAsyncPanel('Vue预览', () => import('./AssistantUiPreview.vue'))
@@ -543,6 +548,66 @@ async function savePreset(): Promise<void> {
   else applyPreset(draft.value, compilePreset(draft.value))
 }
 // SRL-PUBLIC-SYNC: END REPLACE id=appearance-preset-persistence
+
+async function enterPalette(): Promise<void> {
+  if (hasUnsavedChanges.value && hasCssContent.value) {
+    if (
+      !(await confirmAction({
+        title: '保留当前 CSS 草稿',
+        message: '先将当前 CSS 草稿保存到预设库，再进入调色？',
+        confirmLabel: '保存并进入',
+      }))
+    )
+      return
+    if (!persistPreset(draft.value, false)) return
+  }
+  paletteOpen.value = true
+}
+
+const palettePorts: PalettePorts = {
+  get theme() {
+    return props.theme
+  },
+  get initialCss() {
+    return draft.value.globalCss
+  },
+  get sourceId() {
+    return savedDraft.value?.id ?? 'current'
+  },
+  readDraft: () => storage.getAppearancePaletteDraft(),
+  writeDraft: (value) => storage.setAppearancePaletteDraft(value),
+  async importCss(name, css) {
+    return persistPreset(createPreset(name, css), false)
+  },
+  async savePreset(name, css) {
+    const candidate = {
+      ...clonePreset(draft.value),
+      ...createPreset(name, css),
+      scopedCss: { ...draft.value.scopedCss },
+      views: normalizeUiViews(draft.value.views),
+    }
+    if (!(await confirmViewScripts(candidate.views))) return false
+    const saved = persistPreset(candidate)
+    if (!saved) throw new Error(copyStatus.value || '预设保存失败，草稿仍保留')
+    return true
+  },
+  async download(css, name) {
+    await downloadBlob(
+      new Blob([compilePreset({ ...clonePreset(draft.value), globalCss: css })], {
+        type: 'text/css;charset=utf-8',
+      }),
+      `${name.replace(/[\\/:*?"<>|]/g, '-')}.css`,
+    )
+  },
+  async preview(css, signal) {
+    await preview(null, false, { ...clonePreset(draft.value), globalCss: css }, signal)
+  },
+  confirm: confirmAction,
+  notice: flash,
+  back: () => {
+    paletteOpen.value = false
+  },
+}
 function getAssistantContext(): AssistantContext {
   const visible = props.contextScope ? props.contextScope() : getAssistantVisibleScope()
   return {
@@ -1075,27 +1140,27 @@ async function deletePreset(): Promise<void> {
   flash('预设已删除')
 }
 
-async function preview(scope = previewScope.value, source = false): Promise<void> {
+async function preview(
+  scope: CustomCssScope | null | undefined = previewScope.value,
+  source = false,
+  candidate = draft.value,
+  signal = previewConsent.signal,
+): Promise<void> {
   if (scope && !activeScopes.value.some((item) => item.value === scope)) {
     flash('当前界面尚未安装或不可用；草稿保留，请先安装对应 APP')
     return
   }
-  const views = normalizeUiViews(draft.value.views)
+  const views = normalizeUiViews(candidate.views)
   // Source preview runs an unchecked draft without changing its saved enable flag.
   if (source && scope && views[scope]) views[scope]!.enabled = true
-  const css = compilePreset(draft.value)
+  const css = compilePreset(candidate)
   const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
   const scroll = window.scrollY
-  if (
-    !(await confirmViewScripts(views, previewConsent.signal)) ||
-    previewConsent.signal.aborted ||
-    !props.active
-  )
-    return
+  if (!(await confirmViewScripts(views, signal)) || signal.aborted || !props.active) return
   emit('preview-css', {
     css,
     views,
-    scope,
+    scope: scope ?? undefined,
     onExit: () => {
       void nextTick(() => {
         if (previewConsent.signal.aborted) return
@@ -1198,274 +1263,259 @@ async function importPresets(event: Event): Promise<void> {
 
 <template>
   <section class="appearance-studio" :class="{ 'appearance-studio--chat': assistantOpen }">
-    <FeatureAppHeader v-if="!assistantOpen" title="外观" @back="backFromAppearance">
-      <template #status>
-        <span class="feature-header-status">本机生效</span>
-      </template>
-      <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-assistant-header-actions -->
-      <template #actions>
-        <button
-          v-if="!assistantOpen && props.assistantOnly"
-          class="feature-header-action"
-          type="button"
-          @click="assistantOpen = true"
-        >
-          让 AI 修改
-        </button>
-      </template>
-      <!-- SRL-PUBLIC-SYNC: END REPLACE id=appearance-assistant-header-actions -->
-    </FeatureAppHeader>
-    <ProductAssistant
-      v-if="props.assistantOnly && assistantVisited && selectedScope"
-      v-show="assistantOpen"
-      :get-context="getAssistantContext"
-      :execute="executeAssistantReply"
-      :navigate="navigate"
-      :compact="compact"
-      :visible="active && assistantOpen"
-      :background-task="backgroundTask"
-      :capture-reference="captureCurrentReference"
-      @expand="emit('expand')"
-      @activity="emit('assistant-activity', $event)"
-      @back="backFromAppearance"
-    >
-      <template #task-preview><slot name="task-preview" /></template>
-    </ProductAssistant>
-    <div v-show="!assistantOpen" class="appearance-studio__grid">
-      <section class="appearance-panel">
-        <header>
-          <div>
-            <h2>界面明暗</h2>
-          </div>
-        </header>
-        <div class="settings-theme" role="radiogroup" aria-label="选择界面主题">
+    <AppearancePalette v-if="paletteOpen" :ports="palettePorts" :active="active" />
+    <div v-show="!paletteOpen" class="appearance-studio__content">
+      <FeatureAppHeader v-if="!assistantOpen" title="外观" @back="backFromAppearance">
+        <template #status>
+          <span class="feature-header-status">本机生效</span>
+        </template>
+        <!-- SRL-PUBLIC-SYNC: BEGIN REPLACE id=appearance-assistant-header-actions -->
+        <template #actions>
           <button
+            v-if="!assistantOpen && props.assistantOnly"
+            class="feature-header-action"
             type="button"
-            role="radio"
-            :aria-checked="theme === 'light'"
-            :class="{ 'settings-theme__option--active': theme === 'light' }"
-            @click="emit('update:theme', 'light')"
+            @click="assistantOpen = true"
           >
-            <span class="settings-theme__sample settings-theme__sample--light"></span
-            ><strong>浅色档案</strong>
+            让 AI 修改
           </button>
-          <button
-            type="button"
-            role="radio"
-            :aria-checked="theme === 'dark'"
-            :class="{ 'settings-theme__option--active': theme === 'dark' }"
-            @click="emit('update:theme', 'dark')"
-          >
-            <span class="settings-theme__sample settings-theme__sample--dark"></span
-            ><strong>深色档案</strong>
-          </button>
-        </div>
-      </section>
-
-      <section class="appearance-panel appearance-panel--font-scale">
-        <header>
-          <div>
-            <h2>文字大小</h2>
-          </div>
-          <span>不会缩放整个页面</span>
-        </header>
-        <div class="font-scale-options" role="radiogroup" aria-label="文字大小">
-          <button
-            v-for="option in fontScales"
-            :key="option.value"
-            type="button"
-            role="radio"
-            :data-font-scale="option.value"
-            :aria-checked="uiFontScale === option.value"
-            :class="{ 'is-active': uiFontScale === option.value }"
-            @click="emit('update:uiFontScale', option.value)"
-          >
-            <span class="font-scale-option__sample" aria-hidden="true">字</span>
-            <span
-              ><strong>{{ option.title }}</strong></span
-            >
-            <i aria-hidden="true">{{ uiFontScale === option.value ? '✓' : '' }}</i>
-          </button>
-        </div>
-      </section>
-
-      <section class="appearance-panel appearance-panel--layout">
-        <header>
-          <div>
-            <h2>资源排版</h2>
-          </div>
-          <span>不会改变筛选</span>
-        </header>
-        <div class="layout-settings__options" role="radiogroup" aria-label="资源排版">
-          <button
-            v-for="layout in layouts"
-            :key="layout.value"
-            type="button"
-            class="layout-option"
-            :class="{ 'layout-option--active': layoutMode === layout.value }"
-            role="radio"
-            :aria-checked="layoutMode === layout.value"
-            @click="selectLayout(layout.value)"
-          >
-            <span
-              class="layout-option__preview"
-              :class="`layout-option__preview--${layout.value}`"
-              aria-hidden="true"
-              ><i v-for="cell in layout.cells" :key="cell"></i
-            ></span>
-            <span class="layout-option__copy"
-              ><small>{{ layout.eyebrow }}</small
-              ><strong>{{ layout.title }}</strong
-              ><span>{{ layout.description }}</span></span
-            >
-            <span class="layout-option__check" aria-hidden="true">{{
-              layoutMode === layout.value ? '✓' : ''
-            }}</span>
-          </button>
-        </div>
-      </section>
-
-      <section class="appearance-panel appearance-panel--cabinet">
-        <header>
-          <div>
-            <h2>收藏柜布局</h2>
-          </div>
-          <span>固定三行</span>
-        </header>
-        <p>文件夹少可以放大图标，收藏多则保留四列。分页、空位和拖动会自动适配。</p>
-        <div class="cabinet-density" role="radiogroup" aria-label="收藏柜每行图标数量">
-          <button
-            v-for="density in cabinetDensities"
-            :key="density.value"
-            type="button"
-            role="radio"
-            :data-cabinet-columns="density.value"
-            :aria-checked="cabinetColumns === density.value"
-            :class="{ 'is-active': cabinetColumns === density.value }"
-            @click="selectCabinetColumns(density.value)"
-          >
-            <span
-              class="cabinet-density__preview"
-              :style="{ '--density-columns': density.value }"
-              aria-hidden="true"
-            >
-              <i v-for="cell in density.value * 3" :key="cell"></i>
-            </span>
-            <strong>{{ density.value }} 列 · {{ density.title }}</strong>
-            <small>{{ density.description }}</small>
-            <b aria-hidden="true">{{ cabinetColumns === density.value ? '✓' : '' }}</b>
-          </button>
-        </div>
-      </section>
-
-      <section class="appearance-panel appearance-panel--code">
-        <header>
-          <h2>自定义 CSS</h2>
-          <AppearanceCodeReference />
-          <AppearanceOriginalCssActions class="appearance-code-tools" />
-        </header>
-
-        <section class="appearance-preset-manager">
+        </template>
+        <!-- SRL-PUBLIC-SYNC: END REPLACE id=appearance-assistant-header-actions -->
+      </FeatureAppHeader>
+      <ProductAssistant
+        v-if="props.assistantOnly && assistantVisited && selectedScope"
+        v-show="assistantOpen"
+        :get-context="getAssistantContext"
+        :execute="executeAssistantReply"
+        :navigate="navigate"
+        :compact="compact"
+        :visible="active && assistantOpen"
+        :background-task="backgroundTask"
+        :capture-reference="captureCurrentReference"
+        @expand="emit('expand')"
+        @activity="emit('assistant-activity', $event)"
+        @back="backFromAppearance"
+      >
+        <template #task-preview><slot name="task-preview" /></template>
+      </ProductAssistant>
+      <div v-show="!assistantOpen" class="appearance-studio__grid">
+        <section class="appearance-panel">
           <header>
             <div>
-              <strong>预设库</strong><span>{{ presets.length }} / 30 份保存在本机</span>
+              <h2>界面明暗</h2>
             </div>
-            <i :class="{ 'is-dirty': hasUnsavedChanges }">{{ presetState }}</i>
           </header>
-          <div class="appearance-preset-fields">
-            <label
-              ><span>正在编辑</span
-              ><select :value="activePresetId" @change="selectPreset">
-                <option v-if="!savedDraft" :value="draft.id">{{ draft.name }}（未保存）</option>
-                <option v-for="preset in presets" :key="preset.id" :value="preset.id">
-                  {{ preset.name }}
-                </option>
-              </select></label
+          <div class="settings-theme" role="radiogroup" aria-label="选择界面主题">
+            <button
+              type="button"
+              role="radio"
+              :aria-checked="theme === 'light'"
+              :class="{ 'settings-theme__option--active': theme === 'light' }"
+              @click="emit('update:theme', 'light')"
             >
-            <label
-              ><span>预设名称</span
-              ><input v-model="draft.name" maxlength="40" placeholder="例如：夜间玻璃风"
-            /></label>
-          </div>
-          <div class="appearance-preset-tools">
-            <button type="button" class="appearance-action-hit" @click="newPreset">
-              <span class="appearance-action-face"><b>＋</b><span>新建空白预设</span></span>
+              <span class="settings-theme__sample settings-theme__sample--light"></span
+              ><strong>浅色档案</strong>
             </button>
-            <button type="button" class="appearance-action-hit" @click="importInput?.click()">
-              <span class="appearance-action-face"><b>↑</b><span>导入 CSS / 预设</span></span>
-            </button>
-            <button type="button" class="appearance-action-hit" @click="exportPreset">
-              <span class="appearance-action-face"><b>↓</b><span>导出 CSS</span></span>
-            </button>
-            <button type="button" class="appearance-action-hit" @click="exportEditablePreset">
-              <span class="appearance-action-face"><b>↓</b><span>导出可编辑预设</span></span>
+            <button
+              type="button"
+              role="radio"
+              :aria-checked="theme === 'dark'"
+              :class="{ 'settings-theme__option--active': theme === 'dark' }"
+              @click="emit('update:theme', 'dark')"
+            >
+              <span class="settings-theme__sample settings-theme__sample--dark"></span
+              ><strong>深色档案</strong>
             </button>
           </div>
-          <input
-            ref="importInput"
-            data-appearance-preset-import
-            hidden
-            type="file"
-            accept=".css,.json,text/css,application/json"
-            multiple
-            @change="importPresets"
-          />
         </section>
 
-        <label class="appearance-code-editor"
-          ><span>全局 CSS <small>会作用于整个应用</small></span
-          ><textarea
-            v-model="draft.globalCss"
-            spellcheck="false"
-            placeholder="例如：:root { --color-accent: #7d4be2; }"
-            @focus="previewScope = undefined"
-          ></textarea>
-        </label>
-
-        <details
-          class="appearance-advanced"
-          :open="scopedEditorOpen"
-          @toggle="scopedEditorOpen = ($event.target as HTMLDetailsElement).open"
-        >
-          <summary data-assistant-focus="appearance-css">
-            <span><strong>按界面编辑 CSS / 源码</strong></span>
-          </summary>
-          <div
-            class="appearance-scope-tabs"
-            role="tablist"
-            aria-label="选择要装修的界面"
-            data-assistant-focus="appearance-scope"
-          >
+        <section class="appearance-panel appearance-panel--font-scale">
+          <header>
+            <div>
+              <h2>文字大小</h2>
+            </div>
+            <span>不会缩放整个页面</span>
+          </header>
+          <div class="font-scale-options" role="radiogroup" aria-label="文字大小">
             <button
-              v-for="scope in activeScopes"
-              :key="scope.value"
+              v-for="option in fontScales"
+              :key="option.value"
               type="button"
-              role="tab"
-              :aria-selected="activeScope === scope.value"
-              :class="{ 'is-active': activeScope === scope.value }"
-              @click="selectPreviewScope(scope.value)"
+              role="radio"
+              :data-font-scale="option.value"
+              :aria-checked="uiFontScale === option.value"
+              :class="{ 'is-active': uiFontScale === option.value }"
+              @click="emit('update:uiFontScale', option.value)"
             >
-              {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i
-              ><small v-if="draft.views?.[scope.value]">Vue</small>
+              <span class="font-scale-option__sample" aria-hidden="true">字</span>
+              <span
+                ><strong>{{ option.title }}</strong></span
+              >
+              <i aria-hidden="true">{{ uiFontScale === option.value ? '✓' : '' }}</i>
             </button>
           </div>
-          <p v-if="installationError" role="status">{{ installationError }}</p>
-          <p v-else-if="!installationsLoaded" role="status">正在读取 APP 安装状态…</p>
-          <details
-            v-if="inactiveScopes.length"
-            class="appearance-inactive-scopes"
-            :open="inactiveScopes.some((scope) => scope.value === activeScope)"
+        </section>
+
+        <section class="appearance-panel appearance-panel--layout">
+          <header>
+            <div>
+              <h2>资源排版</h2>
+            </div>
+            <span>不会改变筛选</span>
+          </header>
+          <div class="layout-settings__options" role="radiogroup" aria-label="资源排版">
+            <button
+              v-for="layout in layouts"
+              :key="layout.value"
+              type="button"
+              class="layout-option"
+              :class="{ 'layout-option--active': layoutMode === layout.value }"
+              role="radio"
+              :aria-checked="layoutMode === layout.value"
+              @click="selectLayout(layout.value)"
+            >
+              <span
+                class="layout-option__preview"
+                :class="`layout-option__preview--${layout.value}`"
+                aria-hidden="true"
+                ><i v-for="cell in layout.cells" :key="cell"></i
+              ></span>
+              <span class="layout-option__copy"
+                ><small>{{ layout.eyebrow }}</small
+                ><strong>{{ layout.title }}</strong
+                ><span>{{ layout.description }}</span></span
+              >
+              <span class="layout-option__check" aria-hidden="true">{{
+                layoutMode === layout.value ? '✓' : ''
+              }}</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="appearance-panel appearance-panel--cabinet">
+          <header>
+            <div>
+              <h2>收藏柜布局</h2>
+            </div>
+            <span>固定三行</span>
+          </header>
+          <p>文件夹少可以放大图标，收藏多则保留四列。分页、空位和拖动会自动适配。</p>
+          <div class="cabinet-density" role="radiogroup" aria-label="收藏柜每行图标数量">
+            <button
+              v-for="density in cabinetDensities"
+              :key="density.value"
+              type="button"
+              role="radio"
+              :data-cabinet-columns="density.value"
+              :aria-checked="cabinetColumns === density.value"
+              :class="{ 'is-active': cabinetColumns === density.value }"
+              @click="selectCabinetColumns(density.value)"
+            >
+              <span
+                class="cabinet-density__preview"
+                :style="{ '--density-columns': density.value }"
+                aria-hidden="true"
+              >
+                <i v-for="cell in density.value * 3" :key="cell"></i>
+              </span>
+              <strong>{{ density.value }} 列 · {{ density.title }}</strong>
+              <small>{{ density.description }}</small>
+              <b aria-hidden="true">{{ cabinetColumns === density.value ? '✓' : '' }}</b>
+            </button>
+          </div>
+        </section>
+
+        <section class="appearance-panel appearance-panel--code">
+          <button
+            v-if="!props.assistantOnly"
+            type="button"
+            class="appearance-palette-entry"
+            @click="enterPalette"
           >
-            <summary>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="4" y="4" width="16" height="16" rx="4" />
-                <path d="M8 12h8m-4-4v8" /></svg
-              ><span>未安装 APP</span><small>{{ inactiveScopes.length }}</small
-              ><span class="appearance-inactive-scopes__chevron" aria-hidden="true">⌄</span>
+            <span>调色模式</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m9 5 7 7-7 7" />
+            </svg>
+          </button>
+          <header>
+            <h2>自定义 CSS</h2>
+            <AppearanceCodeReference />
+            <AppearanceOriginalCssActions class="appearance-code-tools" />
+          </header>
+
+          <section class="appearance-preset-manager">
+            <header>
+              <div>
+                <strong>预设库</strong><span>{{ presets.length }} / 30 份保存在本机</span>
+              </div>
+              <i :class="{ 'is-dirty': hasUnsavedChanges }">{{ presetState }}</i>
+            </header>
+            <div class="appearance-preset-fields">
+              <label
+                ><span>正在编辑</span
+                ><select :value="activePresetId" @change="selectPreset">
+                  <option v-if="!savedDraft" :value="draft.id">{{ draft.name }}（未保存）</option>
+                  <option v-for="preset in presets" :key="preset.id" :value="preset.id">
+                    {{ preset.name }}
+                  </option>
+                </select></label
+              >
+              <label
+                ><span>预设名称</span
+                ><input v-model="draft.name" maxlength="40" placeholder="例如：夜间玻璃风"
+              /></label>
+            </div>
+            <div class="appearance-preset-tools">
+              <button type="button" class="appearance-action-hit" @click="newPreset">
+                <span class="appearance-action-face"><b>＋</b><span>新建空白预设</span></span>
+              </button>
+              <button type="button" class="appearance-action-hit" @click="importInput?.click()">
+                <span class="appearance-action-face"><b>↑</b><span>导入 CSS / 预设</span></span>
+              </button>
+              <button type="button" class="appearance-action-hit" @click="exportPreset">
+                <span class="appearance-action-face"><b>↓</b><span>导出 CSS</span></span>
+              </button>
+              <button type="button" class="appearance-action-hit" @click="exportEditablePreset">
+                <span class="appearance-action-face"><b>↓</b><span>导出可编辑预设</span></span>
+              </button>
+            </div>
+            <input
+              ref="importInput"
+              data-appearance-preset-import
+              hidden
+              type="file"
+              accept=".css,.json,text/css,application/json"
+              multiple
+              @change="importPresets"
+            />
+          </section>
+
+          <label class="appearance-code-editor"
+            ><span>全局 CSS <small>会作用于整个应用</small></span
+            ><textarea
+              v-model="draft.globalCss"
+              spellcheck="false"
+              placeholder="例如：:root { --color-accent: #7d4be2; }"
+              @focus="previewScope = undefined"
+            ></textarea>
+          </label>
+
+          <details
+            class="appearance-advanced"
+            :open="scopedEditorOpen"
+            @toggle="scopedEditorOpen = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary data-assistant-focus="appearance-css">
+              <span><strong>按界面编辑 CSS / 源码</strong></span>
             </summary>
-            <div class="appearance-scope-tabs" role="tablist" aria-label="未安装 APP 的样式">
+            <div
+              class="appearance-scope-tabs"
+              role="tablist"
+              aria-label="选择要装修的界面"
+              data-assistant-focus="appearance-scope"
+            >
               <button
-                v-for="scope in inactiveScopes"
+                v-for="scope in activeScopes"
                 :key="scope.value"
                 type="button"
                 role="tab"
@@ -1477,188 +1527,217 @@ async function importPresets(event: Event): Promise<void> {
                 ><small v-if="draft.views?.[scope.value]">Vue</small>
               </button>
             </div>
+            <p v-if="installationError" role="status">{{ installationError }}</p>
+            <p v-else-if="!installationsLoaded" role="status">正在读取 APP 安装状态…</p>
+            <details
+              v-if="inactiveScopes.length"
+              class="appearance-inactive-scopes"
+              :open="inactiveScopes.some((scope) => scope.value === activeScope)"
+            >
+              <summary>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="4" y="4" width="16" height="16" rx="4" />
+                  <path d="M8 12h8m-4-4v8" /></svg
+                ><span>未安装 APP</span><small>{{ inactiveScopes.length }}</small
+                ><span class="appearance-inactive-scopes__chevron" aria-hidden="true">⌄</span>
+              </summary>
+              <div class="appearance-scope-tabs" role="tablist" aria-label="未安装 APP 的样式">
+                <button
+                  v-for="scope in inactiveScopes"
+                  :key="scope.value"
+                  type="button"
+                  role="tab"
+                  :aria-selected="activeScope === scope.value"
+                  :class="{ 'is-active': activeScope === scope.value }"
+                  @click="selectPreviewScope(scope.value)"
+                >
+                  {{ scope.title }}<i v-if="draft.scopedCss[scope.value]">●</i
+                  ><small v-if="draft.views?.[scope.value]">Vue</small>
+                </button>
+              </div>
+            </details>
+            <div class="appearance-scope-editor__header">
+              <strong>{{ selectedScope?.title }}专用 CSS</strong>
+              <AppearanceOriginalCssActions v-if="selectedScope" :scope="selectedScope" />
+            </div>
+            <label class="appearance-code-editor">
+              <small
+                >未修改的样式沿用全局；用 :scope 设置局部变量。公共弹窗请在全局 CSS 中修改。</small
+              >
+              <textarea
+                v-model="activeScopedCss"
+                spellcheck="false"
+                placeholder="在此填写本界面的自定义 CSS"
+                @focus="previewScope = activeScope"
+              ></textarea>
+            </label>
+            <AppearanceUiEditor
+              v-if="selectedScope?.selector"
+              :scope="activeScope"
+              :title="selectedScope.title"
+              :views="draft.views ?? {}"
+              @update:views="draft.views = $event"
+              @preview="preview(activeScope, true)"
+            />
           </details>
-          <div class="appearance-scope-editor__header">
-            <strong>{{ selectedScope?.title }}专用 CSS</strong>
-            <AppearanceOriginalCssActions v-if="selectedScope" :scope="selectedScope" />
-          </div>
-          <label class="appearance-code-editor">
-            <small
-              >未修改的样式沿用全局；用 :scope 设置局部变量。公共弹窗请在全局 CSS 中修改。</small
-            >
-            <textarea
-              v-model="activeScopedCss"
-              spellcheck="false"
-              placeholder="在此填写本界面的自定义 CSS"
-              @focus="previewScope = activeScope"
-            ></textarea>
-          </label>
-          <AppearanceUiEditor
-            v-if="selectedScope?.selector"
-            :scope="activeScope"
-            :title="selectedScope.title"
-            :views="draft.views ?? {}"
-            @update:views="draft.views = $event"
-            @preview="preview(activeScope, true)"
-          />
-        </details>
 
-        <div class="appearance-code-actions">
-          <span role="status">{{ copyStatus }}</span>
-          <button type="button" class="appearance-action-hit" @click="preview()">
-            <span class="appearance-action-face">全屏预览</span>
-          </button>
-          <button type="button" class="appearance-action-hit" @click="clearDraft">
-            <span class="appearance-action-face">清空草稿</span>
-          </button>
-          <button type="button" class="appearance-action-hit" @click="deletePreset">
-            <span class="appearance-action-face">{{ savedDraft ? '删除预设' : '放弃草稿' }}</span>
-          </button>
-          <button
-            v-if="savedDraft"
-            type="button"
-            class="appearance-action-hit"
-            @click="saveAsNewPreset"
-          >
-            <span class="appearance-action-face">另存为新预设</span>
-          </button>
-          <button
-            class="button--primary appearance-action-hit"
-            type="button"
-            :disabled="!hasUnsavedChanges && !needsReapply"
-            data-assistant-focus="appearance-save"
-            @click="savePreset"
-          >
-            <span class="appearance-action-face">{{
-              hasUnsavedChanges ? '保存并应用' : needsReapply ? '重新应用' : '已保存'
-            }}</span>
-          </button>
-        </div>
-      </section>
-    </div>
-
-    <Teleport to="body">
-      <div
-        v-if="isCardOrientationDialogOpen"
-        class="editor-overlay appearance-card-orientation-overlay"
-        role="presentation"
-        @click.self="isCardOrientationDialogOpen = false"
-      >
-        <section
-          class="editor-sheet appearance-card-orientation"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="appearance-card-orientation-title"
-        >
-          <header>
-            <div>
-              <small>CARD BROWSING</small>
-              <h2 id="appearance-card-orientation-title">卡片浏览外观</h2>
-            </div>
-            <button
-              type="button"
-              aria-label="关闭卡片方向选择"
-              @click="isCardOrientationDialogOpen = false"
-            >
-              ×
+          <div class="appearance-code-actions">
+            <span role="status">{{ copyStatus }}</span>
+            <button type="button" class="appearance-action-hit" @click="preview()">
+              <span class="appearance-action-face">全屏预览</span>
             </button>
-          </header>
-          <section class="appearance-card-setting">
-            <h3>资源卡片高度 · 全部资源</h3>
-            <p>最长模式按当前页内容等高；固定模式按比例设置长度并收起超出内容。</p>
-            <div role="radiogroup" aria-label="资源卡片高度">
-              <button
-                v-for="mode in cardHeightModes"
-                :key="String(mode.value)"
-                type="button"
-                role="radio"
-                :aria-checked="resourceCardHeightMode === mode.value"
-                :class="{ 'is-active': resourceCardHeightMode === mode.value }"
-                @click="emit('update:resourceCardHeightMode', mode.value)"
-              >
-                <span
-                  ><strong>{{ mode.title }}</strong
-                  ><small>{{ mode.description }}</small></span
-                >
-                <b aria-hidden="true">{{ resourceCardHeightMode === mode.value ? '✓' : '' }}</b>
-              </button>
-            </div>
-          </section>
-          <section class="appearance-card-setting">
-            <h3>无图资源封面</h3>
-            <div role="radiogroup" aria-label="无图资源封面显示方式">
-              <button
-                v-for="mode in noImageResourceCoverModes"
-                :key="mode.value"
-                type="button"
-                role="radio"
-                :aria-checked="noImageResourceCoverMode === mode.value"
-                :class="{ 'is-active': noImageResourceCoverMode === mode.value }"
-                @click="emit('update:noImageResourceCoverMode', mode.value)"
-              >
-                <span
-                  ><strong>{{ mode.title }}</strong
-                  ><small>{{ mode.description }}</small></span
-                >
-                <b aria-hidden="true">{{ noImageResourceCoverMode === mode.value ? '✓' : '' }}</b>
-              </button>
-            </div>
-          </section>
-          <section class="appearance-card-setting">
-            <h3>手机端封面方向</h3>
-            <div role="radiogroup" aria-label="手机卡片封面比例">
-              <button
-                v-for="orientation in cardOrientations"
-                :key="orientation.value"
-                type="button"
-                role="radio"
-                :aria-checked="mobileCardOrientation === orientation.value"
-                :class="{ 'is-active': mobileCardOrientation === orientation.value }"
-                @click="selectCardOrientation(orientation.value)"
-              >
-                <span
-                  ><strong>{{ orientation.title }}</strong
-                  ><small>{{ orientation.description }}</small></span
-                >
-                <b aria-hidden="true">{{
-                  mobileCardOrientation === orientation.value ? '✓' : ''
-                }}</b>
-              </button>
-            </div>
-            <div
-              class="appearance-card-orientation__fit"
-              role="radiogroup"
-              aria-label="卡片图片显示方式"
+            <button type="button" class="appearance-action-hit" @click="clearDraft">
+              <span class="appearance-action-face">清空草稿</span>
+            </button>
+            <button type="button" class="appearance-action-hit" @click="deletePreset">
+              <span class="appearance-action-face">{{ savedDraft ? '删除预设' : '放弃草稿' }}</span>
+            </button>
+            <button
+              v-if="savedDraft"
+              type="button"
+              class="appearance-action-hit"
+              @click="saveAsNewPreset"
             >
-              <strong>图片显示方式</strong>
-              <button
-                v-for="mode in cardFitModes"
-                :key="mode.value"
-                type="button"
-                role="radio"
-                :aria-checked="mobileCardFitMode === mode.value"
-                :class="{ 'is-active': mobileCardFitMode === mode.value }"
-                @click="emit('update:mobileCardFitMode', mode.value)"
-              >
-                <span
-                  ><strong>{{ mode.title }}</strong
-                  ><small>{{ mode.description }}</small></span
-                >
-                <b aria-hidden="true">{{ mobileCardFitMode === mode.value ? '✓' : '' }}</b>
-              </button>
-            </div>
-          </section>
+              <span class="appearance-action-face">另存为新预设</span>
+            </button>
+            <button
+              class="button--primary appearance-action-hit"
+              type="button"
+              :disabled="!hasUnsavedChanges && !needsReapply"
+              data-assistant-focus="appearance-save"
+              @click="savePreset"
+            >
+              <span class="appearance-action-face">{{
+                hasUnsavedChanges ? '保存并应用' : needsReapply ? '重新应用' : '已保存'
+              }}</span>
+            </button>
+          </div>
         </section>
       </div>
-    </Teleport>
-    <AssistantUiPreview
-      v-if="vueTools.preview.value"
-      :preview="vueTools.preview.value"
-      @close="vueTools.close"
-      @ready="(id) => vueTools.status(id)"
-      @error="(id, message) => vueTools.status(id, message)"
-      @action="vueTools.invoke"
-    />
+
+      <Teleport to="body">
+        <div
+          v-if="isCardOrientationDialogOpen"
+          class="editor-overlay appearance-card-orientation-overlay"
+          role="presentation"
+          @click.self="isCardOrientationDialogOpen = false"
+        >
+          <section
+            class="editor-sheet appearance-card-orientation"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="appearance-card-orientation-title"
+          >
+            <header>
+              <div>
+                <small>CARD BROWSING</small>
+                <h2 id="appearance-card-orientation-title">卡片浏览外观</h2>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭卡片方向选择"
+                @click="isCardOrientationDialogOpen = false"
+              >
+                ×
+              </button>
+            </header>
+            <section class="appearance-card-setting">
+              <h3>资源卡片高度 · 全部资源</h3>
+              <p>最长模式按当前页内容等高；固定模式按比例设置长度并收起超出内容。</p>
+              <div role="radiogroup" aria-label="资源卡片高度">
+                <button
+                  v-for="mode in cardHeightModes"
+                  :key="String(mode.value)"
+                  type="button"
+                  role="radio"
+                  :aria-checked="resourceCardHeightMode === mode.value"
+                  :class="{ 'is-active': resourceCardHeightMode === mode.value }"
+                  @click="emit('update:resourceCardHeightMode', mode.value)"
+                >
+                  <span
+                    ><strong>{{ mode.title }}</strong
+                    ><small>{{ mode.description }}</small></span
+                  >
+                  <b aria-hidden="true">{{ resourceCardHeightMode === mode.value ? '✓' : '' }}</b>
+                </button>
+              </div>
+            </section>
+            <section class="appearance-card-setting">
+              <h3>无图资源封面</h3>
+              <div role="radiogroup" aria-label="无图资源封面显示方式">
+                <button
+                  v-for="mode in noImageResourceCoverModes"
+                  :key="mode.value"
+                  type="button"
+                  role="radio"
+                  :aria-checked="noImageResourceCoverMode === mode.value"
+                  :class="{ 'is-active': noImageResourceCoverMode === mode.value }"
+                  @click="emit('update:noImageResourceCoverMode', mode.value)"
+                >
+                  <span
+                    ><strong>{{ mode.title }}</strong
+                    ><small>{{ mode.description }}</small></span
+                  >
+                  <b aria-hidden="true">{{ noImageResourceCoverMode === mode.value ? '✓' : '' }}</b>
+                </button>
+              </div>
+            </section>
+            <section class="appearance-card-setting">
+              <h3>手机端封面方向</h3>
+              <div role="radiogroup" aria-label="手机卡片封面比例">
+                <button
+                  v-for="orientation in cardOrientations"
+                  :key="orientation.value"
+                  type="button"
+                  role="radio"
+                  :aria-checked="mobileCardOrientation === orientation.value"
+                  :class="{ 'is-active': mobileCardOrientation === orientation.value }"
+                  @click="selectCardOrientation(orientation.value)"
+                >
+                  <span
+                    ><strong>{{ orientation.title }}</strong
+                    ><small>{{ orientation.description }}</small></span
+                  >
+                  <b aria-hidden="true">{{
+                    mobileCardOrientation === orientation.value ? '✓' : ''
+                  }}</b>
+                </button>
+              </div>
+              <div
+                class="appearance-card-orientation__fit"
+                role="radiogroup"
+                aria-label="卡片图片显示方式"
+              >
+                <strong>图片显示方式</strong>
+                <button
+                  v-for="mode in cardFitModes"
+                  :key="mode.value"
+                  type="button"
+                  role="radio"
+                  :aria-checked="mobileCardFitMode === mode.value"
+                  :class="{ 'is-active': mobileCardFitMode === mode.value }"
+                  @click="emit('update:mobileCardFitMode', mode.value)"
+                >
+                  <span
+                    ><strong>{{ mode.title }}</strong
+                    ><small>{{ mode.description }}</small></span
+                  >
+                  <b aria-hidden="true">{{ mobileCardFitMode === mode.value ? '✓' : '' }}</b>
+                </button>
+              </div>
+            </section>
+          </section>
+        </div>
+      </Teleport>
+      <AssistantUiPreview
+        v-if="vueTools.preview.value"
+        :preview="vueTools.preview.value"
+        @close="vueTools.close"
+        @ready="(id) => vueTools.status(id)"
+        @error="(id, message) => vueTools.status(id, message)"
+        @action="vueTools.invoke"
+      />
+    </div>
   </section>
 </template>
 

@@ -19,6 +19,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const view of views) view.unmount()
   views.length = 0
+  vi.restoreAllMocks()
 })
 afterAll(() => vi.unstubAllGlobals())
 
@@ -85,4 +86,135 @@ it('follows the existing remote-resource preview policy without enabling documen
   policy.value.allowRemoteResources = false
   await flushPromises()
   expect(view.get('img').attributes('src')).toBeUndefined()
+})
+
+async function filePreview(name: string, content: string | Blob) {
+  const resource = {
+    id: name,
+    fileName: name,
+    mimeType: 'application/octet-stream',
+    originalBlob: typeof content === 'string' ? new Blob([content]) : content,
+  } as Resource
+  const view = mount(AttachmentDocumentPreview, { props: { resource } })
+  views.push(view)
+  await flushPromises()
+  return view
+}
+
+it('creates typed local media URLs without decoding bytes, and stops/releases the source on close', async () => {
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+  const load = vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {})
+  const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:media')
+  const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  for (const [name, selector, mime] of [
+    ['声音.mp3', 'audio', 'audio/mpeg'],
+    ['视频.mp4', 'video', 'video/mp4'],
+  ]) {
+    const blob = new Blob(['fixture'])
+    const read = vi.spyOn(blob, 'arrayBuffer')
+    const view = await filePreview(name!, blob)
+    expect(view.text()).not.toContain('暂不支持')
+    const element = view.get(selector!)
+    expect(element.attributes('controls')).toBeDefined()
+    expect(element.attributes('preload')).toBe('metadata')
+    expect(element.attributes('autoplay')).toBeUndefined()
+    expect((create.mock.calls.at(-1)![0] as Blob).type).toBe(mime)
+    expect(read).not.toHaveBeenCalled()
+    await view.setProps({ active: false })
+    expect(pause).toHaveBeenCalled()
+    await element.trigger('error')
+    expect(view.get('[role="alert"]').text()).toContain('格式或编码')
+    view.unmount()
+    views.splice(views.indexOf(view), 1)
+  }
+  expect(pause).toHaveBeenCalledTimes(4)
+  expect(load).toHaveBeenCalledTimes(2)
+  expect(revoke).toHaveBeenCalledTimes(2)
+})
+
+it('keeps HTML/code inert, bounds the rendered text and preserves Unicode across pages', async () => {
+  const prefix = '<script>globalThis.executed=true</script>'
+  const source = prefix + 'x'.repeat(32767 - prefix.length) + '😀' + '尾部'
+  const view = await filePreview('示例.html', source)
+  expect(view.find('script,iframe').exists()).toBe(false)
+  const first = view.get('pre code').text()
+  const next = view.findAll('button').find((button) => button.text() === '下一页')!
+  await next.trigger('click')
+  expect(first + view.get('pre code').text()).toBe(source)
+  expect(first.length).toBeLessThanOrEqual(32768)
+  expect(first.endsWith('x')).toBe(true)
+})
+
+it('reads text once across page changes, rejects oversized text before reading, and ignores a late closed read', async () => {
+  const read = vi.spyOn(NodeBlob.prototype, 'arrayBuffer')
+  const view = await filePreview('lines.jsonl', 'x'.repeat(40000))
+  const count = read.mock.calls.length
+  await view
+    .findAll('button')
+    .find((button) => button.text() === '下一页')!
+    .trigger('click')
+  await view
+    .findAll('button')
+    .find((button) => button.text() === '上一页')!
+    .trigger('click')
+  expect(read).toHaveBeenCalledTimes(count)
+  const large = new Blob(['x'.repeat(16 * 1024 * 1024 + 1)])
+  const oversized = await filePreview('large.json', large)
+  expect(oversized.get('[role="alert"]').text()).toContain('16 MiB')
+  expect(read).toHaveBeenCalledTimes(count)
+  let finish!: (value: ArrayBuffer) => void
+  read.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  const late = mount(AttachmentDocumentPreview, {
+    props: {
+      resource: { id: 'late', fileName: 'late.json', originalBlob: new Blob(['late']) } as Resource,
+    },
+  })
+  late.unmount()
+  finish(new TextEncoder().encode('late').buffer)
+  await flushPromises()
+  expect(late.exists()).toBe(false)
+})
+
+it('renders bounded table pages as escaped cells and provides a raw view for malformed CSV', async () => {
+  const view = await filePreview('数据.csv', '名称,正文\n<script>,"a,b"\n' + 'x,y\n'.repeat(52))
+  expect(view.findAll('tbody tr')).toHaveLength(50)
+  expect(view.find('script').exists()).toBe(false)
+  expect(view.findAll('tbody tr')[1]!.text()).toContain('<script>')
+  await view
+    .findAll('button')
+    .find((button) => button.text() === '下一页')!
+    .trigger('click')
+  expect(view.findAll('tbody tr')).toHaveLength(4)
+  expect(view.find('tbody th').text()).toBe('51')
+  await view
+    .findAll('button')
+    .find((button) => button.text() === '查看原文')!
+    .trigger('click')
+  expect(view.get('pre').text()).toContain('名称,正文')
+  const malformed = await filePreview('不完整.csv', '"missing')
+  expect(malformed.get('[role="alert"]').text()).toContain('引号未闭合')
+  await malformed
+    .findAll('button')
+    .find((button) => button.text() === '查看原文')!
+    .trigger('click')
+  expect(malformed.get('pre').text()).toBe('"missing')
+})
+
+it('previews images with zoom and releases their URLs', async () => {
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:image')
+  const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  const view = await filePreview('动图.gif', new Blob(['gif']))
+  expect(view.get('img').attributes('alt')).toBe('动图.gif')
+  Object.defineProperty(view.get('img').element, 'naturalWidth', { value: 800 })
+  await view.get('img').trigger('load')
+  await view.get('select').setValue('2')
+  expect(view.get('img').attributes('style')).toContain('1600px')
+  view.unmount()
+  views.splice(views.indexOf(view), 1)
+  expect(revoke).toHaveBeenCalledWith('blob:image')
 })

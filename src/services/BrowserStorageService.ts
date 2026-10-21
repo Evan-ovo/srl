@@ -3,6 +3,8 @@ import {
   PREVIEW_SCRIPTS_KEY,
   readStoredCustomUiCss,
   writeStoredCustomUiCss,
+  readPaletteDraft,
+  writePaletteDraft,
 } from './BrowserAppearancePreferences'
 export { type BridgeTransferDraft, PROJECT_NOTICE_VERSION } from './BrowserDevicePreferences'
 import { normalizeUiViews } from '../core/UiCustomization'
@@ -495,6 +497,14 @@ export class BrowserStorageService {
     } catch {
       return []
     }
+  }
+
+  getAppearancePaletteDraft(): Record<string, unknown> | undefined {
+    return readPaletteDraft()
+  }
+
+  setAppearancePaletteDraft(value: Record<string, unknown>): void {
+    writePaletteDraft(value)
   }
 
   getCustomUiViews(): CustomUiViews {

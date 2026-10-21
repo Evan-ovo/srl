@@ -62,8 +62,12 @@
   font-size: 12px;
 }
 .assistant-reference-dialog {
+  top: var(--visual-viewport-offset-top, 0px);
+  bottom: calc(
+    100% - var(--visual-viewport-offset-top, 0px) - var(--visual-viewport-height, 100dvh)
+  );
   width: min(620px, calc(100vw - 24px));
-  max-height: calc(100dvh - 48px);
+  max-height: calc(var(--visual-viewport-height, 100dvh) - 48px);
   box-sizing: border-box;
   overflow: auto;
   padding: 12px;

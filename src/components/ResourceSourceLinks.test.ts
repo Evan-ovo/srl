@@ -8,7 +8,6 @@ import {
   type ResourceCommunitySourceSummary,
 } from '../types/CommunitySource'
 import ResourceSourceLinks from './ResourceSourceLinks.vue'
-import { readDiscordSourceFromUrl } from '../services/DiscordSourceRefreshService'
 
 const runtime = vi.hoisted(() => ({
   listSummariesForResource: vi.fn(),
@@ -18,12 +17,6 @@ vi.mock('../core/CommunitySourceRuntime', () => ({
   communitySourceService: {
     listSummariesForResource: runtime.listSummariesForResource,
   },
-}))
-
-vi.mock('../services/DiscordSourceRefreshService', () => ({
-  parseDiscordMessageUrl: vi.fn(),
-  readDiscordSourceFromUrl: vi.fn(),
-  readDiscordSourceRemote: vi.fn(),
 }))
 
 function savedSourceSummary(): ResourceCommunitySourceSummary {
@@ -178,7 +171,6 @@ describe('ResourceSourceLinks Discord directory lifecycle', () => {
     expect(wrapper.emitted('update:links')?.at(-1)?.[0]).toEqual([
       expect.objectContaining({ url, type: 'discord', trustMode: 'linkOnly' }),
     ])
-    expect(readDiscordSourceFromUrl).not.toHaveBeenCalled()
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('来源链接已添加')
     await wrapper.get('.resource-sources__add').trigger('click')

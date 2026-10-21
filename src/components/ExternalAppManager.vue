@@ -67,6 +67,7 @@ const sourceText = ref('')
 const actionPermissions = ref<ExternalAppPermission[]>([])
 const originalPreview = ref<ExternalAppPreview>()
 const updateAppId = ref('')
+const fixedUpdateTarget = ref('')
 const previewEntry = ref('')
 const showPreview = ref(false)
 const trialHtml = ref('')
@@ -418,6 +419,7 @@ async function inspectFiles(files: File[]): Promise<boolean> {
   previewRuntimeMode.value = EXTERNAL_APP_RUNTIME_MODE.ISOLATED
   try {
     preview.value = await externalAppService.inspect(files.length === 1 ? files[0] : files)
+    fixedUpdateTarget.value = ''
     originalPreview.value = preview.value
     updateAppId.value = ''
     previewEntry.value = preview.value.manifest.entry
@@ -967,7 +969,11 @@ async function clearAppData(app: InstalledExternalApp): Promise<void> {
             >
               <label
                 ><span>安装方式</span
-                ><select v-model="updateAppId" :disabled="installing" @change="configureInstall">
+                ><select
+                  v-model="updateAppId"
+                  :disabled="installing || Boolean(fixedUpdateTarget)"
+                  @change="configureInstall"
+                >
                   <option value="">按当前网页身份安装</option>
                   <option v-for="app in apps" :key="app.id" :value="app.id">
                     更新“{{ app.manifest.name }}” · v{{ app.manifest.version }}

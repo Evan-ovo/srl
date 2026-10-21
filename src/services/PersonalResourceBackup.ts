@@ -37,7 +37,8 @@ export function includePersonalResource(
 
 export async function plaintextSecretCopies(
   resources: readonly Resource[],
-  password: string,
+  password?: string,
+  requestPassword?: () => Promise<string | undefined>,
 ): Promise<PlainSecretCopy[]> {
   const { secretResourceService } = await import('./SecretResourceService')
   const copies: PlainSecretCopy[] = []
@@ -45,7 +46,19 @@ export async function plaintextSecretCopies(
     if (resource.type !== 'secret') continue
     if (resource.originalBlob.size > 2 * 1024 * 1024) throw new Error('密钥资源超过大小限制')
     const document = parsePersonalResource(JSON.parse(await resource.originalBlob.text()))
-    const fields = await secretResourceService.reveal(document, password)
+    if (document.protection === 'none') continue // The original already carries these fields.
+    let selectedPassword = password
+    if (
+      document.protected &&
+      selectedPassword === undefined &&
+      !secretResourceService.isUnlocked() &&
+      !secretResourceService.hasRememberedPassword(document) &&
+      requestPassword
+    ) {
+      selectedPassword = await requestPassword()
+      if (!selectedPassword) throw new DOMException('已取消密钥导出', 'AbortError')
+    }
+    const fields = await secretResourceService.reveal(document, selectedPassword)
     copies.push({
       contentHash: resource.contentHash,
       document: { ...document, fields, protected: undefined },
@@ -71,10 +84,17 @@ async function grantId(config: CloudBackupConfig): Promise<string> {
 }
 export async function savePlainSecretExportGrant(
   config: CloudBackupConfig,
-  password: string,
+  password?: string,
 ): Promise<void> {
   const { localCredentialStore } = await import('./LocalCredentialStore')
-  await localCredentialStore.save(await grantId(config), password)
+  const id = await grantId(config)
+  if (password !== undefined) await localCredentialStore.save(id, password)
+  else {
+    const { secretResourceService } = await import('./SecretResourceService')
+    await secretResourceService.withUnlockedPassword((verified) =>
+      localCredentialStore.save(id, verified),
+    )
+  }
 }
 export async function readPlainSecretExportGrant(config: CloudBackupConfig): Promise<string> {
   const { localCredentialStore } = await import('./LocalCredentialStore')
@@ -92,9 +112,6 @@ export async function cloudPlainSecretCopies(
 ): Promise<PlainSecretCopy[]> {
   if (selection && !includePersonalResource({ type: 'secret' }, selection)) return []
   const ids = selection?.resourceIds ? new Set(selection.resourceIds) : undefined
-  const password = await readPlainSecretExportGrant(config)
-  if (!password)
-    throw new Error('当前备份目标尚未授权明文密钥副本，请在设置中确认，或关闭明文副本保留加密备份')
   if (ids?.size === 0) return []
   const summaries =
     typeof resources.listResourceListSummaries === 'function'
@@ -103,10 +120,22 @@ export async function cloudPlainSecretCopies(
           ids: ids ? [...ids] : undefined,
         })
       : await resources.listSummaries()
+  const candidates = summaries.filter(
+    (summary) =>
+      summary.type === 'secret' &&
+      summary.metadata.secretProtection !== 'none' &&
+      summary.metadata.privateFieldCount !== 0 &&
+      summary.metadata.cloudBackupExcluded !== true &&
+      (!ids || ids.has(summary.id)),
+  )
+  if (!candidates.length) return []
+  const password = await readPlainSecretExportGrant(config)
+  if (!password)
+    throw new Error('当前备份目标尚未授权明文密钥副本，请在设置中确认，或关闭明文副本保留原件')
   const copies: PlainSecretCopy[] = []
   const encoder = new TextEncoder()
   let outputBytes = 2 // JSON array brackets; each subsequent item adds one comma.
-  for (const summary of summaries) {
+  for (const summary of candidates) {
     if (
       summary.type !== 'secret' ||
       summary.metadata.cloudBackupExcluded === true ||

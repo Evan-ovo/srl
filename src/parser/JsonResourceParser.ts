@@ -461,8 +461,11 @@ export class JsonResourceParser implements ResourceParser {
       const { parsePersonalResource } = await import('../types/PersonalResource')
       const { personalResourceMetadata } = await import('../services/PersonalResourceService')
       const document = parsePersonalResource(content)
-      if (document.fields.some((field) => field.private && field.value))
-        throw new Error('此密钥文件包含明文私密字段，请通过密钥编辑器设置密码后保存')
+      if (document.kind === 'secret') {
+        if (file.size > 2 * 1024 * 1024) throw new Error('密钥资源超过 2 MB，请减少字段内容')
+        const { validateSecretDocument } = await import('../services/PersonalResourceImport')
+        validateSecretDocument(document)
+      }
       return personalResourceMetadata(document)
     }
     if (isRecord(content) && content.format === 'srl-greeting') {

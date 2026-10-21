@@ -70,7 +70,11 @@ export interface ResourceStorageAdapter {
     signal?: AbortSignal
   }): Promise<number>
   get(id: string): Promise<Resource | undefined>
-  getReadSource?(id: string): Promise<ResourceReadSource | undefined>
+  getReadSource?(
+    id: string,
+    historical?: boolean,
+    signal?: AbortSignal,
+  ): Promise<ResourceReadSource | undefined>
   getSummary?(id: string, historical?: boolean): Promise<ResourceSummary | undefined>
   findGalleryImage?(ownerId: string, contentHash: string): Promise<ResourceSummary | undefined>
   updateMetadata?(

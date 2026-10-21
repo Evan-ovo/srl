@@ -23,7 +23,9 @@
   min-height: 0;
   min-width: 0;
   overflow: auto;
-  padding-block: 4px;
+  /* 留足既有焦点避让的上下内距，源码不得大于实际可见滚动区。 */
+  padding-block: 12px;
+  container-type: size;
 }
 .frontend-workshop-source-editor__tools {
   position: relative;
@@ -71,8 +73,8 @@
 .frontend-workshop-source-editor textarea {
   box-sizing: border-box;
   width: 100%;
-  flex: 1 1 0;
-  min-height: 64px;
+  flex: 1 0 0;
+  min-height: min(12rem, 100cqh);
   resize: none;
   padding: 8px;
   font:

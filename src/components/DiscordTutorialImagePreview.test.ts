@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import DiscordManualDeployDrawer from './DiscordManualDeployDrawer.vue'
 import DiscordSetupGuideDrawer from './DiscordSetupGuideDrawer.vue'
+import { SRL_BACK_REQUEST_EVENT } from '../composables/UseBackStack'
 
 const props = {
   open: true,
@@ -15,6 +16,21 @@ const props = {
 }
 
 beforeEach(() => {
+  Object.defineProperties(HTMLDialogElement.prototype, {
+    showModal: {
+      configurable: true,
+      value: function (this: HTMLDialogElement) {
+        this.setAttribute('open', '')
+      },
+    },
+    close: {
+      configurable: true,
+      value: function (this: HTMLDialogElement) {
+        this.removeAttribute('open')
+        this.dispatchEvent(new Event('close'))
+      },
+    },
+  })
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -25,6 +41,42 @@ beforeEach(() => {
 })
 
 describe('Discord tutorial screenshot previews', () => {
+  it.each(['one-click', 'github', 'manual'] as const)(
+    'opens privacy help at the end of the save instruction and returns focus in %s',
+    async (mode) => {
+      const wrapper = mount(
+        mode === 'manual' ? DiscordManualDeployDrawer : DiscordSetupGuideDrawer,
+        {
+          props: { ...props, ...(mode === 'manual' ? {} : { deploymentMode: mode }) },
+          attachTo: document.body,
+          global: { stubs: { teleport: true } },
+        },
+      )
+      try {
+        const help = wrapper.get<HTMLButtonElement>('[aria-label="隐私说明与 Discord 配置"]')
+        expect(help.element.parentElement?.textContent).toContain('确认保存成功。')
+        expect(wrapper.find('dialog').exists()).toBe(false)
+        await help.trigger('click')
+        await flushPromises()
+        expect(wrapper.get('dialog').attributes('open')).toBeDefined()
+        expect(wrapper.get('dialog').text()).toContain('本地副本和历史版本不会随 Discord')
+        expect(wrapper.get('dialog a').attributes('href')).toContain('/blob/main/PRIVACY.md')
+        await wrapper.get('[aria-label="关闭隐私说明"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.find('dialog').exists()).toBe(false)
+        expect(document.activeElement).toBe(help.element)
+        await help.trigger('click')
+        const detail = { handled: false }
+        window.dispatchEvent(new CustomEvent(SRL_BACK_REQUEST_EVENT, { detail }))
+        await flushPromises()
+        expect(detail.handled).toBe(true)
+        expect(wrapper.find('dialog').exists()).toBe(false)
+        expect(wrapper.emitted('close')).toBeUndefined()
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
   it('shows the D1 UUID column reference in the GitHub deploy guide', () => {
     const wrapper = mount(DiscordSetupGuideDrawer, {
       props: { ...props, deploymentMode: 'github' },

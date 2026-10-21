@@ -42,6 +42,14 @@ describe('reportFatalError', () => {
     expect(errorDialogText()).toContain('导出完整备份')
   })
 
+  it('数据库损坏提示保全原文件，不引导清除数据或把重开当作修复', () => {
+    reportFatalError('Android 数据库', new Error('SRL-DATABASE-CORRUPT: damaged database'))
+    expect(errorDialogText()).toContain('SRL-FATAL-DATABASE-CORRUPT')
+    expect(errorDialogText()).toContain('请勿清除应用数据或卸载')
+    expect(errorDialogText()).toContain('先保全应用数据')
+    expect(errorDialogText()).not.toContain('换回普通窗口')
+  })
+
   it('Vue 渲染故障的详情保留组件、版本和原始堆栈，帮助区分更新与业务错误', () => {
     const app = createApp({ name: 'FailingFeature', render: () => null })
     // This case concerns the error detail only; do not install window listeners.

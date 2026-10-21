@@ -27,6 +27,33 @@ function summary(
   }
 }
 
+it('does not build hidden-row search strings until there is a text query', async () => {
+  let hiddenTagReads = 0
+  const rows = Array.from({ length: 1000 }, (_, index) => {
+    const row = summary(`row-${index}`, `资源 ${index}`)
+    Object.defineProperty(row, 'tags', {
+      get: () => {
+        if (index >= 30) hiddenTagReads++
+        return index === 999 ? ['唯一标签'] : []
+      },
+    })
+    return row
+  })
+  const wrapper = mount(ResourcePicker, { props: { resources: rows, modelValue: [] } })
+  try {
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(30)
+    hiddenTagReads = 0
+    await wrapper.get('input[type="search"]').setValue(' ')
+    expect(hiddenTagReads).toBe(0)
+    await wrapper.get('input[type="search"]').setValue('唯一标签')
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(1)
+    expect(wrapper.get('[role="option"]').text()).toContain('资源 999')
+    expect(hiddenTagReads).toBeGreaterThan(0)
+  } finally {
+    wrapper.unmount()
+  }
+})
+
 describe('ResourcePicker', () => {
   it('combines words across name, tag and author instead of requiring one contiguous phrase', async () => {
     const wrapper = mount(ResourcePicker, {

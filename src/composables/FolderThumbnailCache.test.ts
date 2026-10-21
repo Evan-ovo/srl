@@ -5,6 +5,30 @@ import type { ResourceSummary } from '../types/Resource'
 const source = (id: string) => ({ id, contentHash: id, thumbnailAssetId: id }) as ResourceSummary
 afterEach(() => vi.restoreAllMocks())
 
+it('retains native addresses within the entry budget without creating or revoking object URLs', () => {
+  const create = vi.spyOn(URL, 'createObjectURL')
+  const revoke = vi.spyOn(URL, 'revokeObjectURL')
+  const cache = createFolderThumbnailCache(1, 4)
+  const first = cache.acquire(source('a'), 'https://native/a')!
+  first.release()
+  const reused = cache.acquire(source('a'))!
+  expect(reused.url).toBe(first.url)
+  expect(reused.native).toBe(true)
+  reused.release()
+  const next = cache.acquire(source('b'), 'https://native/b')!
+  expect(cache.acquire(source('a'))).toBeUndefined()
+  cache.invalidate(source('b'), 'https://native/old')
+  const current = cache.acquire(source('b'))!
+  expect(current.url).toBe(next.url)
+  current.release()
+  cache.invalidate(source('b'), next.url)
+  expect(cache.acquire(source('b'))).toBeUndefined()
+  next.release()
+  cache.clear()
+  expect(create).not.toHaveBeenCalled()
+  expect(revoke).not.toHaveBeenCalled()
+})
+
 it('bounds retained bytes and entries, without revoking a displayed image', () => {
   const revoke = vi.spyOn(URL, 'revokeObjectURL')
   const cache = createFolderThumbnailCache(2, 4)

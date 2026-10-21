@@ -4,6 +4,8 @@ import { DISCORD_RESOURCE_SCHEMA } from '../../workers/discord-source-bridge/src
 export const DISCORD_BRIDGE_PUBLIC_REPOSITORY_URL =
   'https://github.com/jixiangruyi117/SRL-Discord-Bridge'
 
+export const DISCORD_BRIDGE_PRIVACY_POLICY_URL = `${DISCORD_BRIDGE_PUBLIC_REPOSITORY_URL}/blob/main/PRIVACY.md`
+
 export const DISCORD_BRIDGE_DEPLOY_URL = `https://deploy.workers.cloudflare.com/?url=${encodeURIComponent(
   DISCORD_BRIDGE_PUBLIC_REPOSITORY_URL,
 )}`

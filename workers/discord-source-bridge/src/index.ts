@@ -19,7 +19,6 @@ import {
   interactionUserId,
   pairDiscordUser,
 } from './DiscordInbox'
-import { discordJson, handleSavedMessageCheck, handleSourceRead } from './DiscordSourceReader'
 import {
   cleanupResources,
   createResourceJobs,
@@ -28,6 +27,7 @@ import {
 } from './DiscordResources'
 import {
   CORS_HEADERS,
+  discordJson,
   authorizedSetup,
   bytesToBase64Url,
   escapeHtml,
@@ -888,14 +888,6 @@ export default {
       }
     }
 
-    if (url.pathname === '/source/read' && request.method === 'POST') {
-      return handleSourceRead(request, env)
-    }
-
-    if (url.pathname === '/source/messages/check' && request.method === 'POST') {
-      return handleSavedMessageCheck(request, env)
-    }
-
     if (url.pathname === '/interactions' && request.method === 'POST') {
       return handleInteraction(request, env, ctx)
     }
@@ -959,7 +951,7 @@ export default {
 
     if (url.pathname === '/' && request.method === 'GET') {
       return html(
-        `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SRL Discord Bridge</title></head><body style="font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 20px;color:#173641"><h1>SRL Discord Bridge</h1><p>这个 Worker 只负责 Discord 消息的短期 handoff 与用户主动发起的只读来源检查，不是资源永久仓库。</p><p>Interactions Endpoint URL：</p><code style="overflow-wrap:anywhere">${escapeHtml(`${url.origin}/interactions`)}</code></body></html>`,
+        `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SRL Discord Bridge</title></head><body style="font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 20px;color:#173641"><h1>SRL Discord Bridge</h1><p>这个 Worker 只负责用户主动选择的 Discord 帖子与资源的临时传输，不是资源永久仓库。</p><p>Interactions Endpoint URL：</p><code style="overflow-wrap:anywhere">${escapeHtml(`${url.origin}/interactions`)}</code></body></html>`,
       )
     }
 

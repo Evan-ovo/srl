@@ -35,7 +35,15 @@ const runtime = vi.hoisted(() => ({
   contents: vi.fn(),
   download: vi.fn(),
   saveFile: vi.fn(),
+  shareStream: vi.fn(),
   discard: vi.fn(),
+  resourceList: vi.fn(),
+  resourceGet: vi.fn(),
+  unlocked: false,
+  password: vi.fn(),
+  grantRead: vi.fn(),
+  grantSave: vi.fn(),
+  plainCopies: vi.fn(),
 }))
 vi.mock('@capacitor/core', () => ({
   Capacitor: {
@@ -45,7 +53,7 @@ vi.mock('@capacitor/core', () => ({
   registerPlugin: () => ({}),
 }))
 vi.mock('../core/AppContainer', () => ({
-  resourceService: {},
+  resourceService: { listResourceListSummaries: runtime.resourceList, get: runtime.resourceGet },
   cloudBackupService: {
     getWebBackupState: () => runtime.webState,
     subscribeWebBackup: (listener: () => void) => {
@@ -76,10 +84,18 @@ vi.mock('./UseConfirmDialog', () => ({ confirmAction: runtime.confirm }))
 vi.mock('../utils/LibraryFormatting', async (load) => ({
   ...(await load<typeof import('../utils/LibraryFormatting')>()),
   downloadBlob: runtime.saveFile,
+  shareNativeStream: runtime.shareStream,
 }))
 vi.mock('../services/PersonalResourceBackup', () => ({
   clearPlainSecretExportGrant: async () => undefined,
+  readPlainSecretExportGrant: runtime.grantRead,
+  savePlainSecretExportGrant: runtime.grantSave,
+  plaintextSecretCopies: runtime.plainCopies,
 }))
+vi.mock('../services/SecretResourceService', () => ({
+  secretResourceService: { isUnlocked: () => runtime.unlocked },
+}))
+vi.mock('./UseSecretPasswordPrompt', () => ({ requestSecretPassword: runtime.password }))
 
 const item = {
   id: 'backup-1',
@@ -119,6 +135,9 @@ beforeEach(() => {
     resources: [],
     portableScopeIds: ['extra.chatReader', 'extra.assistantData', 'extra.credentials'],
   })
+  runtime.resourceList.mockResolvedValue([])
+  runtime.unlocked = false
+  runtime.grantRead.mockResolvedValue('')
 })
 afterEach(() => noticeCenter.dismiss('cloud-restore:pending-test'))
 
@@ -137,6 +156,65 @@ function mountCenter(resources = ref<ResourceSummary[]>([])) {
   center.github.value.repository = 'private-backup'
   return { center, wrapper, emit, resources }
 }
+
+it('saves all-selected backup settings without a password grant when every key card is explicitly unencrypted', async () => {
+  const plain = {
+    ...resource('plain'),
+    type: 'secret',
+    metadata: { secretProtection: 'none' },
+  } as ResourceSummary
+  runtime.resourceList.mockResolvedValue([plain])
+  const { center, wrapper } = mountCenter(ref([plain]))
+  center.setCloudScopeModel({
+    resourceIds: [plain.id],
+    scopeIds: ['resource.secret', 'extra.plaintextSecretCopy'],
+  })
+  await center.saveConfig()
+  expect(runtime.confirm).not.toHaveBeenCalled()
+  expect(runtime.save).toHaveBeenCalledOnce()
+  expect(center.message.value).toContain('配置已保存')
+  wrapper.unmount()
+})
+it('does not request a password for an encrypted card outside the selected backup', async () => {
+  const plain = {
+    ...resource('plain'),
+    type: 'secret',
+    metadata: { secretProtection: 'none' },
+  } as ResourceSummary
+  const encrypted = { ...resource('other'), type: 'secret' } as ResourceSummary
+  runtime.resourceList.mockResolvedValue([plain, encrypted])
+  const { center, wrapper } = mountCenter(ref([plain, encrypted]))
+  center.setCloudScopeModel({
+    resourceIds: [plain.id],
+    scopeIds: ['resource.secret', 'extra.plaintextSecretCopy'],
+  })
+  await center.saveConfig()
+  expect(runtime.confirm).not.toHaveBeenCalled()
+  expect(runtime.save).toHaveBeenCalledOnce()
+  expect(runtime.resourceList).toHaveBeenCalledWith({ types: ['secret'], ids: [plain.id] })
+  wrapper.unmount()
+})
+it('reuses the verified unified session when authorizing plaintext copies for a new cloud target', async () => {
+  const encrypted = { ...resource('encrypted'), type: 'secret' } as ResourceSummary
+  runtime.unlocked = true
+  runtime.resourceList.mockResolvedValue([encrypted])
+  runtime.resourceGet.mockResolvedValue(encrypted)
+  runtime.confirm.mockResolvedValue(true)
+  const { center, wrapper } = mountCenter(ref([encrypted]))
+  center.setCloudScopeModel({
+    resourceIds: [encrypted.id],
+    scopeIds: ['resource.secret', 'extra.plaintextSecretCopy'],
+  })
+  await center.saveConfig()
+  expect(runtime.password).not.toHaveBeenCalled()
+  expect(runtime.plainCopies).toHaveBeenCalledWith([encrypted], undefined)
+  expect(runtime.grantSave).toHaveBeenCalledWith(
+    expect.objectContaining({ repository: 'private-backup' }),
+    undefined,
+  )
+  expect(runtime.save).toHaveBeenCalledOnce()
+  wrapper.unmount()
+})
 
 it('publishes actual cloud download item/byte/ZIP progress and only then hands it to saving', async () => {
   let resolve!: (blob: Blob) => void
@@ -179,6 +257,64 @@ it('publishes actual cloud download item/byte/ZIP progress and only then hands i
   expect(taskCenter.list().find((task) => task.operationId === id)?.status).toBe('completed')
   taskCenter.dismiss(id)
   wrapper.unmount()
+})
+
+it('streams native structured downloads into the same task without materializing or saving a ZIP Blob', async () => {
+  let finishShare!: () => void
+  const received: Uint8Array[] = []
+  runtime.shareStream.mockImplementationOnce(
+    async (
+      source: ReadableStream<Uint8Array>,
+      _name: string,
+      options: { operationId: string; onHandoff: () => void },
+    ) => {
+      const reader = source.getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        received.push(value)
+      }
+      options.onHandoff()
+      await new Promise<void>((resolve) => {
+        finishShare = resolve
+      })
+    },
+  )
+  runtime.download.mockImplementationOnce(
+    async (_item, _config, _secret, options: CloudDownloadOptions) => {
+      const writer = await options.writerFactory!('cloud.zip')
+      await writer.write(new Uint8Array([1, 2, 3]))
+      await writer.commit()
+      return new Blob() // Existing streaming archive contract returns an empty placeholder.
+    },
+  )
+  const { center, wrapper } = mountCenter()
+  const pending = center.download(item)
+  await vi.waitFor(() => expect(finishShare).toBeTypeOf('function'))
+  expect(received.map((bytes) => [...bytes])).toEqual([[1, 2, 3]])
+  expect(runtime.saveFile).not.toHaveBeenCalled()
+  expect(taskCenter.active()).toHaveLength(1)
+  expect(taskCenter.active()[0]?.cancelable).toBe(false)
+  finishShare()
+  await pending
+  expect(taskCenter.list().filter((task) => task.status === 'completed')).toHaveLength(1)
+  wrapper.unmount()
+})
+
+it('keeps the existing native save path when TransformStream is unavailable', async () => {
+  vi.stubGlobal('TransformStream', undefined)
+  const archive = new Blob(['legacy WebView zip'])
+  runtime.download.mockResolvedValueOnce(archive)
+  const { center, wrapper } = mountCenter()
+  try {
+    await center.download(item)
+    expect(runtime.download.mock.calls[0]![3]?.writerFactory).toBeUndefined()
+    expect(runtime.shareStream).not.toHaveBeenCalled()
+    expect(runtime.saveFile).toHaveBeenCalledExactlyOnceWith(archive, item.objectKey)
+  } finally {
+    wrapper.unmount()
+    vi.unstubAllGlobals()
+  }
 })
 
 it.each([true, false])(

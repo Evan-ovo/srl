@@ -47,6 +47,41 @@ const categories: Category[] = [
 ]
 
 describe('ExportService', () => {
+  it.each([false, true])(
+    'opens a native original reference only for an explicit URI-aware read (history=%s)',
+    async (historical) => {
+      const row = createResource('native', null, 'bytes')
+      const original = new Blob(['bytes'])
+      const nativeFile = vi.fn(async () => new Blob())
+      const get = vi.fn(async () => ({ ...row, originalBlob: original }))
+      const getReadSource = vi.fn(async () => ({
+        ...toResourceListSummary(row),
+        originalSource: { size: 5, nativeFile },
+      }))
+      const service = {
+        listResourceListSummaries: vi.fn(async (filter) =>
+          filter?.types ? [] : [toResourceListSummary(row)],
+        ),
+        listVersionSummariesForResources: vi.fn(async () => []),
+        getReadSource,
+        get,
+        getVersion: get,
+      } as unknown as ResourceService
+      const source = await createResourceArchiveSource(service, [row.id])
+      const referenced = await source.read(row, historical, true)
+      expect(referenced.fileSize).toBe(5)
+      expect(referenced.originalBlob.size).toBe(0)
+      expect(nativeFile).toHaveBeenCalledOnce()
+      expect(getReadSource).toHaveBeenCalledWith(row.id, historical)
+      expect(get).not.toHaveBeenCalled()
+      await source.read(row, historical)
+      expect(get).toHaveBeenCalledOnce()
+      getReadSource.mockResolvedValueOnce({ ...row, originalSource: original } as never)
+      expect((await source.read(row, historical, true)).originalBlob).toBe(original)
+      expect(get).toHaveBeenCalledOnce()
+    },
+  )
+
   it('plans selected chat companions and persona avatars without a full catalogue or originals', async () => {
     const chat = {
       ...createResource('chat', null, 'chat'),

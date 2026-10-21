@@ -98,10 +98,7 @@ export const cloudBackupService = new CloudBackupService(
       : {}),
     ...(selection.aiTaggingState
       ? {
-          aiTaggingState: {
-            draft: aiTaggingDraftService.loadDraft(),
-            undo: aiTaggingDraftService.loadUndo(),
-          },
+          aiTaggingState: aiTaggingDraftService.exportPortableState(),
         }
       : {}),
     ...(selection.credentials
@@ -144,8 +141,7 @@ export const cloudBackupService = new CloudBackupService(
     if (data.credentials) await importPortableCredentialBundle(data.credentials)
     if (data.resourceGalleryCategories)
       await resourceGalleryService.importCategories(data.resourceGalleryCategories)
-    if (data.aiTaggingState?.draft) aiTaggingDraftService.saveDraft(data.aiTaggingState.draft)
-    if (data.aiTaggingState?.undo) aiTaggingDraftService.saveUndo(data.aiTaggingState.undo)
+    if (data.aiTaggingState) aiTaggingDraftService.importPortableState(data.aiTaggingState)
     if (data.externalApps) await externalAppService.importPortableState(data.externalApps)
     if (data.chatReader) await externalAppService.importReaderData(data.chatReader)
     if (data.assistantData) await importPortableAssistantData(data.assistantData)

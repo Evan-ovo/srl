@@ -77,6 +77,15 @@ export async function cloneBlob(value: unknown): Promise<Blob | undefined> {
   // File in a new Blob is not sufficient: WebKit can retain the source file
   // backing during structured cloning.
   if (typeof File !== 'undefined' && rawValue instanceof File) {
+    if (rawValue.size > 1024 * 1024) {
+      const parts: Blob[] = []
+      // Detach file backing for WebKit without a whole-file ArrayBuffer/copy.
+      for (let offset = 0; offset < rawValue.size; offset += 1024 * 1024) {
+        const bytes = await rawValue.slice(offset, offset + 1024 * 1024).arrayBuffer()
+        parts.push(new Blob([bytes]))
+      }
+      return new Blob(parts, { type: rawValue.type })
+    }
     const bytes = await rawValue.arrayBuffer()
     return new Blob([bytes], { type: rawValue.type })
   }
@@ -124,6 +133,9 @@ export async function materializeResourceForIndexedDb(
 ): Promise<StoredResource> {
   if (isEncryptedResource(resource) || isNativeBackedResource(resource)) return resource
   if (!(resource.originalBlob instanceof Blob)) return resource
+  // Large ArrayBuffers exceed browser IPC/IDB record limits and duplicate the full file in JS.
+  // The decoder already accepts both forms; keep existing small-record compatibility.
+  if (resource.originalBlob.size > 1024 * 1024) return resource
   return {
     ...resource,
     originalBlob: await resource.originalBlob.arrayBuffer(),

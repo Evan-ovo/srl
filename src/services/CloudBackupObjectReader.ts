@@ -2,6 +2,7 @@ import { createCloudReadBudget } from './CloudBackupHttp'
 import { hashCloudBlob } from './CloudArchiveCodec'
 import type { GitHubBundleManifest } from './GitHubBackupBundle'
 import type { CloudBackupTransportContext } from './CloudBackupTransportContext'
+import { withAbort } from '../utils/Abortable'
 
 export interface CloudReadPart {
   key: string
@@ -43,7 +44,7 @@ export function createCloudObjectReader(
       return { promise: Promise.resolve(cached.blob), release: () => undefined }
     let entry = inFlight.get(part.key)
     if (!entry) {
-      cached = undefined
+      // A tiny unique tail must not evict the large verified chunk shared by later originals.
       const controller = new AbortController()
       const abort = () => controller.abort(context.signal?.reason)
       if (context.signal?.aborted) abort()
@@ -90,7 +91,12 @@ export function createCloudObjectReader(
         if (held.users) return
         if (inFlight.get(part.key) === held) inFlight.delete(part.key)
         if (!held.settled) held.controller.abort(new DOMException('资源读取已结束', 'AbortError'))
-        if (!context.signal?.aborted && held.blob && part.size <= byteBudget)
+        if (
+          !context.signal?.aborted &&
+          held.blob &&
+          part.size <= byteBudget &&
+          (!cached || part.size >= cached.blob.size)
+        )
           cached = { key: part.key, blob: held.blob }
       },
     }
@@ -100,6 +106,12 @@ export function createCloudObjectReader(
     // Resolve all locations before reserving bytes; a slow container cannot starve its head.
     const parts = await resolve(object)
     context.signal?.throwIfAborted()
+    // Location/state validation stays first. Native CAS reuse verifies the complete original SHA.
+    const local = context.readLocalObject
+      ? await withAbort(context.readLocalObject(object), context.signal)
+      : undefined
+    context.signal?.throwIfAborted()
+    if (local) return local
     const leases = new Map<number, ReturnType<typeof acquire>>()
     let next = 0
     let firstFailure: unknown

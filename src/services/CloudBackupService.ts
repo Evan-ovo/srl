@@ -1052,6 +1052,7 @@ export class CloudBackupService extends CloudBackupTransport {
                 onReceivedBytes: transfer.onReceivedBytes,
                 onProgress: (state) => report({ ...state, phase: 'archive' }),
                 onReadFailures: options.onReadFailures,
+                writerFactory: options.writerFactory,
               },
             )
             report({}, true)

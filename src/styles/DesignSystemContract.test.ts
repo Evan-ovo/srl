@@ -6,6 +6,10 @@ import { parse } from '@vue/compiler-sfc'
 const foundation = readFileSync(new URL('./Foundation.css', import.meta.url), 'utf8')
 const glass = readFileSync(new URL('./GlassRefinement.css', import.meta.url), 'utf8')
 const refinement = readFileSync(new URL('./DesignSystemRefinement.css', import.meta.url), 'utf8')
+const iosSurface = readFileSync(
+  new URL('./IOSStandaloneSafeAreaSurface.css', import.meta.url),
+  'utf8',
+)
 const layout = readFileSync(new URL('./LayoutAndResponsive.css', import.meta.url), 'utf8')
 const stylesEntry = readFileSync(new URL('../Styles.css', import.meta.url), 'utf8')
 const header = readFileSync(new URL('./FeatureAppHeader.css', import.meta.url), 'utf8')
@@ -107,6 +111,16 @@ describe('mobile design system contract', () => {
     expect(foundation.match(/--color-accent:/g)).toHaveLength(2)
     expect(foundation).not.toContain('--color-canvas: #161c19')
     expect(foundation).not.toContain('--color-accent: #8dbda9')
+  })
+
+  it('paints a single page gradient on the viewport canvas, including its scrollbar gutter', () => {
+    expect(refinement).toMatch(/html:root\s*\{\s*background: var\(\s*--page-background,/)
+    expect(refinement).toMatch(/body\s*\{\s*background: transparent;/)
+    expect(refinement.match(/--page-background,/g)).toHaveLength(1)
+    expect(iosSurface).toContain('background: var(--page-background, var(--color-canvas))')
+    expect(iosSurface).toMatch(
+      /body,\s*:root\[data-ios-standalone='true'\] #app\s*\{\s*background: transparent;/,
+    )
   })
 
   it('uses discrete font tiers without scaling the root font size', () => {

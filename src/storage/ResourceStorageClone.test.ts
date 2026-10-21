@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Resource } from '../types/Resource'
 import {
   cloneBlob,
@@ -8,6 +8,22 @@ import {
 } from './ResourceStorageClone'
 
 describe('cloneBlob', () => {
+  it('detaches large files in bounded reads and keeps large originals out of ArrayBuffer records', async () => {
+    const original = new File([new Uint8Array(3 * 1024 * 1024 + 19)], 'video.mp4', {
+      type: 'video/mp4',
+    })
+    const read = vi.spyOn(original, 'arrayBuffer').mockRejectedValue(new Error('no whole file'))
+    const slice = vi.spyOn(original, 'slice')
+    const cloned = await cloneBlob(original)
+    expect(cloned!.size).toBe(original.size)
+    expect(cloned!.type).toBe(original.type)
+    expect(slice.mock.calls).toHaveLength(4)
+    expect(slice.mock.calls.every(([start = 0, end = 0]) => end - start <= 1024 * 1024)).toBe(true)
+    expect(read).not.toHaveBeenCalled()
+    const stored = await materializeResourceForIndexedDb({ originalBlob: cloned } as Resource)
+    expect((stored as Resource).originalBlob).toBe(cloned)
+    expect(new Uint8Array(await cloned!.slice(-19).arrayBuffer())).toEqual(new Uint8Array(19))
+  })
   it('materializes File bytes as a detached Blob for WebKit IndexedDB persistence', async () => {
     const file = new File(['preset'], 'preset.json', { type: 'application/json' })
     const cloned = await cloneBlob(file)

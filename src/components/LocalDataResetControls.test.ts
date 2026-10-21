@@ -76,6 +76,14 @@ describe('factory reset settings control', () => {
     expect(state.activeDialog.value).toBeUndefined()
   })
   it('renders the actual manual entry dialog without authorizing a pasted incomplete value', async () => {
+    // jsdom does not implement the native dialog close method used by the real UI.
+    const originalClose = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, 'close')
+    Object.defineProperty(HTMLDialogElement.prototype, 'close', {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.removeAttribute('open')
+      },
+    })
     const controls = mount(LocalDataResetControls),
       dialog = mount(ConfirmDialog, { attachTo: document.body })
     await controls.get('button').trigger('click')
@@ -89,5 +97,7 @@ describe('factory reset settings control', () => {
     controls.unmount()
     dialog.unmount()
     await flushPromises()
+    if (originalClose) Object.defineProperty(HTMLDialogElement.prototype, 'close', originalClose)
+    else Reflect.deleteProperty(HTMLDialogElement.prototype, 'close')
   })
 })

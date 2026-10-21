@@ -140,10 +140,10 @@ onMounted(() => {
 <style scoped>
 .chat-reader-preview {
   position: fixed;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top, 0px) 0 auto;
   width: 100vw;
   max-width: none;
-  height: 100dvh;
+  height: var(--app-viewport-height, 100dvh);
   max-height: none;
   margin: 0;
   padding: 0;
@@ -198,7 +198,7 @@ svg {
   bottom: calc(80px + var(--safe-bottom, 0px));
   right: calc(18px + var(--safe-right, 0px));
   width: min(340px, calc(100% - 36px));
-  max-height: calc(100dvh - 120px);
+  max-height: calc(var(--app-viewport-height, 100dvh) - 120px);
   overflow-y: auto;
   padding: 20px;
   border-radius: 20px;

@@ -330,8 +330,9 @@
   text-decoration: none;
 }
 
-@media (max-width: 640px) {
-  .resource-source-advanced-overlay {
+@media (max-width: 53.75rem) {
+  :root body .resource-source-advanced-overlay {
+    height: var(--layout-viewport-height, 100lvh);
     padding: 0;
     place-items: stretch;
   }
@@ -340,9 +341,9 @@
     width: 100%;
     max-height: var(--app-viewport-height);
     min-height: var(--app-viewport-height);
-    border: 1px solid var(--dialog-border, var(--glass-border));
-    border-radius: var(--dialog-radius, var(--glass-radius-panel));
-    padding: max(22px, var(--safe-top)) max(18px, var(--safe-right)) max(34px, var(--safe-bottom))
+    border: 0;
+    border-radius: 0;
+    padding: max(22px, var(--safe-top)) max(18px, var(--safe-right)) max(18px, var(--safe-bottom))
       max(18px, var(--safe-left));
   }
 
@@ -363,4 +364,8 @@
     display: grid;
     grid-template-columns: 1fr;
   }
+}
+
+:root[data-ios-keyboard-open='true'] .resource-source-advanced-overlay {
+  background: var(--color-canvas);
 }

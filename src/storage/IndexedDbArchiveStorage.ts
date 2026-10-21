@@ -26,11 +26,13 @@ import { materializeResourceForIndexedDb } from './ResourceStorageClone'
 import { IndexedDbAssetStore } from './IndexedDbAssetStore'
 import {
   linkNativeResourceObjects,
+  importNativeResourceObject,
   releaseReplacedNativeObjects,
   type NativeObjectReplacement,
 } from './NativeResourceFileMirror'
 import { isAndroidNativeAppDatabaseActive } from './AndroidNativeDexieCore'
 import { isEncodedBlobValue } from './AndroidAppDatabaseMigration'
+import { nativeFileSize } from '../core/NativeFileSource'
 import { readResourceMetadataBatch } from './ResourceReadSource'
 
 function toBackupRecordSummary(record: BackupRecord): BackupRecordSummary {
@@ -82,6 +84,15 @@ export async function listBackupRecordSummaries(
 
 const RESTORE_INLINE_ORIGINAL_LIMIT = 1024 * 1024
 
+function needsStoredBlobDetach(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const agent = navigator.userAgent ?? ''
+  // WebKit loses re-stored IDB Blob backing after commit. Chromium instead
+  // fails large atomic commits when the compatibility copy is performed inside them.
+  // CriOS/EdgiOS intentionally retain this compatibility path.
+  return /AppleWebKit\//iu.test(agent) && !/Chrome\/|Chromium\/|Edg\/|OPR\//iu.test(agent)
+}
+
 async function detachStoredBlob(
   blob: Blob,
   onProgress?: (transferredBytes: number, totalBytes: number) => void,
@@ -99,15 +110,14 @@ async function detachStoredBlob(
       detached = await response.blob()
       onProgress?.(blob.size, blob.size)
     } else {
-      const chunks: ArrayBuffer[] = []
+      const chunks: Blob[] = []
       let transferredBytes = 0
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
         if (!value) continue
-        const chunk = new ArrayBuffer(value.byteLength)
-        new Uint8Array(chunk).set(value)
-        chunks.push(chunk)
+        // Keep detached Blob parts rather than an entire original's ArrayBuffers in JS.
+        chunks.push(new Blob([value]))
         transferredBytes += value.byteLength
         onProgress?.(transferredBytes, blob.size)
       }
@@ -232,7 +242,6 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
           listSummary: this.vault ? await this.vault.encodeResourceSummary(light) : light,
         }
       },
-      undefined,
       replace,
       onProgress,
       checkpointId,
@@ -251,7 +260,6 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
     if (!this.canRestoreNative()) {
       throw new Error('资源库保险箱开启时不能保存 Android 原生明文引用')
     }
-    let replacements: NativeObjectReplacement[] = []
     await this.restoreStaged(
       categories,
       resources,
@@ -263,27 +271,35 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
           listSummary: toNativeListSummary(record),
         }
       },
-      () =>
-        linkNativeResourceObjects(
-          [
-            ...resources.map((resource) => nativeLinkRecord(resource, 'current')),
-            ...versions.map((resource) => nativeLinkRecord(resource, 'versions')),
-          ],
-          (records) => {
-            replacements = records
-          },
-        ),
       false,
       onProgress,
     )
-    // Native links are prepared before the database transaction. GC belongs after its commit.
-    await releaseReplacedNativeObjects(replacements).catch(() => undefined)
   }
 
   private async stageOriginal(record: StagedArchiveRecord): Promise<StagedArchiveRecord> {
     const resource = record.resource
     if (isEncryptedResource(resource) || isNativeBackedResource(resource)) return record
     const original = resource.originalBlob as Blob | ArrayBuffer
+    if (
+      original instanceof Blob &&
+      nativeFileSize(original) > RESTORE_INLINE_ORIGINAL_LIMIT &&
+      this.canRestoreNative() &&
+      isAndroidNativeAppDatabaseActive() &&
+      (await importNativeResourceObject(resource))
+    ) {
+      const { originalBlob: _originalBlob, ...metadata } = resource
+      return {
+        ...record,
+        resource: {
+          ...metadata,
+          nativeOriginal: {
+            version: 1,
+            contentHash: resource.contentHash,
+            size: resource.fileSize,
+          },
+        } as NativeBackedResourceRecord,
+      }
+    }
     if (!(original instanceof Blob) || original.size > RESTORE_INLINE_ORIGINAL_LIMIT) return record
     // Reuse ordinary byte-backed resource storage for small bodies, before the commit transaction.
     return { ...record, resource: await materializeResourceForIndexedDb(resource) }
@@ -294,7 +310,6 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
     resources: T[],
     versions: T[],
     prepare: (resource: T) => Promise<StagedArchiveRecord>,
-    beforeCommit?: () => Promise<unknown>,
     replace = false,
     onProgress?: (progress: ArchiveRestoreProgress) => void,
     checkpointId?: string,
@@ -304,8 +319,10 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
       ? await Promise.all(categories.map((category) => this.vault!.encodeCategory(category)))
       : categories
     const jobId = checkpointId ? `commit:${checkpointId}` : crypto.randomUUID()
+    const nativeLinks: Parameters<typeof linkNativeResourceObjects>[0] = []
+    let replacements: NativeObjectReplacement[] = []
     try {
-      // Small byte-backed originals avoid the local Blob loader; large originals retain its established path.
+      // Plain Android originals use the existing CAS; other runtimes keep Blob staging.
       const total = resources.length + versions.length
       const totalBytes = [...resources, ...versions].reduce(
         (sum, resource) => sum + Math.max(0, resource.fileSize),
@@ -339,8 +356,10 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
           ) {
             throw new Error('恢复检查点与当前计划不一致，请重新预检')
           }
-          if (!previous?.record || previous.path !== path) {
+          let stagedRecord = previous?.record
+          if (!stagedRecord || previous?.path !== path) {
             const record = await this.stageOriginal(previous?.record ?? (await prepare(planned)))
+            stagedRecord = record
             await this.database.restoreStaging.put({
               jobId,
               path,
@@ -350,6 +369,8 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
               record,
             })
           }
+          if (stagedRecord && isNativeBackedResource(stagedRecord.resource))
+            nativeLinks.push(nativeLinkRecord(stagedRecord.resource, scope))
           prepared += 1
           onProgress?.({
             phase: 'prepare',
@@ -359,7 +380,10 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
           })
         }
       }
-      await beforeCommit?.()
+      if (nativeLinks.length)
+        await linkNativeResourceObjects(nativeLinks, (records) => {
+          replacements = records
+        })
       await this.database.transaction(
         'rw',
         [
@@ -383,7 +407,7 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
             await this.database.resourceVersionSummaries.clear()
           }
           if (storedCategories.length) await this.database.categories.bulkPut(storedCategories)
-          // Small originals already use ordinary byte storage; larger Blob backing keeps its compatibility copy.
+          // Reuse verified persisted originals; copying IDB Blobs during this transaction can invalidate them.
           let committed = 0
           let committedBytes = 0
           for (const [scope, records] of [
@@ -413,6 +437,7 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
               const record = staged?.record
               if (!record) throw new Error('恢复暂存记录缺失，已取消索引提交')
               if (
+                needsStoredBlobDetach() &&
                 !isEncryptedResource(record.resource) &&
                 !isNativeBackedResource(record.resource) &&
                 record.resource.originalBlob instanceof Blob
@@ -464,6 +489,8 @@ export class IndexedDbArchiveStorage implements ArchiveStorageAdapter {
             })
         },
       )
+      // Keep the old objects until the existing restore transaction has committed.
+      await releaseReplacedNativeObjects(replacements).catch(() => undefined)
     } catch (error) {
       if (
         error &&

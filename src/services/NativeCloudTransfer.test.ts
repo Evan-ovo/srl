@@ -1,6 +1,8 @@
 /** @vitest-environment jsdom */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { taskCenter } from '../core/TaskCenter'
+import * as nativeFiles from '../core/NativeFileSource'
+import * as nativeMirror from '../storage/NativeResourceFileMirror'
 
 const transfer = vi.hoisted(() => ({
   webDavRequest: vi.fn(),
@@ -45,9 +47,77 @@ import {
   readNativeCloudCredential,
   readNativeRestoredCardMetadata,
   restoreNativeStructuredObjects,
+  readVerifiedNativeCloudObject,
   saveNativeCloudCredential,
   uploadNativeStructuredSnapshot,
 } from './NativeCloudTransfer'
+
+describe('verified native cloud original reuse', () => {
+  beforeEach(() => vi.clearAllMocks())
+  it('reuses only the exact native size and complete SHA, preserving cancellation', async () => {
+    const blob = new Blob(['body']),
+      hash = 'a'.repeat(64),
+      controller = new AbortController()
+    transfer.probeLibraryObject.mockResolvedValue({ available: true, size: blob.size })
+    const read = vi.spyOn(nativeMirror, 'readNativeResourceObject').mockResolvedValue(blob)
+    const verify = vi.spyOn(nativeFiles, 'hashNativeFile').mockResolvedValue(hash)
+    try {
+      await expect(readVerifiedNativeCloudObject(hash, blob.size, controller.signal)).resolves.toBe(
+        blob,
+      )
+      expect(read).toHaveBeenCalledWith(
+        hash,
+        blob.size,
+        'application/octet-stream',
+        controller.signal,
+      )
+      expect(verify).toHaveBeenCalledWith(blob, controller.signal)
+      verify.mockResolvedValueOnce('b'.repeat(64))
+      await expect(readVerifiedNativeCloudObject(hash, blob.size)).resolves.toBeUndefined()
+    } finally {
+      read.mockRestore()
+      verify.mockRestore()
+    }
+  })
+  it('leaves missing, differently sized and old-APK objects on the remote path', async () => {
+    const read = vi.spyOn(nativeMirror, 'readNativeResourceObject')
+    try {
+      for (const probe of [
+        { available: false, size: 0 },
+        { available: true, size: 5 },
+      ]) {
+        transfer.probeLibraryObject.mockResolvedValueOnce(probe)
+        await expect(readVerifiedNativeCloudObject('a'.repeat(64), 4)).resolves.toBeUndefined()
+      }
+      transfer.probeLibraryObject.mockRejectedValueOnce({ code: 'UNIMPLEMENTED' })
+      await expect(readVerifiedNativeCloudObject('a'.repeat(64), 4)).resolves.toBeUndefined()
+      expect(read).not.toHaveBeenCalled()
+    } finally {
+      read.mockRestore()
+    }
+  })
+  it('rejects cancellation while waiting for a native probe and does not read late bytes', async () => {
+    const controller = new AbortController(),
+      read = vi.spyOn(nativeMirror, 'readNativeResourceObject')
+    let finish!: (value: { available: boolean; size: number }) => void
+    transfer.probeLibraryObject.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    try {
+      const pending = readVerifiedNativeCloudObject('a'.repeat(64), 4, controller.signal)
+      controller.abort()
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      finish({ available: true, size: 4 })
+      await Promise.resolve()
+      expect(read).not.toHaveBeenCalled()
+    } finally {
+      read.mockRestore()
+    }
+  })
+})
 
 describe('NativeCloudTransfer', () => {
   beforeEach(() => {

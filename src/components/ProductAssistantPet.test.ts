@@ -556,9 +556,9 @@ it('expands and collapses the same chat window without opening a second assistan
   await flushPromises()
   expect(document.querySelector('.assistant-pet-dialog')).toBe(dialog)
   expect(dialog.style.left).toBe('0px')
-  expect(dialog.style.top).toBe('0px')
+  expect(dialog.style.top).toBe('var(--visual-viewport-offset-top, 0px)')
   expect(dialog.style.width).toBe(`${innerWidth}px`)
-  expect(dialog.style.height).toBe(`${innerHeight}px`)
+  expect(dialog.style.height).toBe('var(--app-viewport-height, 100dvh)')
   expect(studio.attributes('data-compact')).toBe('false')
   expect(wrapper!.findComponent({ name: 'AppearanceStudioStub' }).vm).toBe(studio.vm)
 
@@ -582,6 +582,12 @@ it('opens the existing assistant chat expanded when the feature hub requests the
     expect(
       wrapper!.findComponent({ name: 'AppearanceStudioStub' }).attributes('data-compact'),
     ).toBe('false')
+    Array.from(dialog.querySelectorAll('button'))
+      .find((button) => button.textContent === '返回')!
+      .click()
+    await flushPromises()
+    expect(dialog.open).toBe(false)
+    expect(document.querySelector('.assistant-pet-dialog[open]')).toBeNull()
   } finally {
     wrapper!.unmount()
     wrapper = undefined
@@ -616,7 +622,7 @@ it('resizes with pointer deltas, bounds the window to the viewport and retains s
     document.querySelector<HTMLButtonElement>('[aria-label="调整快捷对话大小"]')!,
   )
   expect(dialog.element.style.width).toBe('300px')
-  expect(dialog.element.style.height).toBe('340px')
+  expect(dialog.element.style.getPropertyValue('--pet-dialog-height')).toBe('340px')
   const pointer = async (type: string, id: number, x: number, y: number) => {
     const event = new MouseEvent(type, { button: 0, clientX: x, clientY: y, bubbles: true })
     Object.defineProperty(event, 'pointerId', { value: id })
@@ -627,19 +633,20 @@ it('resizes with pointer deltas, bounds the window to the viewport and retains s
   await pointer('pointermove', 4, 460, 450)
   await pointer('pointerup', 4, 460, 450)
   expect(dialog.element.style.width).toBe('260px')
-  expect(dialog.element.style.height).toBe('290px')
+  expect(dialog.element.style.getPropertyValue('--pet-dialog-height')).toBe('290px')
   await dialog.trigger('keydown', { key: 'Escape' })
   pet.click()
   await flushPromises()
   expect(dialog.element.style.width).toBe('260px')
-  expect(dialog.element.style.height).toBe('290px')
+  expect(dialog.element.style.getPropertyValue('--pet-dialog-height')).toBe('290px')
   await pointer('pointerdown', 5, 0, 0)
   await pointer('pointermove', 5, 10000, 10000)
   expect(
     parseFloat(dialog.element.style.left) + parseFloat(dialog.element.style.width),
   ).toBeLessThanOrEqual(innerWidth - 8)
   expect(
-    parseFloat(dialog.element.style.top) + parseFloat(dialog.element.style.height),
+    parseFloat(dialog.element.style.getPropertyValue('--pet-dialog-top')) +
+      parseFloat(dialog.element.style.getPropertyValue('--pet-dialog-height')),
   ).toBeLessThanOrEqual(innerHeight - 8)
 })
 it('follows a dragged cat and limits enlargement to the free space beside it', async () => {
@@ -648,7 +655,7 @@ it('follows a dragged cat and limits enlargement to the free space beside it', a
   await flushPromises()
   const dialog = document.querySelector<HTMLDialogElement>('.assistant-pet-dialog')!
   expect(document.querySelector('.assistant-pet-look')).toBeNull()
-  const originalTop = dialog.style.top
+  const originalTop = dialog.style.getPropertyValue('--pet-dialog-top')
   vi.spyOn(pet, 'getBoundingClientRect').mockImplementation(
     () => new DOMRect(parseFloat(pet.style.left), parseFloat(pet.style.top), 88, 88),
   )
@@ -661,13 +668,13 @@ it('follows a dragged cat and limits enlargement to the free space beside it', a
     pet.dispatchEvent(event)
     await flushPromises()
   }
-  expect(dialog.style.top).not.toBe(originalTop)
+  expect(dialog.style.getPropertyValue('--pet-dialog-top')).not.toBe(originalTop)
   const handle = new DOMWrapper(
     document.querySelector<HTMLButtonElement>('[aria-label="调整快捷对话大小"]')!,
   )
   for (let index = 0; index < 60; index++) await handle.trigger('keydown', { key: 'ArrowDown' })
-  const top = parseFloat(dialog.style.top)
-  const bottom = top + parseFloat(dialog.style.height)
+  const top = parseFloat(dialog.style.getPropertyValue('--pet-dialog-top'))
+  const bottom = top + parseFloat(dialog.style.getPropertyValue('--pet-dialog-height'))
   const catTop = parseFloat(pet.style.top)
   expect(bottom <= catTop || top >= catTop + 88).toBe(true)
   expect(top).toBeGreaterThanOrEqual(8)

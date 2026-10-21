@@ -26,6 +26,77 @@ import org.junit.rules.TemporaryFolder;
 
 public class NativeCloudRestoreTransportTest {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
+
+    @Test public void cancellingIncrementalSharedDownloadDrainsWaitersWithoutInstallingLateOriginals() throws Exception {
+        File root = temporary.newFolder(); byte[] common=bytes("cancel-shared");
+        RestoreObject shared=object(common),a=object(bytes("a")),b=object(bytes("b"));
+        List<RestoreResource> resources=Arrays.asList(
+            resource(bytes("cancel-shareda"),new RestoreSegment(shared.hash,0,common.length),new RestoreSegment(a.hash,0,1)),
+            resource(bytes("cancel-sharedb"),new RestoreSegment(shared.hash,0,common.length),new RestoreSegment(b.hash,0,1)));
+        CountDownLatch started=new CountDownLatch(1),release=new CountDownLatch(1);
+        AtomicInteger cancellations=new AtomicInteger();ExecutorService owner=Executors.newSingleThreadExecutor();
+        Future<RestoreCounts> operation=owner.submit(()->restoreIncrementally(new File(root,"pending"),Arrays.asList(shared,a,b),resources,h->file(root,h),
+            ()->new CancellableDownloader(){
+                public void download(RestoreObject part,File target)throws Exception{
+                    if(part.hash.equals(shared.hash)){started.countDown();release.await();throw new java.io.InterruptedIOException("cancelled");}
+                    Files.write(target.toPath(),part.hash.equals(a.hash)?bytes("a"):bytes("b"));
+                }
+                public void cancel(){cancellations.incrementAndGet();release.countDown();}
+            },(done,total)->{},(hash,error)->{}));
+        try{
+            assertTrue(started.await(5,TimeUnit.SECONDS));long start=System.nanoTime();operation.cancel(true);owner.shutdownNow();
+            assertTrue("all shared waiters must drain",owner.awaitTermination(3,TimeUnit.SECONDS));
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start)<3000);assertTrue(cancellations.get()>0);
+            for(RestoreResource resource:resources)assertFalse(file(root,resource.hash).exists());
+        }finally{release.countDown();owner.shutdownNow();}
+    }
+
+    @Test public void incrementalResourcesDownloadSharedChunksOnceAndReleaseTheirJobCache() throws Exception {
+        File root = temporary.newFolder();
+        byte[] common = new byte[2 * 1024 * 1024 + 7]; new java.util.Random(61).nextBytes(common);
+        RestoreObject shared = object(common);
+        List<RestoreObject> objects = new java.util.ArrayList<>(); objects.add(shared);
+        List<RestoreResource> resources = new java.util.ArrayList<>();
+        Map<String, byte[]> bodies = new HashMap<>(); bodies.put(shared.hash, common);
+        for (int index = 0; index < 8; index++) {
+            byte[] tail = bytes("tail-" + index); RestoreObject part = object(tail);
+            objects.add(part); bodies.put(part.hash, tail);
+            byte[] original = new byte[common.length + tail.length];
+            System.arraycopy(common, 0, original, 0, common.length);
+            System.arraycopy(tail, 0, original, common.length, tail.length);
+            resources.add(resource(original, new RestoreSegment(shared.hash, 0, common.length), new RestoreSegment(part.hash, 0, tail.length)));
+        }
+        AtomicInteger reads = new AtomicInteger(), sharedReads = new AtomicInteger();
+        RestoreCounts result = restoreIncrementally(new File(root, "pending"), objects, resources, h -> file(root, h),
+            () -> (part, target) -> { reads.incrementAndGet(); if (part.hash.equals(shared.hash)) sharedReads.incrementAndGet(); Files.write(target.toPath(), bodies.get(part.hash)); },
+            (done, total) -> {}, (hash, error) -> {});
+        assertEquals(1, sharedReads.get()); assertEquals(9, reads.get());
+        assertEquals(9, result.downloaded); assertEquals(8, result.assembled); assertTrue(result.failures.isEmpty());
+        for (RestoreResource resource : resources) assertTrue(verifyFile(file(root, resource.hash), resource.hash, resource.size));
+        assertFalse(new File(root, "pending/shared-chunks").exists());
+    }
+
+    @Test public void incrementalSharedCacheIsReverifiedOnExplicitRetryAndDoesNotHideOtherFailures() throws Exception {
+        File root = temporary.newFolder(); byte[] common = bytes("shared-prefix");
+        RestoreObject shared = object(common), good = object(bytes("good")), bad = object(bytes("bad"));
+        List<RestoreObject> objects = Arrays.asList(shared, good, bad);
+        RestoreResource a = resource(bytes("shared-prefixgood"), new RestoreSegment(shared.hash,0,common.length),new RestoreSegment(good.hash,0,4));
+        RestoreResource b = resource(bytes("shared-prefixbad"), new RestoreSegment(shared.hash,0,common.length),new RestoreSegment(bad.hash,0,3));
+        AtomicInteger sharedReads = new AtomicInteger();
+        RestoreCounts first = restoreIncrementally(new File(root,"pending"), objects, Arrays.asList(a,b), h->file(root,h),
+            () -> (part,target) -> { if(part.hash.equals(bad.hash))throw new IOException("missing tail");if(part.hash.equals(shared.hash))sharedReads.incrementAndGet();Files.write(target.toPath(),part.hash.equals(shared.hash)?common:bytes("good")); },
+            (done,total)->{},(hash,error)->{});
+        assertEquals(1,first.assembled);assertEquals(1,first.failures.size());assertTrue(verifyFile(file(root,a.hash),a.hash,a.size));
+        File cached = new File(root,"pending/shared-chunks/"+shared.hash+".chunk.part");
+        assertTrue(cached.isFile());Files.write(cached.toPath(),new byte[common.length]);
+        File local = new File(root,"pending/"+b.hash+"/"+shared.hash+".chunk.part");
+        local.getParentFile().mkdirs();Files.write(local.toPath(),new byte[common.length]);
+        RestoreCounts second = restoreIncrementally(new File(root,"pending"),objects,Arrays.asList(a,b),h->file(root,h),
+            ()->(part,target)->{if(part.hash.equals(shared.hash))sharedReads.incrementAndGet();Files.write(target.toPath(),part.hash.equals(shared.hash)?common:part.hash.equals(bad.hash)?bytes("bad"):bytes("good"));},
+            (done,total)->{},(hash,error)->{});
+        assertTrue(second.failures.isEmpty());assertTrue(verifyFile(file(root,b.hash),b.hash,b.size));
+        assertEquals(2,sharedReads.get());assertFalse(cached.exists());
+    }
     private byte[] bytes(String text) { return text.getBytes(StandardCharsets.UTF_8); }
     private String hash(byte[] data) throws Exception { return hex(MessageDigest.getInstance("SHA-256").digest(data)); }
     private RestoreObject object(byte[] data) throws Exception { return new RestoreObject(hash(data), data.length, "https://example.invalid/object"); }

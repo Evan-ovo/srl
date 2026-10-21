@@ -1,5 +1,4 @@
-import { validSnowflake } from './DiscordSourceProtocol'
-import type { DiscordCaptureContext, DiscordInteraction } from './DiscordSourceProtocol'
+import type { DiscordInteraction } from './DiscordSourceProtocol'
 
 export const THREAD_CHANNEL_TYPES = new Set([10, 11, 12])
 
@@ -221,49 +220,6 @@ export function buildCapture(interaction: DiscordInteraction): Record<string, un
       : {}),
     ...(threadId && currentChannelName ? { title: currentChannelName } : {}),
     forumTags: readForumTags(channel),
-    embeds: Array.isArray(message.embeds)
-      ? message.embeds.filter((value) => Boolean(asRecord(value)))
-      : [],
-    attachments: normalizeAttachments(message.attachments),
-  }
-}
-
-export function buildCaptureFromMessage(
-  message: Record<string, unknown>,
-  context: DiscordCaptureContext,
-): Record<string, unknown> | undefined {
-  const messageId = asString(message.id)
-  if (!validSnowflake(messageId)) return undefined
-  const author = asRecord(message.author)
-  const authorId = asString(author?.id)
-  const authorName =
-    asString(author?.global_name) || asString(author?.username) || asString(message.author_name)
-  if (!validSnowflake(authorId) || !authorName) return undefined
-  const authorBot = author?.bot === true || Boolean(asString(message.webhook_id))
-  const guildPath = context.guildId ?? '@me'
-  const canonicalUrl = `https://discord.com/channels/${encodeURIComponent(guildPath)}/${encodeURIComponent(context.channelId)}/${encodeURIComponent(messageId)}`
-  const isStarter = messageId === context.starterMessageId
-  return {
-    ...(context.guildId ? { guildId: context.guildId } : {}),
-    ...(context.guildName ? { guildName: context.guildName } : {}),
-    channelId: context.channelId,
-    ...(context.channelName ? { channelName: context.channelName } : {}),
-    ...(context.threadId ? { threadId: context.threadId } : {}),
-    starterMessageId: context.starterMessageId,
-    isStarter,
-    messageId,
-    canonicalUrl,
-    authorId,
-    authorName,
-    authorBot,
-    ...(typeof message.pinned === 'boolean' ? { pinned: message.pinned } : {}),
-    content: typeof message.content === 'string' ? message.content : '',
-    timestamp: asString(message.timestamp) || new Date().toISOString(),
-    ...(asString(message.edited_timestamp)
-      ? { editedTimestamp: asString(message.edited_timestamp) }
-      : {}),
-    ...(isStarter && context.title ? { title: context.title } : {}),
-    forumTags: isStarter ? context.forumTags : [],
     embeds: Array.isArray(message.embeds)
       ? message.embeds.filter((value) => Boolean(asRecord(value)))
       : [],

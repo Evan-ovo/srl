@@ -321,7 +321,7 @@
 .discord-inbox-dialog {
   box-sizing: border-box;
   width: min(100%, 30rem);
-  max-height: min(80dvh, 42rem);
+  max-height: min(80dvh, calc(var(--visual-viewport-height, 100dvh) - 32px), 42rem);
   overflow: auto;
   padding: 16px;
 }
@@ -441,7 +441,7 @@
 
   .discord-inbox-dialog {
     width: 100%;
-    max-height: min(84dvh, 42rem);
+    max-height: min(84dvh, calc(var(--visual-viewport-height, 100dvh) - 32px), 42rem);
   }
 }
 .discord-inbox__post-icon {

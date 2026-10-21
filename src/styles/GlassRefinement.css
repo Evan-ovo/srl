@@ -86,7 +86,7 @@ summary:focus-visible {
 
 /* The settings workspace fills the app viewport; keep sheet chrome off its root. */
 .layout-settings-overlay {
-  background: var(--page-background, var(--color-surface-raised));
+  background: var(--editor-overlay-background, var(--page-background, var(--color-surface-raised)));
 }
 
 .layout-settings-page {

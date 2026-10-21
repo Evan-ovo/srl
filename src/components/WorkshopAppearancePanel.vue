@@ -2,6 +2,11 @@
 import { toRef, type ShallowUnwrapRef } from 'vue'
 import type { useFrontendWorkshopApp } from '../composables/UseFrontendWorkshopApp'
 import type { WorkshopDesignTokens } from '../utils/FrontendWorkshop'
+function submitOnEnter(event: KeyboardEvent, action: () => void): void {
+  if (event.isComposing) return
+  event.preventDefault()
+  action()
+}
 type PanelModel = Pick<
   ShallowUnwrapRef<ReturnType<typeof useFrontendWorkshopApp>>,
   | 'activeDesignPanel'
@@ -539,7 +544,7 @@ const toggleLockedAspect = toRef(input.model, 'toggleLockedAspect')
             v-model="imageUrlDraft"
             inputmode="url"
             placeholder="https://example.com/character.webp"
-            @keydown.enter.prevent="addImageUrl"
+            @keydown.enter="submitOnEnter($event, addImageUrl)"
           />
           <button type="button" @click="addImageUrl">添加</button>
         </div>
@@ -755,7 +760,7 @@ const toggleLockedAspect = toRef(input.model, 'toggleLockedAspect')
             v-model="customTextStyleName"
             maxlength="20"
             placeholder="样式名称，例如：小字"
-            @keydown.enter.prevent="addCustomTextStyle"
+            @keydown.enter="submitOnEnter($event, addCustomTextStyle)"
           />
           <button type="button" @click="addCustomTextStyle">添加</button>
         </div>

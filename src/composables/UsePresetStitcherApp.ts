@@ -314,10 +314,6 @@ export function usePresetStitcherApp(
 
   const editorSelection = ref({ start: 0, end: 0 })
 
-  const editorViewportHeight = ref(0)
-
-  const editorKeyboardOffset = ref(0)
-
   const mobileEditorOverlay = ref(false)
 
   const variableWriterOpen = ref(false)
@@ -427,10 +423,6 @@ export function usePresetStitcherApp(
     },
   })
 
-  let editorVisualViewport: VisualViewport | undefined
-
-  let editorViewportFrame: number | undefined
-
   let mobileEditorMedia: MediaQueryList | undefined
 
   let landscapeWorkbenchMedia: MediaQueryList | undefined
@@ -438,13 +430,6 @@ export function usePresetStitcherApp(
   const workbenchHistory = ref<WorkbenchSnapshot[]>([])
 
   const workbenchHistoryIndex = ref(-1)
-
-  const editorOverlayStyle = computed(() => ({
-    '--stitch-editor-viewport': editorViewportHeight.value
-      ? `${editorViewportHeight.value}px`
-      : 'var(--app-viewport-height)',
-    '--stitch-editor-keyboard-offset': `${editorKeyboardOffset.value}px`,
-  }))
 
   const fullWorkspaceActive = computed(
     () => step.value === 'workbench' && (readingMode.value || landscapeWorkbench.value),
@@ -720,20 +705,6 @@ export function usePresetStitcherApp(
     event.stopImmediatePropagation()
   }
 
-  function scheduleEditorViewportSync(): void {
-    if (editorViewportFrame !== undefined) return
-    editorViewportFrame = window.requestAnimationFrame(() => {
-      editorViewportFrame = undefined
-      const viewport = window.visualViewport
-      const height = viewport ? Math.round(viewport.height) : 0
-      const offset = viewport
-        ? Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop))
-        : 0
-      if (editorViewportHeight.value !== height) editorViewportHeight.value = height
-      if (editorKeyboardOffset.value !== offset) editorKeyboardOffset.value = offset
-    })
-  }
-
   function syncMobileEditorOverlay(): void {
     mobileEditorOverlay.value = Boolean(mobileEditorMedia?.matches)
   }
@@ -806,12 +777,8 @@ export function usePresetStitcherApp(
   onMounted(() => {
     window.addEventListener('keydown', handleKeydown, true)
     window.addEventListener('pagehide', saveDraftNow)
-    editorVisualViewport = window.visualViewport ?? undefined
-    scheduleEditorViewportSync()
-    editorVisualViewport?.addEventListener('resize', scheduleEditorViewportSync)
-    editorVisualViewport?.addEventListener('scroll', scheduleEditorViewportSync)
     if (typeof window.matchMedia === 'function') {
-      mobileEditorMedia = window.matchMedia('(max-width: 52rem)')
+      mobileEditorMedia = window.matchMedia('(max-width: 53.75rem)')
       syncMobileEditorOverlay()
       mobileEditorMedia.addEventListener?.('change', syncMobileEditorOverlay)
       landscapeWorkbenchMedia = window.matchMedia(
@@ -840,9 +807,6 @@ export function usePresetStitcherApp(
     saveDraftNow()
     window.removeEventListener('keydown', handleKeydown, true)
     window.removeEventListener('pagehide', saveDraftNow)
-    editorVisualViewport?.removeEventListener('resize', scheduleEditorViewportSync)
-    editorVisualViewport?.removeEventListener('scroll', scheduleEditorViewportSync)
-    if (editorViewportFrame !== undefined) window.cancelAnimationFrame(editorViewportFrame)
     mobileEditorMedia?.removeEventListener?.('change', syncMobileEditorOverlay)
     landscapeWorkbenchMedia?.removeEventListener?.('change', syncLandscapeWorkbench)
     if (draftTimer) window.clearTimeout(draftTimer)
@@ -890,7 +854,6 @@ export function usePresetStitcherApp(
     cancelSourceDrag,
     insertFavoriteFromAction,
     editor,
-    editorOverlayStyle,
     mobileEditorOverlay,
     ROLE_OPTIONS,
     rememberEditorSelection,

@@ -61,6 +61,7 @@ const dialog = ref<HTMLDialogElement>()
 const browserPreview = ref<HTMLButtonElement>()
 const open = ref(false)
 const expanded = ref(false)
+let returnToCompact = false
 const visited = ref(false)
 const held = ref(false)
 const busy = ref(false)
@@ -322,15 +323,15 @@ const dialogStyle = computed(() =>
   expanded.value
     ? {
         left: '0px',
-        top: '0px',
+        top: 'var(--visual-viewport-offset-top, 0px)',
         width: `${viewport.value.width}px`,
-        height: `${viewport.value.height}px`,
+        height: 'var(--app-viewport-height, 100dvh)',
       }
     : {
         left: `${dialogPosition.value.x}px`,
-        top: `${dialogPosition.value.y}px`,
+        '--pet-dialog-top': `${dialogPosition.value.y}px`,
         width: `${dialogSize.value.width}px`,
-        height: `${dialogSize.value.height}px`,
+        '--pet-dialog-height': `${dialogSize.value.height}px`,
       },
 )
 let resizing: { id: number; x: number; y: number; width: number; height: number } | undefined
@@ -518,6 +519,7 @@ async function showChat() {
 }
 function openSharedAssistantChat(request: number) {
   if (!request) return
+  returnToCompact = false
   expanded.value = true
   void showChat()
 }
@@ -544,6 +546,7 @@ function openTaskChat(event?: Event) {
     if (x >= 0 && x < innerWidth && y >= 0 && y < innerHeight) position.value = { x, y }
   }
   expanded.value = event instanceof CustomEvent && event.detail?.fullscreen === true
+  returnToCompact = expanded.value
   void showChat()
 }
 function down(event: PointerEvent) {
@@ -682,6 +685,7 @@ watch(
 )
 function close() {
   resizing = undefined
+  returnToCompact = false
   expanded.value = false
   dialog.value?.close()
   open.value = false
@@ -825,10 +829,11 @@ watch(
   },
 )
 function expand() {
+  returnToCompact = true
   expanded.value = true
 }
 function backFromChat() {
-  if (expanded.value) expanded.value = false
+  if (expanded.value && returnToCompact) expanded.value = false
   else close()
 }
 async function navigateFromPet(id: string, guide?: string) {

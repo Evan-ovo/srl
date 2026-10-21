@@ -65,6 +65,7 @@ const filteredResources = computed(() => {
       !categoryIds.includes(categoryFilter.value)
     )
       return false
+    if (!terms.length) return true
     const text =
       `${resource.name}\n${resource.fileName}\n${resource.tags.join('\n')}\n${resourceAuthorSearchText(resource)}`.toLocaleLowerCase()
     return terms.every((term) => text.includes(term))

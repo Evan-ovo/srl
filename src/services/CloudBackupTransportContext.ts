@@ -67,6 +67,7 @@ export interface CloudBackupTransportContext {
   webDavCapabilities: Map<string, WebDavCapabilities>
   cloudFetch(url: string, init: RequestInit, provider: CloudBackupProvider): Promise<Response>
   readResponseBlob(response: Response, totalBytes?: number, fileName?: string): Promise<Blob>
+  readLocalObject?(object: GitHubBundleManifest): Promise<Blob | undefined>
   githubFetch(
     config: GitHubBackupConfig,
     secret: string,

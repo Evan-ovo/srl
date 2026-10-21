@@ -82,14 +82,24 @@ async function cleanStaleNativeExports(): Promise<void> {
   )
 }
 
-async function shareNativeBlob(blob: Blob, fileName: string): Promise<void> {
+export async function shareNativeStream(
+  source: Blob | ReadableStream<Uint8Array>,
+  fileName: string,
+  options: { signal?: AbortSignal; operationId?: string; onHandoff?: () => void } = {},
+): Promise<void> {
   const controller = new AbortController()
-  const operationId = taskCenter.start({
-    name: `导出 ${fileName}`,
-    phase: '准备分享文件',
-    cancelable: true,
-    cancel: () => controller.abort(new DOMException('导出已取消', 'AbortError')),
-  })
+  const abort = () => controller.abort(options.signal?.reason)
+  if (options.signal?.aborted) abort()
+  else options.signal?.addEventListener('abort', abort, { once: true })
+  const ownTask = !options.operationId
+  const operationId =
+    options.operationId ??
+    taskCenter.start({
+      name: `导出 ${fileName}`,
+      phase: '准备分享文件',
+      cancelable: true,
+      cancel: () => controller.abort(new DOMException('导出已取消', 'AbortError')),
+    })
   const sanitizedName = fileName.replace(/[\\/:*?"<>|]/g, '_')
   const safeName = !sanitizedName || /^\.+$/u.test(sanitizedName) ? 'srl-export' : sanitizedName
   const exportDirectory = `exports/${Date.now()}-${crypto.randomUUID()}`
@@ -102,8 +112,13 @@ async function shareNativeBlob(blob: Blob, fileName: string): Promise<void> {
   try {
     await cleanStaleNativeExports()
     throwIfAborted()
-    taskCenter.update(operationId, { phase: '写入分享缓存' })
-    taskCenter.updateTransfer(operationId, { transferredBytes: 0, totalBytes: blob.size })
+    if (ownTask) {
+      taskCenter.update(operationId, { phase: '写入分享缓存' })
+      taskCenter.updateTransfer(operationId, {
+        transferredBytes: 0,
+        totalBytes: source instanceof Blob ? source.size : undefined,
+      })
+    }
     const append = async (data: string): Promise<void> => {
       if (!written) {
         // 即使原生 write 报错，也清理本次唯一的可能残片路径。
@@ -113,22 +128,26 @@ async function shareNativeBlob(blob: Blob, fileName: string): Promise<void> {
         await Filesystem.appendFile({ path, data, directory: Directory.Cache })
       }
     }
-    if (blob.size === 0) await append('')
+    if (source instanceof Blob && source.size === 0) await append('')
     else {
-      await transferNativeStream(blob, {
+      await transferNativeStream(source, {
         append,
         signal: controller.signal,
-        onProgress: (progress) => taskCenter.updateTransfer(operationId, progress),
+        onProgress: (progress) => {
+          if (ownTask) taskCenter.updateTransfer(operationId, progress)
+        },
       })
     }
+    if (!written) await append('')
     throwIfAborted()
     const { uri } = await Filesystem.getUri({ path, directory: Directory.Cache })
     throwIfAborted()
     // 系统分享面板由系统管理，不能展示一个实际上无法关闭它的取消按钮。
-    taskCenter.update(operationId, { phase: '等待系统分享', cancelable: false })
+    options.onHandoff?.()
+    if (ownTask) taskCenter.update(operationId, { phase: '等待系统分享', cancelable: false })
     handedOff = true
     await Share.share({ title: fileName, dialogTitle: '导出 SRL 文件', url: uri })
-    taskCenter.complete(operationId)
+    if (ownTask) taskCenter.complete(operationId)
   } catch (error) {
     // 系统已接收 URI 后可能继续读取文件，不删除这份有效交付副本。
     if (written && !handedOff) {
@@ -138,9 +157,13 @@ async function shareNativeBlob(blob: Blob, fileName: string): Promise<void> {
         recursive: true,
       }).catch(() => undefined)
     }
-    if (controller.signal.aborted) taskCenter.cancelled(operationId)
-    else taskCenter.fail(operationId, error)
+    if (ownTask) {
+      if (controller.signal.aborted) taskCenter.cancelled(operationId)
+      else taskCenter.fail(operationId, error)
+    }
     throw error
+  } finally {
+    options.signal?.removeEventListener('abort', abort)
   }
 }
 
@@ -150,7 +173,7 @@ export async function downloadBlob(blob: Blob, fileName: string): Promise<void> 
     return
   }
   // 原生取消或失败必须原样传给调用方，不能悄悄启动另一份下载并报告成功。
-  await shareNativeBlob(blob, fileName)
+  await shareNativeStream(blob, fileName)
 }
 
 export function readStoredTheme(): ThemeValue {

@@ -3,7 +3,9 @@ package buzz.jixiangruyi1207.srl;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
+import android.database.DatabaseErrorHandler;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteDatabaseCorruptException;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.util.Base64;
 import java.io.File;
@@ -24,6 +26,13 @@ import org.json.JSONObject;
 final class NativeAppDatabase extends SQLiteOpenHelper {
     static final int SCHEMA_VERSION = 5;
     static final String DATABASE_NAME = "srl-app-data.db";
+    // The platform default deletes corrupt databases and may reopen an empty one. Stop
+    // before that retry; leave the database and journal/WAL files in place for recovery.
+    static final DatabaseErrorHandler PRESERVE_CORRUPT_DATABASE = database -> {
+        throw new SQLiteDatabaseCorruptException(
+            "SRL-DATABASE-CORRUPT：原生数据库损坏，已停止访问并保留原文件；请勿清除应用数据或卸载，先保全应用数据再从有效备份恢复。"
+        );
+    };
     // Large restore/import transactions stay atomic in SQLite. Keep a generous safety cap,
     // rather than rejecting ordinary libraries once they cross an arbitrary 1,000 rows.
     static final int MAX_BATCH_SIZE = 50_000;
@@ -91,7 +100,7 @@ final class NativeAppDatabase extends SQLiteOpenHelper {
     }
 
     NativeAppDatabase(Context context, String name) {
-        super(context.getApplicationContext(), name, null, SCHEMA_VERSION);
+        super(context.getApplicationContext(), name, null, SCHEMA_VERSION, PRESERVE_CORRUPT_DATABASE);
         this.context = context.getApplicationContext();
     }
 
@@ -114,7 +123,7 @@ final class NativeAppDatabase extends SQLiteOpenHelper {
         result.put("fileBytes", file.length());
         result.put("walBytes", new File(file.getPath() + "-wal").length());
         result.put("shmBytes", new File(file.getPath() + "-shm").length());
-        try (SQLiteDatabase database = SQLiteDatabase.openDatabase(file.getPath(), null, SQLiteDatabase.OPEN_READONLY)) {
+        try (SQLiteDatabase database = SQLiteDatabase.openDatabase(file.getPath(), null, SQLiteDatabase.OPEN_READONLY, PRESERVE_CORRUPT_DATABASE)) {
             long pageSize;
             try (Cursor cursor = database.rawQuery("PRAGMA page_size", null)) {
                 cursor.moveToFirst(); pageSize = cursor.getLong(0);

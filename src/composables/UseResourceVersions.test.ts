@@ -7,6 +7,7 @@ import { RESOURCE_TYPE, type Resource, type ResourceSummary } from '../types/Res
 
 const resourceApi = {
   activateVersion: vi.fn(),
+  detachVersion: vi.fn(),
   listVersions: vi.fn(),
   deleteVersion: vi.fn(),
   deleteVersions: vi.fn(),
@@ -85,7 +86,7 @@ describe('useResourceVersions', () => {
 
     expect(resourceApi.activateVersion).toHaveBeenCalledWith('r1', 'v2')
     expect(organizingResource.value).toStrictEqual(next)
-    expect(loadResources).toHaveBeenCalled()
+    expect(loadResources).toHaveBeenCalledExactlyOnceWith(['r1'])
     expect(notices[0]).toContain('已切换当前展示版本')
   })
 
@@ -160,7 +161,7 @@ describe('useResourceVersions', () => {
   })
 
   it('删除历史版本前必须确认', async () => {
-    const { api } = setup([version('v1', false)])
+    const { api, loadResources } = setup([version('v1', false)])
     confirmMock.mockResolvedValueOnce(false)
     await api.handleDeleteResourceVersion('v1')
     expect(resourceApi.deleteVersions).not.toHaveBeenCalled()
@@ -169,6 +170,17 @@ describe('useResourceVersions', () => {
     resourceApi.get.mockResolvedValue(current)
     await api.handleDeleteResourceVersion('v1')
     expect(resourceApi.deleteVersions).toHaveBeenCalledWith('r1', ['v1'])
+    expect(loadResources).toHaveBeenCalledExactlyOnceWith(['r1'])
+  })
+
+  it('refreshes only the owner and the new standalone resource after detaching history', async () => {
+    confirmMock.mockResolvedValueOnce(true)
+    resourceApi.detachVersion.mockResolvedValue({ id: 'v1' })
+    resourceApi.get.mockResolvedValue(current)
+    const { api, loadResources } = setup([version('v1', false)])
+    await api.handleDetachResourceVersion('v1')
+    expect(resourceApi.detachVersion).toHaveBeenCalledWith('r1', 'v1')
+    expect(loadResources).toHaveBeenCalledExactlyOnceWith(['r1', 'v1'])
   })
 
   it('允许删除当前逻辑版本中的非当前自定义卡面封装', async () => {
@@ -305,9 +317,10 @@ describe('useResourceVersions', () => {
   it('手动合并成功后同时刷新存储用量', async () => {
     resourceApi.mergeExistingResourceAsVersion.mockResolvedValue(current)
     confirmMock.mockResolvedValueOnce(true)
-    const { api, notices } = setup()
+    const { api, notices, loadResources } = setup()
     await api.handleMergeExistingVersion('r2', '来自旧库')
     expect(resourceApi.mergeExistingResourceAsVersion).toHaveBeenCalledWith('r1', 'r2', '来自旧库')
+    expect(loadResources).toHaveBeenCalledExactlyOnceWith(undefined)
     expect(notices).toEqual(['已手动加入历史版本'])
   })
 

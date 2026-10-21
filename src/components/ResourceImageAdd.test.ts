@@ -4,6 +4,27 @@ import { describe, expect, it, vi } from 'vitest'
 import ResourceImageAdd from './ResourceImageAdd.vue'
 
 describe('gallery file import entry', () => {
+  it('does not import a URL while Enter is confirming IME composition', async () => {
+    const wrapper = mount(ResourceImageAdd)
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === '图片直链')!
+      .trigger('click')
+    const input = wrapper.get('input[type=url]')
+    await input.setValue('https://example.com/图片.png')
+    const composing = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    input.element.dispatchEvent(composing)
+    expect(wrapper.emitted('url')).toBeUndefined()
+    expect(composing.defaultPrevented).toBe(false)
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('url')).toEqual([['https://example.com/图片.png', false, 'original']])
+    wrapper.unmount()
+  })
   it('opens the file picker from 本地图片 and waits for quality confirmation before importing', async () => {
     const wrapper = mount(ResourceImageAdd, { props: { multiple: true } })
     const input = wrapper.get('input[type=file]')

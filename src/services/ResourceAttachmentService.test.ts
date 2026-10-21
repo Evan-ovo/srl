@@ -248,6 +248,62 @@ describe('resource attachment lifecycle', () => {
     expect(await target.storage.listVersions(a.id)).toHaveLength(1)
   })
 
+  it.each([
+    { name: '音频.mp3', mime: 'audio/mpeg', size: 1024 * 1024 + 19 },
+    { name: '视频.mp4', mime: 'video/mp4', size: 33 * 1024 * 1024 + 19 },
+  ])(
+    'preserves binary media through cloud snapshot chunks and restored storage: $name',
+    async ({ name, mime, size }) => {
+      const f = await fixture()
+      // Synthetic bytes test the backup contract, not whether a media decoder accepts a codec.
+      const bytes = new Uint8Array(size)
+      bytes[0] = 0x49
+      bytes[size - 1] = 0x7f
+      const attachment = await f.attachments.add('card', new File([bytes], name, { type: mime }))
+      const created = await createStructuredSnapshot(await f.storage.list(), [], [], { version: 1 })
+      const selected = selectStructuredSnapshot(created.snapshot, new Set(['card']), false, true)
+      const entry = selected.resources.find((resource) => resource.id === attachment.id)!
+      expect(entry.fileName).toBe(name)
+      expect(entry.mimeType).toBe(mime)
+      expect(entry.object.parts.reduce((total, part) => total + part.size, 0)).toBe(size)
+      expect(entry.object.parts.every((part) => part.size <= 32 * 1024 * 1024)).toBe(true)
+      if (size > 32 * 1024 * 1024) expect(entry.object.parts.length).toBeGreaterThan(1)
+      expect(
+        selectStructuredSnapshot(created.snapshot, new Set(['card']), false, false).resources.some(
+          (resource) => resource.id === attachment.id,
+        ),
+      ).toBe(false)
+      const read = async (object: typeof entry.object) =>
+        new Blob(
+          object.parts.map((part) =>
+            created.chunks.get(part.name)!.slice(part.offset ?? 0, (part.offset ?? 0) + part.size),
+          ),
+        )
+      const target = await fixture()
+      await target.storage.delete('card')
+      const resources = await materializeStructuredResources(selected.resources, read)
+      await target.restore.restore(
+        await target.restore.prepareStructured(
+          resources,
+          [],
+          [],
+          { version: 1 },
+          [],
+          [],
+          'media-cloud-fixture',
+        ),
+      )
+      target.db.close()
+      await target.db.open()
+      const restored = await target.attachments.get('card', attachment.id)
+      expect(restored.fileName).toBe(name)
+      expect(restored.mimeType).toBe(mime)
+      expect(restored.fileSize).toBe(size)
+      expect(await hashBlob(restored.originalBlob)).toBe(attachment.contentHash)
+      expect(resourceOwnedFileOwnerId(restored)).toBe('card')
+    },
+  )
+
   it('recycles and restores one attachment, its history, and then the whole card', async () => {
     const f = await fixture()
     const a = await f.attachments.add('card', new File(['原文'], '说明.txt'))

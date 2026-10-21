@@ -19,6 +19,9 @@
       "owner": "src/services/ChatReaderService.ts",
       "tests": [
         "src/services/ChatReaderService.test.ts",
+        "src/storage/NativeMirroredResourceStorage.test.ts",
+        "src/services/NativeArchiveReplacementLifecycle.test.ts",
+        "src/storage/AndroidNativeDexieCore.test.ts",
         "src/components/ChatReaderApp.test.ts",
         "src/components/ExternalAppHost.test.ts",
         "src/services/ExternalAppSdkService.test.ts",
@@ -28,7 +31,8 @@
         "scripts/ChatReaderApp.test.ts",
         "src/services/ChatReaderRendering.test.ts",
         "src/utils/RenderCompatibilityScriptHost.test.ts",
-        "src/services/ExternalAppService.test.ts"
+        "src/services/ExternalAppService.test.ts",
+        "src/services/ChatReaderHostService.test.ts"
       ],
       "backup": {
         "policy": "supported",
@@ -45,6 +49,11 @@
     "appearance": {
       "owner": "src/services/AppearanceScopeService.ts",
       "tests": [
+        "src/components/AppearanceStudio.test.ts",
+        "src/core/AppearanceSafety.test.ts",
+        "src/components/AppearanceUiEditor.test.ts",
+        "src/components/UiCustomizationHost.test.ts",
+        "src/utils/LibraryFormatting.test.ts",
         "src/services/AppearanceScopeService.test.ts",
         "src/components/RichContentPreview.loading.test.ts",
         "src/components/BeautificationPreview.test.ts",
@@ -59,19 +68,27 @@
         "scripts/AppearanceReferenceCatalog.test.ts",
         "src/services/AppearanceReferenceService.test.ts",
         "src/components/CustomUiFrame.test.ts",
-        "src/components/AppearanceUiEditor.test.ts",
+        "src/composables/UseAssistantUiCustomization.test.ts",
+        "src/components/AppearanceStudioVue.test.ts",
+        "src/styles/DesignSystemContract.test.ts",
+        "src/core/UiRecoveryGesture.test.ts",
+        "src/services/UiViewRuntime.test.ts",
+        "src/components/AppearanceQuickMenu.test.ts",
         "src/core/AndroidAppUpdate.test.ts",
-        "src/core/GitHubAndroidApkRelease.test.ts",
-        "scripts/PublicRelease.test.ts",
         "src/components/ProjectNoticeDialog.test.ts",
-        "src/core/AndroidAppUpdatePrivacy.test.ts"
+        "src/core/AndroidAppUpdatePrivacy.test.ts",
+        "src/components/AppearancePalette.test.ts",
+        "src/components/AppearancePaletteIntegration.test.ts",
+        "src/core/AppearancePaletteModel.test.js",
+        "src/core/GitHubAndroidApkRelease.test.ts",
+        "scripts/PublicRelease.test.ts"
       ],
       "backup": {
         "policy": "supported",
         "scopes": ["extra.appearance"],
-        "reason": "外观与预览权限沿原便携设置；增加多线路下载为本机负担偏好，恢复时关闭，需本机再次确认"
+        "reason": "外观与预览权限沿原便携设置；增加多线路下载为本机负担偏好，恢复时关闭，需本机再次确认；命名调色CSS预设沿extra.appearance，srl.ui.paletteDraft仅当前设备工作进度，不进入便携备份"
       },
-      "appearance": "正式设置入口App.vue绑定多线路状态与事件；NativeIntakeFilesAudit在完整APP内覆盖取消、确认、重开保留和关闭，不能只用隔离设置组件替代",
+      "appearance": "正式设置入口App.vue绑定多线路状态与事件；NativeIntakeFilesAudit在完整APP内覆盖取消、确认、重开保留和关闭，不能只用隔离设置组件替代 调色入口位于自定义CSS顶部，使用本机草稿与原预设库；支持CSS导入、颜色/形状编辑、真实预览与下载，未修改的布局和源码保留。",
       "starter": "available",
       "cleanup": {
         "policy": "not-applicable",
@@ -90,15 +107,20 @@
       "owner": "src/services/ProductAssistantService.ts",
       "tests": [
         "src/components/ProductAssistant.test.ts",
+        "src/composables/UseProductAssistantChatLayout.test.ts",
         "src/components/ProductAssistantResultViewer.test.ts",
         "src/components/ProductAssistantAppPreview.test.ts",
         "src/services/ProductAssistantService.test.ts",
+        "src/services/ProductAssistantTaskRouting.test.ts",
+        "src/services/ProductAssistantAppearanceReference.test.ts",
+        "src/services/ProductAssistantAppearanceInspection.test.ts",
         "src/services/DiscordSetupService.test.ts",
         "src/services/DiscordSetupPage.test.ts",
         "src/services/DiscordSourceConnectionService.test.ts",
         "src/services/DiscordSetupParameters.test.ts",
         "src/components/DiscordSetupAssistant.test.ts",
         "src/components/DiscordSetupHelp.test.ts",
+        "src/components/ResourceLinkAdvancedSettings.test.ts",
         "src/storage/IndexedDbDiscordSetupStorage.test.ts",
         "src/services/ProductAssistantOnline.test.ts",
         "src/services/MainApiService.test.ts",
@@ -120,7 +142,10 @@
         "src/components/FeatureHub.test.ts",
         "src/storage/OfficialAppDataStorage.test.ts",
         "src/storage/IndexedDbProductAssistantStorage.test.ts",
-        "src/storage/AndroidNativeDexieCore.test.ts"
+        "src/storage/AndroidNativeDexieCore.test.ts",
+        "src/services/ProductAssistantTask.test.ts",
+        "src/services/ProductAssistantReferences.test.ts",
+        "src/composables/UseProductAssistantTasks.test.ts"
       ],
       "backup": {
         "policy": "supported",
@@ -140,6 +165,9 @@
     "folders": {
       "owner": "src/services/ExportService.ts",
       "tests": [
+        "src/components/FolderLibraryView.test.ts",
+        "src/composables/FolderThumbnailCache.test.ts",
+        "src/storage/IndexedDbAssetStore.image-sources.test.ts",
         "src/services/ExportService.test.ts",
         "src/services/ExportService.download.test.ts",
         "src/composables/UseNativeResourceExport.download.test.ts",
@@ -186,6 +214,9 @@
         "src/composables/UseDiscordResourceInbox.test.ts",
         "src/composables/UseAppSharedIntake.test.ts",
         "src/services/NativeDiscordInboxService.test.ts",
+        "src/services/WebBackgroundKeepAlive.test.ts",
+        "src/services/WebDiscordInboxSession.test.ts",
+        "src/services/WebDiscordInboxNotifications.test.ts",
         "src/core/NativeRuntime.test.ts",
         "src/components/DiscordSourceHandoffIntake.test.ts",
         "src/services/DiscordInboxAutoBinding.test.ts",
@@ -197,7 +228,9 @@
         "src/components/DiscordInboxPanel.test.ts",
         "src/components/DiscordResourceDownloadPanel.test.ts",
         "src/components/ProjectActivityCenter.test.ts",
-        "src/composables/UseLibraryRefresh.test.ts"
+        "src/composables/UseLibraryRefresh.test.ts",
+        "src/services/CloudBackupCoverage.test.ts",
+        "src/services/CommunitySourceRestoreService.native.test.ts"
       ],
       "backup": {
         "policy": "partial",
@@ -215,6 +248,11 @@
     "cloud": {
       "owner": "src/services/CloudBackupService.ts",
       "tests": [
+        "src/services/AiTaggingDraftService.test.ts",
+        "src/parser/JsonResourceParser.test.ts",
+        "src/services/PersonalResourceBackup.test.ts",
+        "src/services/PersonalResourceImport.test.ts",
+        "src/components/PersonalResourceEditor.test.ts",
         "src/core/PersonalResourceContainer.test.ts",
         "src/services/PersonalResourceService.test.ts",
         "src/services/CommunitySourceRestoreService.test.ts",
@@ -222,6 +260,8 @@
         "src/components/SecretProtectionSettings.test.ts",
         "src/services/SecretResourceService.test.ts",
         "src/storage/IndexedDbArchiveStorage.test.ts",
+        "src/services/ArchiveExtraction.test.ts",
+        "src/storage/IndexedDbRestoreStagingStore.test.ts",
         "src/services/WebDiscordInboxNotifications.test.ts",
         "src/services/WebNotificationWorker.test.ts",
         "src/storage/NativeMirroredResourceStorage.test.ts",
@@ -229,6 +269,9 @@
         "src/services/CloudBackupGitHubTransport.delete.test.ts",
         "src/services/CloudBackupRetentionOperations.test.ts",
         "src/services/NativeCloudTransfer.test.ts",
+        "src/services/CloudBackupObjectReader.test.ts",
+        "src/services/CloudBackupTransport.materialize.test.ts",
+        "src/services/CloudBackupGitHubTransport.read-ahead.test.ts",
         "src/services/CloudBackupPerformance.test.ts",
         "src/services/CloudBackupJobStore.test.ts",
         "src/services/CloudStructuredSnapshot.test.ts",
@@ -244,7 +287,11 @@
         "src/services/CloudBackupCoverage.test.ts",
         "src/services/ChatReaderPortableData.test.ts",
         "src/services/WebBackgroundKeepAlive.test.ts",
-        "src/composables/UseConfirmDialog.test.ts"
+        "src/composables/UseConfirmDialog.test.ts",
+        "src/services/CloudBackupSnapshotOperations.test.ts",
+        "src/services/ArchiveStreaming.test.ts",
+        "src/services/ArchiveZipWriter.prefetch.test.ts",
+        "src/core/FatalErrorNotice.test.ts"
       ],
       "backup": {
         "policy": "supported",
@@ -254,7 +301,7 @@
       "starter": "available",
       "cleanup": {
         "policy": "not-applicable",
-        "reason": "系统入口不提供官方 APP 卸载；数据操作复用各自既有 Owner"
+        "reason": "系统入口不提供官方 APP 卸载；数据操作复用各自既有 Owner；网页离页只解绑显示，不停止服务任务，暂停/停止显式中断并保留远端对象；当前/历史原件替换与批量写入按已提交回执回收无引用旧对象，未完成云任务、未知恢复文件保留"
       },
       "cssReference": "available"
     },
@@ -265,14 +312,14 @@
         "src/components/TavernBridgeCenter.test.ts",
         "src/services/RelayWorkerSettingsService.test.ts",
         "src/components/RelayWorkerSettings.test.ts",
-        "cloudflare/Worker.test.js",
         "src/components/TavernParcelExchange.test.ts",
         "scripts/AuditEnvironment.test.mjs",
         "src/services/ExportService.download.test.ts",
         "src/services/BrowserStorageService.test.ts",
         "src/components/LayoutSettingsPanel.test.ts",
         "src/services/TavernChatImport.test.ts",
-        "src/services/RestoreService.test.ts"
+        "src/services/RestoreService.test.ts",
+        "cloudflare/Worker.test.js"
       ],
       "backup": {
         "policy": "partial",
@@ -313,7 +360,12 @@
     },
     "frontendWorkshop": {
       "owner": "src/services/FrontendWorkshopProjectService.ts",
-      "tests": ["src/services/FrontendWorkshopProjectService.test.ts"],
+      "tests": [
+        "src/services/FrontendWorkshopProjectService.test.ts",
+        "src/services/PortableAppMigration.test.ts",
+        "src/services/FrontendWorkshopSourceComponentService.test.ts",
+        "src/components/FrontendWorkshopSourceComponentLibrary.test.ts"
+      ],
       "backup": {
         "policy": "partial",
         "scopes": [
@@ -335,7 +387,11 @@
       "owner": "src/services/FrontendWorkshopImageGenerationService.ts",
       "tests": [
         "src/services/FrontendWorkshopImageGenerationService.test.ts",
-        "src/components/ImageGenerationApp.test.ts"
+        "src/components/ImageGenerationApp.test.ts",
+        "src/services/ImageGenerationCapabilities.test.ts",
+        "src/components/ImageGenerationAppState.test.ts",
+        "src/services/ImageGenerationIntegration.test.ts",
+        "src/services/FrontendWorkshopImageDraftService.test.ts"
       ],
       "backup": {
         "policy": "partial",
@@ -376,7 +432,11 @@
     },
     "userPersona": {
       "owner": "src/services/UserPersonaService.ts",
-      "tests": ["src/services/UserPersonaService.test.ts", "src/components/UserPersonaApp.test.ts"],
+      "tests": [
+        "src/services/UserPersonaService.test.ts",
+        "src/components/UserPersonaApp.test.ts",
+        "src/components/UserPersonaTemplatePanel.test.ts"
+      ],
       "backup": {
         "policy": "partial",
         "scopes": ["resource.userPersona", "extra.generalPreferences"],

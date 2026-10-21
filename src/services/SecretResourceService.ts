@@ -33,6 +33,8 @@ async function importKey(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
 export class SecretResourceService {
   private readonly credentials: LocalCredentialRepository
   private sessionPassword = ''
+  private readonly rememberedPasswords = new Map<string, string>()
+  private sessionGeneration = 0
   constructor(credentials: LocalCredentialRepository = localCredentialStore) {
     this.credentials = credentials
   }
@@ -95,6 +97,17 @@ export class SecretResourceService {
   isUnlocked(): boolean {
     return Boolean(this.sessionPassword)
   }
+  hasRememberedPassword(document: PersonalResourceDocument): boolean {
+    return Boolean(document.protected && this.rememberedPasswords.has(document.protected.salt))
+  }
+  /** Consume the verified local password without exposing it through UI state. */
+  async withUnlockedPassword<T>(consume: (password: string) => Promise<T>): Promise<T> {
+    if (!this.sessionPassword) throw new Error('请先解锁统一密码')
+    return consume(this.sessionPassword)
+  }
+  private checkSession(generation: number): void {
+    if (generation !== this.sessionGeneration) throw new Error('统一密码已锁定，请重新解锁')
+  }
   /** One local encrypted transfer. Only the consumer sees plaintext; never return it to tools. */
   async receiveBrowserSecret(
     capture: (publicKey: string) => Promise<SecretBrowserTransfer>,
@@ -146,11 +159,14 @@ export class SecretResourceService {
     }
   }
   lock(): void {
+    this.sessionGeneration++
     this.sessionPassword = ''
+    this.rememberedPasswords.clear()
   }
 
   /** Only the general settings screen establishes the shared password. Never replace a verifier. */
   async setPassword(password: string): Promise<void> {
+    const generation = this.sessionGeneration
     if (await this.hasPassword()) throw new Error('已设置统一密码，请使用原密码解锁')
     if (password.length < 8) throw new Error('统一密码至少需要 8 个字符')
     const salt = base64(crypto.getRandomValues(new Uint8Array(16)))
@@ -160,6 +176,7 @@ export class SecretResourceService {
       await this.credentials.save(CONFIG_ID, verifier)
       if ((await this.credentials.read(CONFIG_ID)) !== verifier)
         throw new Error('统一密码保存后未能读回确认，请重新打开密码设置核对；原有密钥内容未修改')
+      this.checkSession(generation)
       this.sessionPassword = password
     } finally {
       raw.fill(0)
@@ -167,12 +184,14 @@ export class SecretResourceService {
   }
 
   async unlock(password: string): Promise<void> {
+    const generation = this.sessionGeneration
     const saved = await this.credentials.read(CONFIG_ID)
     if (!saved) throw new Error('请先在总设置中设置密钥统一密码')
     const config: SecretEnvelope = JSON.parse(saved)
     const raw = await this.derive(password, config.salt)
     try {
       if ((await this.open(config, raw)) !== VERIFIER) throw new Error('统一密码不正确')
+      this.checkSession(generation)
       this.sessionPassword = password
     } finally {
       raw.fill(0)
@@ -196,6 +215,7 @@ export class SecretResourceService {
     document: PersonalResourceDocument,
     password = this.sessionPassword,
   ): Promise<PersonalResourceDocument> {
+    const generation = this.sessionGeneration
     const privateFields = document.fields.filter((field) => field.private)
     if (!privateFields.length) return { ...document, protected: undefined }
     const saved = await this.credentials.read(CONFIG_ID)
@@ -207,9 +227,11 @@ export class SecretResourceService {
     try {
       if ((await this.open(config, raw)) !== VERIFIER) throw new Error('统一密码不正确')
       const protectedValue = await this.seal(JSON.stringify(privateFields), raw, salt)
+      this.checkSession(generation)
       this.sessionPassword = password
       return {
         ...document,
+        protection: undefined,
         fields: document.fields.map((field) => (field.private ? { ...field, value: '' } : field)),
         protected: protectedValue,
       }
@@ -229,16 +251,23 @@ export class SecretResourceService {
     })
   }
 
-  async reveal(
-    document: PersonalResourceDocument,
-    password = this.sessionPassword,
-  ): Promise<SecretField[]> {
+  async reveal(document: PersonalResourceDocument, password?: string): Promise<SecretField[]> {
     if (!document.protected) return document.fields.map((field) => ({ ...field }))
-    const raw = await this.derive(password, document.protected.salt)
+    const generation = this.sessionGeneration
+    const salt = document.protected.salt
+    const resolved = password ?? this.rememberedPasswords.get(salt) ?? this.sessionPassword
+    const raw = await this.derive(resolved, salt)
     try {
       const fields = this.revealed(document, await this.open(document.protected, raw))
       // Foreign backups may use another password; do not replace the local shared session.
-      if (await this.hasPassword()) await this.unlock(password).catch(() => undefined)
+      this.checkSession(generation)
+      if (resolved !== this.sessionPassword && !this.rememberedPasswords.has(salt))
+        await this.unlock(resolved).catch(() => undefined)
+      this.checkSession(generation)
+      this.rememberedPasswords.delete(salt)
+      this.rememberedPasswords.set(salt, resolved)
+      if (this.rememberedPasswords.size > 16)
+        this.rememberedPasswords.delete(this.rememberedPasswords.keys().next().value!)
       return fields
     } finally {
       raw.fill(0)

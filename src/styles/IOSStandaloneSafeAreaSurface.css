@@ -1,10 +1,10 @@
 /* iOS 主屏幕 PWA 的 WebKit 可能在布局 viewport 之外暴露底部系统安全区。
    这里仅负责该根层表面的视觉连续性；组件自身仍按 --safe-bottom 正常避让。 */
 :root[data-ios-standalone='true'] {
-  background: var(--glass-panel-strong);
+  background: var(--page-background, var(--color-canvas));
 }
 
 :root[data-ios-standalone='true'] body,
 :root[data-ios-standalone='true'] #app {
-  background: var(--color-canvas);
+  background: transparent;
 }

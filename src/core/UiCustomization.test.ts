@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
+import appSource from '../App.vue?raw'
 import { createUiView, normalizeUiViews, resolveUiCssAssets } from './UiCustomization'
 import { BrowserStorageService } from '../services/BrowserStorageService'
 import { createUiDomSession, UI_PRIVATE_SELECTOR } from '../services/UiViewDom'
@@ -90,6 +91,28 @@ describe('可编辑界面项目', () => {
   })
 })
 describe('界面与原功能的边界', () => {
+  it('资源分页保留宿主页码输入，作者仅取得整个原生分页区域', () => {
+    const template = document.createElement('template')
+    const start = appSource.lastIndexOf('<nav', appSource.indexOf('class="pagination"'))
+    template.innerHTML = appSource.slice(start, appSource.indexOf('</nav>', start) + 6)
+    const pager = template.content.querySelector<HTMLElement>('nav.pagination')!
+    expect(pager.hasAttribute('data-srl-native-root')).toBe(true)
+    const input = pager.querySelector<HTMLInputElement>('.inline-page-jump')!
+    const root = document.createElement('section')
+    root.append(pager)
+    document.body.append(root)
+    const session = createUiDomSession(root, UI_PRIVATE_SELECTOR)
+    const snapshot = session.read()
+    expect(snapshot.nativeRegions).toEqual([
+      expect.objectContaining({ tag: 'nav', label: '资源分页' }),
+    ])
+    expect(snapshot.html).not.toContain('inline-page-jump')
+    expect(snapshot.controls).toEqual([])
+    expect(session.native(snapshot.nativeRegions![0]!.id)).toBe(pager)
+    input.focus()
+    expect(document.activeElement).toBe(input)
+    expect(pager.querySelector('.inline-page-jump')).toBe(input)
+  })
   it('显式原生工作区保留Shadow实例，正文和内部操作不进入作者快照', () => {
     const root = document.createElement('section')
     const workspace = document.createElement('div')

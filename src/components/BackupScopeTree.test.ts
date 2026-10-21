@@ -48,6 +48,32 @@ const resources = [
 ] as ResourceSummary[]
 
 describe('BackupScopeTree', () => {
+  it('does not build search strings for the unqueried catalogue', async () => {
+    let tagReads = 0
+    const cards = Array.from({ length: 1000 }, (_, index) => ({
+      ...resources[0]!,
+      id: `row-${index}`,
+      name: `角色 ${index}`,
+      get tags() {
+        tagReads++
+        return index === 999 ? ['唯一标签'] : []
+      },
+    }))
+    const wrapper = mount(BackupScopeTree, {
+      props: { resources: cards, mode: 'local', modelValue: { resourceIds: [], scopeIds: [] } },
+    })
+    try {
+      await wrapper.get('button[aria-label="展开角色卡"]').trigger('click')
+      tagReads = 0
+      await wrapper.get('input[type="search"]').setValue(' ')
+      expect(tagReads).toBe(0)
+      await wrapper.get('input[type="search"]').setValue('唯一标签')
+      expect(wrapper.findAll('.backup-scope-tree__resources label')).toHaveLength(1)
+      expect(wrapper.get('.backup-scope-tree__resources label').text()).toContain('角色 999')
+    } finally {
+      wrapper.unmount()
+    }
+  })
   it('paginates 2501 resources and searching preserves selection outside the results', async () => {
     const cards = Array.from({ length: 2501 }, (_, index) => ({
       ...resources[0]!,

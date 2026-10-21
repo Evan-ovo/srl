@@ -32,6 +32,84 @@ async function resource(id: string): Promise<Resource> {
 }
 
 describe('streamed archive round trip', () => {
+  it.each(['original', 'modified'] as const)(
+    'passes native file capability only for original bytes (%s)',
+    async (resourceContent) => {
+      const row = await resource('native-request')
+      const read = vi.fn(async () => row)
+      await new ExportService().createArchivesFromSource(
+        { resources: [toResourceListSummary(row)], versions: [], read },
+        [],
+        { mode: 'full', resourceContent },
+        async () => ({
+          write: async () => {
+            throw Error('Native encoder required')
+          },
+          encode: async (options) => {
+            await options.read(options.resources[0]!, false, true)
+            return 1
+          },
+          commit: async () => {},
+          abort: async () => {},
+        }),
+      )
+      expect(read.mock.calls[0]).toEqual(
+        resourceContent === 'original'
+          ? [expect.anything(), false, true]
+          : [expect.anything(), false],
+      )
+    },
+  )
+
+  it('exports a large local album original as one ZIP entry and restores its complete SHA', async () => {
+    const blob = new Blob([new Uint8Array(33 * 1024 * 1024 + 19).fill(0x63)], { type: 'image/png' })
+    const hash = await hashBlob(blob)
+    const archive = await new ExportService().createArchive([], [], {
+      mode: 'full',
+      portableData: {
+        version: 1,
+        generatedImageAlbum: [
+          {
+            item: {
+              id: 'large-album',
+              name: 'large.png',
+              source: 'imported',
+              category: '',
+              mimeType: 'image/png',
+              sizeBytes: blob.size,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        ],
+      },
+      readAlbumFile: async () => blob,
+    })
+    const object = archive.manifest.portableData!.generatedImageAlbum![0]!.object!
+    expect(object.totalSha256).toBe(hash)
+    expect(object.parts).toEqual([
+      { name: `srl-chunk--sha256-${hash}`, size: blob.size, sha256: hash },
+    ])
+    const db = new AppDatabase(`album-zip-${crypto.randomUUID()}`)
+    const staging = new IndexedDbRestoreStagingStore(db)
+    try {
+      const service = new RestoreService(new IndexedDbArchiveStorage(db), staging)
+      const prepared = await service.prepare(
+        new File([archive.blob], archive.fileName),
+        [],
+        [],
+        true,
+      )
+      const entry = await staging.get(prepared.staging!.jobId, `app-data/album/${hash}.bin`)
+      expect(entry!.size).toBe(blob.size)
+      expect(entry!.sha256).toBe(hash)
+      expect(await hashBlob(entry!.blob)).toBe(hash)
+      await prepared.dispose!()
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
   it('exports lazy originals/history and restores from a body-free preview', async () => {
     const records = [await resource('b'), await resource('a')]
     const version = { ...(await resource('old')), versionGroupId: 'b' }
@@ -179,14 +257,16 @@ describe('streamed archive round trip', () => {
       ).rejects.toThrow('read failed')
       expect(await db.resources.get(original.id)).toBeDefined()
       const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('copy failed'))
+      vi.stubGlobal('navigator', { userAgent: 'AppleWebKit/605.1.15 Version/26.5 Safari/605.1.15' })
       try {
-        // Small originals now use byte-backed storage without the Blob loader.
+        // Only WebKit needs the compatibility copy; exercise its failure explicitly.
         const originalBlob = new Blob([new Uint8Array(1024 * 1024 + 1)])
         await expect(
           storage.replace([], [{ ...replacement, originalBlob, fileSize: originalBlob.size }]),
         ).rejects.toThrow('copy failed')
       } finally {
         fetch.mockRestore()
+        vi.unstubAllGlobals()
       }
       expect(await db.resources.get(original.id)).toBeDefined()
       expect(await db.resources.get(replacement.id)).toBeUndefined()

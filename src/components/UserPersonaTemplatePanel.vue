@@ -11,6 +11,11 @@ const selectedTemplateId = defineModel<string>('selectedTemplateId', { required:
 const creating = defineModel<boolean>('creating', { required: true })
 const templateName = defineModel<string>('templateName', { required: true })
 const emit = defineEmits<{ apply: []; save: []; delete: [] }>()
+function saveOnEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  event.preventDefault()
+  emit('save')
+}
 </script>
 
 <template>
@@ -45,7 +50,7 @@ const emit = defineEmits<{ apply: []; save: []; delete: [] }>()
         aria-label="模板名称"
         placeholder="模板名称"
         maxlength="80"
-        @keydown.enter.prevent="emit('save')"
+        @keydown.enter="saveOnEnter"
       />
       <button class="button button--quiet" type="button" @click="emit('save')">保存模板</button>
     </div>

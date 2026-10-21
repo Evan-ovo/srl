@@ -8,7 +8,7 @@
 .chat-reader-startup {
   position: fixed;
   z-index: 2000;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top, 0px) 0 auto;
   box-sizing: border-box;
   height: var(--app-viewport-height, 100dvh);
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);

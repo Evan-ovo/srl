@@ -1019,7 +1019,7 @@ async function clearOfflineResources(): Promise<void> {
             <span><strong>隐私与网络说明</strong><small>数据范围、联网选择与使用前说明</small></span
             ><i aria-hidden="true">→</i>
           </button>
-          <label v-if="isNativeApk" class="settings-toggle">
+          <label v-if="isNativeApk" class="settings-switch-row">
             <span
               ><strong>自动检查 APK 更新</strong
               ><small>默认关闭；开启后每 12 小时最多检查一次。关闭不影响手动更新。</small
@@ -1032,6 +1032,7 @@ async function clearOfflineResources(): Promise<void> {
               :checked="automaticApkUpdates"
               @change="changeAutomaticApkUpdates"
             />
+            <i aria-hidden="true"></i>
           </label>
           <button type="button" @click="handleCheckUpdate">
             <span>

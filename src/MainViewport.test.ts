@@ -169,6 +169,54 @@ describe('Main viewport state', () => {
     )
   })
 
+  it('publishes reduced geometry during zoom without identifying it as an iOS keyboard', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 390)
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    input.focus()
+    await import('./Main')
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+
+    Object.assign(viewport, { height: 300, scale: 1.25 })
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('true')
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+    expect(document.documentElement.style.getPropertyValue('--layout-viewport-height')).toBe(
+      '812px',
+    )
+
+    Object.assign(viewport, { height: 778 / 1.25, scale: 1.25 })
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+
+    Object.assign(viewport, { height: 778, scale: 1 })
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+    input.remove()
+  })
+
+  it('tracks reduced input space when the focus session starts already zoomed', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 390)
+    Object.assign(viewport, { height: 778 / 1.25, scale: 1.25 })
+    const input = document.createElement('textarea')
+    document.body.append(input)
+    input.focus()
+    await import('./Main')
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+    viewport.height = 300
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('true')
+    viewport.height = 778 / 1.25
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+    input.remove()
+  })
+
   it.each([
     { ios: true, width: 390, height: 448, scale: 1, open: true, focused: true },
     { ios: true, width: 390, height: 753, scale: 1, open: false },
@@ -459,6 +507,46 @@ describe('Main viewport state', () => {
     settleScheduledViewport()
     expect(content.scrollTop).toBeGreaterThan(0)
     content.remove()
+  })
+
+  it('tracks and reveals editable controls inside open shadow roots', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 390)
+    const host = document.createElement('div')
+    const shadow = host.attachShadow({ mode: 'open' })
+    const content = document.createElement('div')
+    content.style.overflowY = 'auto'
+    const first = document.createElement('input')
+    const second = document.createElement('textarea')
+    content.append(first, second)
+    shadow.append(content)
+    document.body.append(host)
+    Object.defineProperties(content, {
+      clientHeight: { value: 300 },
+      scrollHeight: { value: 1200 },
+    })
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 60, 390, 300))
+    for (const input of [first, second])
+      vi.spyOn(input, 'getBoundingClientRect').mockImplementation(
+        () => new DOMRect(0, 500 - content.scrollTop, 390, 40),
+      )
+    await import('./Main')
+    first.focus()
+    notifyFocusIn()
+    viewport.height = 420
+    applyScheduledViewport()
+    settleScheduledViewport()
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('true')
+    expect(content.scrollTop).toBeGreaterThan(0)
+    content.scrollTop = 0
+    second.focus()
+    notifyFocusIn()
+    settleScheduledViewport()
+    expect(content.scrollTop).toBeGreaterThan(0)
+    viewport.height = 778
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+    host.remove()
   })
 
   it('waits through 25 viewport animation frames and never re-corrects after its own scroll', async () => {

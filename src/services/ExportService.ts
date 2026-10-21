@@ -369,7 +369,11 @@ export interface StreamedArchive {
 export interface ArchiveSource {
   resources: ResourceSummary[]
   versions: ResourceSummary[]
-  read(resource: ResourceSummary, historical: boolean): Promise<Resource>
+  read(
+    resource: ResourceSummary,
+    historical: boolean,
+    preferNativeFile?: boolean,
+  ): Promise<Resource>
 }
 
 export async function createResourceArchiveSource(
@@ -440,7 +444,16 @@ export async function createResourceArchiveSource(
     versions: selection
       ? await service.listVersionSummariesForResources([...selection])
       : await service.listVersionSummaries(true),
-    read: async (summary, historical) => {
+    read: async (summary, historical, preferNativeFile) => {
+      if (preferNativeFile) {
+        const source = await service.getReadSource(summary.id, historical)
+        if (!source) throw new Error(`导出资源已不存在：${summary.fileName}`)
+        // Old APK / encrypted sources may already have performed the whole read.
+        if (source.originalSource instanceof Blob)
+          return { ...source, originalBlob: source.originalSource }
+        if (source.originalSource.nativeFile)
+          return { ...source, originalBlob: await source.originalSource.nativeFile() }
+      }
       const resource = historical
         ? await service.getVersion(summary.id)
         : await service.get(summary.id)
@@ -718,7 +731,7 @@ export class ExportService {
     freezeAlbum = false,
   ): Promise<ArchiveOptions> {
     if (freezeAlbum && options.portableData?.generatedImageAlbum?.length) {
-      const { createGitHubBundle } = await import('./GitHubBackupBundle')
+      const { planGitHubBundle } = await import('./GitHubBackupBundle')
       const album = []
       for (const entry of options.portableData.generatedImageAlbum) {
         throwIfArchiveAborted(signal)
@@ -728,7 +741,7 @@ export class ExportService {
           throwIfArchiveAborted(signal)
           if (!blob || blob.size !== entry.item.sizeBytes)
             throw new Error(`相册原图缺失或已变化：${entry.item.name}`)
-          object = (await createGitHubBundle(blob, entry.item.name)).manifest
+          object = await planGitHubBundle(blob, entry.item.name, { signal }, blob.size)
         }
         throwIfArchiveAborted(signal)
         album.push({ item: entry.item, object })
@@ -1106,8 +1119,13 @@ export class ExportService {
       communitySourceData,
       communitySourceAttachments,
       path: createArchivePath,
-      read: async (planned, historical) => {
-        let resource = source ? await source.read(planned, historical) : planned
+      read: async (planned, historical, preferNativeFile) => {
+        let resource = planned
+        if (source)
+          resource =
+            preferNativeFile && options.resourceContent !== 'modified'
+              ? await source.read(planned, historical, true)
+              : await source.read(planned, historical)
         if (
           resource.id !== planned.id ||
           resource.contentHash !== planned.contentHash ||

@@ -1,7 +1,7 @@
 /** @vitest-environment node */
 import { Capacitor } from '@capacitor/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
+import { nativeFileSize, nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
 import type { Resource, ResourceType } from '../types/Resource'
 import type { RestoreStagingEntry } from '../types/RestoreStaging'
 import type { RestoreStagingStore } from '../storage/RestoreStagingStore'
@@ -77,6 +77,31 @@ function fixture(rows: Resource[]) {
 }
 
 describe('staged persona avatar selection', () => {
+  it('passes a declared file reference only to an explicit native original sink', async () => {
+    vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
+    const row = { ...(await record('large')), fileSize: 32 * 1024 * 1024, mimeType: 'video/mp4' }
+    const state = fixture([row])
+    const entry = state.entries.get(state.paths.get(row.contentHash)!)!
+    const getNativeFile = vi.fn(async () => ({
+      ...entry,
+      blob: rememberNativeFile(new Blob(), 'file:///staged', row.fileSize),
+    }))
+    state.stage.getNativeFile = getNativeFile
+    const ordinary = await openArchiveFiles(state.stage, 'fixture', state.paths, [row])
+    await ordinary.hydrate(row)
+    expect(getNativeFile).not.toHaveBeenCalled()
+    const native = await openArchiveFiles(state.stage, 'fixture', state.paths, [row], true)
+    const ready = await native.hydrate(row)
+    expect(ready.originalBlob.size).toBe(0)
+    expect(nativeFileSize(ready.originalBlob)).toBe(row.fileSize)
+    expect(nativeFileSource(ready.originalBlob)).toBe('file:///staged')
+    expect(state.get).toHaveBeenCalledTimes(1)
+    getNativeFile.mockResolvedValueOnce(undefined as never)
+    await native.hydrate(row)
+    expect(state.get).toHaveBeenCalledTimes(2)
+    await native.hydrate({ ...row, type: 'secret' })
+    expect(getNativeFile).toHaveBeenCalledTimes(2)
+  })
   it('does not scan unrelated records for each persona or prefetch originals at session open', async () => {
     const personas = await Promise.all(
       Array.from({ length: 160 }, async (_, i) => ({

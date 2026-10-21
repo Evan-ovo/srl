@@ -120,7 +120,7 @@ export const BACKUP_SCOPE_REGISTRY: ReadonlyArray<BackupScopeDefinition> = [
   resourceScope('resource.pocketPhone', RESOURCE_TYPE.POCKET_PHONE, 'manualResources'),
   {
     ...resourceScope('resource.secret', RESOURCE_TYPE.SECRET, 'manualResources'),
-    description: '密钥资源原件保持加密；明文副本必须单独确认',
+    description: '保留各卡片的保护方式；未加密卡片可直接读取，已加密卡片仍需原密码',
   },
   {
     id: 'extra.communitySources',
@@ -162,7 +162,7 @@ export const BACKUP_SCOPE_REGISTRY: ReadonlyArray<BackupScopeDefinition> = [
     id: 'extra.aiTaggingState',
     group: 'extraContent',
     label: 'AI 标签工作区',
-    description: '标签草稿与撤销记录',
+    description: '标签草稿、撤销记录和已保存的规则模板（含系统提示词）',
     defaultLocal: false,
     defaultCloud: false,
   },
@@ -254,7 +254,7 @@ export const BACKUP_SCOPE_REGISTRY: ReadonlyArray<BackupScopeDefinition> = [
     id: 'extra.plaintextSecretCopy',
     group: 'extraContent',
     label: '明文密钥副本',
-    description: '可直接读取的密钥字段，必须单独确认',
+    description: '为已加密卡片另存可直接读取的字段，需确认；未加密卡片无需此项',
     sensitive: true,
     defaultLocal: false,
     defaultCloud: false,

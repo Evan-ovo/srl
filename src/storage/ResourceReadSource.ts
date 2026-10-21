@@ -1,10 +1,12 @@
 import type { AppDatabase } from '../database/AppDatabase'
 import { toResourceSummary, type Resource } from '../types/Resource'
 import type { ResourceReadSource } from '../types/ResourceReadSource'
-import { isEncryptedResource, type StoredResource } from '../types/Vault'
+import { isEncryptedResource, isNativeBackedResource, type StoredResource } from '../types/Vault'
 import { isAndroidNativeAppDatabaseActive, runAndroidNativeRead } from './AndroidNativeDexieCore'
 import { encodeAppDatabaseKey, isEncodedBlobValue } from './AndroidAppDatabaseMigration'
 import { nativeAppDatabase } from './NativeAppDatabaseBridge'
+import { withAbort } from '../utils/Abortable'
+import { openNativeResourceByteSource } from './NativeResourceFileMirror'
 
 /** Read a resource snapshot without hydrating originals or thumbnail attachments. */
 export async function readResourceMetadata(
@@ -39,11 +41,31 @@ export async function readResourceSource(
   database: AppDatabase,
   id: string,
   get: (id: string) => Promise<Resource | undefined>,
+  historical = false,
+  signal?: AbortSignal,
+  decode?: (record: StoredResource) => Promise<Resource>,
 ): Promise<ResourceReadSource | undefined> {
-  if (isAndroidNativeAppDatabaseActive()) {
-    const table = database.resources
-    const record = await readResourceMetadata(database, id)
-    if (!record) return undefined
+  signal?.throwIfAborted()
+  const activeNative = isAndroidNativeAppDatabaseActive()
+  const store = historical ? 'resourceVersions' : 'resources'
+  const record = await withAbort(readResourceMetadata(database, id, store), signal)
+  if (!record) return undefined
+  if (activeNative) {
+    if (isNativeBackedResource(record)) {
+      if (
+        record.nativeOriginal.contentHash.toLowerCase() !== record.contentHash.toLowerCase() ||
+        record.nativeOriginal.size !== record.fileSize
+      )
+        throw new Error('Android 原生原件描述与资源索引不一致')
+      const originalSource = await openNativeResourceByteSource(
+        record.nativeOriginal.contentHash.toLowerCase(),
+        record.nativeOriginal.size,
+        signal,
+      )
+      if (originalSource)
+        return { ...toResourceSummary(record as unknown as Resource), originalSource }
+    }
+    const table = database[store]
     if (
       !isEncryptedResource(record) &&
       'originalBlob' in record &&
@@ -55,7 +77,7 @@ export async function readResourceSource(
         database.transaction('r', table, (transaction) =>
           runAndroidNativeRead(transaction.idbtrans, () =>
             nativeAppDatabase.readBlobRange(
-              'resources',
+              store,
               key,
               descriptor.fieldPath,
               offset,
@@ -65,7 +87,7 @@ export async function readResourceSource(
           ),
         )
       // Live existence/identity validation still runs when recent floors are cached.
-      await read(0, Math.min(1, descriptor.size))
+      await withAbort(read(0, Math.min(1, descriptor.size)), signal)
       const source = {
         size: descriptor.size,
         contentIdentity: descriptor.sha256,
@@ -75,10 +97,15 @@ export async function readResourceSource(
           const from = bound(start),
             to = Math.max(from, bound(end))
           return {
-            async arrayBuffer() {
+            async arrayBuffer(readSignal = signal) {
               const bytes = new Uint8Array(to - from)
               for (let offset = from; offset < to; offset += 256 * 1024) {
-                const chunk = await read(offset, Math.min(256 * 1024, to - offset))
+                readSignal?.throwIfAborted()
+                const chunk = await withAbort(
+                  read(offset, Math.min(256 * 1024, to - offset)),
+                  readSignal,
+                )
+                readSignal?.throwIfAborted()
                 bytes.set(new Uint8Array(chunk), offset - from)
               }
               return bytes.buffer
@@ -100,8 +127,16 @@ export async function readResourceSource(
     }
   }
   // Encrypted originals and old file mirrors retain their established verified owner.
-  const resource = await get(id)
+  const resource = await withAbort(!activeNative && decode ? decode(record) : get(id), signal)
+  signal?.throwIfAborted()
   return resource
-    ? { ...toResourceSummary(resource), originalSource: resource.originalBlob }
+    ? {
+        ...toResourceSummary(resource),
+        originalSource: resource.originalBlob,
+        requiresWholeRead:
+          isEncryptedResource(record) ||
+          isNativeBackedResource(record) ||
+          ('originalBlob' in record && record.originalBlob instanceof ArrayBuffer),
+      }
     : undefined
 }

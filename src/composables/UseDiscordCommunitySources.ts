@@ -5,9 +5,6 @@ import { useTransientStatus } from '../composables/UseTransientStatus'
 import { communitySourceService } from '../core/CommunitySourceRuntime'
 import {
   COMMUNITY_SOURCE_MESSAGE_KIND,
-  COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE,
-  COMMUNITY_SOURCE_REFRESH_MODE,
-  COMMUNITY_SOURCE_REMOTE_STATE,
   type CommunitySourceMessage,
   type CommunitySourceRevision,
   type ResourceCommunitySourceSummary,
@@ -16,8 +13,6 @@ import {
 import type {
   DiscordCommunitySourcesEvents,
   DiscordCommunitySourcesProps,
-  RefreshCandidate,
-  RefreshMode,
   RevisionComparisonItem,
   RevisionViewMode,
   SourcePresentation,
@@ -27,12 +22,9 @@ import {
   type DiscordEmbedPresentation,
 } from '../utils/DiscordMessagePresentation'
 import { useDiscordSourceAttachments } from './UseDiscordSourceAttachments'
-import { useDiscordSourceRefresh } from './UseDiscordSourceRefresh'
 export type {
   DiscordCommunitySourcesEvents,
   DiscordCommunitySourcesProps,
-  RefreshCandidate,
-  RefreshMode,
   RevisionComparisonItem,
   RevisionViewMode,
   SourcePresentation,
@@ -42,32 +34,6 @@ export function useDiscordCommunitySources(
   props: Readonly<DiscordCommunitySourcesProps>,
   emit: EmitFn<DiscordCommunitySourcesEvents>,
 ) {
-  const {
-    checkForUpdates,
-    applyRefresh,
-    cancelRefreshDecision,
-    refreshChangeLabel,
-    refreshChangeDetails,
-  } = useDiscordSourceRefresh(() => ({
-    detailLoading,
-    checkingSourceId,
-    applyingRefresh,
-    get refreshController() {
-      return refreshController
-    },
-    set refreshController(value: typeof refreshController) {
-      refreshController = value
-    },
-    refreshError,
-    refreshCandidate,
-    selectedRefreshMessageIds,
-    load,
-    showTransientStatus,
-    refreshMode,
-    refreshCanApply,
-    historyOpen,
-  }))
-
   const {
     clearAttachmentObjectUrls,
     handleBackgroundAttachmentUpdate,
@@ -94,7 +60,7 @@ export function useDiscordCommunitySources(
     props,
     embedCache,
     savingAttachmentKey,
-    refreshError,
+    operationError,
     load,
     showTransientStatus,
   }))
@@ -123,17 +89,7 @@ export function useDiscordCommunitySources(
 
   const deleteStarterModeOpen = ref(false)
 
-  const checkingSourceId = ref('')
-
-  const refreshError = ref('')
-
-  const refreshCandidate = ref<RefreshCandidate>()
-
-  const refreshMode = ref<RefreshMode>('keep')
-
-  const selectedRefreshMessageIds = ref<string[]>([])
-
-  const applyingRefresh = ref(false)
+  const operationError = ref('')
 
   const historyOpen = ref(false)
 
@@ -167,8 +123,6 @@ export function useDiscordCommunitySources(
 
   let longPressStartY = 0
 
-  let refreshController: AbortController | undefined
-
   let detailLoadGeneration = 0
 
   const detailMessages = computed(() => sortMessages(detailSource.value?.messages ?? []))
@@ -177,10 +131,6 @@ export function useDiscordCommunitySources(
     [...(detailSource.value?.source.revisions ?? [])].sort(
       (left, right) => right.createdAt - left.createdAt,
     ),
-  )
-
-  const detailChecking = computed(() =>
-    Boolean(detailSource.value && checkingSourceId.value === detailSource.value.source.id),
   )
 
   const selectedRevisionMessages = computed(() =>
@@ -231,37 +181,6 @@ export function useDiscordCommunitySources(
     if (!first) return ''
     const date = new Date(first.timestamp)
     return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('zh-CN')
-  })
-
-  const refreshDiffRows = computed(() => {
-    const diff = refreshCandidate.value?.diff
-    if (!diff) return []
-    const rows: Array<{ label: string; value: string }> = []
-    if (diff.newMessages) rows.push({ label: '新增消息', value: `${diff.newMessages} 条` })
-    if (diff.contentChanges) rows.push({ label: '正文', value: `${diff.contentChanges} 条有变化` })
-    if (diff.embedChanges) rows.push({ label: 'Embed', value: `${diff.embedChanges} 条有变化` })
-    if (diff.attachmentChanges)
-      rows.push({ label: '附件', value: `${diff.attachmentChanges} 条有变化` })
-    if (diff.missingMessages)
-      rows.push({ label: '远端删除', value: `${diff.missingMessages} 条，本地继续保留` })
-    if (diff.restoredMessages)
-      rows.push({ label: '恢复可访问', value: `${diff.restoredMessages} 条` })
-    if (diff.sourceMetadataChanges)
-      rows.push({ label: '帖子信息', value: `${diff.sourceMetadataChanges} 处有变化` })
-    return rows
-  })
-
-  const refreshCanApply = computed(() => {
-    const diff = refreshCandidate.value?.diff
-    if (!diff) return false
-    return Boolean(
-      diff.newMessages ||
-      selectedRefreshMessageIds.value.length ||
-      diff.changedMessages ||
-      diff.missingMessages ||
-      diff.restoredMessages ||
-      diff.sourceMetadataChanges,
-    )
   })
 
   const actionSheetActions = computed<readonly ActionSheetAction[]>(() => {
@@ -463,7 +382,6 @@ export function useDiscordCommunitySources(
   onBeforeUnmount(() => {
     detailLoadGeneration += 1
     clearLongPress()
-    refreshController?.abort()
     window.removeEventListener(
       'srl:community-source-attachments-updated',
       handleBackgroundAttachmentUpdate,
@@ -487,40 +405,19 @@ export function useDiscordCommunitySources(
     return view.source.latestMessagePreview || '已保存来源内容'
   }
 
-  function sourceBadge(view: ResourceCommunitySourceSummary): {
+  function sourceBadge(): {
     label: string
     tone: 'neutral' | 'ok' | 'warn' | 'bad'
   } {
-    if (view.source.remoteState === COMMUNITY_SOURCE_REMOTE_STATE.UNAVAILABLE) {
-      return { label: '原帖不可访问', tone: 'bad' }
-    }
-    if (view.source.discordRefreshMode === COMMUNITY_SOURCE_REFRESH_MODE.MANUAL) {
-      return { label: '手动更新', tone: 'neutral' }
-    }
-    if ((view.source.missingMessageCount ?? 0) > 0) {
-      return { label: '部分消息不可访问', tone: 'bad' }
-    }
-    if (view.source.hasRemoteUpdate) return { label: '有更新', tone: 'warn' }
-    if (
-      view.source.remoteState === COMMUNITY_SOURCE_REMOTE_STATE.AVAILABLE &&
-      view.source.lastCheckedAt
-    ) {
-      return { label: '已同步', tone: 'ok' }
-    }
     return { label: '已保存', tone: 'neutral' }
   }
 
   function sourceMeta(view: ResourceCommunitySourceSummary): string {
     const revisions = view.source.revisionCount
-    const missing = view.source.missingMessageCount ?? 0
-    const missingSuffix = missing ? ` · ${missing} 条远端已删除` : ''
     const countSuffix =
       typeof view.source.messageCount === 'number' ? ` · ${view.source.messageCount} 条内容` : ''
     const revisionSuffix = revisions ? ` · 历史版本 ${revisions}` : ''
-    if (view.source.lastCheckedAt) {
-      return `上次检查 ${formatDate(view.source.lastCheckedAt)}${revisionSuffix}${countSuffix}${missingSuffix}`
-    }
-    return `最近保存 ${formatDate(view.source.updatedAt)}${countSuffix}${missingSuffix}`
+    return `最近保存 ${formatDate(view.source.updatedAt)}${revisionSuffix}${countSuffix}`
   }
 
   function sourceInitialMessage(
@@ -545,9 +442,7 @@ export function useDiscordCommunitySources(
     detailSelectedMessageId.value = ''
     navigationOpen.value = false
     historyOpen.value = false
-    refreshError.value = ''
-    refreshCandidate.value = undefined
-    selectedRefreshMessageIds.value = []
+    operationError.value = ''
     selectedRevision.value = undefined
     revisionSheetOpen.value = false
     clearAttachmentObjectUrls()
@@ -591,9 +486,7 @@ export function useDiscordCommunitySources(
     detailSelectedMessageId.value = ''
     navigationOpen.value = false
     historyOpen.value = false
-    refreshCandidate.value = undefined
-    selectedRefreshMessageIds.value = []
-    refreshError.value = ''
+    operationError.value = ''
     selectedRevision.value = undefined
     revisionSheetOpen.value = false
     clearAttachmentObjectUrls()
@@ -719,7 +612,7 @@ export function useDiscordCommunitySources(
     const view = actionSource.value
     const message = actionMessage.value
     if (!view || !message) return
-    refreshError.value = ''
+    operationError.value = ''
     try {
       await communitySourceService.deleteSavedMessage(
         view.source.id,
@@ -732,7 +625,7 @@ export function useDiscordCommunitySources(
       await load()
       dispatchSourcesChanged()
     } catch (error) {
-      refreshError.value = error instanceof Error ? error.message : '删除本机保存副本失败'
+      operationError.value = error instanceof Error ? error.message : '删除本机保存副本失败'
     }
   }
 
@@ -803,7 +696,7 @@ export function useDiscordCommunitySources(
     const revision = selectedRevision.value
     if (!view || !revision || restoringRevision.value) return
     restoringRevision.value = true
-    refreshError.value = ''
+    operationError.value = ''
     try {
       await communitySourceService.restoreRevision(view.source.id, revision.id)
       revisionRestoreConfirmOpen.value = false
@@ -812,7 +705,7 @@ export function useDiscordCommunitySources(
       selectedRevision.value = undefined
       showTransientStatus('已恢复历史版本；恢复前状态已自动保存为新的历史版本')
     } catch (error) {
-      refreshError.value = error instanceof Error ? error.message : '恢复历史版本失败'
+      operationError.value = error instanceof Error ? error.message : '恢复历史版本失败'
     } finally {
       restoringRevision.value = false
     }
@@ -836,15 +729,10 @@ export function useDiscordCommunitySources(
     closeDetail,
     detailSourceDate,
     formatDate,
-    COMMUNITY_SOURCE_REFRESH_MODE,
     detailLoading,
-    detailChecking,
-    applyingRefresh,
-    checkForUpdates,
     openSourceManagement,
     detailLoadError,
-    COMMUNITY_SOURCE_REMOTE_STATE,
-    refreshError,
+    operationError,
     detailMessages,
     messageElementId,
     detailSelectedMessageId,
@@ -853,7 +741,6 @@ export function useDiscordCommunitySources(
     moveLongPress,
     finishLongPress,
     kindLabel,
-    COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE,
     embedPresentations,
     imageAttachments,
     attachmentDisplayUrl,
@@ -876,15 +763,6 @@ export function useDiscordCommunitySources(
     navigateToMessage,
     navPreview,
     navigateToHistory,
-    refreshCandidate,
-    cancelRefreshDecision,
-    refreshDiffRows,
-    selectedRefreshMessageIds,
-    refreshChangeLabel,
-    refreshChangeDetails,
-    refreshMode,
-    refreshCanApply,
-    applyRefresh,
     revisionSheetOpen,
     selectedRevision,
     revisionViewMode,

@@ -6,7 +6,6 @@ import type { usePresetStitcherApp } from '../composables/UsePresetStitcherApp'
 export type PresetEntryEditorModel = Pick<
   ShallowUnwrapRef<ReturnType<typeof usePresetStitcherApp>>,
   | 'editor'
-  | 'editorOverlayStyle'
   | 'mobileEditorOverlay'
   | 'ROLE_OPTIONS'
   | 'setEditorTextarea'
@@ -26,7 +25,7 @@ const editor = toRef(props.model, 'editor')
 
 <template>
   <PresetStitchEditorPortal :active="model.mobileEditorOverlay">
-    <div v-if="editor" class="stitch-editor" data-srl-controls :style="model.editorOverlayStyle">
+    <div v-if="editor" class="stitch-editor" data-srl-controls>
       <label>
         名称<input
           v-model="editor.name"
@@ -165,38 +164,35 @@ const editor = toRef(props.model, 'editor')
   flex: 1 0 10rem;
   padding-inline: 0.55rem;
 }
-@media (max-width: 52rem) {
+@media (max-width: 53.75rem) {
   .stitch-editor {
     position: fixed;
     z-index: 360;
-    right: max(0.35rem, var(--safe-right));
-    bottom: calc(max(0.35rem, var(--safe-bottom)) + var(--stitch-editor-keyboard-offset, 0px));
-    left: max(0.35rem, var(--safe-left));
+    inset: var(--visual-viewport-offset-top, 0px) 0 auto;
     display: grid;
     grid-template-columns: minmax(0, 1fr) 6rem;
-    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    grid-template-rows: auto minmax(auto, 1fr) auto auto;
     gap: 0.3rem;
-    height: calc(
-      var(--stitch-editor-viewport, var(--app-viewport-height)) - max(0.35rem, var(--safe-top)) -
-        max(0.35rem, var(--safe-bottom))
-    );
-    max-height: calc(var(--stitch-editor-viewport, var(--app-viewport-height)) - 0.7rem);
+    height: var(--app-viewport-height, 100dvh);
+    max-height: none;
     overflow: auto;
+    container-type: size;
     overscroll-behavior: contain;
-    padding: 0.65rem;
-    border: 1px solid var(--dialog-border, var(--color-line-strong));
-    border-radius: var(--dialog-radius, var(--radius-card));
-    background: var(--dialog-background, var(--color-canvas));
-    box-shadow: var(--dialog-shadow, 0 8px 24px var(--color-shadow));
+    padding: max(0.65rem, var(--safe-top)) max(0.65rem, var(--safe-right))
+      max(0.65rem, var(--safe-bottom)) max(0.65rem, var(--safe-left));
+    border: 0;
+    border-radius: 0;
+    background: var(--color-canvas);
+    box-shadow: none;
   }
   .stitch-editor textarea {
-    /* 键盘缩高后仍须容纳在正文轨道内，不能越过宏按钮和保存栏。 */
+    /* 正文轨道保留编辑空间；放不下的变量与操作沿外层滚动查看。 */
     min-height: 0;
     flex: 1;
     resize: none;
   }
   .stitch-editor > label:has(textarea) {
-    min-height: 0;
+    min-height: min(11rem, 60cqh);
     grid-column: 1 / -1;
   }
   .stitch-editor__macros,

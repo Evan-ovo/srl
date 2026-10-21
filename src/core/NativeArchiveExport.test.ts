@@ -43,7 +43,7 @@ it('reuses compressed resources without reading originals and routes remaining n
   const second = {
     ...resource,
     id: 'b',
-    originalBlob: rememberNativeFile(new Blob(['abc']), 'file:///native-b'),
+    originalBlob: rememberNativeFile(new Blob(), 'file:///native-b', 3),
   }
   const read = vi.fn(async (r: Resource) => r)
   native.beginArchive.mockResolvedValue({ id: 'job' })

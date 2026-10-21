@@ -104,6 +104,7 @@ describe('assistant workspace with actual indexed settings', () => {
       if (sourceId !== 'full-chat') return
       received.push({ id: value.id, toolState: value.history[0]?.toolCalls?.[0]?.state })
     })
+    const stringify = vi.spyOn(JSON, 'stringify')
     await workspace.save(
       {
         ...chat,
@@ -119,6 +120,11 @@ describe('assistant workspace with actual indexed settings', () => {
       false,
       'full-chat',
     )
+    const completeSnapshots = stringify.mock.calls.filter(
+      ([value]) => value && typeof value === 'object' && value.id === chat.id && value.history,
+    )
+    stringify.mockRestore()
+    expect(completeSnapshots).toHaveLength(1)
     await workspace.flush()
     expect(received).toEqual([{ id: chat.id, toolState: 'running' }])
     expect((await storage.read(chat.id))?.history[0]?.toolCalls?.[0]?.state).toBe('cancelled')

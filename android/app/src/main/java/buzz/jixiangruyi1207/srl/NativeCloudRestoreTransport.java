@@ -41,6 +41,9 @@ final class NativeCloudRestoreTransport {
     interface ObjectLocator { File locate(String hash) throws Exception; }
     /** Called concurrently for distinct hashes; implementations must honor interruption. */
     interface ObjectDownloader { void download(RestoreObject object, File temporary) throws Exception; }
+    interface CancellableDownloader extends ObjectDownloader { void cancel(); }
+    /** Invocation-local proof; persisted chunks still require full verification on reopen. */
+    interface VerifiedDownloader extends CancellableDownloader {}
     interface RestoreProgress { void update(int completed, int total) throws Exception; }
 
     static final class RestoreObject {
@@ -92,6 +95,9 @@ final class NativeCloudRestoreTransport {
         Map<Future<RestoreCounts>, RestoreResource> pending = new HashMap<>();
         java.util.Iterator<RestoreResource> queue = unique.values().iterator();
         RestoreCounts total = new RestoreCounts();
+        NativeCloudSharedRestoreDownloads shared = new NativeCloudSharedRestoreDownloads(root,
+            new java.util.ArrayList<>(unique.values()), downloader);
+        boolean successful = false;
         int processed = 0;
         try {
             while (queue.hasNext() || !pending.isEmpty()) {
@@ -102,7 +108,7 @@ final class NativeCloudRestoreTransport {
                         Map<String, RestoreObject> needed = new java.util.LinkedHashMap<>();
                         for (RestoreSegment segment : resource.segments) needed.put(segment.hash, objectIndex.get(segment.hash));
                         return restoreFiles(new File(root, resource.hash), new java.util.ArrayList<>(needed.values()),
-                            java.util.Collections.singletonList(resource), locator, downloader.get(), true, (done, count) -> {});
+                            java.util.Collections.singletonList(resource), locator, shared.forResource(), true, (done, count) -> {});
                     }), resource);
                 }
                 Future<RestoreCounts> future = ready.take();
@@ -123,8 +129,11 @@ final class NativeCloudRestoreTransport {
                 completion.complete(resource.hash, failure);
                 progress.update(++processed, unique.size());
             }
+            total.downloaded = shared.downloaded.get();
+            successful = total.failures.isEmpty();
             return total;
         } finally {
+            shared.cancel();
             for (Future<RestoreCounts> future : pending.keySet()) future.cancel(true);
             executor.shutdownNow();
             boolean interrupted = false;
@@ -133,6 +142,7 @@ final class NativeCloudRestoreTransport {
                 catch (InterruptedException stopped) { interrupted = true; }
             }
             if (interrupted) Thread.currentThread().interrupt();
+            shared.finish(successful);
         }
     }
 
@@ -333,7 +343,7 @@ final class NativeCloudRestoreTransport {
                             // The native downloader validates the full network/prefix stream itself.
                             // Assembly still hashes persisted source bytes before any installation.
                             // Arbitrary downloaders have no such proof and retain the full file check.
-                            boolean valid = downloader instanceof NativeObjectDownloader
+                            boolean valid = downloader instanceof VerifiedDownloader
                                 ? isReusableCasObject(target, object.size) : verifyFile(target, object.hash, object.size);
                             if (!valid) {
                                 target.delete();
@@ -379,7 +389,7 @@ final class NativeCloudRestoreTransport {
         }
 
         void cancelDownloads() {
-            if (downloader instanceof NativeObjectDownloader) ((NativeObjectDownloader) downloader).cancel();
+            if (downloader instanceof CancellableDownloader) ((CancellableDownloader) downloader).cancel();
         }
 
         @Override public void close() {
@@ -401,7 +411,7 @@ final class NativeCloudRestoreTransport {
     }
 
     /** Invocation-scoped cancellation and verification proof, never a persisted trust flag. */
-    private static final class NativeObjectDownloader implements ObjectDownloader {
+    private static final class NativeObjectDownloader implements VerifiedDownloader {
         final String provider, secret, username;
         final java.util.function.Consumer<okhttp3.Call> onCall;
         final Set<okhttp3.Call> calls = new HashSet<>();
@@ -426,7 +436,7 @@ final class NativeCloudRestoreTransport {
                 synchronized (this) { calls.remove(active.get()); }
             }
         }
-        synchronized void cancel() {
+        public synchronized void cancel() {
             cancelled = true;
             for (okhttp3.Call call : calls) call.cancel();
         }

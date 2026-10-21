@@ -36,6 +36,29 @@ async function drain(): Promise<void> {
 }
 
 describe('ConfirmDialog + confirmAction', () => {
+  it('closes the native modal while connected before removing an answered confirmation', async () => {
+    await drain()
+    const wrapper = mount(ConfirmDialog, { attachTo: document.body })
+    const closed: boolean[] = []
+    const close = vi.spyOn(HTMLDialogElement.prototype, 'close').mockImplementation(function (
+      this: HTMLDialogElement,
+    ) {
+      closed.push(this.isConnected)
+      this.removeAttribute('open')
+    })
+    try {
+      const pending = confirmAction({ message: '运行 Vue 预览' })
+      await flushPromises()
+      confirmButton()!.click()
+      await expect(pending).resolves.toBe(true)
+      await flushPromises()
+      expect(closed).toEqual([true])
+      expect(document.querySelector('.confirm-dialog__overlay')).toBeNull()
+    } finally {
+      wrapper.unmount()
+      close.mockRestore()
+    }
+  })
   it('gates destructive confirmation on full typed text, resets on reopen, and blocks paste/drop', async () => {
     await drain()
     const wrapper = mount(ConfirmDialog, { attachTo: document.body })

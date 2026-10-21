@@ -1165,6 +1165,61 @@
 }
 
 @media (max-width: 53.75rem) {
+  .editor-overlay {
+    --mobile-dialog-top-space: max(0.75rem, var(--safe-top));
+    grid-template-rows: minmax(
+      0,
+      calc(var(--visual-viewport-height) - var(--mobile-dialog-top-space))
+    );
+    align-items: end;
+    padding: var(--mobile-dialog-top-space) 0 0;
+  }
+
+  .layout-settings-overlay {
+    display: block;
+    padding: 0;
+  }
+
+  :root[data-ios-keyboard-open='true'] .editor-overlay {
+    --editor-overlay-background: var(--color-surface-raised);
+  }
+
+  .editor-sheet,
+  .editor-sheet--wide,
+  .export-sheet,
+  .restore-sheet {
+    width: 100%;
+    max-height: calc(var(--visual-viewport-height) - max(0.75rem, var(--safe-top)));
+    padding: 1.25rem var(--mobile-gutter) max(1.25rem, var(--safe-bottom));
+    border-right: 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-radius: 8px 8px 0 0;
+  }
+
+  :root body .mobile-dialog-viewport,
+  :root body .feedback-admin,
+  :root body .feedback-admin__settings-backdrop,
+  :root body .fw-workbench,
+  :root body .persona-app__rename-overlay,
+  :root body .discord-inbox-dialog-backdrop,
+  :root body .frontend-workbench__layer-popover,
+  :root body .feature-hub[data-feature-page='folders'],
+  :root body .stitch.is-reading,
+  :root body .external-app-host__workspace--immersive,
+  :root body .external-app-manager__overlay {
+    /* Keep existing fixed editors on one viewport origin/height through landscape widths. */
+    inset: var(--visual-viewport-offset-top) 0 auto;
+    height: var(--visual-viewport-height);
+  }
+
+  .editor-overlay {
+    /* Keep the backdrop full size through focus zoom and keyboard transitions.
+       Only the first grid row (the interactive sheet) uses the visual height. */
+    inset: var(--visual-viewport-offset-top) 0 auto;
+    height: var(--layout-viewport-height, 100lvh);
+  }
+
   :root {
     --size-card-min: 10.5rem;
     --space-grid: clamp(0.75rem, 2.5vw, 1rem);
@@ -1232,12 +1287,17 @@
     --bottom-action-reserved: 3.875rem;
   }
 
-  body.modal-open .mobile-bottom-nav {
+  body.modal-open .mobile-bottom-nav,
+  body:has(.assistant-pet-dialog--expanded[open]) .mobile-bottom-nav {
     visibility: hidden;
     pointer-events: none;
   }
 
-  /* Only fixed-viewport apps with an explicit internal scroller lock the host document. */
+  /* Chat visibility is already published by FeatureHub; it also owns an internal scroller. */
+  :root:has(.feature-hub--assistant),
+  body:has(.feature-hub--assistant),
+  :root:has(.assistant-pet-dialog--expanded[open]),
+  body:has(.assistant-pet-dialog--expanded[open]),
   :root.feature-app-scroll-lock,
   body.feature-app-scroll-lock,
   :root.modal-open,
@@ -1247,6 +1307,10 @@
 
   body.modal-open .notice {
     display: none;
+  }
+
+  .layout-settings-page {
+    height: var(--visual-viewport-height);
   }
 
   .sidebar {
@@ -1961,48 +2025,6 @@
     font-size: 1.35rem;
   }
 
-  :root body .mobile-dialog-viewport,
-  .editor-overlay {
-    /* Height and origin must follow the same viewport, including keyboard pan. */
-    inset: var(--visual-viewport-offset-top) 0 auto;
-    height: var(--visual-viewport-height);
-  }
-
-  .editor-overlay {
-    --mobile-dialog-top-space: max(0.75rem, var(--safe-top));
-    grid-template-rows: minmax(
-      0,
-      calc(var(--visual-viewport-height) - var(--mobile-dialog-top-space))
-    );
-    align-items: end;
-    padding: var(--mobile-dialog-top-space) 0 0;
-  }
-
-  .layout-settings-overlay {
-    display: block;
-    padding: 0;
-  }
-
-  :root[data-ios-keyboard-open='true'] .editor-overlay {
-    /* Keep the existing backdrop under iOS's translucent keyboard accessory.
-       Only the first grid row (the interactive sheet) shrinks with the keyboard. */
-    height: var(--layout-viewport-height, 100lvh);
-    --editor-overlay-background: var(--color-surface-raised);
-  }
-
-  .editor-sheet,
-  .editor-sheet--wide,
-  .export-sheet,
-  .restore-sheet {
-    width: 100%;
-    max-height: calc(var(--visual-viewport-height) - max(0.75rem, var(--safe-top)));
-    padding: 1.25rem var(--mobile-gutter) max(1.25rem, var(--safe-bottom));
-    border-right: 0;
-    border-bottom: 0;
-    border-left: 0;
-    border-radius: 8px 8px 0 0;
-  }
-
   .resource-detail-overlay {
     z-index: 24;
     --mobile-dialog-top-space: 0px;
@@ -2023,11 +2045,6 @@
     border-radius: 0;
     background: var(--dialog-background);
     box-shadow: none;
-  }
-
-  :root[data-ios-keyboard-open='true'] .layout-settings-overlay {
-    height: var(--visual-viewport-height);
-    --editor-overlay-background: var(--color-surface-raised);
   }
 
   .layout-settings-page .layout-settings__header {

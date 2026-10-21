@@ -9,10 +9,7 @@ import { isResourceGalleryImage } from '../types/ResourceGallery'
 import {
   COMMUNITY_SOURCE_ATTACHMENT_LOCAL_STATE,
   COMMUNITY_SOURCE_MESSAGE_KIND,
-  COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE,
   COMMUNITY_SOURCE_PLATFORM,
-  COMMUNITY_SOURCE_REFRESH_MODE,
-  COMMUNITY_SOURCE_REMOTE_STATE,
   createCommunitySourceId,
   createCommunitySourceMessageId,
   createDiscordSourceKey,
@@ -23,11 +20,9 @@ import {
   type CommunitySourceBackupData,
   type CommunitySourceMessage,
   type CommunitySourceMessageKind,
-  type CommunitySourceRemoteState,
   type CommunitySourceSummary,
   type DiscordAttachmentMeta,
   type DiscordCapture,
-  type DiscordSourceRemoteScanCursor,
   type ResourceCommunitySourceSummary,
   type ResourceCommunitySourceView,
   type ResourceSourceBinding,
@@ -36,7 +31,6 @@ import {
 import {
   clean,
   normalizeStringList,
-  normalizeMessageIds,
   safeHttpUrl,
   normalizeAttachments,
   hashIdentity,
@@ -57,20 +51,6 @@ const AUTO_LOCAL_ATTACHMENT_BYTES = 8 * 1024 * 1024
 const MAX_MANUAL_LOCAL_ATTACHMENT_BYTES = 64 * 1024 * 1024
 
 const ATTACHMENT_DOWNLOAD_TIMEOUT_MS = 15_000
-
-const MAX_IGNORED_REMOTE_MESSAGE_IDS = 128
-
-type DiscordRefreshSyncState = {
-  remoteScanCursor?: DiscordSourceRemoteScanCursor
-  savedMessageCheckCursor?: string
-}
-
-type DiscordRefreshOptions = {
-  keepPrevious: boolean
-  includeNewMessageIds?: readonly string[]
-  missingMessageIds?: readonly string[]
-  syncState?: DiscordRefreshSyncState
-}
 
 type CommunitySourceAssetStore = {
   put(
@@ -453,12 +433,6 @@ export class CommunitySourceService {
     } else {
       source = withDiscordSourceMetadata(source, capture, capturedAt, now)
       if (!stale) {
-        source.ignoredRemoteMessageIds = normalizeMessageIds(
-          (source.ignoredRemoteMessageIds ?? []).filter(
-            (messageId) => messageId !== capture.messageId,
-          ),
-          MAX_IGNORED_REMOTE_MESSAGE_IDS,
-        )
         source.updatedAt = now
         if (capture.isStarter) {
           source.starterMessageId = capture.messageId
@@ -749,305 +723,6 @@ export class CommunitySourceService {
       },
       'shared',
     )
-  }
-
-  async recordRemoteCheck(
-    sourceId: string,
-    state: CommunitySourceRemoteState,
-    hasRemoteUpdate = false,
-    syncState?: DiscordRefreshSyncState,
-  ): Promise<CommunitySource> {
-    return withCaptureSave(
-      'discord-local-media',
-      async () => {
-        const source = await this.storage.getSource(sourceId)
-        if (!source) throw new Error('社区来源不存在')
-        const updated: CommunitySource = {
-          ...source,
-          remoteState: state,
-          hasRemoteUpdate: state === COMMUNITY_SOURCE_REMOTE_STATE.AVAILABLE && hasRemoteUpdate,
-          lastCheckedAt: Date.now(),
-          ...(syncState ?? {}),
-        }
-        delete updated.discordRefreshMode
-        await this.storage.putSource(updated)
-        return updated
-      },
-      'shared',
-    )
-  }
-
-  async clearRemoteAvailability(sourceId: string): Promise<CommunitySource> {
-    return withCaptureSave(
-      'discord-local-media',
-      async () => {
-        const source = await this.storage.getSource(sourceId)
-        if (!source) throw new Error('社区来源不存在')
-        const updated = { ...source }
-        delete updated.remoteState
-        delete updated.hasRemoteUpdate
-        await this.storage.putSource(updated)
-        return updated
-      },
-      'shared',
-    )
-  }
-
-  async recordManualRefresh(sourceId: string): Promise<CommunitySource> {
-    return withCaptureSave(
-      'discord-local-media',
-      async () => {
-        const source = await this.storage.getSource(sourceId)
-        if (!source) throw new Error('社区来源不存在')
-        const updated: CommunitySource = {
-          ...source,
-          discordRefreshMode: COMMUNITY_SOURCE_REFRESH_MODE.MANUAL,
-        }
-        delete updated.remoteState
-        delete updated.hasRemoteUpdate
-        await this.storage.putSource(updated)
-        return updated
-      },
-      'shared',
-    )
-  }
-
-  async recordMessageRemoteCheck(
-    sourceId: string,
-    presentMessageIds: readonly string[],
-    missingMessageIds: readonly string[],
-  ): Promise<void> {
-    return withCaptureSave(
-      'discord-local-media',
-      async () => {
-        const present = new Set(presentMessageIds)
-        const missing = new Set(missingMessageIds)
-        const now = Date.now()
-        const messages = await this.storage.listMessages(sourceId)
-        for (const message of messages) {
-          const nextState = missing.has(message.messageId)
-            ? COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE.MISSING
-            : present.has(message.messageId)
-              ? COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE.AVAILABLE
-              : undefined
-          if (!nextState || (message.remoteState === nextState && message.lastRemoteCheckedAt))
-            continue
-          await this.storage.putMessage({
-            ...message,
-            remoteState: nextState,
-            lastRemoteCheckedAt: now,
-            updatedAt: now,
-          })
-        }
-      },
-      'shared',
-    )
-  }
-
-  async ignoreRemoteMessages(
-    sourceId: string,
-    messageIds: readonly string[],
-    syncState?: DiscordRefreshSyncState,
-  ): Promise<CommunitySource> {
-    return withCaptureSave(
-      'discord-local-media',
-      async () => {
-        const source = await this.storage.getSource(sourceId)
-        if (!source) throw new Error('社区来源不存在')
-        const ignoredRemoteMessageIds = normalizeMessageIds(
-          [...(source.ignoredRemoteMessageIds ?? []), ...messageIds],
-          MAX_IGNORED_REMOTE_MESSAGE_IDS,
-        )
-        const updated: CommunitySource = {
-          ...source,
-          hasRemoteUpdate: false,
-          ignoredRemoteMessageIds,
-          ...(syncState ?? {}),
-          updatedAt: Date.now(),
-        }
-        await this.storage.putSource(updated)
-        return updated
-      },
-      'shared',
-    )
-  }
-
-  async applyDiscordRefresh(
-    sourceId: string,
-    captureInputs: readonly DiscordCapture[],
-    options: DiscordRefreshOptions,
-  ): Promise<{ source: CommunitySource; messages: CommunitySourceMessage[] }> {
-    const source = await this.storage.getSource(sourceId)
-    if (!source) throw new Error('社区来源不存在')
-    return withCaptureSave(
-      'discord-local-media',
-      () =>
-        withCaptureSave(source.sourceKeyHash, () =>
-          this.persistDiscordRefresh(sourceId, captureInputs, options),
-        ),
-      'shared',
-    )
-  }
-
-  private async persistDiscordRefresh(
-    sourceId: string,
-    captureInputs: readonly DiscordCapture[],
-    options: DiscordRefreshOptions,
-  ): Promise<{ source: CommunitySource; messages: CommunitySourceMessage[] }> {
-    const source = await this.storage.getSource(sourceId)
-    if (!source) throw new Error('社区来源不存在')
-    const currentMessages = await this.storage.listMessages(sourceId)
-    const existingByMessageId = new Map(
-      currentMessages.map((message) => [message.messageId, message]),
-    )
-
-    const verified: DiscordCapture[] = []
-    const seenMessageIds = new Set<string>()
-    for (const input of captureInputs) {
-      const capture = normalizeCapture(input)
-      if (seenMessageIds.has(capture.messageId)) continue
-      const captureSourceKeyHash = await hashIdentity(createDiscordSourceKey(capture))
-      if (captureSourceKeyHash !== source.sourceKeyHash) continue
-      seenMessageIds.add(capture.messageId)
-      verified.push(capture)
-    }
-    if (!verified.length && !(options.missingMessageIds?.length ?? 0)) {
-      throw new Error('没有可用于更新的 Discord 内容')
-    }
-
-    const starterCapture = verified.find(
-      (capture) =>
-        capture.isStarter ||
-        (source.starterMessageId && capture.messageId === source.starterMessageId),
-    )
-    const metadataCapture = starterCapture ?? verified[0]
-    const starterAuthorId = source.starterAuthorId ?? starterCapture?.authorId
-    const ignoredIds = new Set(source.ignoredRemoteMessageIds ?? [])
-
-    const relevant = verified.filter((capture) => {
-      if (existingByMessageId.has(capture.messageId)) return true
-      if (capture.isStarter || capture.messageId === source.starterMessageId) return true
-      if (ignoredIds.has(capture.messageId)) return false
-      if (starterAuthorId && capture.authorId === starterAuthorId) return true
-      return capture.authorBot === true
-    })
-    const candidateNewIds = relevant
-      .filter((capture) => !existingByMessageId.has(capture.messageId))
-      .map((capture) => capture.messageId)
-    const selectedNewIds = new Set(options.includeNewMessageIds ?? candidateNewIds)
-    const declinedNewIds = candidateNewIds.filter((messageId) => !selectedNewIds.has(messageId))
-    const appliedCaptures = relevant.filter(
-      (capture) =>
-        existingByMessageId.has(capture.messageId) || selectedNewIds.has(capture.messageId),
-    )
-    if (
-      !appliedCaptures.length &&
-      !(options.missingMessageIds?.length ?? 0) &&
-      !declinedNewIds.length
-    ) {
-      throw new Error('没有选择要保存的 Discord 更新')
-    }
-
-    const now = Date.now()
-    const revisions = options.keepPrevious ? structuredClone(source.revisions ?? []) : []
-    if (options.keepPrevious) revisions.push(makeRevision(source, currentMessages, now))
-    const nextIgnoredIds = new Set(source.ignoredRemoteMessageIds ?? [])
-    for (const messageId of selectedNewIds) nextIgnoredIds.delete(messageId)
-    for (const messageId of declinedNewIds) nextIgnoredIds.add(messageId)
-
-    let updatedSource: CommunitySource = {
-      ...source,
-      guildName: metadataCapture?.guildName ?? source.guildName,
-      channelName: metadataCapture?.channelName ?? source.channelName,
-      remoteState: COMMUNITY_SOURCE_REMOTE_STATE.AVAILABLE,
-      hasRemoteUpdate: false,
-      lastCheckedAt: now,
-      ignoredRemoteMessageIds: normalizeMessageIds(
-        [...nextIgnoredIds],
-        MAX_IGNORED_REMOTE_MESSAGE_IDS,
-      ),
-      ...(options.syncState ?? {}),
-      revisions,
-      metadataCapturedAt: Math.max(sourceMetadataCapturedAt(source), now),
-      updatedAt: now,
-    }
-    delete updatedSource.discordRefreshMode
-
-    if (starterCapture) {
-      updatedSource = {
-        ...updatedSource,
-        canonicalUrl: starterCapture.canonicalUrl,
-        title: starterCapture.title ?? updatedSource.title,
-        starterMessageId: starterCapture.messageId,
-        starterAuthorId: starterCapture.authorId,
-        starterAuthorName: starterCapture.authorName,
-        forumTags: normalizeStringList([
-          ...updatedSource.forumTags,
-          ...(starterCapture.forumTags ?? []),
-        ]),
-      }
-    }
-
-    const refreshedMessages: CommunitySourceMessage[] = []
-    for (const capture of appliedCaptures) {
-      const existing = existingByMessageId.get(capture.messageId)
-      const keyHash = await messageKeyHash(sourceId, capture.messageId)
-      const inferredKind: CommunitySourceMessageKind =
-        capture.isStarter || capture.messageId === updatedSource.starterMessageId
-          ? COMMUNITY_SOURCE_MESSAGE_KIND.STARTER
-          : updatedSource.starterAuthorId && capture.authorId === updatedSource.starterAuthorId
-            ? COMMUNITY_SOURCE_MESSAGE_KIND.AUTHOR_UPDATE
-            : COMMUNITY_SOURCE_MESSAGE_KIND.SELECTED_COMMENT
-      refreshedMessages.push({
-        id: createCommunitySourceMessageId(sourceId, keyHash),
-        sourceId,
-        messageKeyHash: keyHash,
-        messageId: capture.messageId,
-        kind: existing?.kind ?? inferredKind,
-        authorId: capture.authorId,
-        authorName: capture.authorName,
-        authorBot: capture.authorBot === true,
-        pinned: capture.pinned ?? existing?.pinned,
-        content: capture.content,
-        embeds: structuredClone(capture.embeds ?? []),
-        attachments: await this.localizeAttachments(
-          capture.attachments ?? [],
-          existing?.attachments ?? [],
-          AUTO_LOCAL_ATTACHMENT_BYTES,
-        ),
-        canonicalUrl: capture.canonicalUrl,
-        timestamp: capture.timestamp,
-        editedTimestamp: capture.editedTimestamp,
-        remoteState: COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE.AVAILABLE,
-        lastRemoteCheckedAt: now,
-        capturedAt: existing?.capturedAt ?? now,
-        deliveryCapturedAt: Math.max(existing?.deliveryCapturedAt ?? existing?.updatedAt ?? 0, now),
-        updatedAt: now,
-      })
-    }
-
-    const missingIds = new Set(options.missingMessageIds ?? [])
-    for (const message of currentMessages) {
-      if (!missingIds.has(message.messageId)) continue
-      refreshedMessages.push({
-        ...message,
-        remoteState: COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE.MISSING,
-        lastRemoteCheckedAt: now,
-        updatedAt: now,
-      })
-    }
-
-    if (this.storage.putSourceWithMessages) {
-      await this.storage.putSourceWithMessages(updatedSource, refreshedMessages)
-    } else {
-      await this.storage.putSource(updatedSource)
-      for (const message of refreshedMessages) await this.storage.putMessage(message)
-    }
-
-    const finalMessages = await this.storage.listMessages(sourceId)
-    updatedSource = withMessageSummary(updatedSource, finalMessages)
-    await this.storage.putSource(updatedSource)
-    return { source: updatedSource, messages: finalMessages }
   }
 
   async restoreRevision(

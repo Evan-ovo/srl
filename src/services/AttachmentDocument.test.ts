@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { zipSync, strToU8 } from 'fflate'
 import {
   attachmentFormat,
+  attachmentMediaType,
+  attachmentTablePage,
   attachmentTextFile,
   attachmentZipDirectory,
   readAttachmentText,
@@ -15,6 +17,38 @@ beforeAll(() => {
 })
 afterAll(() => vi.unstubAllGlobals())
 describe('attachment text and archive views', () => {
+  it('recognizes media, code, subtitles and tables without exposing executable formats as documents', () => {
+    for (const name of ['a.MP3', 'a.m4a', 'a.wav', 'a.ogg', 'a.flac'])
+      expect(attachmentFormat(name)).toBe('audio')
+    for (const name of ['a.MP4', 'a.webm', 'a.mov']) expect(attachmentFormat(name)).toBe('video')
+    for (const name of ['a.jpg', 'a.gif', 'a.avif']) expect(attachmentFormat(name)).toBe('image')
+    for (const name of ['a.jsonl', 'a.html', 'a.js', 'a.yml', 'a.srt', 'a.lrc'])
+      expect(attachmentFormat(name)).toBe('code')
+    expect(attachmentFormat('a.tsv')).toBe('table')
+    expect(attachmentMediaType('a.MP3')).toBe('audio/mpeg')
+    expect(attachmentMediaType('a.mp4')).toBe('video/mp4')
+    expect(attachmentFormat('a.svg')).toBe('other')
+    expect(attachmentFormat('a.exe')).toBe('other')
+  })
+  it('pages CSV including quoted newlines, escaped quotes, empty cells and CRLF without reading later rows', () => {
+    const source =
+      '名称,说明,空\r\n"a,b","第一行\r\n第二行 ""引号""",\r\n' + 'x,y,z\n'.repeat(100) + '"未闭合'
+    const first = attachmentTablePage(source, ',')
+    expect(first.rows).toHaveLength(50)
+    expect(first.rows[1]).toEqual(['a,b', '第一行\r\n第二行 "引号"', ''])
+    expect(first.hasMore).toBe(true)
+    const second = attachmentTablePage(source, ',', first.next)
+    expect(second.rows).toHaveLength(50)
+    expect(() => attachmentTablePage(source, ',', second.next)).toThrow('未闭合')
+    expect(attachmentTablePage('a\tb\r\n1\t2', '\t').rows).toEqual([
+      ['a', 'b'],
+      ['1', '2'],
+    ])
+    expect(attachmentTablePage('a,b,', ',').rows).toEqual([['a', 'b', '']])
+    expect(attachmentTablePage('', ',').rows).toEqual([])
+    expect(() => attachmentTablePage('"a"x,b', ',')).toThrow('引号格式')
+    expect(() => attachmentTablePage('x,'.repeat(200), ',')).toThrow('200 列')
+  })
   it('reads Markdown text with the existing decoder and preview limit without offering text writes', async () => {
     expect(attachmentFormat('README.MD')).toBe('markdown')
     expect(attachmentFormat('作者.markdown')).toBe('markdown')

@@ -1,5 +1,5 @@
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate'
-import { createGitHubBundle } from './GitHubBackupBundle'
+import { planGitHubBundle } from './GitHubBackupBundle'
 import { hashCloudBlob } from './CloudArchiveCodec'
 import { albumArchivePath, parseAlbumBackup } from './GeneratedImageAlbumBackup'
 import {
@@ -49,7 +49,7 @@ export interface ArchiveEncoding extends ArchiveTransferOptions {
   communitySourceData?: CommunitySourceBackupData
   communitySourceAttachments: readonly CommunitySourceAttachmentArchiveEntry[]
   path(resource: Resource, historical: boolean): string
-  read(resource: Resource, historical: boolean): Promise<Resource>
+  read(resource: Resource, historical: boolean, preferNativeFile?: boolean): Promise<Resource>
   describe(resource: Resource, historical: boolean): ArchivedResource
 }
 
@@ -344,7 +344,15 @@ export async function writeArchiveEntries(
         if (entry.object) {
           if ((await hashCloudBlob(blob)).toLowerCase() !== entry.object.totalSha256.toLowerCase())
             throw new Error(`相册原图校验失败：${entry.item.name}`)
-        } else entry.object = (await createGitHubBundle(blob, entry.item.name)).manifest
+        } else {
+          // ZIP stores this original as one entry; cloud CDC ranges are never consumed here.
+          entry.object = await planGitHubBundle(
+            blob,
+            entry.item.name,
+            { signal: options.signal },
+            blob.size,
+          )
+        }
         return { blob, path: albumArchivePath(entry.object.totalSha256) }
       },
       async ({ blob, path }) => {

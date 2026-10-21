@@ -341,7 +341,7 @@ describe('RestoreService', () => {
   })
 
   it('stages a large entry as bounded chunks instead of retaining one entry buffer', async () => {
-    const bytes = new Uint8Array(8 * 1024 * 1024)
+    const bytes = new Uint8Array(24 * 1024 * 1024 + 17)
     let state = 0x12345678
     for (let index = 0; index < bytes.length; index += 1) {
       state ^= state << 13

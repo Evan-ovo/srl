@@ -19,6 +19,7 @@ import {
 import RootApp from './RootApp.vue'
 import { isCapacitorApp } from './utils/CapacitorDetection'
 import {
+  getMobileActiveElement,
   isMobileEditableElement,
   revealMobileInputIfOccluded,
   restorePersonalInputScroll,
@@ -38,6 +39,7 @@ let androidNativeDatabaseMigrationWarning: string | undefined
 let lastViewportHeight = -1
 let lastLayoutHeight = -1
 let expandedVisualViewportHeight = -1
+let expandedVisualViewportScale = 1
 let lastViewportOffsetTop = -1
 let lastDisplayMode = ''
 let lastIOSDevice: boolean | undefined
@@ -153,7 +155,7 @@ function getViewportSignature(): string {
 }
 
 function markFocusedMobileInputForReveal(): void {
-  const input = document.activeElement
+  const input = getMobileActiveElement()
   if (!isMobileEditableElement(input)) {
     focusRevealPending = false
     focusRevealTarget = undefined
@@ -186,7 +188,7 @@ function checkViewportStability(): void {
     scheduleViewportSettleCheck()
     return
   }
-  const input = document.activeElement
+  const input = getMobileActiveElement()
   if (
     focusRevealPending &&
     !focusRevealAttempted &&
@@ -211,6 +213,7 @@ function applyViewportState(): void {
   const { height: viewportHeight, offsetTop: viewportOffsetTop } = getViewportBounds()
   const windowHeight = window.innerHeight
   const viewportWidth = window.innerWidth
+  const viewportScale = window.visualViewport?.scale ?? 1
   // Keep the backdrop/layout sizing baseline separate from the visual viewport
   // baseline used for keyboard state: Safari/PWA may report different heights
   // for innerHeight and visualViewport even when the keyboard is closed.
@@ -218,23 +221,37 @@ function applyViewportState(): void {
     layoutViewportWidth = viewportWidth
     lastLayoutHeight = Math.max(windowHeight, viewportHeight)
     expandedVisualViewportHeight = viewportHeight
+    expandedVisualViewportScale = viewportScale
   } else if (viewportHeight >= lastLayoutHeight || windowHeight >= lastLayoutHeight) {
     lastLayoutHeight = Math.max(windowHeight, viewportHeight)
   } else {
     lastLayoutHeight = Math.max(lastLayoutHeight, windowHeight)
   }
-  const focusedEditable = isMobileEditableElement(document.activeElement)
-  if (!focusedEditable && !keyboardFocusActive) expandedVisualViewportHeight = viewportHeight
-  else if (viewportHeight >= expandedVisualViewportHeight) {
+  const focusedEditable = isMobileEditableElement(getMobileActiveElement())
+  if (!focusedEditable && !keyboardFocusActive) {
     expandedVisualViewportHeight = viewportHeight
+    expandedVisualViewportScale = viewportScale
+  } else if (viewportHeight >= expandedVisualViewportHeight) {
+    expandedVisualViewportHeight = viewportHeight
+    expandedVisualViewportScale = viewportScale
   }
   document.documentElement.style.setProperty('--layout-viewport-height', `${lastLayoutHeight}px`)
+  // Compare extents in the same zoom scale: zoom alone must not retain compact
+  // input layout after the obstructed space is restored. Insets/scrolling keep
+  // their stricter keyboard signal below.
+  const visualViewportReduced =
+    Math.floor(
+      expandedVisualViewportHeight * expandedVisualViewportScale - viewportHeight * viewportScale,
+    ) > 0
+  if (document.documentElement.dataset.visualViewportReduced !== String(visualViewportReduced)) {
+    document.documentElement.dataset.visualViewportReduced = String(visualViewportReduced)
+  }
   const viewportSignature = getViewportSignature()
   const viewportGeometryChanged = viewportSignature !== lastViewportSignature
   if (viewportGeometryChanged) {
     lastViewportSignature = viewportSignature
     stableViewportFrames = 0
-    const input = document.activeElement
+    const input = getMobileActiveElement()
     if (
       isMobileEditableElement(input) &&
       !focusRevealAttempted &&

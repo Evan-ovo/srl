@@ -56,6 +56,7 @@ import { ResourceService } from '../services/ResourceService'
 import { ResourceGalleryService, moveResourceGallery } from '../services/ResourceGalleryService'
 import { RESOURCE_GALLERY_ASSET_KIND } from '../types/ResourceGallery'
 import { cloudPlainSecretCopies } from '../services/PersonalResourceBackup'
+import * as nativeResourceMirror from './NativeResourceFileMirror'
 import {
   updateDetails,
   moveManyToCategory,
@@ -1895,6 +1896,114 @@ describe('AndroidNativeDexieCore', () => {
     }
   })
 
+  it.each([false, true])(
+    'opens nativeOriginal through the immutable native byte source (history=%s)',
+    async (historical) => {
+      const name = `native-cas-source-${crypto.randomUUID()}`
+      const seed = new AppDatabase(name)
+      await seed.open()
+      seed.close()
+      const database = new AppDatabase(name),
+        { native, stores } = createNativeStore()
+      const original = await routeResource('native-cas')
+      const { originalBlob: _blob, ...metadata } = original
+      stores.get(historical ? 'resourceVersions' : 'resources')!.set(JSON.stringify(original.id), {
+        ...metadata,
+        nativeOriginal: {
+          version: 1,
+          contentHash: original.contentHash,
+          size: original.fileSize,
+        },
+      })
+      database.use(createAndroidNativeDexieCore({ enabled: () => true, native }))
+      const source = {
+        size: original.fileSize,
+        text: async () => '',
+        slice: original.originalBlob.slice.bind(original.originalBlob),
+      }
+      const open = vi
+        .spyOn(nativeResourceMirror, 'openNativeResourceByteSource')
+        .mockResolvedValue(source)
+      const full = vi.spyOn(native, 'readBlob')
+      activateAndroidNativeAppDatabase()
+      try {
+        const storage = new IndexedDbResourceStorage(database)
+        const read = await storage.getReadSource(original.id, historical)
+        expect(read?.originalSource).toBe(source)
+        expect(read?.requiresWholeRead).toBeUndefined()
+        expect(open).toHaveBeenCalledWith(original.contentHash, original.fileSize, undefined)
+        expect(full).not.toHaveBeenCalled()
+        open.mockRejectedValueOnce(new Error('原件缺失'))
+        await expect(storage.getReadSource(original.id, historical)).rejects.toThrow('原件缺失')
+        expect(full).not.toHaveBeenCalled()
+        open.mockResolvedValueOnce(undefined)
+        const load = vi
+          .spyOn(storage, historical ? 'getVersion' : 'get')
+          .mockResolvedValueOnce(original)
+        expect((await storage.getReadSource(original.id, historical))?.requiresWholeRead).toBe(true)
+        expect(load).toHaveBeenCalledOnce()
+      } finally {
+        deactivateAndroidNativeAppDatabase()
+        open.mockRestore()
+        full.mockRestore()
+        database.close()
+        await new AppDatabase(name).delete()
+      }
+    },
+  )
+
+  it('reads historical backup bytes by range and stops within one native chunk when cancelled', async () => {
+    const name = `native-history-range-${crypto.randomUUID()}`
+    const seed = new AppDatabase(name)
+    await seed.open()
+    seed.close()
+    const database = new AppDatabase(name)
+    const { native, stores } = createNativeStore()
+    const descriptor = {
+      __srlAppDatabaseValueV1: 'file',
+      fieldPath: '/originalBlob',
+      size: 1024 ** 3,
+      mimeType: 'video/mp4',
+      sha256: 'a'.repeat(64),
+    }
+    const row = {
+      ...(await routeResource('large-history')),
+      originalBlob: descriptor,
+      fileSize: descriptor.size,
+      mimeType: descriptor.mimeType,
+      contentHash: descriptor.sha256,
+    }
+    stores.get('resourceVersions')!.set(JSON.stringify(row.id), row)
+    database.use(createAndroidNativeDexieCore({ enabled: () => true, native }))
+    const full = vi.spyOn(native, 'readBlob')
+    const controller = new AbortController()
+    const range = vi
+      .spyOn(nativeAppDatabase, 'readBlobRange')
+      .mockImplementation(async (_store, _key, _path, _offset, length) => {
+        if (length > 1) controller.abort()
+        return new ArrayBuffer(length)
+      })
+    activateAndroidNativeAppDatabase()
+    try {
+      const storage = new IndexedDbResourceStorage(database)
+      const read = await storage.getReadSource(row.id, true)
+      expect(read!.originalSource.size).toBe(1024 ** 3)
+      await expect(
+        read!.originalSource.slice(0, 1024 * 1024).arrayBuffer(controller.signal),
+      ).rejects.toMatchObject({ name: 'AbortError' })
+      expect(range.mock.calls.map((call) => [call[0], call[4]])).toEqual([
+        ['resourceVersions', 1],
+        ['resourceVersions', 256 * 1024],
+      ])
+      expect(full).not.toHaveBeenCalled()
+    } finally {
+      deactivateAndroidNativeAppDatabase()
+      range.mockRestore()
+      database.close()
+      await new AppDatabase(name).delete()
+    }
+  })
+
   it('reads a small chat page without hydrating a declared 1 GiB original and guards cache identity', async () => {
     const name = `native-chat-range-${crypto.randomUUID()}`
     const seed = new AppDatabase(name)
@@ -3059,10 +3168,14 @@ describe('AndroidNativeDexieCore', () => {
         backup.snapshot,
         async (object) =>
           new Blob(
-            object.parts.map((part) => {
-              const blob = backup.chunks.get(part.name)!
-              return blob.slice(part.offset ?? 0, (part.offset ?? 0) + part.size)
-            }),
+            await Promise.all(
+              object.parts.map(async (part) => {
+                const blob =
+                  backup.chunks.get(part.name) ??
+                  (await backup.objectPlans.find((plan) => plan.name === part.name)!.loadBlob!())
+                return blob.slice(part.offset ?? 0, (part.offset ?? 0) + part.size)
+              }),
+            ),
           ),
         await new IndexedDbResourceStorage(target.database).listSummaries(),
         [],

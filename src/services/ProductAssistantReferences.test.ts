@@ -109,15 +109,18 @@ describe('selected resource retrieval', () => {
     await expect(reader.search('森林', 0)).rejects.toThrow('变化')
     expect(resources.get).not.toHaveBeenCalled()
   })
-  it('excludes credentials even if their ID is supplied directly', async () => {
-    const { reader, resource, resources } = fixture(
-      { key: 'private' },
-      { type: RESOURCE_TYPE.SECRET },
-    )
-    expect(isAssistantReferenceResource(resource)).toBe(false)
-    await expect(reader.search('private', 0)).rejects.toThrow('不支持')
-    expect(resources.get).not.toHaveBeenCalled()
-  })
+  it.each([{}, { secretProtection: 'none' }])(
+    'excludes credentials even if their ID is supplied directly (metadata=%j)',
+    async (metadata) => {
+      const { reader, resource, resources } = fixture(
+        { key: 'private' },
+        { type: RESOURCE_TYPE.SECRET, metadata },
+      )
+      expect(isAssistantReferenceResource(resource)).toBe(false)
+      await expect(reader.search('private', 0)).rejects.toThrow('不支持')
+      expect(resources.get).not.toHaveBeenCalled()
+    },
+  )
   it('retains original line positions and paginates exact field text', async () => {
     const lines = Array.from(
       { length: 43 },

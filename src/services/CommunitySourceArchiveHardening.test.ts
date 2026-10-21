@@ -3,9 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CommunitySourceStorage } from '../storage/CommunitySourceStorage'
 import {
   COMMUNITY_SOURCE_ATTACHMENT_LOCAL_STATE,
-  COMMUNITY_SOURCE_MESSAGE_KIND,
-  COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE,
-  COMMUNITY_SOURCE_REMOTE_STATE,
   type CommunitySource,
   type CommunitySourceBackupData,
   type CommunitySourceMessage,
@@ -267,10 +264,7 @@ describe('CommunitySourceService archive hardening', () => {
       await pause
       await putSource(source)
     })
-    const updating = service.recordRemoteCheck(
-      created.source.id,
-      COMMUNITY_SOURCE_REMOTE_STATE.AVAILABLE,
-    )
+    const updating = service.saveDiscordCapture({ ...starter(), title: 'updated' })
     await start
     const cleaning = service.clearDownloadedMedia()
     try {
@@ -282,7 +276,7 @@ describe('CommunitySourceService archive hardening', () => {
     await updating
     await cleaning
     expect(await storage.getSource(created.source.id)).toMatchObject({
-      remoteState: COMMUNITY_SOURCE_REMOTE_STATE.AVAILABLE,
+      title: 'updated',
     })
     expect((await storage.getSource(created.source.id))?.revisions).toBeUndefined()
   })
@@ -324,7 +318,7 @@ describe('CommunitySourceService archive hardening', () => {
     await cleaning
     expect(cleanup).toHaveBeenCalledOnce()
   })
-  it('honors the post-media switch for capture, deferred work and refresh, while allowing explicit downloads', async () => {
+  it('honors the post-media switch for capture, deferred work and manual resaves, while allowing explicit downloads', async () => {
     const storage = new MemoryCommunitySourceStorage()
     const fetcher = vi.fn(async () => new Response('image'))
     vi.stubGlobal('fetch', fetcher)
@@ -349,11 +343,7 @@ describe('CommunitySourceService archive hardening', () => {
     }
     const saved = await service.saveDiscordCapture(capture)
     await service.localizeSavedMessageAttachments(saved.source.id, capture.messageId)
-    await service.applyDiscordRefresh(
-      saved.source.id,
-      [{ ...capture, content: `${capture.content}更新` }],
-      { keepPrevious: true },
-    )
+    await service.saveDiscordCapture({ ...capture, content: `${capture.content}更新` })
     expect(fetcher).not.toHaveBeenCalled()
     expect(put).not.toHaveBeenCalled()
     const refreshed = await service.exportAll()
@@ -775,7 +765,7 @@ describe('CommunitySourceService archive hardening', () => {
     expect(sourceLocks[0]?.[0]).not.toBe(sourceLocks[1]?.[0])
   })
 
-  it('keeps an in-flight explicit refresh from overwriting a later delivery', async () => {
+  it('keeps an in-flight manual resave from overwriting a later delivery', async () => {
     vi.spyOn(captureHelpers, 'hashIdentity').mockResolvedValue('a'.repeat(64))
     vi.spyOn(captureHelpers, 'messageKeyHash').mockResolvedValue('b'.repeat(64))
     vi.spyOn(Date, 'now').mockReturnValue(2_000)
@@ -784,7 +774,7 @@ describe('CommunitySourceService archive hardening', () => {
       put: vi.fn(async () => ({ assetId: 'asset' })),
       getBlob: vi.fn(async () => undefined),
     })
-    const saved = await service.saveDiscordCapture(starter('initial'), { capturedAt: 1_000 })
+    await service.saveDiscordCapture(starter('initial'), { capturedAt: 1_000 })
     let start!: () => void, release!: () => void
     const started = new Promise<void>((resolve) => {
       start = resolve
@@ -800,38 +790,35 @@ describe('CommunitySourceService archive hardening', () => {
         return new Response('body')
       }),
     )
-    const refreshing = service.applyDiscordRefresh(
-      saved.source.id,
-      [
-        {
-          ...starter('refresh'),
-          attachments: [
-            { id: 'file', name: 'file.txt', size: 4, url: 'https://cdn.discordapp.com/file.txt' },
-          ],
-        },
-      ],
-      { keepPrevious: true },
+    const refreshing = service.saveDiscordCapture(
+      {
+        ...starter('resaved'),
+        attachments: [
+          { id: 'file', name: 'file.txt', size: 4, url: 'https://cdn.discordapp.com/file.txt' },
+        ],
+      },
+      { capturedAt: 2_000 },
     )
     await started
     const delivery = service.saveDiscordCapture(starter('later delivery'), { capturedAt: 3_000 })
-    // Let all ready storage operations finish while the older refresh still awaits its attachment.
+    // Let all ready storage operations finish while the older manual resave still awaits its attachment.
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     release()
     await Promise.all([refreshing, delivery])
     const readback = await service.findDiscordSourceForCapture(starter())
     expect(readback?.messages[0]?.content).toBe('later delivery')
     expect(readback?.messages[0]?.deliveryCapturedAt).toBe(3_000)
-    expect(readback?.source.revisions).toHaveLength(1)
+    expect(readback?.source.revisions).toBeUndefined()
   })
 
-  it('preserves explicit refresh and restore decisions against previously captured deliveries', async () => {
+  it('preserves manual resaves and legacy revision restores against previously captured deliveries', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(2_000)
     const storage = new MemoryCommunitySourceStorage()
     const service = new CommunitySourceService(storage)
     const initial = await service.saveDiscordCapture(starter('initial'), { capturedAt: 1_000 })
-    const refreshed = await service.applyDiscordRefresh(initial.source.id, [starter('refresh')], {
-      keepPrevious: true,
-    })
+    const revision = captureHelpers.makeRevision(initial.source, initial.messages, 1_000)
+    await storage.putSource({ ...initial.source, revisions: [revision] })
+    const refreshed = await service.saveDiscordCapture(starter('refresh'), { capturedAt: 2_000 })
     expect(refreshed.messages[0]?.deliveryCapturedAt).toBe(2_000)
     expect(refreshed.source.metadataCapturedAt).toBe(2_000)
     const late = await service.saveDiscordCapture(starter('late initial'), { capturedAt: 1_500 })
@@ -1047,28 +1034,6 @@ describe('CommunitySourceService archive hardening', () => {
     })
   })
 
-  it('records source and message remote checks concurrently without overwriting the source state', async () => {
-    const storage = new MemoryCommunitySourceStorage()
-    const service = new CommunitySourceService(storage)
-    const created = await service.saveDiscordCapture(starter(), { resourceId: 'resource-a' })
-    const putSource = vi.spyOn(storage, 'putSource')
-    putSource.mockClear()
-
-    await Promise.all([
-      service.recordRemoteCheck(created.source.id, COMMUNITY_SOURCE_REMOTE_STATE.AVAILABLE, true),
-      service.recordMessageRemoteCheck(created.source.id, [], [created.messages[0].messageId]),
-    ])
-
-    expect(putSource).toHaveBeenCalledTimes(1)
-    expect(await storage.getSource(created.source.id)).toMatchObject({
-      remoteState: COMMUNITY_SOURCE_REMOTE_STATE.AVAILABLE,
-      hasRemoteUpdate: true,
-    })
-    expect((await storage.listMessages(created.source.id))[0]).toMatchObject({
-      remoteState: COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE.MISSING,
-    })
-  })
-
   it('keeps display names out of source identity while updating their local presentation values', async () => {
     const storage = new MemoryCommunitySourceStorage()
     const service = new CommunitySourceService(storage)
@@ -1090,88 +1055,17 @@ describe('CommunitySourceService archive hardening', () => {
     })
   })
 
-  it('marks a deleted remote message missing without deleting its local body', async () => {
-    const storage = new MemoryCommunitySourceStorage()
-    const service = new CommunitySourceService(storage)
-    const created = await service.saveDiscordCapture(starter('v1'), { resourceId: 'resource-a' })
-    await service.saveDiscordCapture(message('44444', '55555', 'Reader', 'keep me'), {
-      kind: COMMUNITY_SOURCE_MESSAGE_KIND.SELECTED_COMMENT,
-    })
-
-    const refreshed = await service.applyDiscordRefresh(created.source.id, [starter('v1')], {
-      keepPrevious: false,
-      missingMessageIds: ['44444'],
-    })
-    const local = refreshed.messages.find((item) => item.messageId === '44444')
-    expect(local?.content).toBe('keep me')
-    expect(local?.remoteState).toBe(COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE.MISSING)
-  })
-
-  it('lets the user decline newly discovered messages while refreshing existing ones', async () => {
-    const storage = new MemoryCommunitySourceStorage()
-    const service = new CommunitySourceService(storage)
-    const created = await service.saveDiscordCapture(starter('v1'), { resourceId: 'resource-a' })
-    const authorUpdate = message('44444', '33333', 'Author', 'author update')
-    const botUpdate = message('55555', '66666', 'Helper', 'bot update', true)
-
-    const refreshed = await service.applyDiscordRefresh(
-      created.source.id,
-      [starter('v2'), authorUpdate, botUpdate],
-      {
-        keepPrevious: false,
-        includeNewMessageIds: ['55555'],
-      },
-    )
-
-    expect(refreshed.messages.find((item) => item.messageId === '22222')?.content).toBe('v2')
-    expect(refreshed.messages.some((item) => item.messageId === '55555')).toBe(true)
-    expect(refreshed.messages.some((item) => item.messageId === '44444')).toBe(false)
-    expect(refreshed.source.ignoredRemoteMessageIds).toContain('44444')
-  })
-
-  it('remembers declined-only remote messages and explicit saving clears the ignore marker', async () => {
-    const storage = new MemoryCommunitySourceStorage()
-    const service = new CommunitySourceService(storage)
-    const created = await service.saveDiscordCapture(starter('v1'), { resourceId: 'resource-a' })
-    const authorUpdate = message('44444', '33333', 'Author', 'author update')
-
-    const ignored = await service.ignoreRemoteMessages(created.source.id, ['44444'], {
-      remoteScanCursor: { lastSeenMessageId: '44444' },
-      savedMessageCheckCursor: '33333',
-    })
-    expect(ignored.ignoredRemoteMessageIds).toEqual(['44444'])
-    expect(ignored.remoteScanCursor).toEqual({ lastSeenMessageId: '44444' })
-    expect(ignored.savedMessageCheckCursor).toBe('33333')
-
-    await service.saveDiscordCapture(authorUpdate, {
-      kind: COMMUNITY_SOURCE_MESSAGE_KIND.AUTHOR_UPDATE,
-    })
-    const source = await storage.getSource(created.source.id)
-    expect(source?.ignoredRemoteMessageIds).toEqual([])
-    expect(
-      (await storage.listMessages(created.source.id)).some((item) => item.messageId === '44444'),
-    ).toBe(true)
-  })
-
-  it('keeps the ignored remote message list bounded to the latest 128 ids', async () => {
-    const storage = new MemoryCommunitySourceStorage()
-    const service = new CommunitySourceService(storage)
-    const created = await service.saveDiscordCapture(starter('v1'), { resourceId: 'resource-a' })
-    const ids = Array.from({ length: 150 }, (_, index) => String(70000 + index))
-
-    const ignored = await service.ignoreRemoteMessages(created.source.id, ids)
-
-    expect(ignored.ignoredRemoteMessageIds).toHaveLength(128)
-    expect(ignored.ignoredRemoteMessageIds).toEqual(ids.slice(-128))
-  })
-
   it('restores a revision exactly and keeps the pre-restore state as a rollback revision', async () => {
     const storage = new MemoryCommunitySourceStorage()
     const service = new CommunitySourceService(storage)
     const created = await service.saveDiscordCapture(starter('v1'), { resourceId: 'resource-a' })
-    const v2 = await service.applyDiscordRefresh(created.source.id, [starter('v2')], {
-      keepPrevious: true,
-    })
+    const legacy = captureHelpers.makeRevision(
+      created.source,
+      created.messages,
+      created.source.updatedAt,
+    )
+    await storage.putSource({ ...created.source, revisions: [legacy] })
+    const v2 = await service.saveDiscordCapture(starter('v2'))
     const revision = v2.source.revisions?.[0]
     expect(revision).toBeDefined()
 

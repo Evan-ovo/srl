@@ -23,15 +23,10 @@ const {
   closeDetail,
   detailSourceDate,
   formatDate,
-  COMMUNITY_SOURCE_REFRESH_MODE,
   detailLoading,
-  detailChecking,
-  applyingRefresh,
-  checkForUpdates,
   openSourceManagement,
   detailLoadError,
-  COMMUNITY_SOURCE_REMOTE_STATE,
-  refreshError,
+  operationError,
   detailMessages,
   messageElementId,
   detailSelectedMessageId,
@@ -40,7 +35,6 @@ const {
   moveLongPress,
   finishLongPress,
   kindLabel,
-  COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE,
   embedPresentations,
   imageAttachments,
   attachmentDisplayUrl,
@@ -63,15 +57,6 @@ const {
   navigateToMessage,
   navPreview,
   navigateToHistory,
-  refreshCandidate,
-  cancelRefreshDecision,
-  refreshDiffRows,
-  selectedRefreshMessageIds,
-  refreshChangeLabel,
-  refreshChangeDetails,
-  refreshMode,
-  refreshCanApply,
-  applyRefresh,
   revisionSheetOpen,
   selectedRevision,
   revisionViewMode,
@@ -113,9 +98,9 @@ const {
             <strong>{{ sourceTitle(view) }}</strong>
             <span
               class="discord-source-badge"
-              :class="`discord-source-badge--${sourceBadge(view).tone}`"
+              :class="`discord-source-badge--${sourceBadge().tone}`"
             >
-              {{ sourceBadge(view).label }}
+              {{ sourceBadge().label }}
             </span>
           </span>
           <p>{{ sourcePreview(view) }}</p>
@@ -156,49 +141,15 @@ const {
             <p>
               {{ sourceCommunityLabel(detailSource) }}
               <template v-if="detailSourceDate"> · {{ detailSourceDate }}</template>
-              <template v-if="detailSource.source.lastCheckedAt">
-                · 上次检查 {{ formatDate(detailSource.source.lastCheckedAt) }}
-              </template>
             </p>
           </div>
           <button type="button" aria-label="关闭 Discord 来源详情" @click="closeDetail">×</button>
         </header>
 
         <div class="discord-thread-toolbar">
-          <a
-            v-if="detailSource.source.discordRefreshMode === COMMUNITY_SOURCE_REFRESH_MODE.MANUAL"
-            class="discord-thread-toolbar__primary"
-            :href="detailSource.source.canonicalUrl"
-            target="_blank"
-            rel="noopener noreferrer"
+          <a :href="detailSource.source.canonicalUrl" target="_blank" rel="noopener noreferrer"
+            >打开 Discord 原帖</a
           >
-            前往 Discord 更新
-          </a>
-          <button
-            v-else
-            class="discord-thread-toolbar__primary"
-            type="button"
-            :disabled="detailLoading || detailChecking || applyingRefresh"
-            @click="checkForUpdates(detailSource)"
-          >
-            {{ detailChecking ? '正在检查…' : '检查更新' }}
-          </button>
-          <button
-            v-if="detailSource.source.discordRefreshMode === COMMUNITY_SOURCE_REFRESH_MODE.MANUAL"
-            type="button"
-            :disabled="detailLoading || detailChecking || applyingRefresh"
-            @click="checkForUpdates(detailSource)"
-          >
-            {{ detailChecking ? '正在检查…' : '重试自动检查' }}
-          </button>
-          <a
-            v-else
-            :href="detailSource.source.canonicalUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            打开 Discord 原帖
-          </a>
           <button type="button" @click="openSourceManagement(detailSource)">来源管理</button>
         </div>
 
@@ -208,22 +159,7 @@ const {
         <p v-else-if="detailLoadError" class="discord-thread-error" role="alert">
           {{ detailLoadError }}
         </p>
-        <p
-          v-if="detailSource.source.remoteState === COMMUNITY_SOURCE_REMOTE_STATE.UNAVAILABLE"
-          class="discord-source-unavailable"
-        >
-          原帖当前不可访问。本地仍保留最后一次成功保存的内容；远端删除不会反向删除本地存档。
-        </p>
-        <p v-if="refreshError" class="discord-thread-error" role="alert">{{ refreshError }}</p>
-        <p
-          v-if="detailSource.source.discordRefreshMode === COMMUNITY_SOURCE_REFRESH_MODE.MANUAL"
-          class="discord-thread-status"
-          role="status"
-        >
-          这个来源所在的社区没有安装 Discord
-          Bot，因此使用手动更新。前往原帖，对需要更新的消息再次执行“保存到资源库”；SRL
-          会更新已有来源，不会重复创建。
-        </p>
+        <p v-if="operationError" class="discord-thread-error" role="alert">{{ operationError }}</p>
         <p v-if="statusMessage" class="discord-thread-status" role="status">{{ statusMessage }}</p>
 
         <div v-if="detailSource.source.forumTags.length" class="discord-source-detail__tags">
@@ -256,13 +192,6 @@ const {
               </span>
               <em>{{ kindLabel(message) }}</em>
             </header>
-
-            <p
-              v-if="message.remoteState === COMMUNITY_SOURCE_MESSAGE_REMOTE_STATE.MISSING"
-              class="discord-thread-message__remote-state"
-            >
-              Discord 原消息已删除或不可访问 · 本地副本仍保留
-            </p>
 
             <DiscordMarkdownText
               v-if="message.content"
@@ -502,84 +431,8 @@ const {
     </div>
 
     <div
-      v-if="refreshCandidate"
-      class="discord-refresh-sheet-wrap mobile-dialog-viewport"
-      role="presentation"
-      @click.self="cancelRefreshDecision"
-    >
-      <section
-        class="discord-refresh-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="discord-refresh-title"
-      >
-        <h3 id="discord-refresh-title">发现帖子更新</h3>
-        <p>
-          先看具体变化。新的作者 / Bot 消息可以选择是否收入本机；已有消息的修改只会在你确认后更新。
-        </p>
-
-        <div class="discord-refresh-diff">
-          <div v-for="row in refreshDiffRows" :key="row.label">
-            <span>{{ row.label }}</span>
-            <strong>{{ row.value }}</strong>
-          </div>
-        </div>
-
-        <div v-if="refreshCandidate.diff.changes.length" class="discord-refresh-change-list">
-          <label
-            v-for="change in refreshCandidate.diff.changes"
-            :key="`${change.type}:${change.messageId}`"
-            class="discord-refresh-change"
-          >
-            <input
-              v-if="change.type === 'new'"
-              v-model="selectedRefreshMessageIds"
-              type="checkbox"
-              :value="change.messageId"
-            />
-            <span v-else class="discord-refresh-change__marker"></span>
-            <span>
-              <strong>{{ refreshChangeLabel(change) }} · {{ change.authorName }}</strong>
-              <small>{{ refreshChangeDetails(change) }}</small>
-              <em>{{ change.summary }}</em>
-            </span>
-          </label>
-        </div>
-
-        <label class="discord-refresh-choice">
-          <input v-model="refreshMode" type="radio" value="keep" />
-          <span>
-            <strong>更新并保留上一版本</strong>
-            <small>先生成一个本地历史版本，再应用你确认的变化。</small>
-          </span>
-        </label>
-        <label class="discord-refresh-choice">
-          <input v-model="refreshMode" type="radio" value="replace" />
-          <span>
-            <strong>更新并替换上一版本</strong>
-            <small>清除旧历史，只保留更新后的最新版。</small>
-          </span>
-        </label>
-
-        <div class="discord-refresh-actions">
-          <button type="button" :disabled="applyingRefresh" @click="cancelRefreshDecision">
-            取消
-          </button>
-          <button
-            class="discord-refresh-actions__primary"
-            type="button"
-            :disabled="applyingRefresh || !refreshCanApply"
-            @click="applyRefresh"
-          >
-            {{ applyingRefresh ? '正在更新…' : '确认更新' }}
-          </button>
-        </div>
-      </section>
-    </div>
-
-    <div
       v-if="revisionSheetOpen && selectedRevision"
-      class="discord-refresh-sheet-wrap mobile-dialog-viewport"
+      class="discord-revision-sheet-wrap mobile-dialog-viewport"
       role="presentation"
       @click.self="revisionSheetOpen = false"
     >
@@ -648,10 +501,10 @@ const {
           <p v-else>这个历史版本与当前保存内容一致。</p>
         </div>
 
-        <div class="discord-refresh-actions">
+        <div class="discord-revision-actions">
           <button type="button" @click="revisionSheetOpen = false">关闭</button>
           <button
-            class="discord-refresh-actions__primary"
+            class="discord-revision-actions__primary"
             type="button"
             @click="requestRevisionRestore(selectedRevision)"
           >

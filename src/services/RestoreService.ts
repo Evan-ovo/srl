@@ -320,7 +320,14 @@ export class RestoreService {
       ...prepared,
       resources: prepared.resources.map(placeholder),
       versions: prepared.versions.map(placeholder),
-      openFiles: () => openArchiveFiles(this.staging, jobId, new Map(paths), prepared.resources),
+      openFiles: (options) =>
+        openArchiveFiles(
+          this.staging,
+          jobId,
+          new Map(paths),
+          prepared.resources,
+          options?.preferNativeFile,
+        ),
       dispose: () => this.staging.deleteJob(jobId),
     }
   }
@@ -336,8 +343,16 @@ export class RestoreService {
     deferFiles = false,
     onProgress?: (progress: ArchiveStageProgress) => void,
     signal?: AbortSignal,
+    stagingOptions: { chunkBytes?: number } = {},
   ): Promise<PreparedRestore> {
-    const jobId = await stageArchive(file, this.staging, undefined, onProgress, signal)
+    const jobId = await stageArchive(
+      file,
+      this.staging,
+      undefined,
+      onProgress,
+      signal,
+      stagingOptions,
+    )
     let retainedStaging = false
     try {
       const manifestEntry = await this.staging.get(jobId, 'manifest.json')
@@ -608,7 +623,14 @@ export class RestoreService {
               this.prepareStaged(fileName, jobId, manifest, communitySourceData, [], [], true, true)
           : undefined,
       openFiles: deferFiles
-        ? () => openArchiveFiles(this.staging, jobId, files, normalizedResources)
+        ? (options) =>
+            openArchiveFiles(
+              this.staging,
+              jobId,
+              files,
+              normalizedResources,
+              options?.preferNativeFile,
+            )
         : undefined,
       dispose: deferFiles ? () => this.staging.deleteJob(jobId) : undefined,
       replan: deferFiles
@@ -1242,7 +1264,9 @@ export class RestoreService {
     onProgress?: (progress: ArchiveRestoreProgress) => void,
   ): Promise<RestoreReport> {
     await this.restoreAlbumArchive(prepared)
-    const session = await prepared.openFiles?.()
+    const session = await prepared.openFiles?.({
+      preferNativeFile: this.canRestoreStructuredNative(),
+    })
     hydrate ??= session?.hydrate
     let restored = false
     try {
@@ -1358,7 +1382,9 @@ export class RestoreService {
       throw new Error('整库覆盖需要完整备份计划，请重新预检备份')
     }
     await this.restoreAlbumArchive(prepared)
-    const session = await prepared.openFiles?.()
+    const session = await prepared.openFiles?.({
+      preferNativeFile: this.canRestoreStructuredNative(),
+    })
     let replaced = false
     try {
       if (!session) await this.validateSecrets([...prepared.resources, ...prepared.versions])

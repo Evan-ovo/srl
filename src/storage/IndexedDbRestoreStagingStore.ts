@@ -14,12 +14,11 @@ export class IndexedDbRestoreStagingStore implements RestoreStagingStore {
   }
 
   async putChunk(chunk: RestoreStagingChunk): Promise<void> {
-    // iOS WebKit can return IndexedDB-backed Blobs that later fail with
-    // "The object can not be found here." Materialize each bounded chunk before
-    // persisting it so files rebuilt from staging have stable byte backing.
+    // Keep bounded binary chunks out of WebKit's SQLite value quota. Detach before
+    // writing and again on read: IDB-backed Blobs must not escape into rebuilt files.
     const { blob, ...metadata } = chunk
     const data = await blob.arrayBuffer()
-    await this.database.restoreStagingChunks.put({ ...metadata, data })
+    await this.database.restoreStagingChunks.put({ ...metadata, blob: new Blob([data]) })
   }
 
   async complete(entry: RestoreStagingMetadata): Promise<void> {
@@ -37,11 +36,12 @@ export class IndexedDbRestoreStagingStore implements RestoreStagingStore {
       .where('[jobId+path]')
       .equals([jobId, path])
       .sortBy('chunkIndex')
-    const parts = chunks.map((chunk) => {
-      if (chunk.data) return chunk.data
-      if (chunk.blob) return chunk.blob
-      throw new Error('压缩包暂存分块缺少内容')
-    })
+    const parts: Blob[] = []
+    for (const chunk of chunks) {
+      if (chunk.data) parts.push(new Blob([chunk.data]))
+      else if (chunk.blob) parts.push(new Blob([await chunk.blob.arrayBuffer()]))
+      else throw new Error('压缩包暂存分块缺少内容')
+    }
     return {
       ...entry,
       blob: new Blob(parts),

@@ -92,3 +92,20 @@ export function authorizedSetup(request: Request, env: Env): boolean {
   const header = request.headers.get('Authorization') ?? ''
   return Boolean(env.DISCORD_BOT_TOKEN) && header === `Bearer ${env.DISCORD_BOT_TOKEN}`
 }
+
+/** Shared response handling for Bot setup and command diagnostics. */
+export async function discordJson(response: Response, operation: string): Promise<unknown> {
+  if (response.status === 429) {
+    const header =
+      response.headers.get('Retry-After') ?? response.headers.get('X-RateLimit-Reset-After')
+    const seconds = Number(header)
+    const delay =
+      header && Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds * 1000) : undefined
+    throw new DiscordRateLimitError(operation, delay)
+  }
+  if (!response.ok) {
+    const detail = (await response.text()).slice(0, 500)
+    throw new Error(`${operation} failed: ${response.status} ${detail}`)
+  }
+  return response.json()
+}

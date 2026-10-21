@@ -22,7 +22,7 @@ interface DiscordSourceAttachmentsContext {
   props: Readonly<DiscordCommunitySourcesProps>
   embedCache: Map<string, DiscordEmbedPresentation[]>
   savingAttachmentKey: Ref<string, string>
-  refreshError: Ref<string, string>
+  operationError: Ref<string, string>
   load: () => Promise<void>
   showTransientStatus: (message: string, timeoutMs?: number) => void
 }
@@ -189,7 +189,7 @@ export function useDiscordSourceAttachments(getContext: () => DiscordSourceAttac
     if (!context.detailSource.value || context.savingAttachmentKey.value) return
     const key = attachmentSaveKey(message, attachment)
     context.savingAttachmentKey.value = key
-    context.refreshError.value = ''
+    context.operationError.value = ''
     try {
       await communitySourceService.saveAttachmentToLocal(
         context.detailSource.value.source.id,
@@ -199,7 +199,7 @@ export function useDiscordSourceAttachments(getContext: () => DiscordSourceAttac
       await context.load()
       context.showTransientStatus('附件已保存到本机')
     } catch (error) {
-      context.refreshError.value = error instanceof Error ? error.message : '附件保存到本机失败'
+      context.operationError.value = error instanceof Error ? error.message : '附件保存到本机失败'
     } finally {
       context.savingAttachmentKey.value = ''
     }

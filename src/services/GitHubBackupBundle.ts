@@ -1,6 +1,14 @@
 import { sha256 } from '@noble/hashes/sha2.js'
 import { bytesToHex } from '@noble/hashes/utils.js'
 import { hashCloudBlob } from './CloudArchiveCodec'
+import type { ResourceByteSource } from '../types/ResourceReadSource'
+import { withAbort } from '../utils/Abortable'
+
+export interface BundleReadOptions {
+  signal?: AbortSignal
+  onRead?: (bytes: number, total: number) => void
+}
+export const BUNDLE_READ_BYTES = 1024 * 1024
 
 export const GITHUB_BUNDLE_FORMAT = 'srl-github-backup-bundle'
 export const GITHUB_BUNDLE_VERSION = 2
@@ -57,65 +65,138 @@ const GEAR_TABLE = (() => {
 })()
 
 async function contentDefinedParts(
-  blob: Blob,
+  blob: ResourceByteSource,
   computeTotal: boolean,
+  options: BundleReadOptions = {},
+  fixedPartSize?: number,
 ): Promise<{
-  blobs: Blob[]
   parts: GitHubBundlePart[]
   totalSha256?: string
 }> {
-  const blobs: Blob[] = []
   const parts: GitHubBundlePart[] = []
   let start = 0
   let offset = 0
   let rolling = 0
-  let partHash = sha256.create()
   const totalHash = computeTotal ? sha256.create() : undefined
-  const reader = blob.stream().getReader()
+  const singlePart = computeTotal && fixedPartSize !== undefined && blob.size <= fixedPartSize
+  let partHash = singlePart ? totalHash! : sha256.create()
+  let singlePartHash: string | undefined
+  const signal = options.signal
+  signal?.throwIfAborted()
+  let readOffset = 0
+  const reader = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        try {
+          signal?.throwIfAborted()
+          if (readOffset >= blob.size) {
+            controller.close()
+            return
+          }
+          const end = Math.min(blob.size, readOffset + BUNDLE_READ_BYTES)
+          const value = new Uint8Array(
+            await withAbort(blob.slice(readOffset, end).arrayBuffer(signal), signal),
+          )
+          signal?.throwIfAborted()
+          if (value.byteLength !== end - readOffset)
+            throw new Error('云备份分块读取长度与原件不一致')
+          readOffset = end
+          controller.enqueue(value)
+        } catch (error) {
+          controller.error(error)
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  ).getReader()
   let yieldedAt = 0
   try {
     while (true) {
-      const { done, value } = await reader.read()
+      signal?.throwIfAborted()
+      const { done, value } = await withAbort(reader.read(), signal)
+      signal?.throwIfAborted()
       if (done) break
       totalHash?.update(value)
-      let segmentStart = 0
-      const valueOffset = offset
-      for (const byte of value) {
-        rolling = (Math.imul(rolling, 2) + (GEAR_TABLE[byte] ?? 0)) >>> 0
-        offset += 1
-        const size = offset - start
-        if (
-          size >= GITHUB_MIN_PART_SIZE &&
-          ((rolling & CONTENT_BOUNDARY_MASK) === 0 || size >= GITHUB_PART_SIZE)
-        ) {
-          const segmentEnd = offset - valueOffset
-          partHash.update(value.subarray(segmentStart, segmentEnd))
-          const hash = bytesToHex(partHash.digest())
-          blobs.push(blob.slice(start, offset))
-          parts.push({ name: `srl-chunk--sha256-${hash}`, size: offset - start, sha256: hash })
-          start = offset
-          rolling = 0
-          partHash = sha256.create()
-          segmentStart = segmentEnd
+      if (singlePart) offset += value.byteLength
+      else {
+        let segmentStart = 0
+        const valueOffset = offset
+        for (const byte of value) {
+          rolling = (Math.imul(rolling, 2) + (GEAR_TABLE[byte] ?? 0)) >>> 0
+          offset += 1
+          const size = offset - start
+          if (
+            fixedPartSize !== undefined
+              ? size >= fixedPartSize
+              : size >= GITHUB_MIN_PART_SIZE &&
+                ((rolling & CONTENT_BOUNDARY_MASK) === 0 || size >= GITHUB_PART_SIZE)
+          ) {
+            const segmentEnd = offset - valueOffset
+            partHash.update(value.subarray(segmentStart, segmentEnd))
+            const hash = bytesToHex(partHash.digest())
+            parts.push({ name: `srl-chunk--sha256-${hash}`, size: offset - start, sha256: hash })
+            start = offset
+            rolling = 0
+            partHash = sha256.create()
+            segmentStart = segmentEnd
+          }
         }
+        partHash.update(value.subarray(segmentStart))
       }
-      partHash.update(value.subarray(segmentStart))
       // Preserve UI opportunities during large-file planning without a second read/hash pass.
-      if (offset - yieldedAt >= 1024 * 1024) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      if (offset - yieldedAt >= BUNDLE_READ_BYTES || offset === blob.size) {
+        options.onRead?.(offset - yieldedAt, offset)
+        await withAbort(new Promise<void>((resolve) => setTimeout(resolve, 0)), signal)
         yieldedAt = offset
       }
     }
     if (offset !== blob.size) throw new Error('云备份分块读取长度与原件不一致')
     if (start < offset || !parts.length) {
       const hash = bytesToHex(partHash.digest())
-      blobs.push(blob.slice(start, offset))
+      if (singlePart) singlePartHash = hash
       parts.push({ name: `srl-chunk--sha256-${hash}`, size: offset - start, sha256: hash })
     }
   } finally {
+    if (signal?.aborted) void reader.cancel(signal.reason).catch(() => undefined)
     reader.releaseLock()
   }
-  return { blobs, parts, totalSha256: totalHash ? bytesToHex(totalHash.digest()) : undefined }
+  signal?.throwIfAborted()
+  return {
+    parts,
+    totalSha256: singlePartHash ?? (totalHash ? bytesToHex(totalHash.digest()) : undefined),
+  }
+}
+
+/** Plan immutable parts from the existing read-only byte source without retaining originals. */
+export async function planGitHubBundle(
+  source: ResourceByteSource,
+  fileName: string,
+  options: BundleReadOptions = {},
+  fixedPartSize?: number,
+): Promise<GitHubBundleManifest> {
+  options.signal?.throwIfAborted()
+  const native = source.planParts
+    ? await withAbort(source.planParts({ ...options, fixedPartSize }), options.signal)
+    : undefined
+  options.signal?.throwIfAborted()
+  const planned = native
+    ? {
+        totalSha256: native.totalSha256,
+        parts: native.parts.map((part) => ({
+          ...part,
+          name: `srl-chunk--sha256-${part.sha256}`,
+        })),
+      }
+    : await contentDefinedParts(source, true, options, fixedPartSize)
+  return {
+    format: GITHUB_BUNDLE_FORMAT,
+    version: GITHUB_BUNDLE_VERSION,
+    createdAt: new Date().toISOString(),
+    fileName,
+    totalSize: source.size,
+    totalSha256: planned.totalSha256!,
+    parts: planned.parts,
+  }
 }
 
 export async function createGitHubBundle(
@@ -123,6 +204,7 @@ export async function createGitHubBundle(
   fileName: string,
   partSize?: number,
   knownTotalSha256?: string,
+  options: BundleReadOptions = {},
 ): Promise<{ manifest: GitHubBundleManifest; blobs: Blob[] }> {
   if (partSize !== undefined && (!Number.isFinite(partSize) || partSize <= 0))
     throw new Error('GitHub 分包大小无效')
@@ -130,22 +212,33 @@ export async function createGitHubBundle(
     throw new Error('云备份总哈希无效')
   const streamed =
     partSize === undefined
-      ? await contentDefinedParts(blob, knownTotalSha256 === undefined)
+      ? await contentDefinedParts(blob, knownTotalSha256 === undefined, options)
       : undefined
   const blobs =
-    streamed?.blobs ??
+    (streamed
+      ? (() => {
+          let offset = 0
+          return streamed.parts.map((part) => {
+            const start = offset
+            offset += part.size
+            return blob.slice(start, offset)
+          })
+        })()
+      : undefined) ??
     Array.from({ length: Math.max(1, Math.ceil(blob.size / partSize!)) }, (_, index) =>
       blob.slice(index * partSize!, Math.min(blob.size, (index + 1) * partSize!)),
     )
   const parts: GitHubBundlePart[] = streamed?.parts ?? []
   if (!streamed) {
     for (const part of blobs) {
-      const hash = await hashCloudBlob(part)
+      options.signal?.throwIfAborted()
+      const hash = await withAbort(hashCloudBlob(part), options.signal)
       parts.push({ name: `srl-chunk--sha256-${hash}`, size: part.size, sha256: hash })
-      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      await withAbort(new Promise<void>((resolve) => setTimeout(resolve, 0)), options.signal)
     }
   }
 
+  options.signal?.throwIfAborted()
   return {
     blobs,
     manifest: {

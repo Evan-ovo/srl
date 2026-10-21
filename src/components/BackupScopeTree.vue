@@ -81,6 +81,7 @@ const visibleByScope = computed(() => {
           (activeCategoryId.value === null ? ids.length > 0 : !ids.includes(activeCategoryId.value))
         )
           return false
+        if (!terms.length) return true
         const text =
           `${resource.name}\n${resource.fileName}\n${(resource.tags ?? []).join(' ')}`.toLocaleLowerCase()
         return terms.every((term) => text.includes(term))

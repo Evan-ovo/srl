@@ -595,8 +595,15 @@ export class IndexedDbResourceStorage implements ResourceStorageAdapter {
     return this.vault ? this.vault.decodeResourceSummary(summary) : (summary as ResourceSummary)
   }
 
-  getReadSource(id: string) {
-    return readResourceSource(this.database, id, this.get.bind(this))
+  getReadSource(id: string, historical = false, signal?: AbortSignal) {
+    return readResourceSource(
+      this.database,
+      id,
+      historical ? this.getVersion.bind(this) : this.get.bind(this),
+      historical,
+      signal,
+      this.decodeStoredResource.bind(this),
+    )
   }
 
   async findGalleryImage(

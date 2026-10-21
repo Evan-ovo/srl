@@ -32,6 +32,7 @@ import { normalizeFolderCoverUrl } from '../utils/FolderCover'
 import { useFolderCabinetDrag } from './UseFolderCabinetDrag'
 import { enqueueThumbnailRead } from './UseResourceThumbnail'
 import { folderThumbnailCacheKey } from './FolderThumbnailCache'
+type ThumbnailSource = { blob?: Blob; assetId?: string; hash: string; nativeUrl?: string }
 export type {
   FolderLibraryViewEvents,
   FolderLibraryViewProps,
@@ -86,7 +87,7 @@ export function useFolderLibraryView(
   const pendingThumbnails = new Map<string, () => void>()
   const thumbnailCache = inject(folderThumbnailCacheKey, undefined)
   const thumbnailReleases = new Map<string, () => void>()
-  const thumbnailSources = new Map<string, { blob?: Blob; assetId?: string; hash: string }>()
+  const thumbnailSources = new Map<string, ThumbnailSource>()
 
   const searchQuery = ref('')
 
@@ -408,6 +409,80 @@ export function useFolderLibraryView(
     }
   }
 
+  function publishThumbnail(
+    resource: ResourceSummary,
+    source: ThumbnailSource,
+    image: Blob | string,
+  ): void {
+    if (thumbnailSources.get(resource.id) !== source) return
+    const lease = thumbnailCache?.acquire(resource, image) ?? {
+      url: typeof image === 'string' ? image : URL.createObjectURL(image),
+      native: typeof image === 'string',
+      release() {
+        if (!this.native) URL.revokeObjectURL(this.url)
+      },
+    }
+    source.nativeUrl = lease.native ? lease.url : undefined
+    thumbnailReleases.set(resource.id, () => lease.release())
+    thumbnailUrls.value = new Map(thumbnailUrls.value).set(resource.id, lease.url)
+  }
+
+  function readThumbnail(resource: ResourceSummary, source: ThumbnailSource, native = true): void {
+    if (native && assetStore.supportsImageUrls) {
+      pendingThumbnails.set(
+        resource.id,
+        enqueueThumbnailRead(
+          async () => {
+            if (!source.assetId || thumbnailSources.get(resource.id) !== source) return
+            try {
+              const url = await assetStore.getImageUrl(source.assetId)
+              if (thumbnailSources.get(resource.id) !== source) return
+              if (url) {
+                publishThumbnail(resource, source, url)
+                pendingThumbnails.delete(resource.id)
+              } else readThumbnail(resource, source, false)
+            } catch {
+              if (thumbnailSources.get(resource.id) === source)
+                pendingThumbnails.delete(resource.id)
+            }
+          },
+          undefined,
+          'source',
+        ),
+      )
+      return
+    }
+    pendingThumbnails.set(
+      resource.id,
+      enqueueThumbnailRead(async () => {
+        try {
+          if (!source.assetId || thumbnailSources.get(resource.id) !== source) return
+          const blob = await assetStore.getBlob(source.assetId)
+          if (blob) publishThumbnail(resource, source, blob)
+        } catch {
+          /* A missing thumbnail must not hold back other cabinet images. */
+        } finally {
+          if (thumbnailSources.get(resource.id) === source) pendingThumbnails.delete(resource.id)
+        }
+      }),
+    )
+  }
+
+  function handleThumbnailError(id: string, event: Event): void {
+    const source = thumbnailSources.get(id)
+    const url = (event.target as HTMLImageElement).getAttribute('src')
+    if (!source?.nativeUrl || url !== source.nativeUrl) return
+    const resource = visibleThumbnailResources.value.find((item) => item.id === id)
+    if (!resource) return
+    thumbnailCache?.invalidate(resource, url)
+    source.nativeUrl = undefined
+    thumbnailReleases.get(id)?.()
+    thumbnailReleases.delete(id)
+    thumbnailUrls.value = new Map(thumbnailUrls.value)
+    thumbnailUrls.value.delete(id)
+    readThumbnail(resource, source, false)
+  }
+
   watch(
     visibleThumbnailResources,
     (resources) => {
@@ -429,47 +504,29 @@ export function useFolderLibraryView(
       thumbnailUrls.value = new Map(thumbnailUrls.value)
       for (const resource of resources) {
         if (thumbnailSources.has(resource.id)) continue
-        const source = {
+        const source: ThumbnailSource = {
           blob: resource.thumbnailBlob,
           assetId: resource.thumbnailAssetId,
           hash: resource.contentHash,
         }
         thumbnailSources.set(resource.id, source)
-        const publishLease = (lease: { url: string; release: () => void }) => {
-          thumbnailReleases.set(resource.id, lease.release)
-          thumbnailUrls.value = new Map(thumbnailUrls.value).set(resource.id, lease.url)
-        }
         const cached = thumbnailCache?.acquire(resource)
         if (cached) {
-          publishLease(cached)
-          continue
-        }
-        const publish = (blob: Blob | undefined) => {
-          if (!blob || thumbnailSources.get(resource.id) !== source) return
-          const lease = thumbnailCache?.acquire(resource, blob)
-          if (lease) publishLease(lease)
-          else {
-            const url = URL.createObjectURL(blob)
-            publishLease({ url, release: () => URL.revokeObjectURL(url) })
+          if (cached.native && !assetStore.supportsImageUrls) {
+            thumbnailCache?.invalidate(resource, cached.url)
+            cached.release()
+          } else {
+            source.nativeUrl = cached.native ? cached.url : undefined
+            thumbnailReleases.set(resource.id, cached.release)
+            thumbnailUrls.value = new Map(thumbnailUrls.value).set(resource.id, cached.url)
+            continue
           }
         }
         if (source.blob) {
-          publish(source.blob)
+          publishThumbnail(resource, source, source.blob)
           continue
         }
-        pendingThumbnails.set(
-          resource.id,
-          enqueueThumbnailRead(async () => {
-            try {
-              publish(source.assetId ? await assetStore.getBlob(source.assetId) : undefined)
-            } catch {
-              /* A missing thumbnail must not hold back other cabinet images. */
-            } finally {
-              if (thumbnailSources.get(resource.id) === source)
-                pendingThumbnails.delete(resource.id)
-            }
-          }),
-        )
+        readThumbnail(resource, source)
       }
     },
     { immediate: true },
@@ -911,6 +968,7 @@ export function useFolderLibraryView(
     moveFolderByKeyboard,
     coverResources,
     thumbnailUrls,
+    handleThumbnailError,
     openRename,
     handleCoverFile,
     selectedResourceIds,

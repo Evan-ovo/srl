@@ -37,6 +37,11 @@ function saveAppearance(value: string, options?: UiApplyOptions) {
   else emit('save-css', value)
 }
 const controller = useFeatureHub(props, emit)
+const appearancePaletteEvents = {
+  // SRL-PUBLIC-SYNC: BEGIN PUBLIC-ONLY id=palette-local-event-boundary
+  // 调色仅在本机保存、预览和导出，此处不连接发布服务。
+  // SRL-PUBLIC-SYNC: END PUBLIC-ONLY id=palette-local-event-boundary
+}
 const assistantPages = ref<Array<'appearance' | 'assistant'>>([])
 const assistantVisibility = ref({ appearance: false, assistant: false })
 const assistantActivity = ref({ appearance: false, assistant: false })
@@ -357,6 +362,7 @@ function forwardAssistantAppearance(
       @preview-css="emit('preview-css', $event)"
       @assistant-visibility="setAssistantVisible($event, assistantPage)"
       @assistant-activity="setAssistantActivity($event, assistantPage)"
+      v-on="appearancePaletteEvents"
     />
   </main>
 </template>

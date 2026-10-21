@@ -18,6 +18,7 @@ import {
 import { hashCloudBlob } from './CloudArchiveCodec'
 import { SecretResourceService } from './SecretResourceService'
 import { parsePersonalResource } from '../types/PersonalResource'
+import type { ResourceByteSource } from '../types/ResourceReadSource'
 
 function resource(id: string, body: string): Resource {
   return {
@@ -40,6 +41,79 @@ function resource(id: string, body: string): Resource {
 }
 
 describe('CloudStructuredSnapshot', () => {
+  it('materializes an encrypted or legacy candidate once instead of reopening the full original per part', async () => {
+    const original = resource('legacy-original', '')
+    original.originalBlob = new Blob([new Uint8Array(33 * 1024 * 1024 + 19)])
+    original.fileSize = original.originalBlob.size
+    original.contentHash = await hashCloudBlob(original.originalBlob)
+    const loadSource = vi.fn(async () => ({
+      ...toResourceSummary(original),
+      originalSource: original.originalBlob,
+      requiresWholeRead: true,
+    }))
+    const planned = await createStructuredSnapshot(
+      [{ summary: toResourceSummary(original), load: async () => original, loadSource }],
+      [],
+      [],
+      { version: 1 },
+    )
+    expect(planned.objectPlans.length).toBeGreaterThan(1)
+    for (const part of planned.objectPlans) {
+      expect(part.blob).toBeInstanceOf(Blob)
+      expect(await hashCloudBlob(part.blob!)).toBe(part.hash)
+    }
+    expect(loadSource).toHaveBeenCalledTimes(1)
+  })
+  it('plans current and historical attachments without hydrating originals and loads only a selected upload range', async () => {
+    const original = resource('bounded-media', '')
+    original.originalBlob = new Blob([new Uint8Array(33 * 1024 * 1024 + 19)])
+    original.fileSize = original.originalBlob.size
+    original.contentHash = await hashCloudBlob(original.originalBlob)
+    const ranges: number[] = []
+    const source: ResourceByteSource = {
+      size: original.fileSize,
+      text: async () => {
+        throw new Error('no full text')
+      },
+      slice(start = 0, end = original.fileSize) {
+        ranges.push(end - start)
+        return { arrayBuffer: () => original.originalBlob.slice(start, end).arrayBuffer() }
+      },
+    }
+    let changed = false
+    const load = vi.fn(async () => {
+      throw new Error('must not hydrate')
+    })
+    const candidate = {
+      summary: toResourceSummary(original),
+      load,
+      loadSource: async () => ({
+        ...toResourceSummary(original),
+        updatedAt: changed ? 2 : 1,
+        originalSource: source,
+      }),
+    }
+    const planned = await createStructuredSnapshot([candidate], [], [], { version: 1 })
+    expect(load).not.toHaveBeenCalled()
+    expect(planned.chunks.size).toBe(0)
+    expect(planned.objectPlans.every((plan) => !plan.blob)).toBe(true)
+    expect(planned.localReadBytes).toBe(original.fileSize)
+    expect(ranges.reduce((sum, size) => sum + size, 0)).toBe(original.fileSize)
+    expect(Math.max(...ranges)).toBeLessThanOrEqual(1024 * 1024)
+    const plan = planned.objectPlans[0]!
+    const beforeUpload = ranges.length
+    const chunk = await plan.loadBlob!()
+    expect(ranges.slice(beforeUpload)).toEqual([plan.size])
+    expect(chunk.size).toBeLessThan(original.fileSize)
+    expect(await hashCloudBlob(chunk)).toBe(plan.hash)
+    changed = true
+    await expect(plan.loadBlob!()).rejects.toThrow('资源发生变化')
+    changed = false
+    const historical = await createStructuredSnapshot([], [candidate], [], { version: 1 })
+    expect(historical.snapshot.versions[0]!.id).toBe(original.id)
+    expect(historical.descriptorUpdates[0]!.historical).toBe(true)
+    expect(load).not.toHaveBeenCalled()
+  })
   it('maps large upload chunks back to NativeLibrary byte ranges', async () => {
     const body = new Uint8Array(5 * 1024 * 1024).fill(0x5a)
     const original = resource('large-native', '')

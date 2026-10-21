@@ -542,7 +542,7 @@ describe('PresetStitcherApp', () => {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       value: vi.fn((query: string) => ({
-        matches: query === '(max-width: 52rem)',
+        matches: query === '(max-width: 53.75rem)',
         media: query,
         onchange: null,
         addEventListener: vi.fn(),

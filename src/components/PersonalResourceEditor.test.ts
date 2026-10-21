@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   attachment: vi.fn(),
   hasPassword: vi.fn(),
   isUnlocked: vi.fn(),
+  hasRememberedPassword: vi.fn(),
+  lock: vi.fn(),
   protect: vi.fn(),
   reveal: vi.fn(),
   confirm: vi.fn(),
@@ -114,7 +116,7 @@ it('opens reactive pocket-phone metadata and cancels edits without changing its 
 it('starts with name only and lets each field own its label, value and privacy without folding away the focused control', async () => {
   const w = mountEditor('secret', false)
   await flushPromises()
-  expect(w.findAll('input')).toHaveLength(1)
+  expect(w.findAll('input:not([type="checkbox"])')).toHaveLength(1)
   expect(w.findAll('textarea')).toHaveLength(0)
   await button(w, '＋添加字段').trigger('click')
   const row = w.get('.personal-resource-editor__field')
@@ -132,6 +134,36 @@ it('starts with name only and lets each field own its label, value and privacy w
   expect(w.findAll('.personal-resource-editor__field')).toHaveLength(1)
   expect((row.get('textarea').element as HTMLTextAreaElement).value).toBe('user-chosen-value')
 })
+it('saves a new unencrypted card without configuring or requesting a password', async () => {
+  mocks.hasPassword.mockRejectedValue(new Error('password store unavailable'))
+  const w = mountEditor('secret', false)
+  await flushPromises()
+  await w.get('input[maxlength]').setValue('本机资料')
+  await button(w, '＋添加字段').trigger('click')
+  await w.get('textarea').setValue('synthetic-plain-value')
+  expect(w.find('input[type="password"]').exists()).toBe(false)
+  expect(w.text()).not.toContain('备份中以明文保存')
+  await w.get('[aria-label="密钥加密说明"]').trigger('click')
+  expect(mocks.confirm).toHaveBeenCalledWith(
+    expect.objectContaining({
+      title: '密钥加密说明',
+      message: expect.stringContaining('备份中以明文保存'),
+    }),
+  )
+  expect((w.get('[aria-label="使用统一密码加密"]').element as HTMLInputElement).checked).toBe(false)
+  await w.get('form').trigger('submit')
+  await flushPromises()
+  expect(mocks.protect).not.toHaveBeenCalled()
+  expect(mocks.hasPassword).not.toHaveBeenCalled()
+  expect(mocks.save).toHaveBeenCalledWith(
+    expect.objectContaining({
+      protection: 'none',
+      fields: [expect.objectContaining({ private: true, value: 'synthetic-plain-value' })],
+    }),
+    expect.any(Map),
+    undefined,
+  )
+})
 it('opens general settings without discarding the draft and picks up its shared unlock when returning', async () => {
   mocks.hasPassword.mockResolvedValue(false)
   const w = mountEditor('secret', false)
@@ -139,6 +171,7 @@ it('opens general settings without discarding the draft and picks up its shared 
   await w.get('input[maxlength]').setValue('草稿')
   await button(w, '＋添加字段').trigger('click')
   await w.get('textarea').setValue('secret-draft')
+  await w.get('[aria-label="使用统一密码加密"]').setValue(true)
   await button(w, '去总设置设置密码').trigger('click')
   expect(w.emitted('open-settings')).toHaveLength(1)
   await w.setProps({ settingsOpen: true })
@@ -258,4 +291,125 @@ it('keeps private values locked, unlocks for use, and cancels edits back to encr
   expect(w.text()).not.toContain('changed-private')
   expect(w.get('[aria-label="复制密钥"]').attributes('disabled')).toBeDefined()
   expect(mocks.save).not.toHaveBeenCalled()
+})
+it('reuses a source session for another encrypted card and clears it on explicit lock', async () => {
+  const doc = document('secret')
+  doc.fields = [{ id: 'key', label: 'Key', value: '', private: true }]
+  doc.protected = { salt: 'source', iv: 'iv', data: 'encrypted', iterations: 310000 }
+  mocks.read.mockResolvedValue(doc)
+  mocks.hasRememberedPassword.mockReturnValue(true)
+  mocks.reveal.mockResolvedValue([{ ...doc.fields[0], value: 'synthetic-imported-value' }])
+  const w = mountEditor('secret')
+  await flushPromises()
+  expect(w.find('input[type="password"]').exists()).toBe(false)
+  await w.get('form').trigger('submit')
+  await flushPromises()
+  expect(mocks.reveal).toHaveBeenCalledWith(expect.anything(), undefined)
+  expect(w.text()).toContain('synthetic-imported-value')
+  await button(w, '锁定私密内容').trigger('click')
+  expect(mocks.lock).toHaveBeenCalledOnce()
+  expect(w.find('input[type="password"]').exists()).toBe(true)
+  expect(w.text()).not.toContain('synthetic-imported-value')
+})
+it('does not unlock inline private fields while confirming Chinese composition', async () => {
+  const doc = document('secret')
+  doc.fields = [{ id: 'key', label: '密钥', value: '', private: true }]
+  doc.protected = { salt: 's', iv: 'i', data: 'encrypted', iterations: 310000 }
+  mocks.read.mockResolvedValue(doc)
+  mocks.reveal.mockResolvedValue([{ ...doc.fields[0], value: 'synthetic' }])
+  const w = mount(PersonalResourceEditor, { props: { kind: 'secret', resource, embedded: true } })
+  await flushPromises()
+  const input = w.get('input[type=password]')
+  await input.setValue('测试密码')
+  const composing = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    isComposing: true,
+    bubbles: true,
+    cancelable: true,
+  })
+  input.element.dispatchEvent(composing)
+  await flushPromises()
+  expect(mocks.reveal).not.toHaveBeenCalled()
+  expect(composing.defaultPrevented).toBe(false)
+  await input.trigger('keydown', { key: 'Enter' })
+  await flushPromises()
+  expect(mocks.reveal).toHaveBeenCalledOnce()
+})
+
+it('keeps extra-story text in its original editor without adding a second notes input', async () => {
+  const w = mountEditor('extraStory')
+  await flushPromises()
+  await button(w, '编辑').trigger('click')
+  expect(w.find('textarea[placeholder="用途或使用说明"]').exists()).toBe(false)
+  expect((w.get('textarea').element as HTMLTextAreaElement).value).toBe('已保存正文')
+})
+
+it.each(['pocketPhone', 'secret'] as const)(
+  'keeps %s notes open and focused after clearing the last character',
+  async (kind) => {
+    mocks.read.mockResolvedValue(document(kind))
+    const w = mount(PersonalResourceEditor, {
+      attachTo: window.document.body,
+      props: { kind, resource },
+    })
+    await flushPromises()
+    const edit = [
+      ...window.document.querySelectorAll<HTMLButtonElement>(
+        '.personal-resource-editor-overlay button',
+      ),
+    ].find((button) => button.textContent?.trim() === '编辑')!
+    edit.click()
+    await flushPromises()
+    const element = window.document.querySelector<HTMLTextAreaElement>(
+      'textarea[placeholder="用途或使用说明"]',
+    )!
+    element.focus()
+    element.value = ''
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    expect(window.document.querySelector('textarea[placeholder="用途或使用说明"]')).toBe(element)
+    expect(element.closest('details')?.open).toBe(true)
+    expect(window.document.activeElement).toBe(element)
+    element.value = '新的中文备注'
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    expect(element.value).toBe('新的中文备注')
+    w.unmount()
+  },
+)
+
+it('requires unlocking an old card before removing encryption, and keeps its source on save failure', async () => {
+  const doc = document('secret')
+  doc.fields = [{ id: 'key', label: 'Key', value: '', private: true }]
+  doc.protected = { salt: 's', iv: 'i', data: 'encrypted', iterations: 310000 }
+  mocks.read.mockResolvedValue(doc)
+  mocks.reveal.mockResolvedValue([{ ...doc.fields[0], value: 'synthetic-old-value' }])
+  const w = mountEditor('secret')
+  await flushPromises()
+  expect(w.find('[aria-label="使用统一密码加密"]').exists()).toBe(false)
+  await w.get('input[type="password"]').setValue('password123')
+  await w.get('form').trigger('submit')
+  await flushPromises()
+  await button(w, '编辑').trigger('click')
+  expect((w.get('[aria-label="使用统一密码加密"]').element as HTMLInputElement).checked).toBe(true)
+  await w.get('[aria-label="使用统一密码加密"]').setValue(false)
+  mocks.save.mockRejectedValueOnce(new Error('storage failure'))
+  await w.get('form').trigger('submit')
+  await flushPromises()
+  expect(w.text()).toContain('storage failure')
+  expect(doc.protected.data).toBe('encrypted')
+  expect(doc.fields[0]?.value).toBe('')
+  expect(mocks.protect).not.toHaveBeenCalled()
+  await w.get('form').trigger('submit')
+  await flushPromises()
+  expect(mocks.save).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      protection: 'none',
+      fields: [expect.objectContaining({ value: 'synthetic-old-value' })],
+    }),
+    expect.any(Map),
+    resource,
+  )
+  expect(mocks.save.mock.lastCall?.[0].protected).toBeUndefined()
+  expect(w.find('input[type="password"]').exists()).toBe(false)
 })

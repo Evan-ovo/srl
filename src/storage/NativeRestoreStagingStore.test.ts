@@ -14,7 +14,9 @@ vi.mock('@capacitor/core', () => ({
   registerPlugin: () => plugin,
 }))
 import { NativeRestoreStagingStore } from './NativeRestoreStagingStore'
-import { rememberNativeFile, nativeFileSource } from '../core/NativeFileSource'
+import { rememberNativeFile, nativeFileSource, nativeFileSize } from '../core/NativeFileSource'
+import * as nativeMirror from './NativeResourceFileMirror'
+import * as nativeRuntime from './AndroidNativeDexieCore'
 import { stageArchive } from '../services/ArchiveExtraction'
 
 afterEach(() => {
@@ -29,6 +31,46 @@ const archive = () =>
     ),
     'file:///backup.zip',
   )
+
+it('原生大原件只返回显式文件引用；旧库和缺失加速接口仍交给正文路径', async () => {
+  const active = vi.spyOn(nativeRuntime, 'isAndroidNativeAppDatabaseActive').mockReturnValue(true)
+  const available = vi.spyOn(nativeMirror, 'canImportNativeResourceObjects').mockResolvedValue(true)
+  const fetcher = vi.fn()
+  vi.stubGlobal('fetch', fetcher)
+  plugin.readArchiveEntry.mockResolvedValue({
+    entry: {
+      jobId: 'native-zip-files',
+      path: 'large.bin',
+      uri: 'file:///staged',
+      size: 33554432,
+      sha256: 'a'.repeat(64),
+      updatedAt: 1,
+    },
+  })
+  try {
+    const store = new NativeRestoreStagingStore({} as AppDatabase)
+    const entry = await store.getNativeFile('native-zip-files', 'large.bin')
+    expect(entry?.blob.size).toBe(0)
+    expect(nativeFileSize(entry!.blob)).toBe(33554432)
+    expect(nativeFileSource(entry!.blob)).toBe('file:///staged')
+    await store.getNativeFile('native-zip-files', 'large.bin')
+    expect(available).toHaveBeenCalledOnce()
+    expect(fetcher).not.toHaveBeenCalled()
+    active.mockReturnValue(false)
+    expect(await store.getNativeFile('native-zip-files', 'large.bin')).toBeUndefined()
+    active.mockReturnValue(true)
+    available.mockResolvedValue(false)
+    expect(
+      await new NativeRestoreStagingStore({} as AppDatabase).getNativeFile(
+        'native-zip-files',
+        'large.bin',
+      ),
+    ).toBeUndefined()
+  } finally {
+    active.mockRestore()
+    available.mockRestore()
+  }
+})
 
 it('备份预检使用同一原生解压 Owner，保留可重建的 jobId 和文件引用', async () => {
   const store = new NativeRestoreStagingStore({} as AppDatabase)

@@ -21,6 +21,7 @@ import {
 import { IndexedDbResourceStorage } from './IndexedDbResourceStorage'
 import type { NativeBackedResourceRecord } from '../types/Vault'
 import * as nativeMirror from './NativeResourceFileMirror'
+import * as nativeDatabaseRuntime from './AndroidNativeDexieCore'
 import { restoreVersionKey } from '../utils/RestoreIdentity'
 import { VaultService } from '../services/VaultService'
 import { hydrateResourceFromIndexedDb } from './ResourceStorageClone'
@@ -46,14 +47,78 @@ function stagedResource(id: string, blob: Blob): Resource {
 }
 
 describe('IndexedDbArchiveStorage', () => {
-  it('uses inline bytes only through 1 MiB and preserves the existing larger original path', async () => {
+  it.each([
+    ['AppleWebKit/605.1.15 Version/26.5 Safari/605.1.15', true],
+    ['AppleWebKit/605.1.15 CriOS/140.0 Mobile Safari/604.1', true],
+    ['AppleWebKit/537.36 HeadlessChrome/140.0 Safari/537.36', false],
+    ['AppleWebKit/537.36 Chrome/140.0 Edg/140.0 Safari/537.36', false],
+  ])('keeps the verified IDB Blob route for %s', async (userAgent, detach) => {
+    vi.stubGlobal('navigator', { userAgent })
+    const database = new AppDatabase('blob-route-' + crypto.randomUUID())
+    const body = new Blob([new Uint8Array(1024 * 1024 + 7).fill(23)])
+    const resource = stagedResource('original', body),
+      read = vi.spyOn(globalThis, 'fetch')
+    try {
+      await new IndexedDbArchiveStorage(database).restore([], [resource])
+      expect(read).toHaveBeenCalledTimes(detach ? 1 : 0)
+      database.close()
+      await database.open()
+      const stored = await new IndexedDbResourceStorage(database).get(resource.id)
+      expect(await stored!.originalBlob.arrayBuffer()).toEqual(await body.arrayBuffer())
+    } finally {
+      read.mockRestore()
+      vi.unstubAllGlobals()
+      database.close()
+      await database.delete()
+    }
+  })
+  it('keeps native ZIP originals out of staging Blobs and links them before the index commit', async () => {
+    const database = new AppDatabase(`native-zip-original-${crypto.randomUUID()}`)
+    const storage = new IndexedDbArchiveStorage(database)
+    const resource = stagedResource('native-zip', new Blob([new Uint8Array(1024 * 1024 + 7)]))
+    vi.spyOn(nativeDatabaseRuntime, 'isAndroidNativeAppDatabaseActive').mockReturnValue(true)
+    const imported = vi.spyOn(nativeMirror, 'importNativeResourceObject').mockResolvedValue(true)
+    const linked = vi
+      .spyOn(nativeMirror, 'linkNativeResourceObjects')
+      .mockImplementation(async (records) => {
+        expect(records).toEqual([
+          expect.objectContaining({
+            id: resource.id,
+            scope: 'current',
+            contentHash: resource.contentHash,
+            size: resource.fileSize,
+          }),
+        ])
+        expect(await database.resources.count()).toBe(0)
+        const staged = await database.restoreStaging.toArray()
+        expect(staged[0]?.record?.resource).toMatchObject({
+          nativeOriginal: { contentHash: resource.contentHash, size: resource.fileSize },
+        })
+        expect(staged[0]?.record?.resource).not.toHaveProperty('originalBlob')
+        return 1
+      })
+    try {
+      await storage.restore([], [resource])
+      expect(imported).toHaveBeenCalledOnce()
+      expect(linked).toHaveBeenCalledOnce()
+      expect(await database.resources.get(resource.id)).toMatchObject({
+        nativeOriginal: { contentHash: resource.contentHash, size: resource.fileSize },
+      })
+    } finally {
+      vi.restoreAllMocks()
+      database.close()
+      await database.delete()
+    }
+  })
+
+  it('keeps inline bytes through 1 MiB and reuses staged larger originals without a second read', async () => {
     const database = new AppDatabase(`restore-inline-boundary-${crypto.randomUUID()}`)
     const small = stagedResource('inline-limit', new Blob([new Uint8Array(1024 * 1024).fill(7)]))
     const large = stagedResource('above-limit', new Blob([new Uint8Array(1024 * 1024 + 1).fill(9)]))
     const read = vi.spyOn(globalThis, 'fetch')
     try {
       await new IndexedDbArchiveStorage(database).restore([], [small, large])
-      expect(read).toHaveBeenCalledTimes(1)
+      expect(read).not.toHaveBeenCalled()
       const smallStored = await database.resources.get(small.id)
       const largeStored = await database.resources.get(large.id)
       expect(smallStored).toHaveProperty('originalBlob', expect.any(ArrayBuffer))

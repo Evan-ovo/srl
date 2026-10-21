@@ -659,9 +659,13 @@ async function transfer(kind: ReferenceExportKind, copy = false) {
   height: 1.25rem;
 }
 .appearance-code-reference {
+  top: var(--visual-viewport-offset-top, 0px);
+  bottom: calc(
+    100% - var(--visual-viewport-offset-top, 0px) - var(--visual-viewport-height, 100dvh)
+  );
   width: min(34rem, calc(100vw - 2rem));
   max-width: calc(100vw - 2rem);
-  max-height: calc(100dvh - 2rem);
+  max-height: calc(var(--visual-viewport-height, 100dvh) - 2rem);
   box-sizing: border-box;
   padding: 0;
   color: var(--color-ink);
@@ -680,7 +684,7 @@ async function transfer(kind: ReferenceExportKind, copy = false) {
 }
 .appearance-code-reference--full {
   width: 100vw;
-  height: 100dvh;
+  height: var(--visual-viewport-height, 100dvh);
   max-width: none;
   max-height: none;
   margin: 0;

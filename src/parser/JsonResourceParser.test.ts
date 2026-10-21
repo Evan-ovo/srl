@@ -9,6 +9,37 @@ function jsonFile(data: unknown, name = 'resource.json'): File {
 
 describe('JsonResourceParser', () => {
   const parser = new JsonResourceParser()
+  it('accepts explicitly unencrypted key cards without leaking values into metadata, and rejects unmarked private plaintext', async () => {
+    const document = {
+      format: 'srl-personal-resource',
+      version: 1,
+      kind: 'secret',
+      name: 'Plain key',
+      text: '',
+      url: '',
+      attachments: [],
+      fields: [{ id: 'key', label: 'Key', value: 'synthetic-private-value', private: true }],
+    }
+    const parsed = await parser.parse(jsonFile({ ...document, protection: 'none' }))
+    expect(parsed.type).toBe('secret')
+    expect(parsed.metadata).toMatchObject({ secretProtection: 'none', privateFieldCount: 1 })
+    expect(JSON.stringify(parsed)).not.toContain('synthetic-private-value')
+    await expect(parser.parse(jsonFile(document))).rejects.toThrow('保护方式')
+    await expect(
+      parser.parse(
+        jsonFile({
+          ...document,
+          protection: 'none',
+          fields: Array.from({ length: 30 }, (_, i) => ({
+            id: String(i),
+            label: 'Key',
+            value: 'x'.repeat(80000),
+            private: true,
+          })),
+        }),
+      ),
+    ).rejects.toThrow('2 MB')
+  })
   it('keeps Tavern bindings distinct from persona-specific character variants', async () => {
     const cardHash = 'a'.repeat(64)
     const result = await parser.parse(

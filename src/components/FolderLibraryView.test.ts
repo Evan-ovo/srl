@@ -105,6 +105,172 @@ async function dispatchPointer(
 }
 
 describe('FolderLibraryView', () => {
+  it.each([1000, 5000, 10000])(
+    'bounds native cover work to visible entries in a %i-resource library',
+    async (count) => {
+      vi.spyOn(assetStore, 'supportsImageUrls', 'get').mockReturnValue(true)
+      const finishes: ((url: string) => void)[] = []
+      const direct = vi.spyOn(assetStore, 'getImageUrl').mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishes.push(resolve)
+          }),
+      )
+      const bytes = vi.spyOn(assetStore, 'getBlob')
+      const cards = Array.from({ length: count }, (_, id) => ({
+        ...resource(String(id), `封面${id}`),
+        thumbnailAssetId: `asset-${id}`,
+      }))
+      const wrapper = render(
+        [],
+        cards,
+        cards.slice(0, 6).map((card) => card.id),
+      )
+      try {
+        await flushPromises()
+        expect(direct).toHaveBeenCalledTimes(6) // Only the six visible entries, in one address batch.
+      } finally {
+        wrapper.unmount()
+        for (const finish of finishes) finish('https://native/late')
+      }
+      await flushPromises()
+      expect(direct).toHaveBeenCalledTimes(6)
+      expect(bytes).not.toHaveBeenCalled()
+    },
+  )
+
+  it('drops a cached native address when direct access is unavailable, preserving the protected read path', async () => {
+    const cache = createFolderThumbnailCache()
+    const card = { ...resource('protected', '封面', ['folder-a']), thumbnailAssetId: 'asset' }
+    cache.acquire(card, 'https://native/old')!.release()
+    vi.spyOn(assetStore, 'supportsImageUrls', 'get').mockReturnValue(false)
+    const direct = vi.spyOn(assetStore, 'getImageUrl')
+    const bytes = vi.spyOn(assetStore, 'getBlob').mockResolvedValue(new Blob(['protected']))
+    const wrapper = render(categories, [card], [], cache)
+    try {
+      await flushPromises()
+      expect(wrapper.get('.visual-folder__mosaic img').attributes('src')).toMatch(/^blob:/)
+      expect(direct).not.toHaveBeenCalled()
+      expect(bytes).toHaveBeenCalledTimes(1)
+    } finally {
+      wrapper.unmount()
+      cache.clear()
+    }
+  })
+
+  it('displays and reuses native covers without reading image bytes, and invalidates a replaced image', async () => {
+    vi.spyOn(assetStore, 'supportsImageUrls', 'get').mockReturnValue(true)
+    const cache = createFolderThumbnailCache()
+    const card = { ...resource('native', '原生封面', ['folder-a']), thumbnailAssetId: 'old' }
+    const direct = vi
+      .spyOn(assetStore, 'getImageUrl')
+      .mockImplementation(async (id) => `https://native/${id}`)
+    const bytes = vi.spyOn(assetStore, 'getBlob')
+    const create = vi.spyOn(URL, 'createObjectURL')
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    let wrapper = render(categories, [card], [], cache)
+    try {
+      await flushPromises()
+      expect(wrapper.get('.visual-folder__mosaic img').attributes('src')).toBe('https://native/old')
+      wrapper.unmount()
+      wrapper = render(categories, [card], [], cache)
+      await nextTick()
+      expect(wrapper.get('.visual-folder__mosaic img').attributes('src')).toBe('https://native/old')
+      expect(direct).toHaveBeenCalledTimes(1)
+      await wrapper.setProps({ resources: [{ ...card, thumbnailAssetId: 'new' }] })
+      await flushPromises()
+      expect(wrapper.get('.visual-folder__mosaic img').attributes('src')).toBe('https://native/new')
+      expect(direct).toHaveBeenCalledTimes(2)
+      expect(bytes).not.toHaveBeenCalled()
+      expect(create).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      cache.clear()
+    }
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('falls back once after a native display error and replaces its cached address with a Blob', async () => {
+    vi.spyOn(assetStore, 'supportsImageUrls', 'get').mockReturnValue(true)
+    const cache = createFolderThumbnailCache()
+    const card = { ...resource('fallback', '回退封面', ['folder-a']), thumbnailAssetId: 'asset' }
+    const direct = vi.spyOn(assetStore, 'getImageUrl').mockResolvedValue('https://native/broken')
+    const bytes = vi.spyOn(assetStore, 'getBlob').mockResolvedValue(new Blob(['image']))
+    let wrapper = render(categories, [card], [], cache)
+    try {
+      await flushPromises()
+      await wrapper.get('.visual-folder__mosaic img').trigger('error')
+      await flushPromises()
+      expect(wrapper.get('.visual-folder__mosaic img').attributes('src')).toMatch(/^blob:/)
+      await wrapper.get('.visual-folder__mosaic img').trigger('error')
+      await flushPromises()
+      expect(bytes).toHaveBeenCalledTimes(1)
+      wrapper.unmount()
+      wrapper = render(categories, [card], [], cache)
+      await nextTick()
+      expect(wrapper.get('.visual-folder__mosaic img').attributes('src')).toMatch(/^blob:/)
+      expect(direct).toHaveBeenCalledTimes(1)
+      expect(bytes).toHaveBeenCalledTimes(1)
+    } finally {
+      wrapper.unmount()
+      cache.clear()
+    }
+  })
+
+  it.each([undefined, 'https://native/late'])(
+    'discards a late native result %s after unmount without falling back or retaining it',
+    async (result) => {
+      vi.spyOn(assetStore, 'supportsImageUrls', 'get').mockReturnValue(true)
+      const cache = createFolderThumbnailCache()
+      const card = {
+        ...resource('late-native', '原生封面', ['folder-a']),
+        thumbnailAssetId: 'asset',
+      }
+      let finish!: (url: string | undefined) => void
+      vi.spyOn(assetStore, 'getImageUrl').mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      const bytes = vi.spyOn(assetStore, 'getBlob')
+      const wrapper = render(categories, [card], [], cache)
+      await nextTick()
+      wrapper.unmount()
+      finish(result)
+      await flushPromises()
+      expect(bytes).not.toHaveBeenCalled()
+      expect(cache.acquire(card)).toBeUndefined()
+      cache.clear()
+    },
+  )
+
+  it('clears native covers on source removal and does not cache storage failures', async () => {
+    vi.spyOn(assetStore, 'supportsImageUrls', 'get').mockReturnValue(true)
+    const cache = createFolderThumbnailCache()
+    const card = { ...resource('locked', '封面', ['folder-a']), thumbnailAssetId: 'asset' }
+    const direct = vi
+      .spyOn(assetStore, 'getImageUrl')
+      .mockResolvedValueOnce('https://native/asset')
+      .mockRejectedValue(new Error('storage failure'))
+    const bytes = vi.spyOn(assetStore, 'getBlob')
+    const wrapper = render(categories, [card], [], cache)
+    try {
+      await flushPromises()
+      cache.prune([])
+      await wrapper.setProps({ resources: [] })
+      expect(wrapper.find('.visual-folder__mosaic img').exists()).toBe(false)
+      await wrapper.setProps({ resources: [card] })
+      await flushPromises()
+      expect(direct).toHaveBeenCalledTimes(2)
+      expect(bytes).not.toHaveBeenCalled()
+      expect(cache.acquire(card)).toBeUndefined()
+    } finally {
+      wrapper.unmount()
+      cache.clear()
+    }
+  })
+
   it('reuses ready covers synchronously on reentry and reloads a changed cover', async () => {
     const cache = createFolderThumbnailCache()
     const card = {

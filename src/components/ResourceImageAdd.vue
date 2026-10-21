@@ -30,6 +30,12 @@ function files(event: Event) {
   target.value = ''
   if (selected.length && !props.busy) pendingFiles.value = selected
 }
+function addUrlOnEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (!props.busy && url.value.trim()) emit('url', url.value, download.value, quality.value)
+}
 </script>
 <template>
   <div class="resource-gallery__input">
@@ -74,7 +80,7 @@ function files(event: Event) {
           :spellcheck="false"
           placeholder="https://…"
           :disabled="busy"
-          @keydown.enter.stop.prevent="!busy && url.trim() && emit('url', url, download, quality)"
+          @keydown.enter="addUrlOnEnter"
       /></label>
     </template>
     <div v-if="mode === 'file' || download" class="resource-gallery__bar">

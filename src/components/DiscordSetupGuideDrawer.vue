@@ -2,9 +2,11 @@
 import { ref } from 'vue'
 import { useAssistantHelpContext } from '../composables/UseAssistantHelpContext'
 import ResourceImageViewer from './ResourceImageViewer.vue'
+import DiscordPrivacyHelp from './DiscordPrivacyHelp.vue'
 
 import {
   DISCORD_BRIDGE_DEPLOY_URL,
+  DISCORD_BRIDGE_PRIVACY_POLICY_URL,
   DISCORD_BRIDGE_WRANGLER_TEMPLATE,
 } from '../services/DiscordBridgeDeployService'
 
@@ -124,6 +126,51 @@ async function copyText(value: string, message: string): Promise<void> {
                 打开 Discord Bot 设置
               </a>
               <code>Application ID：General Information → APPLICATION ID</code>
+              <p>
+                同时配置隐私政策：先打开说明，核对与你的个人自用部署一致后复制链接。 回到同一个 App
+                的 General Information，将链接粘贴到 Privacy Policy URL，点击 Save
+                Changes（保存更改），确认保存成功。<DiscordPrivacyHelp />
+              </p>
+              <a
+                :href="DISCORD_BRIDGE_PRIVACY_POLICY_URL"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                打开隐私与数据处理说明
+              </a>
+              <div class="discord-guide-copy-list">
+                <button
+                  type="button"
+                  @click="copyText(DISCORD_BRIDGE_PRIVACY_POLICY_URL, '隐私政策链接已复制')"
+                >
+                  复制隐私政策链接
+                </button>
+              </div>
+              <code>{{ DISCORD_BRIDGE_PRIVACY_POLICY_URL }}</code>
+              <figure
+                class="discord-guide-screenshot"
+                role="button"
+                tabindex="0"
+                aria-label="放大查看隐私政策填写位置"
+                @click="openScreenshot($event)"
+                @keydown.enter.prevent="openScreenshot"
+                @keydown.space.prevent="openScreenshot"
+              >
+                <img
+                  :src="'/tutorials/discord-privacy-policy-redacted.png'"
+                  alt="Discord 基本信息页面，红圈标出隐私政策 URL 输入框，交互端点地址已遮挡"
+                  loading="lazy"
+                />
+                <figcaption>
+                  中文界面：基本信息 → 隐私政策 URL（红圈处）。截图中的 App
+                  名称仅作示意，请选择自己的 App；点击图片可放大。
+                </figcaption>
+              </figure>
+              <p class="discord-guide-note discord-guide-note--soft">
+                修改过数据处理方式时，先发布符合实际的公开说明，再填写自己的链接。
+                公开说明不等于公开 Bot 或本地收藏；不要在说明中放入消息、Token 或私人资料。
+                向其他人提供服务前，还需补充有效的私密数据请求渠道。
+              </p>
               <figure
                 class="discord-guide-screenshot"
                 role="button"

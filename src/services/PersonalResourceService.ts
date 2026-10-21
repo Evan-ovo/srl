@@ -23,12 +23,17 @@ export function personalResourceMetadata(document: PersonalResourceDocument): Pa
       document.kind === 'extraStory'
         ? document.text.slice(0, 200)
         : document.kind === 'secret'
-          ? '部署资料 · 私密字段需解锁查看'
+          ? document.protection === 'none'
+            ? '部署资料 · 未启用密码加密'
+            : '部署资料 · 私密字段需解锁查看'
           : document.text.slice(0, 200),
     metadata: {
       format: 'srl-personal-resource',
       attachmentCount: document.attachments.length,
       privateFieldCount: document.fields.filter((field) => field.private).length,
+      ...(document.kind === 'secret'
+        ? { secretProtection: document.protected ? 'password' : 'none' }
+        : {}),
       phoneIconUrl: icon?.dataUrl.startsWith('https:') ? icon.dataUrl : '',
       ...(document.kind === 'pocketPhone' ? { personalDocument: document } : {}),
     },
@@ -124,7 +129,8 @@ export class PersonalResourceService {
         restoredSecretSourceHash: restoredSourceHash.toLowerCase(),
       }
     }
-    if (current) return this.resources.updatePersonalContent(file, parsed, current.id)
+    if (current)
+      return this.resources.updatePersonalContent(file, parsed, current.id, current.contentHash)
     const result = await this.resources.importPreparedFile(file, personalResourceMetadata(document))
     if (result.status === 'failed') throw new Error(result.message)
     if (result.status === 'versionCandidate') throw new Error('资源需要确认版本')

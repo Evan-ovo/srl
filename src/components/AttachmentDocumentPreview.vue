@@ -9,9 +9,13 @@ import {
   readAttachmentText,
 } from '../services/AttachmentDocument'
 import { formatBytes } from '../utils/LibraryFormatting'
+import AttachmentFilePreview from './AttachmentFilePreview.vue'
 
-const props = defineProps<{ resource: Resource }>()
+const props = withDefaults(defineProps<{ resource: Resource; active?: boolean }>(), {
+  active: true,
+})
 const format = attachmentFormat(props.resource.fileName)
+const filePreview = ['audio', 'video', 'image', 'code', 'table'].includes(format)
 const previewPolicy = format === 'markdown' ? usePreviewPolicy() : undefined
 const markdownSource = ref('')
 const markdownHtml = computed(() => {
@@ -84,7 +88,7 @@ const markdownHtml = computed(() => {
 })
 const text = ref('')
 const error = ref('')
-const loading = ref(true)
+const loading = ref(!filePreview)
 const frame = ref('')
 const page = ref(1)
 const pageCount = ref(0)
@@ -136,6 +140,7 @@ async function changeZoom(value: string) {
   await renderPage()
 }
 onMounted(async () => {
+  if (filePreview) return
   const resource = props.resource
   const file = new File([resource.originalBlob], resource.fileName, { type: resource.mimeType })
   try {
@@ -208,6 +213,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="attachment-preview">
+    <AttachmentFilePreview v-if="filePreview" :resource="resource" :active="active" />
     <p v-if="loading" role="status">正在读取…</p>
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="format === 'pdf'">
@@ -264,6 +270,6 @@ onBeforeUnmount(() => {
       <article class="attachment-markdown" aria-label="Markdown 文档预览" v-html="markdownHtml" />
     </template>
     <pre v-else-if="format === 'txt' || format === 'word'">{{ text }}</pre>
-    <p v-else-if="!loading">此格式暂不支持预览，可导出后打开。</p>
+    <p v-else-if="!loading && !filePreview">此格式暂不支持预览，可导出后打开。</p>
   </div>
 </template>

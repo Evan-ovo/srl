@@ -350,7 +350,9 @@ function bindImportInput(element: unknown): void {
       class="card-content-workbench__editor"
       role="group"
       aria-label="条目编辑"
-      @keydown.ctrl.enter.stop.prevent="saveEditor"
+      @keydown.ctrl.enter="
+        !$event.isComposing && ($event.stopPropagation(), $event.preventDefault(), saveEditor())
+      "
     >
       <template v-if="tab === 'greeting'">
         <label>

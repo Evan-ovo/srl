@@ -563,16 +563,14 @@ export class FrontendWorkshopSourceComponentService {
       throw new Error('组件包必须且只能包含 component.json')
     }
     const manifest = parsePortablePackageManifest(files['component.json'], now)
-    return this.create(
-      {
-        ...manifest.component,
-        provenance: {
-          origin: 'imported',
-        },
-        projectIds: [],
+    const draft: FrontendWorkshopSourceComponentDraft = {
+      ...manifest.component,
+      provenance: {
+        origin: 'imported',
       },
-      { id: options.id, now },
-    )
+      projectIds: [],
+    }
+    return this.create(draft, { id: options.id, now })
   }
 
   async duplicate(

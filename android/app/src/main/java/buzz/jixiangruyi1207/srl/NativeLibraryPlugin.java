@@ -87,6 +87,20 @@ public class NativeLibraryPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void importObjectFile(PluginCall call) {
+        runIo(call, () -> {
+            if (Boolean.TRUE.equals(call.getBoolean("probe", false))) { call.resolve(); return; }
+            String hash = call.getString("contentHash", "");
+            if (!hash.matches("[a-f0-9]{64}")) throw new IllegalArgumentException("原生原件摘要无效");
+            File source = NativeFileAccess.resolve(getContext(), call.getString("uri"));
+            NativeBridgeNumber.matchingFileSize(call.getData().opt("size"), source.length(), MAX_FILE_BYTES,
+                "原生原件大小无效", "原生原件大小已变化");
+            NativeLibraryObjectImport.copy(source, objectFile(getContext(), hash), source.length(), hash);
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
     public void appendFile(PluginCall call) {
         runIo(call, () -> {
             PendingWrite write = pending(call.getString("token"));
@@ -361,6 +375,46 @@ public class NativeLibraryPlugin extends Plugin {
             result.put("path", Uri.fromFile(object).toString());
             result.put("size", object.length());
             call.resolve(result);
+        });
+    }
+
+    @PluginMethod
+    public void readObjectChunk(PluginCall call) {
+        runIo(call, () -> {
+            String hash = requiredHash(call.getString("contentHash"));
+            long size = NativeBridgeNumber.bounded(call.getData().opt("size"), 0L, MAX_FILE_BYTES, "原生对象大小无效");
+            long offset = NativeBridgeNumber.bounded(call.getData().opt("offset"), 0L, size, "原生对象位置无效");
+            int length = (int) NativeBridgeNumber.bounded(call.getData().opt("length"), 0L, MAX_CHUNK_BYTES, "原生对象分块无效");
+            byte[] bytes = NativeBackupBundlePlanner.readRange(objectFile(hash), size, offset, length);
+            JSObject result = new JSObject();
+            result.put("size", size); result.put("sha256", hash); result.put("offset", offset);
+            result.put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
+            call.resolve(result);
+        });
+    }
+
+    @PluginMethod
+    public void planBackupObject(PluginCall call) {
+        runIo(call, () -> {
+            String requestId = call.getString("requestId", "");
+            if (!requestId.matches("[a-f0-9-]{36}")) throw new IllegalArgumentException("原生备份请求无效");
+            try {
+                String hash = requiredHash(call.getString("contentHash"));
+                long size = NativeBridgeNumber.bounded(call.getData().opt("size"), 0L, MAX_FILE_BYTES, "原生对象大小无效");
+                Long fixed = call.getData().has("fixedPartSize")
+                    ? NativeBridgeNumber.bounded(call.getData().opt("fixedPartSize"), 1L, MAX_FILE_BYTES, "原生分块大小无效") : null;
+                long[] reported = {-1};
+                JSONObject plan = NativeBackupBundlePlanner.plan(objectFile(hash), size, hash, fixed, processed -> {
+                    if (CANCELLED_HASHES.contains(requestId)) throw new java.io.InterruptedIOException("已停止备份准备");
+                    if (reported[0] != processed) {
+                        reported[0] = processed;
+                        JSObject progress = new JSObject();
+                        progress.put("requestId", requestId); progress.put("processed", processed);
+                        notifyListeners("backupPlanProgress", progress);
+                    }
+                });
+                call.resolve(JSObject.fromJSONObject(plan));
+            } finally { CANCELLED_HASHES.remove(requestId); }
         });
     }
 

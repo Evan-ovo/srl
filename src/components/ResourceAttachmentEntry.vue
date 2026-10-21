@@ -10,6 +10,7 @@ const emit = defineEmits<{ changed: [ids: string[]] }>()
 const ResourceAttachmentPanel = createAsyncPanel(
   '资源附件',
   () => import('./ResourceAttachmentPanel.vue'),
+  { modal: true },
 )
 const items = ref<ResourceSummary[]>([])
 const opened = defineModel<boolean>('open', { default: false })
@@ -45,7 +46,11 @@ watch(
 onBeforeUnmount(() => {
   generation++
 })
-defineExpose({ open: opened, requestBack: () => panel.value?.requestBack() })
+function requestBack() {
+  if (panel.value?.requestBack) return panel.value.requestBack()
+  opened.value = false
+}
+defineExpose({ open: opened, requestBack })
 </script>
 
 <template>

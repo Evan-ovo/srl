@@ -334,7 +334,7 @@ function organize() {
   position: fixed;
   z-index: 1300;
   left: calc(var(--safe-left, 0px) + 62px);
-  top: calc(var(--safe-top, 0px) + 76px);
+  top: calc(var(--visual-viewport-offset-top, 0px) + var(--safe-top, 0px) + 76px);
   width: min(340px, calc(100vw - var(--safe-left, 0px) - var(--safe-right, 0px) - 78px));
   max-height: calc(
     var(--visual-viewport-height, 100dvh) - var(--safe-top, 0px) - var(--safe-bottom, 0px) - 92px

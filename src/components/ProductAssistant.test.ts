@@ -173,6 +173,27 @@ async function send(w: ReturnType<typeof render>, text = '卡片改浅紫') {
   await flushPromises()
 }
 describe('ProductAssistant chat', () => {
+  it('keeps IME confirmation untouched by the send shortcut', async () => {
+    const w = render()
+    await flushPromises()
+    const input = w.get('[aria-label="发送消息"]')
+    await input.setValue('中文草稿')
+    const composing = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      ctrlKey: true,
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    input.element.dispatchEvent(composing)
+    await flushPromises()
+    expect(composing.defaultPrevented).toBe(false)
+    expect((input.element as HTMLTextAreaElement).value).toBe('中文草稿')
+    await input.trigger('keydown', { key: 'Enter', ctrlKey: true })
+    await flushPromises()
+    expect((input.element as HTMLTextAreaElement).value).toBe('')
+    w.unmount()
+  })
   it('keeps a general task in the existing full chat with one webpage preview instead of a second pet window', async () => {
     workspace.initialize.mockResolvedValueOnce({
       id: 'general-chat',

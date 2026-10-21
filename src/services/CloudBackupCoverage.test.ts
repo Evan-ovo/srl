@@ -583,7 +583,18 @@ describe('cloud backup registered content round trips', () => {
       generalPreferences: {},
       mainApiProfiles: {},
       credentials: { version: 1 },
-      aiTaggingState: {},
+      aiTaggingState: {
+        ruleTemplates: [
+          {
+            id: 'rule',
+            name: 'saved rule',
+            prompt: 'saved prompt',
+            systemPrompt: 'saved system prompt',
+            taxonomyTemplateId: 'free',
+            mergeAliases: true,
+          },
+        ],
+      },
       externalApps: { apps: [], data: [] },
       chatReader: [],
       assistantData: [],

@@ -3,7 +3,7 @@ import type { CommunitySourceBackupData } from '../types/CommunitySource'
 import { parseCommunitySourceBackupData } from './CommunitySourceBackupService'
 import type { RestoreStagingStore } from '../storage/RestoreStagingStore'
 import { isUserPersonaAvatarAttachment, RESOURCE_TYPE, type Resource } from '../types/Resource'
-import { nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
+import { nativeFileSize, nativeFileSource, rememberNativeFile } from '../core/NativeFileSource'
 import { createImageThumbnail } from '../utils/createImageThumbnail'
 
 /** Hydrates one verified entry and its thumbnail; planning and commit remain in RestoreService. */
@@ -12,12 +12,25 @@ export async function openArchiveFiles(
   jobId: string,
   paths: Map<string, string>,
   resources: Resource[],
+  preferNativeFile = false,
 ): Promise<{ hydrate: (resource: Resource) => Promise<Resource>; dispose: () => Promise<void> }> {
   type Avatar = { resource: Resource; index: number }
   let avatarsById: Map<string, Avatar[]> | undefined
   const materialize = async (resource: Resource): Promise<Resource> => {
     const path = paths.get(resource.contentHash.toLowerCase())
-    const entry = path ? await staging.get(jobId, path) : undefined
+    // Personal originals are parsed for protection; character PNGs also need thumbnail bytes.
+    const nativeOriginal =
+      preferNativeFile &&
+      resource.fileSize > 1024 * 1024 &&
+      resource.type !== RESOURCE_TYPE.SECRET &&
+      resource.type !== RESOURCE_TYPE.EXTRA_STORY &&
+      resource.type !== RESOURCE_TYPE.POCKET_PHONE &&
+      resource.type !== RESOURCE_TYPE.CHARACTER_CARD &&
+      !isUserPersonaAvatarAttachment(resource)
+    const entry = path
+      ? ((nativeOriginal ? await staging.getNativeFile?.(jobId, path) : undefined) ??
+        (await staging.get(jobId, path)))
+      : undefined
     if (
       !entry ||
       entry.size !== resource.fileSize ||
@@ -26,7 +39,7 @@ export async function openArchiveFiles(
       throw new Error(`备份原文件校验失败：${resource.fileName}`)
     const originalBlob = entry.blob.slice(0, entry.blob.size, resource.mimeType)
     const nativeUri = nativeFileSource(entry.blob)
-    if (nativeUri) rememberNativeFile(originalBlob, nativeUri)
+    if (nativeUri) rememberNativeFile(originalBlob, nativeUri, nativeFileSize(entry.blob))
     const avatar = isUserPersonaAvatarAttachment(resource)
     const thumbnailBlob =
       (resource.type === RESOURCE_TYPE.CHARACTER_CARD || avatar) &&

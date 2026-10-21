@@ -251,6 +251,7 @@ export async function materializeStructuredArchive(
     onReceivedBytes?: RestoreTransferOptions['onReceivedBytes']
     onProgress?: (progress: { completed: number; total: number; writtenBytes: number }) => void
     onReadFailures?: CloudDownloadOptions['onReadFailures']
+    writerFactory?: CloudDownloadOptions['writerFactory']
   },
 ) {
   const controller = new AbortController()
@@ -344,7 +345,7 @@ export async function materializeStructuredArchive(
               }
             : {}),
         },
-        undefined,
+        options?.writerFactory,
         {
           signal: controller.signal,
           readAhead: { onFailure: (error: unknown) => controller.abort(error) },
@@ -560,6 +561,13 @@ export async function buildStructuredBackup(
           if (!resource) throw new Error(`云备份规划期间资源已不存在：${summary.fileName}`)
           return resource
         },
+        loadSource: resourceService.getReadSource
+          ? async (signal?: AbortSignal) => {
+              const source = await resourceService.getReadSource(summary.id, false, signal)
+              if (!source) throw new Error(`云备份规划期间资源已不存在：${summary.fileName}`)
+              return source
+            }
+          : undefined,
       }
     }
   }
@@ -592,6 +600,13 @@ export async function buildStructuredBackup(
           if (!resource) throw new Error(`云备份规划期间历史版本已不存在：${summary.fileName}`)
           return resource
         },
+        loadSource: resourceService.getReadSource
+          ? async (signal?: AbortSignal) => {
+              const source = await resourceService.getReadSource(summary.id, true, signal)
+              if (!source) throw new Error(`云备份规划期间历史版本已不存在：${summary.fileName}`)
+              return source
+            }
+          : undefined,
       }
     }
   }
@@ -599,5 +614,6 @@ export async function buildStructuredBackup(
     readAttachment: context.readCommunityAttachment,
     readAlbumFile: context.readAlbumFile,
     signal: context.signal,
+    onProgress,
   })
 }

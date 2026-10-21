@@ -18,8 +18,9 @@ import type { PersonalResourceDocument } from '../types/PersonalResource'
 import { zipSync, strToU8 } from 'fflate'
 import { CloudBackupService } from './CloudBackupService'
 import type { CategoryService } from './CategoryService'
-import type { CreatedStructuredSnapshot } from './CloudStructuredSnapshot'
+import { createStructuredSnapshot, type CreatedStructuredSnapshot } from './CloudStructuredSnapshot'
 import { RestoreDuplicateIndex } from '../utils/RestoreIdentity'
+import type { GitHubBundleManifest } from './GitHubBackupBundle'
 
 const databases: AppDatabase[] = []
 afterEach(async () => {
@@ -62,50 +63,85 @@ function secrets() {
 }
 
 describe('personal resource lifecycle', () => {
-  it('recognizes a restored secret after local re-encryption, but invalidates that identity after a real edit', async () => {
+  it('replaces an extra in place, reopens the persisted revision, and protects concurrent edits', async () => {
     const { personal, resources, database } = setup()
-    const origin = secrets(),
-      local = secrets()
-    await origin.setPassword('origin-password')
-    await local.setPassword('local-password')
-    const plain = {
-      ...document('secret'),
-      fields: [{ id: 'key', label: 'Key', value: 'synthetic-private-value', private: true }],
-    }
-    const source = await personal.save(await origin.protect(plain), new Map())
-    const migrated = await personal.save(
-      await local.protect(plain),
+    const old = await personal.save(
+      {
+        ...document('extraStory'),
+        text: '旧正文',
+      },
       new Map(),
-      source,
-      source.contentHash,
     )
-    expect(migrated.contentHash).not.toBe(source.contentHash)
+    const next = await personal.save(
+      {
+        ...document('extraStory'),
+        text: '新正文',
+      },
+      new Map(),
+      old,
+    )
+    expect(next.id).toBe(old.id)
+    expect(await resources.listResourceListSummaries()).toHaveLength(1)
     database.close()
     await database.open()
-    let existing = await resources.listResourceListSummaries()
-    expect(new RestoreDuplicateIndex(existing, [source]).find(source)).toBe(migrated.id)
-    expect(
-      (
-        await new RestoreService(new IndexedDbArchiveStorage(database)).prepareStructured(
-          [source],
-          [],
-          [],
-          { version: 1 },
-          existing,
-          [],
-          'same-backup',
-        )
-      ).resources,
-    ).toHaveLength(0)
-    const changed = { ...plain, fields: [{ ...plain.fields[0]!, value: 'edited-private-value' }] }
-    const updated = await personal.save(await local.protect(changed), new Map(), migrated)
-    existing = await resources.listResourceListSummaries()
-    expect(new RestoreDuplicateIndex(existing, [source]).find(source)).toBeUndefined()
-    expect(updated.metadata.restoredSecretSourceHash).toBeUndefined()
-    expect((await local.reveal(await personal.read(updated)))[0]?.value).toBe(
-      'edited-private-value',
-    )
+    const saved = (await resources.get(old.id))!
+    expect((await personal.read(saved)).text).toBe('新正文')
+    await expect(
+      personal.save({ ...document('extraStory'), text: '过期内容' }, new Map(), old),
+    ).rejects.toThrow('内容已变化')
+    expect((await personal.read((await resources.get(old.id))!)).text).toBe('新正文')
   })
+  it.each([false, true])(
+    'recognizes a restored secret after conversion (encrypted=%s), but invalidates that identity after a real edit',
+    async (encrypted) => {
+      const { personal, resources, database } = setup()
+      const origin = secrets(),
+        local = secrets()
+      await origin.setPassword('origin-password')
+      await local.setPassword('local-password')
+      const plain = {
+        ...document('secret'),
+        fields: [{ id: 'key', label: 'Key', value: 'synthetic-private-value', private: true }],
+      }
+      const source = await personal.save(await origin.protect(plain), new Map())
+      const migrated = await personal.save(
+        encrypted ? await local.protect(plain) : { ...plain, protection: 'none' },
+        new Map(),
+        source,
+        source.contentHash,
+      )
+      expect(migrated.contentHash).not.toBe(source.contentHash)
+      database.close()
+      await database.open()
+      let existing = await resources.listResourceListSummaries()
+      expect(new RestoreDuplicateIndex(existing, [source]).find(source)).toBe(migrated.id)
+      expect(
+        (
+          await new RestoreService(new IndexedDbArchiveStorage(database)).prepareStructured(
+            [source],
+            [],
+            [],
+            { version: 1 },
+            existing,
+            [],
+            'same-backup',
+          )
+        ).resources,
+      ).toHaveLength(0)
+      const changed = { ...plain, fields: [{ ...plain.fields[0]!, value: 'edited-private-value' }] }
+      const updated = await personal.save(
+        encrypted ? await local.protect(changed) : { ...changed, protection: 'none' },
+        new Map(),
+        migrated,
+      )
+      existing = await resources.listResourceListSummaries()
+      expect(new RestoreDuplicateIndex(existing, [source]).find(source)).toBeUndefined()
+      expect(updated.metadata.restoredSecretSourceHash).toBeUndefined()
+      expect((await local.reveal(await personal.read(updated)))[0]?.value).toBe(
+        'edited-private-value',
+      )
+    },
+  )
   it('retains multi-chunk APK bytes during a second save using IndexedDB staging', async () => {
     const { personal } = setup(true)
     const bytes = zipSync(
@@ -250,6 +286,57 @@ describe('personal resource lifecycle', () => {
     expect(await (await target.personal.attachment(restored!, 'attachments/apk')).text()).toBe(
       'apk',
     )
+  })
+
+  it('round-trips an explicitly unencrypted card through ZIP with no password and excludes values from indexes', async () => {
+    const { personal, resources } = setup()
+    const plain = {
+      ...document('secret'),
+      protection: 'none' as const,
+      fields: [{ id: 'key', label: 'Key', value: 'synthetic-plain-value', private: true }],
+    }
+    await personal.save(plain, new Map())
+    const all = await resources.list()
+    expect(JSON.stringify(await resources.listSummaries())).not.toContain('synthetic-plain-value')
+    const archive = await new ExportService().createArchive(all, [], {
+      mode: 'full',
+      personalResources: { secret: true },
+    })
+    const target = setup()
+    const restore = new RestoreService(new IndexedDbArchiveStorage(target.database))
+    await restore.restore(await restore.prepare(new File([archive.blob], archive.fileName), [], []))
+    const [restored] = await target.resources.list()
+    const restoredDoc = await target.personal.read(restored!)
+    expect(restoredDoc).toEqual(plain)
+    expect((await secrets().reveal(restoredDoc))[0]?.value).toBe('synthetic-plain-value')
+    expect(await secrets().hasPassword()).toBe(false)
+    const snapshot = await createStructuredSnapshot(all, [], [], { version: 1 })
+    const objects = new Map<string, Blob>()
+    for (const plan of snapshot.objectPlans)
+      objects.set(plan.name, (plan.blob ?? (await plan.loadBlob?.()))!)
+    const cloudTarget = setup()
+    const cloudRestore = new RestoreService(new IndexedDbArchiveStorage(cloudTarget.database))
+    const reads = vi.fn(
+      async (object: GitHubBundleManifest) =>
+        new Blob(
+          object.parts.map((part) =>
+            objects.get(part.name)!.slice(part.offset ?? 0, (part.offset ?? 0) + part.size),
+          ),
+        ),
+    )
+    await cloudRestore.restoreStructured(snapshot.snapshot, reads, [], [], 'plain-cloud')
+    const [cloudResource] = await cloudTarget.resources.list()
+    expect(await cloudTarget.personal.read(cloudResource!)).toEqual(plain)
+    reads.mockClear()
+    const repeated = await cloudRestore.restoreStructured(
+      snapshot.snapshot,
+      reads,
+      await cloudTarget.resources.listResourceListSummaries(),
+      [],
+      'plain-cloud',
+    )
+    expect(repeated.skippedDuplicates).toBe(1)
+    expect(reads).not.toHaveBeenCalled()
   })
 
   it('backs up locked encrypted keys without needing a password and unlocks on another device', async () => {

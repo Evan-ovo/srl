@@ -3,13 +3,140 @@ import { zipArchiveChunks } from '../utils/ZipArchiveStream'
 
 export function attachmentFormat(
   name: string,
-): 'txt' | 'markdown' | 'word' | 'pdf' | 'zip' | 'other' {
+):
+  | 'txt'
+  | 'markdown'
+  | 'word'
+  | 'pdf'
+  | 'zip'
+  | 'audio'
+  | 'video'
+  | 'image'
+  | 'code'
+  | 'table'
+  | 'other' {
   const ext = name.split('.').at(-1)?.toLowerCase()
   if (ext === 'txt') return 'txt'
   if (ext === 'md' || ext === 'markdown') return 'markdown'
   if (ext === 'doc' || ext === 'docx') return 'word'
   if (ext === 'pdf' || ext === 'zip') return ext
+  if (ext && ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'oga', 'opus', 'flac'].includes(ext))
+    return 'audio'
+  if (ext && ['mp4', 'm4v', 'webm', 'ogv', 'mov'].includes(ext)) return 'video'
+  if (ext && ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'ico'].includes(ext))
+    return 'image'
+  if (ext === 'csv' || ext === 'tsv') return 'table'
+  if (
+    ext &&
+    [
+      'json',
+      'jsonl',
+      'yaml',
+      'yml',
+      'xml',
+      'html',
+      'htm',
+      'js',
+      'mjs',
+      'cjs',
+      'ts',
+      'tsx',
+      'jsx',
+      'vue',
+      'css',
+      'scss',
+      'less',
+      'ini',
+      'conf',
+      'cfg',
+      'log',
+      'py',
+      'sh',
+      'bat',
+      'sql',
+      'srt',
+      'vtt',
+      'lrc',
+    ].includes(ext)
+  )
+    return 'code'
   return 'other'
+}
+
+/** Known extensions also repair empty/generic MIME types without decoding media bytes. */
+export function attachmentMediaType(name: string): string {
+  const types: Record<string, string> = {
+    mp3: 'audio/mpeg',
+    m4a: 'audio/mp4',
+    aac: 'audio/aac',
+    wav: 'audio/wav',
+    ogg: 'audio/ogg',
+    oga: 'audio/ogg',
+    opus: 'audio/ogg',
+    flac: 'audio/flac',
+    mp4: 'video/mp4',
+    m4v: 'video/mp4',
+    webm: 'video/webm',
+    ogv: 'video/ogg',
+    mov: 'video/quicktime',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    avif: 'image/avif',
+    bmp: 'image/bmp',
+    ico: 'image/x-icon',
+  }
+  return types[name.split('.').at(-1)?.toLowerCase() ?? ''] ?? 'application/octet-stream'
+}
+
+/** One page only: do not materialize millions of CSV rows to render a small table. */
+export function attachmentTablePage(source: string, delimiter: ',' | '\t', start = 0) {
+  const rows: string[][] = []
+  let offset = start
+  while (offset < source.length && rows.length < 50) {
+    const row: string[] = []
+    let value = '',
+      quoted = false,
+      closed = false
+    for (;;) {
+      const char = source[offset]
+      if (char === undefined) {
+        if (quoted) throw new Error('表格引号未闭合，请切换原文查看')
+        row.push(value)
+        break
+      }
+      offset++
+      if (quoted) {
+        if (char === '"') {
+          if (source[offset] === '"') {
+            value += '"'
+            offset++
+          } else {
+            quoted = false
+            closed = true
+          }
+        } else value += char
+      } else if (char === delimiter || char === '\n' || char === '\r') {
+        row.push(value)
+        if (row.length > 200) throw new Error('此表格超过 200 列展示范围，请切换原文查看')
+        value = ''
+        closed = false
+        if (char !== delimiter) {
+          if (char === '\r' && source[offset] === '\n') offset++
+          break
+        }
+      } else if (char === '"' && !value && !closed) quoted = true
+      else {
+        if (closed || char === '"') throw new Error('表格引号格式异常，请切换原文查看')
+        value += char
+      }
+    }
+    if (row.length > 200) throw new Error('此表格超过 200 列展示范围，请切换原文查看')
+    rows.push(row)
+  }
+  return { rows, next: offset, hasMore: offset < source.length }
 }
 
 export async function readAttachmentText(file: File, signal?: AbortSignal): Promise<string> {

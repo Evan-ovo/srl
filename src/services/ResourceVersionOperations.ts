@@ -437,11 +437,9 @@ export async function activateVersion(
   versionId: string,
 ): Promise<Resource> {
   const current = await storage.get(resourceId)
-  const selected = (await storage.listVersions(resourceId)).find(
-    (version) => version.id === versionId,
-  )
-  if (!current || !selected) throw new Error('历史版本已经不存在')
   const allVersions = await storage.listVersions(resourceId)
+  const selected = allVersions.find((version) => version.id === versionId)
+  if (!current || !selected) throw new Error('历史版本已经不存在')
   const count = countResourceLogicalVersions([current, ...allVersions])
   await storage.saveVersion({
     ...current,
@@ -584,9 +582,12 @@ export async function updatePersonalContent(
   file: File,
   parsed: ParsedResource,
   resourceId: string,
+  expectedContentHash?: string,
 ): Promise<Resource> {
   const current = await storage.get(resourceId)
   if (!current) throw new Error('资源已经不存在')
+  if (expectedContentHash !== undefined && current.contentHash !== expectedContentHash)
+    throw new Error('资源内容已变化，请重新打开后保存')
   if (!isPersonalResourceType(current.type) || current.type !== parsed.type)
     throw new Error('只能更新同类型的个人资源')
   const contentHash = await hashFile(file)
@@ -604,19 +605,25 @@ export async function updatePersonalContent(
     metadata.restoredSecretSourceHash = sourceHash.toLowerCase()
     metadata.restoredSecretContentHash = contentHash
   }
-  await storage.update(resourceId, {
-    name: parsed.name,
-    description: parsed.description,
-    metadata,
-    originalBlob: file,
-    fileName: file.name,
-    mimeType: file.type,
-    fileSize: file.size,
-    contentHash,
-    ...(parsed.type === RESOURCE_TYPE.POCKET_PHONE ? { thumbnailBlob: parsed.thumbnailBlob } : {}),
-    backupDescriptor: undefined,
-    updatedAt: Date.now(),
-  })
+  await storage.update(
+    resourceId,
+    {
+      name: parsed.name,
+      description: parsed.description,
+      metadata,
+      originalBlob: file,
+      fileName: file.name,
+      mimeType: file.type,
+      fileSize: file.size,
+      contentHash,
+      ...(parsed.type === RESOURCE_TYPE.POCKET_PHONE
+        ? { thumbnailBlob: parsed.thumbnailBlob }
+        : {}),
+      backupDescriptor: undefined,
+      updatedAt: Date.now(),
+    },
+    expectedContentHash,
+  )
   const updated = await storage.get(resourceId)
   if (!updated) throw new Error('资源更新失败')
   return updated

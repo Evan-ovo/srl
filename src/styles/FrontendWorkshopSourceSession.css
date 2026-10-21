@@ -4,7 +4,7 @@
 
 .frontend-workshop-source-session__preview {
   position: fixed;
-  inset: 0;
+  inset: var(--visual-viewport-offset-top, 0px) 0 auto;
   z-index: 2147481500;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);

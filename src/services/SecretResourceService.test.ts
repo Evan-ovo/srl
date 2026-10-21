@@ -38,6 +38,49 @@ const document: PersonalResourceDocument = {
   ],
 }
 describe('shared secret password and native recovery', () => {
+  it('reuses a successfully verified source password across imported cards without replacing the local password', async () => {
+    const origin = setup().owner
+    await origin.setPassword('origin-password')
+    const first = await origin.protect(document)
+    const second = await origin.protect({ ...document, name: 'second' })
+    const { owner, credentials } = setup()
+    await owner.setPassword('local-password')
+    owner.lock()
+    expect((await owner.reveal(first, 'origin-password'))[0]?.value).toBe('native-secret')
+    expect(owner.hasRememberedPassword(second)).toBe(true)
+    expect(owner.isUnlocked()).toBe(false)
+    const reads = credentials.read.mock.calls.length
+    expect((await owner.reveal(second))[0]?.value).toBe('native-secret')
+    expect(credentials.read).toHaveBeenCalledTimes(reads)
+    await owner.unlock('local-password')
+    expect((await owner.reveal(second))[0]?.value).toBe('native-secret')
+    owner.lock()
+    expect(owner.hasRememberedPassword(second)).toBe(false)
+    await expect(owner.reveal(second)).rejects.toThrow('密码')
+    await owner.unlock('local-password')
+  })
+  it('does not revive an explicitly locked session when decryption or unlock completes late', async () => {
+    const { owner, credentials } = setup()
+    await owner.setPassword('test-password')
+    const encrypted = await owner.protect(document)
+    const reveal = owner.reveal(encrypted)
+    owner.lock()
+    await expect(reveal).rejects.toThrow('锁定')
+    expect(owner.hasRememberedPassword(encrypted)).toBe(false)
+    const verifier = await credentials.read('personal-resources.password')
+    let release!: (value: string) => void
+    credentials.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const unlock = owner.unlock('test-password')
+    owner.lock()
+    release(verifier)
+    await expect(unlock).rejects.toThrow('锁定')
+    expect(owner.isUnlocked()).toBe(false)
+  })
   it('does not announce an unlocked password when persistence cannot be read back', async () => {
     const { owner, credentials } = setup()
     credentials.read.mockResolvedValue('')
@@ -50,6 +93,10 @@ describe('shared secret password and native recovery', () => {
     expect(credentials.save).not.toHaveBeenCalled()
     await owner.setPassword('test-password')
     const first = await owner.protect(document)
+    const newlyEncrypted = await owner.protect({ ...document, protection: 'none' })
+    expect(newlyEncrypted.protection).toBeUndefined()
+    expect(newlyEncrypted.protected).toBeDefined()
+    expect(JSON.stringify(newlyEncrypted)).not.toContain('native-secret')
     const second = await owner.protect({ ...document, name: '另一个资源' })
     expect(JSON.stringify(first)).not.toContain('native-secret')
     expect(first.fields[1]?.value).toBe('public-value')

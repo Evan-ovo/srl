@@ -280,6 +280,19 @@ afterEach(async () => {
 })
 
 describe('Discord inbox Worker behavior', () => {
+  it.each(['/source/read', '/source/messages/check'])(
+    'removes %s without reading Discord or D1',
+    async (path) => {
+      const prepare = vi.spyOn(database, 'prepare')
+      const response = await request(path, {
+        method: 'POST',
+        body: JSON.stringify({ channelId: '12345' }),
+      })
+      expect(response.status).toBe(404)
+      expect(fetch).not.toHaveBeenCalled()
+      expect(prepare).not.toHaveBeenCalled()
+    },
+  )
   it.each([400, 429])(
     'reports safe registration diagnostics for Discord HTTP %s',
     async (status) => {

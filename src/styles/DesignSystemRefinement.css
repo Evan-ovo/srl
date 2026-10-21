@@ -22,7 +22,8 @@ body,
   font-family: var(--font-ui);
 }
 
-body {
+/* 由根画布绘制背景，经典滚动条槽与 iOS 边缘沿用同一渐变。 */
+html:root {
   background: var(
     --page-background,
     radial-gradient(
@@ -32,6 +33,10 @@ body {
     ),
     var(--color-canvas)
   );
+}
+
+body {
+  background: transparent;
 }
 
 #app :where(button, input, select, textarea) {

@@ -13,6 +13,7 @@ vi.mock('../core/AppContainer', () => ({
   assetStore: {
     getBlob,
     getImageUrl,
+    supportsImageUrls: true,
   },
   resourceGalleryService: { getImagePreview },
 }))

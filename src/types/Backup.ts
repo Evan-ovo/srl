@@ -12,7 +12,7 @@ import type { MainApiConfig, MainApiProfilesState } from '../services/MainApiSer
 import type { FrontendWorkshopImageGenerationConfig } from '../services/FrontendWorkshopImageGenerationService'
 import type { FrontendWorkshopSelfHostedImageBedConfig } from '../services/FrontendWorkshopImageHostingService'
 import type { DiscordSourceConnectionSettings } from '../services/DiscordSourceSettingsService'
-import type { AiTaggingDraft, AiTaggingUndoRecord } from '../services/AiTaggingDraftService'
+import type { AiTaggingStateBackup } from '../services/AiTaggingDraftService'
 import type { ExternalAppDataRecord, InstalledExternalApp } from './ExternalApp'
 import type { PresetStitchDraft } from '../services/BrowserStorageService'
 
@@ -100,10 +100,7 @@ export interface ArchivePortableData {
     discordSource?: DiscordSourceConnectionSettings
     cloudBackup?: Partial<Record<'github' | 'webdav', string>>
   }
-  aiTaggingState?: {
-    draft?: AiTaggingDraft
-    undo?: AiTaggingUndoRecord
-  }
+  aiTaggingState?: AiTaggingStateBackup
   /** 第三方代码及其授权状态；恢复后保持禁用，需用户重新启用。 */
   externalApps?: {
     apps: InstalledExternalApp[]
@@ -200,7 +197,7 @@ export interface PreparedRestore {
   replan?: (resources: ResourceSummary[], categories: Category[]) => Promise<PreparedRestore>
   sourceResourceIds?: [string, string][]
   /** Opens staged, verified entries for the commit, then releases their bounded temporary data. */
-  openFiles?: () => Promise<{
+  openFiles?: (options?: { preferNativeFile?: boolean }) => Promise<{
     hydrate: (resource: Resource) => Promise<Resource>
     dispose: () => Promise<void>
   }>

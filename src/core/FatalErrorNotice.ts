@@ -101,6 +101,13 @@ export function reportHandledError(
  */
 function explain(message: string, name: string): { code: string; advice: string } {
   const text = message.toLocaleLowerCase()
+  if (text.includes('srl-database-corrupt')) {
+    return {
+      code: 'SRL-FATAL-DATABASE-CORRUPT',
+      advice:
+        'Android 原生数据库损坏，已停止访问并保留原文件。请勿清除应用数据或卸载；先保全应用数据，再从有效备份恢复。',
+    }
+  }
   if (
     name === 'QuotaExceededError' ||
     text.includes('quotaexceedederror') ||

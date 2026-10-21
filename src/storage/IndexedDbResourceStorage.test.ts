@@ -44,6 +44,46 @@ function createResource(index: number): Resource {
 
 describe('IndexedDbResourceStorage', () => {
   it.each([false, true])(
+    'opens current and historical byte sources once (vault=%s)',
+    async (encrypted) => {
+      const db = new AppDatabase(`read-source-${crypto.randomUUID()}`)
+      const vault = new VaultService(db)
+      try {
+        await vault.initialize()
+        if (encrypted) await vault.enable('synthetic-source-password')
+        const storage = new IndexedDbResourceStorage(db, vault)
+        const row = createResource(7)
+        row.originalBlob = new Blob([new Uint8Array(2 * 1024 * 1024 + 19).fill(7)])
+        row.fileSize = row.originalBlob.size
+        await storage.save(row)
+        await storage.saveVersion({ ...row, id: 'history-source', versionGroupId: row.id })
+        for (const historical of [false, true]) {
+          const id = historical ? 'history-source' : row.id
+          const table = historical ? db.resourceVersions : db.resources
+          const get = vi.spyOn(table, 'get')
+          const source = await storage.getReadSource(id, historical)
+          expect(get).toHaveBeenCalledTimes(1)
+          get.mockRestore()
+          expect(source!.requiresWholeRead).toBe(encrypted)
+          expect(source!.originalSource.size).toBe(row.fileSize)
+          expect(new Uint8Array(await source!.originalSource.slice(-19).arrayBuffer())).toEqual(
+            new Uint8Array(19).fill(7),
+          )
+        }
+        if (encrypted) {
+          vault.lock()
+          await expect(storage.getReadSource(row.id)).rejects.toThrow()
+        }
+        const abort = new AbortController()
+        abort.abort()
+        await expect(storage.getReadSource(row.id, false, abort.signal)).rejects.toThrow()
+      } finally {
+        db.close()
+        await db.delete()
+      }
+    },
+  )
+  it.each([false, true])(
     'streams authoritative web history rows without retaining a batch of originals (vault=%s)',
     async (encrypted) => {
       const database = new AppDatabase(`history-cursor-${crypto.randomUUID()}`)

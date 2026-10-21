@@ -491,10 +491,20 @@ export class ProductAssistantWorkspaceService {
       snapshot.history.find((turn) => turn.role === 'user')?.text.slice(0, 36) ||
       snapshot.draft?.manifest.name ||
       '新对话'
-    const storedSnapshot = JSON.parse(JSON.stringify(snapshot)) as AssistantConversation
-    for (const turn of storedSnapshot.history)
-      for (const call of turn.toolCalls ?? [])
-        if (call.state === 'running') call.state = 'cancelled'
+    // The snapshot already owns its content; only persisted tool states differ from live views.
+    const storedSnapshot = {
+      ...snapshot,
+      history: snapshot.history.map((turn) => ({
+        ...turn,
+        ...(turn.toolCalls
+          ? {
+              toolCalls: turn.toolCalls.map((call) =>
+                call.state === 'running' ? { ...call, state: 'cancelled' as const } : call,
+              ),
+            }
+          : {}),
+      })),
+    }
     const result = this.writes.then(async () => {
       const reference = await this.storage.save(storedSnapshot, activate)
       for (const listener of this.conversationListeners)

@@ -20,7 +20,7 @@ vi.mock('../services/PersonalResourceService', () => ({
     save = state.save
   },
 }))
-vi.mock('../composables/UseConfirmDialog', () => ({ confirmAction: state.confirm }))
+vi.mock('../composables/UseConfirmDialog', () => ({ chooseAction: state.confirm }))
 vi.mock('../composables/UseSecretPasswordPrompt', () => ({ requestSecretPassword: state.password }))
 vi.mock('../services/SecretResourceService', () => ({
   secretResourceService: {
@@ -49,7 +49,7 @@ beforeEach(() => {
   state.configured = true
   state.unlocked = true
   state.hasPassword.mockImplementation(async () => state.configured)
-  state.confirm.mockResolvedValue(true)
+  state.confirm.mockResolvedValue('alternative')
   state.password.mockResolvedValue('fixture-password')
   state.protect.mockResolvedValue({
     ...copy.document,
@@ -69,6 +69,22 @@ it('uses a verified local unlocked session instead of asking for the password ag
   expect(state.save).toHaveBeenCalledOnce()
   expect(state.save).toHaveBeenCalledWith(
     expect.anything(),
+    expect.any(Map),
+    expect.anything(),
+    copy.contentHash,
+  )
+})
+it('restores plaintext copies without reading password state when the user chooses no encryption', async () => {
+  state.confirm.mockResolvedValue('confirm')
+  state.configured = false
+  state.unlocked = false
+  state.hasPassword.mockRejectedValue(new Error('must not read credentials'))
+  await restorePlainSecretCopies([copy])
+  expect(state.hasPassword).not.toHaveBeenCalled()
+  expect(state.password).not.toHaveBeenCalled()
+  expect(state.protect).not.toHaveBeenCalled()
+  expect(state.save).toHaveBeenCalledWith(
+    { ...copy.document, protection: 'none', protected: undefined },
     expect.any(Map),
     expect.anything(),
     copy.contentHash,
@@ -110,7 +126,7 @@ it.each(['confirm', 'password'])(
   'honors %s cancellation without saving or producing another prompt',
   async (where) => {
     state.unlocked = false
-    if (where === 'confirm') state.confirm.mockResolvedValue(false)
+    if (where === 'confirm') state.confirm.mockResolvedValue('cancel')
     else state.password.mockResolvedValue(undefined)
     await restorePlainSecretCopies([copy])
     expect(state.save).not.toHaveBeenCalled()

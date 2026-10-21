@@ -4,7 +4,8 @@ import type { ResourceSummary } from '../types/Resource'
 type Source = Pick<ResourceSummary, 'contentHash' | 'thumbnailAssetId' | 'thumbnailBlob'>
 type Entry = {
   source: Source
-  blob: Blob
+  bytes: number
+  native: boolean
   url: string
   users: number
   retained: boolean
@@ -25,39 +26,41 @@ export function createFolderThumbnailCache(maxEntries = 96, maxBytes = 8 * 1024 
   let bytes = 0
   function discard(id: string, entry: Entry) {
     entries.delete(id)
-    bytes -= entry.blob.size
+    bytes -= entry.bytes
     entry.retained = false
-    if (!entry.users) URL.revokeObjectURL(entry.url)
+    if (!entry.users && !entry.native) URL.revokeObjectURL(entry.url)
   }
   return {
-    acquire(source: ResourceSummary, blob?: Blob) {
+    acquire(source: ResourceSummary, image?: Blob | string) {
       let entry = entries.get(source.id)
       if (entry && !matches(entry.source, source)) {
         discard(source.id, entry)
         entry = undefined
       }
       if (!entry) {
-        if (!blob) return undefined
-        if (blob.size <= maxBytes)
+        if (!image) return undefined
+        const size = typeof image === 'string' ? 0 : image.size
+        if (size <= maxBytes)
           for (const [id, candidate] of entries) {
-            if (entries.size < maxEntries && bytes + blob.size <= maxBytes) break
+            if (entries.size < maxEntries && bytes + size <= maxBytes) break
             if (!candidate.users) discard(id, candidate)
           }
-        const retained = entries.size < maxEntries && bytes + blob.size <= maxBytes
+        const retained = entries.size < maxEntries && bytes + size <= maxBytes
         entry = {
           source: {
             contentHash: source.contentHash,
             thumbnailAssetId: source.thumbnailAssetId,
             thumbnailBlob: source.thumbnailBlob,
           },
-          blob,
-          url: URL.createObjectURL(blob),
+          bytes: size,
+          native: typeof image === 'string',
+          url: typeof image === 'string' ? image : URL.createObjectURL(image),
           users: 0,
           retained,
         }
         if (retained) {
           entries.set(source.id, entry)
-          bytes += blob.size
+          bytes += size
         }
       } else {
         entries.delete(source.id)
@@ -68,13 +71,19 @@ export function createFolderThumbnailCache(maxEntries = 96, maxBytes = 8 * 1024 
       let released = false
       return {
         url: acquired.url,
+        native: acquired.native,
         release() {
           if (released) return
           released = true
           acquired.users--
-          if (!acquired.retained && !acquired.users) URL.revokeObjectURL(acquired.url)
+          if (!acquired.retained && !acquired.users && !acquired.native)
+            URL.revokeObjectURL(acquired.url)
         },
       }
+    },
+    invalidate(source: ResourceSummary, url: string) {
+      const entry = entries.get(source.id)
+      if (entry?.url === url && matches(entry.source, source)) discard(source.id, entry)
     },
     prune(resources: readonly ResourceSummary[]) {
       const current = new Map(resources.map((resource) => [resource.id, resource]))
