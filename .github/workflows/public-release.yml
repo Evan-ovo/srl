@@ -90,10 +90,10 @@ jobs:
       - name: 客户端回归、知识和功能合同
         if: steps.existing.outputs.published != 'true'
         run: |
-          # Isolate the two CPU/IDB-heavy fixtures from the parallel suite on hosted Windows.
-          pnpm exec vitest run scripts/AppearanceReferenceCatalog.test.ts src/services/ResourceAttachmentService.test.ts --exclude "**/.codex-tmp/**" --maxWorkers=1
+          # Isolate CPU/IDB-heavy fixtures from the parallel suite on hosted Windows.
+          pnpm exec vitest run scripts/AppearanceReferenceCatalog.test.ts src/services/ResourceAttachmentService.test.ts src/services/CloudStructuredSnapshot.test.ts --exclude "**/.codex-tmp/**" --maxWorkers=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pnpm test --exclude "scripts/AppearanceReferenceCatalog.test.ts" --exclude "src/services/ResourceAttachmentService.test.ts"
+          pnpm test --exclude "scripts/AppearanceReferenceCatalog.test.ts" --exclude "src/services/ResourceAttachmentService.test.ts" --exclude "src/services/CloudStructuredSnapshot.test.ts"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm check:feature-contracts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -94,7 +94,10 @@ describe('移动端主要触控目标', () => {
       /\.editor-sheet--wide,\s*\.resource-detail-sheet,\s*\.export-sheet/,
     )
     expect(layoutAndResponsiveCss).toMatch(
-      /:root body \.mobile-dialog-viewport,[^{]*\.editor-overlay\s*\{[^}]*inset: var\(--visual-viewport-offset-top\) 0 auto;[^}]*height: var\(--visual-viewport-height\);/,
+      /:root body \.mobile-dialog-viewport,[^{]*\.external-app-manager__overlay\s*\{[^}]*inset: var\(--visual-viewport-offset-top\) 0 auto;[^}]*height: var\(--visual-viewport-height\);/,
+    )
+    expect(layoutAndResponsiveCss).toMatch(
+      /\.editor-overlay\s*\{[^}]*inset: var\(--visual-viewport-offset-top\) 0 auto;[^}]*height: var\(--layout-viewport-height, 100lvh\);/,
     )
     expect(
       readFileSync(new URL('../components/ResourceOrganizer.vue', import.meta.url), 'utf8'),
