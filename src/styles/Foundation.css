@@ -1,7 +1,7 @@
 /* 设计令牌、结构化预览与富内容基础 */
 :root {
-  /* 详情子弹层按父层派生，调整父层时不会再次把编辑器盖住。 */
-  --layer-resource-detail: 24;
+  /* 独立资源页与 teleported 子弹层共享层级基准，子层必须高于页面出口。 */
+  --layer-resource-detail: 80;
   --layer-resource-editor: calc(var(--layer-resource-detail) + 1);
   --layer-resource-dialog: calc(var(--layer-resource-detail) + 6);
   --layer-resource-viewer: calc(var(--layer-resource-detail) + 8);
@@ -2560,7 +2560,7 @@ input:where([type='checkbox'])[role='switch']:checked::before {
 }
 .srl-independent-page-outlet {
   position: fixed;
-  z-index: 80;
+  z-index: var(--layer-resource-detail);
   inset: 0;
   pointer-events: none;
   isolation: isolate;

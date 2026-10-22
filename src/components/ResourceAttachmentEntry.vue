@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import { resourceAttachmentService } from '../core/AppContainer'
 import { createAsyncPanel } from '../core/AsyncPanel'
 import type { Resource, ResourceSummary } from '../types/Resource'
+import '../styles/FeatureAppHeader.css'
 import '../styles/ResourceAttachments.css'
 
 const props = defineProps<{ resource: Resource; disabled?: boolean }>()
@@ -68,7 +69,7 @@ defineExpose({ open: opened, requestBack })
         :aria-label="error ? '重新读取附件' : '查看附件列表'"
         @click="error ? load() : (opened = true)"
       >
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path
             d="m9 5 7 7-7 7"
             stroke="currentColor"

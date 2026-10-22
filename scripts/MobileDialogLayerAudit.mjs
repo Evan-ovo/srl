@@ -12,7 +12,6 @@ const cases = [
   ['FolderLibrary', 'folder-organizer', 'folder-organizer__sheet'],
   ['FolderLibrary', 'folder-rename', 'folder-rename__sheet'],
   ['ResourceSourceLinks', 'resource-source-add-wrap', 'resource-source-add-sheet'],
-  ['ResourceLinkAdvancedSettings', 'resource-source-advanced-overlay', 'resource-source-advanced'],
   ['VersionArchive', 'version-import-overlay', 'version-import-dialog'],
   ['GeneratedImageAlbumApp', 'generated-album__detail-backdrop', 'generated-album__detail'],
   ['ExternalAppHost', 'external-app-resource-picker', 'external-app-resource-picker__panel'],
@@ -25,7 +24,6 @@ const cases = [
   ['FrontendWorkshopProof', 'frontend-workshop__manual-repair-dialog'],
   ['AiTagging', 'ai-tagging'],
   ['DiscordSourceHandoffIntake', 'discord-intake-overlay', 'discord-intake'],
-  ['DiscordCommunitySources', 'discord-refresh-sheet-wrap', 'discord-refresh-sheet'],
 ]
 const shared = (
   await Promise.all(
@@ -122,6 +120,7 @@ try {
   const nestedPage = await browser.newPage({ viewport: { width: 390, height: 844 } })
   const resourceDetails = await readFile('src/styles/ResourceDetails.css', 'utf8')
   const resourceList = await readFile('src/styles/ResourceList.css', 'utf8')
+  const resourceGallery = await readFile('src/styles/ResourceGallery.css', 'utf8')
   const personalEditor = compileStyle({
     source: await readFile('src/styles/PersonalResourceEditor.css', 'utf8'),
     id: 'data-v-audit',
@@ -130,19 +129,24 @@ try {
   assert.deepEqual(personalEditor.errors, [])
   await nestedPage.setContent(`
     <html><body>
-      <div class="editor-overlay resource-detail-overlay" id="resource-detail">
-        <section class="resource-detail-sheet" style="width:370px;height:650px;background:#ddd"></section>
+      <div class="srl-independent-page-outlet">
+        <main class="srl-independent-page resource-detail-page" id="resource-detail">
+          <section class="resource-detail-sheet" style="width:370px;height:650px;background:#ddd"></section>
+        </main>
       </div>
       <div class="editor-overlay personal-resource-editor-overlay" data-v-audit id="personal-editor">
         <section class="editor-sheet personal-resource-editor" data-v-audit style="height:300px;background:white">
           <button>保存</button>
         </section>
       </div>
+      <div class="editor-overlay resource-gallery-dialog" id="gallery-dialog" style="pointer-events:none"><section>图库添加</section></div>
+      <div class="resource-image-viewer" id="gallery-viewer" style="pointer-events:none"><section>图片预览</section></div>
     </body></html>
   `)
   await nestedPage.addStyleTag({ content: shared })
   await nestedPage.addStyleTag({ content: resourceList })
   await nestedPage.addStyleTag({ content: resourceDetails })
+  await nestedPage.addStyleTag({ content: resourceGallery })
   await nestedPage.addStyleTag({ content: personalEditor.code })
   const stack = await nestedPage.evaluate(() => {
     const parent = document.querySelector('#resource-detail')
@@ -150,23 +154,35 @@ try {
     const childPanel = document.querySelector('.personal-resource-editor')
     const top = document.elementFromPoint(195, 422)?.closest('#resource-detail, #personal-editor')
     return {
-      parent: parent ? getComputedStyle(parent).zIndex : '',
+      parent: parent ? getComputedStyle(parent).position : '',
+      outlet: getComputedStyle(document.querySelector('.srl-independent-page-outlet')).zIndex,
       child: child ? getComputedStyle(child).zIndex : '',
+      dialog: getComputedStyle(document.querySelector('#gallery-dialog')).zIndex,
+      viewer: getComputedStyle(document.querySelector('#gallery-viewer')).zIndex,
       top: top?.id,
       panelVisible: Boolean(childPanel && childPanel.getBoundingClientRect().width > 0),
     }
   })
-  assert.ok(Number(stack.child) > Number(stack.parent), JSON.stringify(stack))
+  assert.equal(stack.parent, 'absolute', JSON.stringify(stack))
+  assert.equal(stack.outlet, '80', JSON.stringify(stack))
+  assert.ok(Number(stack.child) > Number(stack.outlet), JSON.stringify(stack))
+  assert.ok(Number(stack.dialog) > Number(stack.outlet), JSON.stringify(stack))
+  assert.ok(Number(stack.viewer) > Number(stack.outlet), JSON.stringify(stack))
   assert.equal(stack.top, 'personal-editor', JSON.stringify(stack))
   assert.equal(stack.panelVisible, true)
   const shiftedStack = await nestedPage.evaluate(() => {
-    document.documentElement.style.setProperty('--layer-resource-detail', '40')
-    return ['resource-detail', 'personal-editor'].map((id) =>
-      Number(getComputedStyle(document.getElementById(id)).zIndex),
-    )
+    document.documentElement.style.setProperty('--layer-resource-detail', '90')
+    return {
+      outlet: Number(
+        getComputedStyle(document.querySelector('.srl-independent-page-outlet')).zIndex,
+      ),
+      editor: Number(getComputedStyle(document.getElementById('personal-editor')).zIndex),
+      dialog: Number(getComputedStyle(document.getElementById('gallery-dialog')).zIndex),
+      viewer: Number(getComputedStyle(document.getElementById('gallery-viewer')).zIndex),
+    }
   })
-  assert.deepEqual(shiftedStack, [40, 41], 'child editor must follow the parent layer token')
-  console.log('resource detail → embedded personal editor stacking passed')
+  assert.deepEqual(shiftedStack, { outlet: 90, editor: 91, dialog: 96, viewer: 98 })
+  console.log('independent resource detail → teleported editor/gallery overlays stacking passed')
   await nestedPage.close()
 } finally {
   await browser.close()

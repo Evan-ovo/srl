@@ -1137,7 +1137,7 @@
     {
       "path": "src/core/AppearanceReference.ts",
       "guides": ["appearance"],
-      "sha256": "9dbb5acc200cef46a9f044dfbc748a301e9de678fff6740044b861e0e7caa7d0"
+      "sha256": "844913ada402a1130dcd6c6cf1d7d863293628110ad58c8942fe1210308d5d12"
     },
     {
       "path": "src/services/DiscordSourceConnectionService.ts",
@@ -1452,7 +1452,7 @@
     {
       "path": "src/components/ResourceAttachmentEntry.vue",
       "guides": ["resource-attachments"],
-      "sha256": "70b440cef55cdca3437b683bb205f8efc1f4a0946c7d098aa4a9458c6facfef6"
+      "sha256": "afae8107d0abca27a0cf2237882fbfcd2dda47579a20a70dce3451dcd728e699"
     },
     {
       "path": "src/components/ResourceAttachmentPanel.vue",

@@ -22,6 +22,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 
 $projectDirectory = Split-Path -Parent $PSScriptRoot
 $oldServerUrl = $env:CAPACITOR_SERVER_URL
