@@ -33,6 +33,7 @@ export const AUDIT_SUITES = {
   'intake-files': 'scripts/NativeIntakeFilesAudit.mjs',
   stress: 'scripts/BrowserStressAudit.mjs',
   assistant: 'scripts/ProductAssistantPetAudit.mjs',
+  'assistant-keyboard-layout': 'scripts/AssistantKeyboardLayoutAudit.mjs',
   'api-config': 'scripts/ApiConfigurationAudit.mjs',
   'relay-settings': 'scripts/RelayWorkerSettingsAudit.mjs',
   'tag-version': 'scripts/TagVersionPerformanceAudit.mjs',

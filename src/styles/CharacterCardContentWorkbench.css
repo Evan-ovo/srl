@@ -586,7 +586,7 @@
     font-size: 16px;
   }
   .card-content-workbench__editor textarea:not(.is-keys) {
-    min-height: 8rem;
+    min-height: 16rem;
   }
   .card-content-workbench__editor footer {
     margin: 0;

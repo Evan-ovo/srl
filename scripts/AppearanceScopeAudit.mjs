@@ -50,7 +50,7 @@ try {
   await page.goto(environment.baseUrl)
   // 从首次资源库入口直接打开，不能依赖先访问功能桌面加载面板样式。
   await page.getByRole('button', { name: '设置', exact: true }).click()
-  const settings = page.getByRole('dialog', { name: '设置', exact: true })
+  const settings = page.locator('.layout-settings-page')
   await settings.waitFor({ state: 'visible' })
   for (const theme of ['light', 'dark']) {
     await page.evaluate(
@@ -77,7 +77,7 @@ try {
     }
   }
   await settings.getByRole('button', { name: '关闭设置', exact: true }).click()
-  await settings.waitFor({ state: 'hidden' })
+  await settings.waitFor({ state: 'detached' })
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('button', { name: '功能', exact: true }).click()
   await appearance()
