@@ -3,7 +3,7 @@
   position: fixed;
   right: max(0.75rem, var(--safe-right));
   bottom: var(--bottom-notice-offset);
-  z-index: 29;
+  z-index: 85;
   width: fit-content;
   overflow: hidden;
   border: 1px solid var(--notice-border, var(--glass-border));
@@ -55,6 +55,7 @@
 
 #srl-performance-monitor[open] {
   width: min(18.5rem, calc(100vw - 1.5rem));
+  background: var(--color-surface-raised);
 }
 
 #srl-performance-monitor[open] summary {
@@ -69,8 +70,12 @@
   display: grid;
   gap: 0;
   /* Keep the summary reachable when iOS diagnostic rows exceed a landscape viewport. */
-  max-height: calc(
-    var(--visual-viewport-height, 100dvh) - var(--bottom-notice-offset) - 1rem - 2.75rem
+  max-height: min(
+    45dvh,
+    calc(
+      var(--visual-viewport-height, 100dvh) - var(--bottom-notice-offset) -
+        max(1rem, var(--safe-top)) - 2.75rem
+    )
   );
   overflow-y: auto;
   padding: 0.75rem 0.8rem 0.85rem;

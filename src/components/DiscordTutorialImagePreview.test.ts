@@ -41,6 +41,24 @@ beforeEach(() => {
 })
 
 describe('Discord tutorial screenshot previews', () => {
+  it.each([
+    ['one-click', DiscordSetupGuideDrawer],
+    ['GitHub', DiscordSetupGuideDrawer],
+    ['manual', DiscordManualDeployDrawer],
+  ] as const)('presents the %s tutorial as a page, not a dialog or drawer', (_name, component) => {
+    const wrapper = mount(component, {
+      props: {
+        ...props,
+        ...(component === DiscordSetupGuideDrawer ? { deploymentMode: 'github' } : {}),
+      },
+      global: { stubs: { teleport: true } },
+    })
+    expect(wrapper.find('main.srl-independent-page').exists()).toBe(true)
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.find('.discord-guide-backdrop, .discord-manual-backdrop').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it.each(['one-click', 'github', 'manual'] as const)(
     'opens privacy help at the end of the save instruction and returns focus in %s',
     async (mode) => {

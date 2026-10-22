@@ -53,6 +53,34 @@ describe('revealMobileInputIfOccluded', () => {
     expect(isElementOccludedByViewport({ top: 120, bottom: 164 }, viewport)).toBe(false)
   })
 
+  it.each([100, 150])('低矮内容区优先完整显示输入框，留白按剩余空间缩小：%s', (top) => {
+    const content = document.createElement('div')
+    content.style.overflowY = 'auto'
+    const input = document.createElement('input')
+    content.append(input)
+    document.body.append(content)
+    Object.defineProperties(content, {
+      clientHeight: { value: 53 },
+      scrollHeight: { value: 1200 },
+    })
+    content.scrollTop = 100
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 103, 390, 53))
+    vi.spyOn(input, 'getBoundingClientRect').mockImplementation(
+      () => new DOMRect(0, top + 100 - content.scrollTop, 390, 44),
+    )
+    try {
+      expect(revealMobileInputIfOccluded(input, { height: 260, offsetTop: 0 })).toBe(true)
+      const bounds = input.getBoundingClientRect()
+      expect(bounds.top).toBeGreaterThanOrEqual(103)
+      expect(bounds.bottom).toBeLessThanOrEqual(156)
+      const applied = content.scrollTop
+      expect(revealMobileInputIfOccluded(input, { height: 260, offsetTop: 0 })).toBe(false)
+      expect(content.scrollTop).toBe(applied)
+    } finally {
+      content.remove()
+    }
+  })
+
   it('没有应用内部滚动区时不会把焦点避让委托给 body 或 root', () => {
     const input = document.createElement('input')
     const scrollIntoView = vi.fn()

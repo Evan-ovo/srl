@@ -171,7 +171,7 @@ const editor = toRef(props.model, 'editor')
     inset: var(--visual-viewport-offset-top, 0px) 0 auto;
     display: grid;
     grid-template-columns: minmax(0, 1fr) 6rem;
-    grid-template-rows: auto minmax(auto, 1fr) auto auto;
+    grid-template-rows: auto minmax(auto, 1fr) max-content max-content;
     gap: 0.3rem;
     height: var(--app-viewport-height, 100dvh);
     max-height: none;
@@ -186,13 +186,13 @@ const editor = toRef(props.model, 'editor')
     box-shadow: none;
   }
   .stitch-editor textarea {
-    /* 正文轨道保留编辑空间；放不下的变量与操作沿外层滚动查看。 */
-    min-height: 0;
+    /* 键盘压缩视口时正文也保留至少原始编辑高度；工具与操作沿外层滚动查看。 */
+    min-height: 9rem;
     flex: 1;
     resize: none;
   }
   .stitch-editor > label:has(textarea) {
-    min-height: min(11rem, 60cqh);
+    min-height: min(16rem, 100cqh);
     grid-column: 1 / -1;
   }
   .stitch-editor__macros,
@@ -201,6 +201,14 @@ const editor = toRef(props.model, 'editor')
   }
   .stitch-editor__actions {
     padding-top: 0.25rem;
+  }
+  .stitch-editor__macros {
+    /* 工具横向滚动，不让按钮换行继续挤占正文；保留全部原操作。 */
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
   }
 }
 </style>

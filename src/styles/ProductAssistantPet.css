@@ -192,6 +192,14 @@
   padding-left: max(12px, var(--safe-left));
   box-shadow: none;
 }
+.assistant-pet-dialog--expanded::backdrop {
+  background: var(--color-surface);
+}
+@supports (color: rgb(from white r g b / 1)) {
+  .assistant-pet-dialog--expanded::backdrop {
+    background: rgb(from var(--color-surface) r g b / 1);
+  }
+}
 .assistant-pet-dialog--assistance {
   z-index: 1201;
 }

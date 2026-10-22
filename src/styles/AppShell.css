@@ -29,9 +29,11 @@
   transition: height 160ms ease;
 }
 
-.nav-item:hover {
-  color: var(--color-ink);
-  background: var(--color-accent-soft);
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:hover {
+    color: var(--color-ink);
+    background: var(--color-accent-soft);
+  }
 }
 
 .nav-item:active {
@@ -103,11 +105,18 @@
   cursor: pointer;
 }
 
-.tag-nav:hover,
 .tag-nav--active {
   border-color: var(--selection-border, var(--color-accent));
   color: var(--selection-color, var(--color-accent));
   background: var(--selection-background, var(--color-accent-soft));
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tag-nav:hover {
+    border-color: var(--selection-border, var(--color-accent));
+    color: var(--selection-color, var(--color-accent));
+    background: var(--selection-background, var(--color-accent-soft));
+  }
 }
 
 .tag-nav small {
@@ -162,10 +171,16 @@
   cursor: pointer;
 }
 
-.category-nav:hover,
 .category-nav--active {
   color: var(--selection-color, var(--color-ink));
   background: var(--selection-background, var(--color-accent-soft));
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .category-nav:hover {
+    color: var(--selection-color, var(--color-ink));
+    background: var(--selection-background, var(--color-accent-soft));
+  }
 }
 
 .category-nav > span:nth-child(2) {
@@ -336,10 +351,12 @@
   font-weight: 700;
 }
 
-.feature-hub-trigger:hover {
-  color: var(--color-surface-raised);
-  background: var(--color-accent);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-accent) 20%, transparent);
+@media (hover: hover) and (pointer: fine) {
+  .feature-hub-trigger:hover {
+    color: var(--color-surface-raised);
+    background: var(--color-accent);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  }
 }
 
 .layout-settings-trigger,
@@ -351,10 +368,12 @@
   background: var(--button-background, var(--glass-panel-strong));
 }
 
-.layout-settings-trigger:hover,
-.theme-toggle:hover {
-  background: var(--color-surface-raised);
-  box-shadow: 0 8px 24px var(--color-shadow);
+@media (hover: hover) and (pointer: fine) {
+  .layout-settings-trigger:hover,
+  .theme-toggle:hover {
+    background: var(--color-surface-raised);
+    box-shadow: 0 8px 24px var(--color-shadow);
+  }
 }
 
 .export-button {
@@ -368,10 +387,12 @@
   font-weight: 700;
 }
 
-.export-button:hover {
-  border-color: var(--button-border, var(--color-line-strong));
-  background: var(--button-background, var(--color-surface-raised));
-  box-shadow: var(--button-hover-shadow, var(--button-shadow, 0 8px 24px var(--color-shadow)));
+@media (hover: hover) and (pointer: fine) {
+  .export-button:hover {
+    border-color: var(--button-border, var(--color-line-strong));
+    background: var(--button-background, var(--color-surface-raised));
+    box-shadow: var(--button-hover-shadow, var(--button-shadow, 0 8px 24px var(--color-shadow)));
+  }
 }
 
 .export-button:disabled {
@@ -421,8 +442,10 @@
   overflow: hidden;
 }
 
-.import-button:hover {
-  box-shadow: 0 10px 28px color-mix(in srgb, var(--color-accent) 28%, transparent);
+@media (hover: hover) and (pointer: fine) {
+  .import-button:hover {
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  }
 }
 
 .import-button--busy {
@@ -541,11 +564,18 @@
     background 160ms ease;
 }
 
-.import-choice-card:hover,
 .import-choice-card:focus-visible {
   border-color: var(--selection-border, var(--color-accent));
   background: var(--selection-background, var(--color-accent-soft));
   box-shadow: var(--selection-shadow, var(--glass-shadow));
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .import-choice-card:hover {
+    border-color: var(--selection-border, var(--color-accent));
+    background: var(--selection-background, var(--color-accent-soft));
+    box-shadow: var(--selection-shadow, var(--glass-shadow));
+  }
 }
 
 .import-choice-card:active {
@@ -894,10 +924,16 @@
     background 160ms ease;
 }
 
-.protection-trigger:hover,
 .protection-trigger[aria-expanded='true'] {
   color: var(--color-accent);
   background: var(--color-accent-soft);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .protection-trigger:hover {
+    color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
 }
 
 .protection-trigger__mark {
@@ -1003,10 +1039,12 @@
   cursor: pointer;
 }
 
-.protection-panel__header-actions > button:hover {
-  border-color: var(--button-border, var(--color-line));
-  color: var(--button-color, var(--color-ink));
-  background: var(--button-background, var(--color-surface));
+@media (hover: hover) and (pointer: fine) {
+  .protection-panel__header-actions > button:hover {
+    border-color: var(--button-border, var(--color-line));
+    color: var(--button-color, var(--color-ink));
+    background: var(--button-background, var(--color-surface));
+  }
 }
 
 .protection-panel__header-actions .protection-panel__manage {
@@ -1230,10 +1268,12 @@
   border-radius: var(--button-radius, 999px);
 }
 
-.browsing-context__trail button:hover {
-  border-color: var(--button-border, var(--color-accent));
-  color: var(--button-color, var(--color-accent));
-  background: var(--button-background, var(--color-accent-soft));
+@media (hover: hover) and (pointer: fine) {
+  .browsing-context__trail button:hover {
+    border-color: var(--button-border, var(--color-accent));
+    color: var(--button-color, var(--color-accent));
+    background: var(--button-background, var(--color-accent-soft));
+  }
 }
 
 .browsing-context__trail button span {
@@ -1347,8 +1387,10 @@
   text-align: right;
 }
 
-.search-history > button:hover {
-  background: var(--button-background, var(--color-accent-soft));
+@media (hover: hover) and (pointer: fine) {
+  .search-history > button:hover {
+    background: var(--button-background, var(--color-accent-soft));
+  }
 }
 
 .search-box svg {
@@ -1442,11 +1484,18 @@
   cursor: pointer;
 }
 
-.batch-toggle:hover,
 .batch-toggle--active {
   border-color: var(--selection-border, var(--color-accent));
   color: var(--selection-color, var(--color-accent));
   background: var(--selection-background, var(--color-accent-soft));
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .batch-toggle:hover {
+    border-color: var(--selection-border, var(--color-accent));
+    color: var(--selection-color, var(--color-accent));
+    background: var(--selection-background, var(--color-accent-soft));
+  }
 }
 
 .toolbar__similar-names {
@@ -1554,8 +1603,10 @@
   }
 }
 
-.resource-card:hover {
-  transform: translateY(-3px);
+@media (hover: hover) and (pointer: fine) {
+  .resource-card:hover {
+    transform: translateY(-3px);
+  }
 }
 
 .resource-card--selected {

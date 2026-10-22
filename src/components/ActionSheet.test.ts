@@ -65,6 +65,17 @@ describe('ActionSheet', () => {
     wrapper.unmount()
   })
 
+  it('provides a separate dismissible full-screen backdrop', async () => {
+    const wrapper = mount(ActionSheet, {
+      props: { open: true, title: '人设操作', actions: [{ id: 'import', label: '导入人设 JSON' }] },
+      global: { stubs: { Teleport: true, Transition: false } },
+    })
+    expect(wrapper.get('.action-sheet__backdrop').attributes('aria-hidden')).toBe('true')
+    await wrapper.get('.action-sheet__backdrop').trigger('click')
+    expect(wrapper.emitted('update:open')?.[0]).toEqual([false])
+    wrapper.unmount()
+  })
+
   it('consumes the shared Android back request while open', async () => {
     const wrapper = mount(ActionSheet, {
       props: { open: true, title: '操作', actions: [] },

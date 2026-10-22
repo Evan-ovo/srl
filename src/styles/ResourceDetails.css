@@ -1,6 +1,15 @@
 /* 资源详情、角色卡与开场白预览 */
-.resource-detail-overlay {
-  z-index: var(--layer-resource-detail);
+.resource-detail-page {
+  display: flex;
+  justify-content: center;
+  background: var(--page-background, var(--color-surface-raised));
+}
+
+.resource-detail-page .resource-detail-sheet {
+  border: 0;
+  border-radius: 0;
+  background: var(--page-background, var(--color-surface-raised));
+  box-shadow: none;
 }
 
 .resource-detail__header {
@@ -213,12 +222,12 @@
   min-width: 0;
 }
 
-.resource-detail-overlay--content-editor {
+.resource-detail-page--content-editor {
   padding: 0;
   align-items: stretch;
   animation: none;
 }
-.resource-detail-overlay .resource-detail-sheet--content-editor {
+.resource-detail-page .resource-detail-sheet--content-editor {
   width: 100%;
   height: var(--visual-viewport-height);
   max-height: none;
@@ -287,19 +296,6 @@
 
 .resource-detail__description {
   min-height: 8.5rem;
-}
-
-@media (max-width: 53.75rem) {
-  :root[data-visual-viewport-reduced='true']
-    .resource-detail-sheet:not(.resource-detail-sheet--content-editor)
-    .resource-detail__layout {
-    container-type: size;
-  }
-
-  :root[data-visual-viewport-reduced='true'] .resource-detail__description {
-    min-height: clamp(44px, 100cqh, 8.5rem);
-    max-height: max(44px, 100cqh);
-  }
 }
 
 .resource-detail__field-pair {

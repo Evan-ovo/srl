@@ -101,12 +101,10 @@ describe('移动端主要触控目标', () => {
     )
     expect(
       readFileSync(new URL('../components/ResourceOrganizer.vue', import.meta.url), 'utf8'),
-    ).toContain('class="editor-overlay resource-detail-overlay"')
+    ).toContain('class="srl-independent-page resource-detail-page"')
+    expect(layoutAndResponsiveCss).not.toContain('.resource-detail-overlay')
     expect(layoutAndResponsiveCss).toMatch(
-      /\.resource-detail-overlay\s*\{[^}]*padding: 0;[^}]*background: var\(--color-canvas\);[^}]*animation: none;/,
-    )
-    expect(layoutAndResponsiveCss).toMatch(
-      /\.resource-detail-overlay \.resource-detail-sheet\s*\{[^}]*height: var\(--visual-viewport-height\);[^}]*max-height: none;[^}]*border-radius: 0;/,
+      /\.resource-detail-page \.resource-detail-sheet\s*\{[^}]*height: 100%;[^}]*max-height: none;[^}]*border-radius: 0;/,
     )
     expect(layoutAndResponsiveCss).toMatch(
       /\.resource-detail-sheet \.resource-detail__header\s*\{[^}]*padding: max\(0\.75rem, var\(--safe-top\)\)/,
@@ -245,7 +243,7 @@ describe('移动端主要触控目标', () => {
     const monitorRule = readRule(performanceMonitorCss, '#srl-performance-monitor')
 
     expect(performanceMonitorCss).toContain('bottom: var(--bottom-notice-offset)')
-    expect(monitorRule).toContain('z-index: 29')
+    expect(monitorRule).toContain('z-index: 85')
     expect(performanceMonitorCss).toContain('@media (min-width: 53.8125rem)')
     expect(performanceMonitorCss).not.toContain('@media (min-width: 48rem)')
   })

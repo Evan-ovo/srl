@@ -1073,6 +1073,15 @@
     scroll-padding-top: 3.5rem;
   }
 
+  :root[data-visual-viewport-reduced='true'] .resource-detail__layout {
+    scroll-padding-top: 0;
+  }
+
+  :root[data-visual-viewport-reduced='true'] .resource-detail__tabs {
+    /* Keep keyboard space for editing; sticky tabs would cover a revealed field. */
+    position: static;
+  }
+
   .resource-detail__header {
     display: grid;
     grid-template-columns: var(--size-touch) minmax(0, 1fr);

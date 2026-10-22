@@ -83,6 +83,7 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
   let maintenanceRun: Promise<void> | undefined
   let stopGreetingUpdates: (() => void) | undefined
   let removeNotificationNavigation: (() => void) | undefined
+  let overlayDocumentScroll: { left: number; top: number } | undefined
   let startupFailureCode: HandledErrorCode = 'SRL-LIBRARY-VAULT-INIT'
   let maintenanceFailureCode: HandledErrorCode = 'SRL-LIBRARY-MAINTENANCE-THUMBNAILS'
   const maintenanceInterrupted = new DOMException('Maintenance paused or stopped', 'AbortError')
@@ -313,14 +314,29 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
       .catch((error) => reportFailure('SRL-BACKUP-AUTO-START', error))
   }
 
-  watch(
-    context.isOverlayOpen,
-    (open) => {
-      document.body.classList.toggle('modal-open', open)
-      document.documentElement.classList.toggle('modal-open', open)
-    },
-    { immediate: true },
-  )
+  function setOverlayOpen(open: boolean): void {
+    if (open && !overlayDocumentScroll) {
+      overlayDocumentScroll = { left: window.scrollX, top: window.scrollY }
+      document.body.style.setProperty(
+        '--modal-scroll-offset-top',
+        `${-overlayDocumentScroll.top}px`,
+      )
+    }
+    // Only the mobile CSS clips the background. Desktop keeps its existing document
+    // position; internal modal scrolling never changes the saved library position.
+    const restore =
+      !open && overlayDocumentScroll && getComputedStyle(document.body).overflowY === 'clip'
+    document.body.classList.toggle('modal-open', open)
+    document.documentElement.classList.toggle('modal-open', open)
+    if (!open && overlayDocumentScroll) {
+      const position = overlayDocumentScroll
+      overlayDocumentScroll = undefined
+      document.body.style.removeProperty('--modal-scroll-offset-top')
+      if (restore) window.scrollTo({ ...position, behavior: 'instant' })
+    }
+  }
+
+  watch(context.isOverlayOpen, setOverlayOpen, { immediate: true })
 
   watch(
     [
@@ -427,8 +443,7 @@ export function useLibraryLifecycle(context: LibraryLifecycleContext) {
     window.removeEventListener('pagehide', context.saveWorkspaceSnapshot)
     context.saveWorkspaceSnapshot()
     document.removeEventListener('focusin', context.handleMobileFocus)
-    document.body.classList.remove('modal-open')
-    document.documentElement.classList.remove('modal-open')
+    setOverlayOpen(false)
   })
   return {
     consumeSharedFiles,

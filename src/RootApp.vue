@@ -41,6 +41,7 @@ onMounted(async () => {
 </script>
 
 <template>
+  <div id="srl-independent-page-outlet" class="srl-independent-page-outlet" />
   <LibraryApp />
   <ConfirmDialog />
   <CharacterCardMigrationReview />

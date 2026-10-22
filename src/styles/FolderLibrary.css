@@ -33,22 +33,6 @@ body.folder-desktop-open {
   overflow: hidden;
 }
 
-.feature-hub[data-feature-page='folders'] {
-  position: fixed;
-  z-index: 10;
-  inset: 0;
-  display: grid;
-  width: 100%;
-  height: var(--app-viewport-height);
-  grid-template-rows: auto minmax(0, 1fr);
-  padding: var(--safe-top) 0 0;
-  overflow: hidden;
-  background: var(
-    --page-background,
-    linear-gradient(165deg, var(--color-canvas), var(--color-surface))
-  );
-}
-
 .feature-hub[data-feature-page='folders'] > .folder-library {
   width: 100%;
   max-width: 96rem;

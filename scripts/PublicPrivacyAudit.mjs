@@ -18,7 +18,7 @@ await mkdir(fixture, { recursive: true })
 await mkdir(environment.outputDir, { recursive: true })
 const files = {
   'index.html':
-    '<meta name="viewport" content="width=device-width,initial-scale=1"><div id="app"></div><script type="module" src="/main.js"></script>',
+    '<meta name="viewport" content="width=device-width,initial-scale=1"><div id="srl-independent-page-outlet" class="srl-independent-page-outlet"></div><div id="app"></div><script type="module" src="/main.js"></script>',
   'Capacitor.js': `export const Capacitor = {isNativePlatform:()=>true,getPlatform:()=> 'android'};export const registerPlugin = () => ({getCurrentVersion:async()=>({versionCode:1,versionName:'1'}),setAcknowledgedVersion:async()=>undefined,getAcknowledgedVersion:async()=>({version:''})});`,
   'Platform.js': `import {checkForAndroidAppUpdate} from '${path('src/core/AndroidAppUpdate.ts')}';export const platform = {update:{isAndroidApk:()=>true,check:checkForAndroidAppUpdate},security:{getState:async()=>null},backup:{getStatus:async()=>null},systemUi:{getState:async()=>null}}`,
   'Container.js': `import {BrowserStorageService} from '${path('src/services/BrowserStorageService.ts')}';export const browserStorageService=new BrowserStorageService();export const discordInboxAutomationSettingsService={load:async()=>({}),save:async()=>undefined};`,
@@ -37,7 +37,7 @@ const notice=ref(!(await hasAcknowledgedProjectNoticePersisted())),settings=ref(
 installAndroidAppUpdateChecks()
 function acknowledge(){acknowledgeProjectNotice();notice.value=false}
 const props={vaultEnabled:false,allowRemotePreviews:false,allowScriptPreviews:false,preloadGreetingPreviews:false,preloadBeautificationPreviews:false,extractCharacterAssets:false,hideCharacterAssets:false,hideChatDisplayRegex:false,showManuallyBoundResources:false,blurThumbnails:false,autoDownloadDiscordShareLinks:false,persistResourceVersionMatchCache:false,skipVersionComparisonOnImport:false,showPerformanceMonitor:false,hiddenCharacterAssetCount:0}
-</script><template><button type="button" @click="settings=true">打开设置</button><Settings v-if="settings" v-bind="props" @close="settings=false"/><Notice :open="notice" @acknowledged="acknowledge"/></template>`,
+</script><template><button type="button" @click="settings=true">打开设置</button><Teleport to="#srl-independent-page-outlet"><Settings v-if="settings" v-bind="props" @close="settings=false"/></Teleport><Notice :open="notice" @acknowledged="acknowledge"/></template>`,
   'main.js': `import {createApp,h,Suspense} from 'vue';import View from './View.vue';import '${path('src/styles/Foundation.css')}';import '${path('src/styles/DesignSystemRefinement.css')}';import '${path('src/Styles.css')}';import '${path('src/styles/ProjectNoticeDialog.css')}';document.documentElement.dataset.theme=localStorage.getItem('privacy-audit-theme')||'light';document.documentElement.style.setProperty('--app-viewport-height',window.innerHeight+'px');createApp({render:()=>h(Suspense,null,{default:()=>h(View)})}).mount('#app');`,
 }
 for (const [name, source] of Object.entries(files)) await writeFile(resolve(fixture, name), source)
@@ -121,16 +121,17 @@ try {
       assert.equal(requests, 0, 'unread/opted-out startup must not request GitHub')
       await notice.getByRole('button', { name: '我已阅读，进入资源库' }).tap()
       await page.getByRole('button', { name: '打开设置' }).tap()
-      const settings = page.getByRole('dialog', { name: '设置', exact: true })
+      const settings = page.getByRole('main', { name: '设置', exact: true })
       const toggle = settings.getByRole('checkbox', { name: '自动检查 APK 更新' })
-      await toggle.scrollIntoViewIfNeeded()
-      await toggle.tap()
+      const toggleRow = toggle.locator('..')
+      await toggleRow.scrollIntoViewIfNeeded()
+      await toggleRow.tap()
       await page.waitForFunction(
         () => localStorage.getItem('srl.apk-update.last-check-at') !== null,
       )
       await page.waitForTimeout(100)
       assert.equal(requests, 1)
-      await toggle.tap()
+      await toggleRow.tap()
       assert.equal(
         await page.evaluate(() => localStorage.getItem('srl.apk-update.automatic-enabled.v1')),
         'false',

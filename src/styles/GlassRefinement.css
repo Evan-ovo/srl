@@ -84,11 +84,6 @@ summary:focus-visible {
   box-shadow: var(--dialog-shadow, var(--glass-shadow));
 }
 
-/* The settings workspace fills the app viewport; keep sheet chrome off its root. */
-.layout-settings-overlay {
-  background: var(--editor-overlay-background, var(--page-background, var(--color-surface-raised)));
-}
-
 .layout-settings-page {
   border: 0;
   border-radius: 0;
@@ -207,31 +202,39 @@ summary:focus-visible {
   box-shadow: var(--button-shadow, var(--glass-shadow));
 }
 
-.button:not(:disabled):hover,
-.import-button:not(:disabled):hover,
-.feature-app:hover,
-.resource-card:hover {
-  box-shadow: var(--button-hover-shadow, var(--button-shadow, var(--glass-shadow)));
+@media (hover: hover) and (pointer: fine) {
+  .button:not(:disabled):hover,
+  .import-button:not(:disabled):hover,
+  .feature-app:hover,
+  .resource-card:hover {
+    box-shadow: var(--button-hover-shadow, var(--button-shadow, var(--glass-shadow)));
+  }
 }
 
-.button:not(:disabled):hover {
-  border-color: var(
-    --button-border,
-    color-mix(in srgb, var(--color-accent) 48%, var(--glass-border))
-  );
+@media (hover: hover) and (pointer: fine) {
+  .button:not(:disabled):hover {
+    border-color: var(
+      --button-border,
+      color-mix(in srgb, var(--color-accent) 48%, var(--glass-border))
+    );
+  }
 }
 
-.button--primary:not(:disabled):hover,
-.import-button:not(:disabled):hover {
-  border-color: var(
-    --button-primary-border,
-    color-mix(in srgb, var(--color-accent) 48%, var(--glass-border))
-  );
+@media (hover: hover) and (pointer: fine) {
+  .button--primary:not(:disabled):hover,
+  .import-button:not(:disabled):hover {
+    border-color: var(
+      --button-primary-border,
+      color-mix(in srgb, var(--color-accent) 48%, var(--glass-border))
+    );
+  }
 }
 
-.feature-app:hover,
-.resource-card:hover {
-  border-color: color-mix(in srgb, var(--color-accent) 48%, var(--glass-border));
+@media (hover: hover) and (pointer: fine) {
+  .feature-app:hover,
+  .resource-card:hover {
+    border-color: color-mix(in srgb, var(--color-accent) 48%, var(--glass-border));
+  }
 }
 
 .button.button--danger {
@@ -384,14 +387,16 @@ summary:focus-visible {
   box-shadow: var(--selection-shadow, inset 0 0 0 1px var(--color-accent));
 }
 
-:where(
-    .settings-theme,
-    .font-scale-options,
-    .cabinet-density,
-    .appearance-scope-tabs,
-    .appearance-card-orientation
-  )
-  button:not(:disabled):hover,
-.layout-option:not(:disabled):hover {
-  border-color: var(--selection-border, var(--color-accent));
+@media (hover: hover) and (pointer: fine) {
+  :where(
+      .settings-theme,
+      .font-scale-options,
+      .cabinet-density,
+      .appearance-scope-tabs,
+      .appearance-card-orientation
+    )
+    button:not(:disabled):hover,
+  .layout-option:not(:disabled):hover {
+    border-color: var(--selection-border, var(--color-accent));
+  }
 }

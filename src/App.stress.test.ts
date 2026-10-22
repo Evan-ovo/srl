@@ -314,6 +314,41 @@ describe('App 资源量压力回归', () => {
     }
   })
 
+  it('退出功能页时先释放仍聚焦的输入框，避免键盘隐藏状态滞留到底栏', async () => {
+    const wrapper = shallowMount(App, {
+      props: { accountLabel: '键盘失焦恢复' },
+      global: {
+        stubs: {
+          FeatureHub: {
+            name: 'FeatureHub',
+            emits: ['feature-app-active', 'close'],
+            template: '<section />',
+          },
+        },
+      },
+    })
+    const input = document.createElement('input')
+    document.body.append(input)
+    try {
+      await vi.waitFor(() => expect(stressApi.backfillCardFingerprints).toHaveBeenCalled())
+      await wrapper.get('.mobile-bottom-nav > button:nth-child(2)').trigger('click')
+      const hub = wrapper.getComponent({ name: 'FeatureHub' })
+      hub.vm.$emit('feature-app-active', true)
+      await nextTick()
+      input.focus()
+      expect(document.activeElement).toBe(input)
+
+      hub.vm.$emit('feature-app-active', false)
+      await nextTick()
+
+      expect(document.activeElement).not.toBe(input)
+      expect(wrapper.find('.mobile-bottom-nav').exists()).toBe(true)
+    } finally {
+      input.remove()
+      wrapper.unmount()
+    }
+  })
+
   it('先显示轻量资源索引，再执行不阻塞首屏的存量维护', async () => {
     stressApi.summaries = createStressSummaries(500)
     let resolveUpgrade!: (count: number) => void

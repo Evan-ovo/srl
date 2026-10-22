@@ -825,7 +825,8 @@
   flex-direction: column;
   overflow: hidden;
   width: min(100%, 68rem);
-  max-height: min(52rem, calc(var(--app-viewport-height) - 2rem));
+  height: 100%;
+  max-height: none;
 }
 
 /* Keep the detail's layout usable before its lazily loaded panel styles arrive. */

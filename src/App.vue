@@ -13,6 +13,7 @@ import { confirmAction, useConfirmDialogState } from './composables/UseConfirmDi
 import type { AppearancePreviewRequest } from './types/UiCustomization'
 import type { ResourceSummary } from './types/Resource'
 import { secretResourceService } from './services/SecretResourceService'
+import { FEATURE_APP_INACTIVE_EVENT } from './core/ViewportEvents'
 onBeforeUnmount(() => secretResourceService.lock())
 import { secretPasswordRequest } from './composables/UseSecretPasswordPrompt'
 const SecretPasswordDialog = createAsyncPanel(
@@ -556,6 +557,21 @@ function selectPreviewResource(ids: string[]) {
 function closeFeatureHub() {
   isFeatureHubOpen.value = false
   fullAssistantVisible.value = false
+}
+function handleFeatureAppActiveChange(active: boolean) {
+  if (!active && isFeatureAppActive.value) {
+    window.dispatchEvent(new Event(FEATURE_APP_INACTIVE_EVENT))
+    const focusedElement = document.activeElement
+    if (
+      focusedElement instanceof HTMLElement &&
+      focusedElement.matches(
+        'input:not([type="button"], [type="submit"], [type="reset"], [type="checkbox"], [type="radio"], [type="file"]), textarea, select, [contenteditable="true"]',
+      )
+    ) {
+      focusedElement.blur()
+    }
+  }
+  isFeatureAppActive.value = active
 }
 async function navigatePetDestination(id: string, guide?: string): Promise<void> {
   if (ASSISTANT_LIBRARY_DESTINATIONS.some((item) => item.id === id)) {
@@ -1342,7 +1358,7 @@ const isBatchBarVisible = computed(
       :shared-app-files="sharedAppImportFiles"
       v-bind="assistantFeatureHubProps"
       v-on="assistantFeatureHubListeners"
-      @feature-app-active="isFeatureAppActive = $event"
+      @feature-app-active="handleFeatureAppActiveChange"
       @close="closeFeatureHub"
       @open-resource="openResourceDetail"
       @open-persona-history="(resource) => openResourceDetail(resource, 'versions')"
@@ -1591,48 +1607,50 @@ const isBatchBarVisible = computed(
       @resolve="handleVersionImportDecision"
     />
 
-    <LayoutSettingsPanel
-      v-if="isSettingsOpen"
-      :key="settingsPanelKey"
-      :vault-enabled="vaultStatus.enabled"
-      :allow-remote-previews="previewPolicy.allowRemoteResources"
-      :allow-script-previews="previewPolicy.allowScripts"
-      :preload-greeting-previews="previewPolicy.preloadGreetingResources === true"
-      :preload-beautification-previews="previewPolicy.preloadBeautificationResources === true"
-      :increase-preview-downloads="previewPolicy.increaseDownloadConcurrency === true"
-      :extract-character-assets="extractCharacterAssets"
-      :hide-character-assets="hideCharacterAssets"
-      :hide-chat-display-regex="hideChatDisplayRegex"
-      :show-manually-bound-resources="showManuallyBoundResources"
-      :blur-thumbnails="blurThumbnails"
-      :auto-download-discord-share-links="autoDownloadDiscordShareLinks"
-      :persist-resource-version-match-cache="persistResourceVersionMatchCache"
-      :skip-version-comparison-on-import="skipVersionComparisonOnImport"
-      :same-name-version-candidates="sameNameVersionCandidates"
-      :show-performance-monitor="showPerformanceMonitor"
-      :hidden-character-asset-count="hiddenCharacterAssetCount"
-      @library-changed="handleLibraryChanged"
-      @update:allow-remote-previews="applyRemotePreviewPolicy"
-      @update:allow-script-previews="applyScriptPreviewPolicy"
-      @update:preload-greeting-previews="applyGreetingPreviewPreload"
-      @update:preload-beautification-previews="applyBeautificationPreviewPreload"
-      @update:increase-preview-downloads="applyIncreasedPreviewDownloads"
-      @update:extract-character-assets="applyExtractCharacterAssets"
-      @update:hide-character-assets="applyHideCharacterAssets"
-      @update:hide-chat-display-regex="applyHideChatDisplayRegex"
-      @update:show-manually-bound-resources="applyShowManuallyBoundResources"
-      @update:blur-thumbnails="applyBlurThumbnails"
-      @update:auto-download-discord-share-links="applyAutoDownloadDiscordShareLinks"
-      @update:persist-resource-version-match-cache="applyPersistResourceVersionMatchCache"
-      @update:same-name-version-candidates="applySameNameVersionCandidates"
-      @update:skip-version-comparison-on-import="applySkipVersionComparisonOnImport"
-      @update:show-performance-monitor="updatePerformanceMonitorVisibility"
-      @manage-folders="openFolderSettings"
-      @open-vault="openVaultSettings"
-      @open-version-recognition="openVersionRecognition"
-      @manual-check-update="handleManualUpdateCheck"
-      @close="isSettingsOpen = false"
-    />
+    <Teleport to="#srl-independent-page-outlet">
+      <LayoutSettingsPanel
+        v-if="isSettingsOpen"
+        :key="settingsPanelKey"
+        :vault-enabled="vaultStatus.enabled"
+        :allow-remote-previews="previewPolicy.allowRemoteResources"
+        :allow-script-previews="previewPolicy.allowScripts"
+        :preload-greeting-previews="previewPolicy.preloadGreetingResources === true"
+        :preload-beautification-previews="previewPolicy.preloadBeautificationResources === true"
+        :increase-preview-downloads="previewPolicy.increaseDownloadConcurrency === true"
+        :extract-character-assets="extractCharacterAssets"
+        :hide-character-assets="hideCharacterAssets"
+        :hide-chat-display-regex="hideChatDisplayRegex"
+        :show-manually-bound-resources="showManuallyBoundResources"
+        :blur-thumbnails="blurThumbnails"
+        :auto-download-discord-share-links="autoDownloadDiscordShareLinks"
+        :persist-resource-version-match-cache="persistResourceVersionMatchCache"
+        :skip-version-comparison-on-import="skipVersionComparisonOnImport"
+        :same-name-version-candidates="sameNameVersionCandidates"
+        :show-performance-monitor="showPerformanceMonitor"
+        :hidden-character-asset-count="hiddenCharacterAssetCount"
+        @library-changed="handleLibraryChanged"
+        @update:allow-remote-previews="applyRemotePreviewPolicy"
+        @update:allow-script-previews="applyScriptPreviewPolicy"
+        @update:preload-greeting-previews="applyGreetingPreviewPreload"
+        @update:preload-beautification-previews="applyBeautificationPreviewPreload"
+        @update:increase-preview-downloads="applyIncreasedPreviewDownloads"
+        @update:extract-character-assets="applyExtractCharacterAssets"
+        @update:hide-character-assets="applyHideCharacterAssets"
+        @update:hide-chat-display-regex="applyHideChatDisplayRegex"
+        @update:show-manually-bound-resources="applyShowManuallyBoundResources"
+        @update:blur-thumbnails="applyBlurThumbnails"
+        @update:auto-download-discord-share-links="applyAutoDownloadDiscordShareLinks"
+        @update:persist-resource-version-match-cache="applyPersistResourceVersionMatchCache"
+        @update:same-name-version-candidates="applySameNameVersionCandidates"
+        @update:skip-version-comparison-on-import="applySkipVersionComparisonOnImport"
+        @update:show-performance-monitor="updatePerformanceMonitorVisibility"
+        @manage-folders="openFolderSettings"
+        @open-vault="openVaultSettings"
+        @open-version-recognition="openVersionRecognition"
+        @manual-check-update="handleManualUpdateCheck"
+        @close="isSettingsOpen = false"
+      />
+    </Teleport>
 
     <CategoryManager
       v-if="isCategoryManagerOpen"

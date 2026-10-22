@@ -74,17 +74,22 @@ function getElementBounds(element: HTMLElement): ElementBounds {
 function getVisibleBounds(
   viewport: ViewportBounds,
   container: HTMLElement,
+  target: ElementBounds,
 ): ElementBounds | undefined {
   const area = container.getBoundingClientRect()
   // getBoundingClientRect() is already expressed in visual-viewport client
   // coordinates. visualViewport.offsetTop is a layout-viewport offset, so
   // adding it here would move the visible region a second time on iOS.
-  const top = Math.max(INPUT_VIEWPORT_PADDING, area.top + INPUT_VIEWPORT_PADDING)
-  const bottom = Math.min(
-    viewport.height - INPUT_VIEWPORT_PADDING,
-    area.bottom - INPUT_VIEWPORT_PADDING,
+  const top = Math.max(0, area.top)
+  const bottom = Math.min(viewport.height, area.bottom)
+  if (bottom <= top) return undefined
+  // On short keyboards/safe-area layouts the scroller may only fit the field.
+  // Reserve breathing room only when it cannot push the other edge out of view.
+  const padding = Math.min(
+    INPUT_VIEWPORT_PADDING,
+    Math.max(0, (bottom - top - (target.bottom - target.top)) / 2),
   )
-  return bottom > top ? { top, bottom } : undefined
+  return { top: top + padding, bottom: bottom - padding }
 }
 
 function getScrollableContainer(target: HTMLElement): HTMLElement | undefined {
@@ -107,6 +112,110 @@ function getScrollDelta(target: ElementBounds, visible: ElementBounds): number {
   if (target.top < visible.top) return target.top - visible.top
   if (target.bottom > visible.bottom) return target.bottom - visible.bottom
   return 0
+}
+
+/** Reflow can hide the selected line even when the textarea itself is visible. */
+function revealTextareaCaret(
+  target: MobileEditableElement,
+  viewport: ViewportBounds,
+  container?: HTMLElement,
+): boolean {
+  if (
+    !(target instanceof HTMLTextAreaElement) ||
+    getMobileActiveElement() !== target ||
+    !target.value ||
+    target.scrollHeight <= target.clientHeight
+  )
+    return false
+  const field = target.getBoundingClientRect()
+  const area = container?.getBoundingClientRect()
+  const top = Math.max(0, field.top + target.clientTop, area?.top ?? 0)
+  const bottom = Math.min(
+    viewport.height,
+    field.top + target.clientTop + target.clientHeight,
+    area?.bottom ?? viewport.height,
+  )
+  if (bottom <= top) return false
+
+  // Measure the actual font and wrapping once, after Main's viewport settles.
+  // The temporary text stays local, has no focus/interaction and is never logged.
+  const style = getComputedStyle(target)
+  const mirror = document.createElement('div')
+  for (const property of [
+    'font-family',
+    'font-size',
+    'font-weight',
+    'font-style',
+    'font-stretch',
+    'font-variant',
+    'font-feature-settings',
+    'font-variation-settings',
+    'line-height',
+    'letter-spacing',
+    'word-spacing',
+    'tab-size',
+    'text-indent',
+    'text-align',
+    'text-transform',
+    'direction',
+    'word-break',
+    'padding-top',
+    'padding-right',
+    'padding-bottom',
+    'padding-left',
+  ])
+    mirror.style.setProperty(property, style.getPropertyValue(property))
+  Object.assign(mirror.style, {
+    position: 'fixed',
+    left: '0',
+    top: '0',
+    visibility: 'hidden',
+    pointerEvents: 'none',
+    boxSizing: 'border-box',
+    height: '0',
+    overflow: 'hidden',
+    contain: 'layout style paint',
+    width: `${target.clientWidth}px`,
+    border: '0',
+    margin: '0',
+    whiteSpace: target.wrap === 'off' ? 'pre' : 'pre-wrap',
+    overflowWrap: target.wrap === 'off' ? 'normal' : 'break-word',
+  })
+  mirror.setAttribute('aria-hidden', 'true')
+  const text = document.createTextNode(target.value + '\u200b')
+  mirror.append(text)
+  document.body.append(mirror)
+  try {
+    const index =
+      target.selectionDirection === 'backward' ? target.selectionStart : target.selectionEnd
+    const range = document.createRange()
+    range.setStart(text, index)
+    range.collapse(true)
+    let caret = range.getBoundingClientRect()
+    if (!caret.height) {
+      range.setEnd(text, index + 1)
+      caret = range.getBoundingClientRect()
+    }
+    if (!caret.height) return false
+    const lineHeight = Number.parseFloat(style.lineHeight) || caret.height
+    const caretTop =
+      field.top +
+      target.clientTop +
+      caret.top -
+      mirror.getBoundingClientRect().top -
+      target.scrollTop -
+      Math.max(0, lineHeight - caret.height) / 2
+    const padding = Math.min(4, Math.max(0, (bottom - top - lineHeight) / 2))
+    const delta = getScrollDelta(
+      { top: caretTop, bottom: caretTop + lineHeight },
+      { top: top + padding, bottom: bottom - padding },
+    )
+    const before = target.scrollTop
+    if (delta) target.scrollTop += delta
+    return target.scrollTop !== before
+  } finally {
+    mirror.remove()
+  }
 }
 
 let personalAvoidance:
@@ -174,17 +283,18 @@ export function revealMobileInputIfOccluded(
   const targetKind = getTargetKind(target)
   const container = getScrollableContainer(target)
   const before = container?.scrollTop ?? null
-  const visible = container ? getVisibleBounds(viewport, container) : undefined
+  const visible = container ? getVisibleBounds(viewport, container, bounds) : undefined
   const delta = visible ? getScrollDelta(bounds, visible) : 0
 
   if (!container || !visible) {
+    const caretScrolled = revealTextareaCaret(target, viewport, container)
     const targetBounds = getElementBounds(target)
     reportDiagnostic({
       action: 'avoidance-check',
       target: targetKind,
       // An off-screen container is not an "already visible" field. The host
       // document owns that displacement, and we must not scroll it here.
-      result: 'skipped',
+      result: caretScrolled ? 'scrolled' : 'skipped',
       targetBefore: { top: bounds.top, bottom: bounds.bottom },
       targetAfter: targetBounds,
       containerScrollTopBefore: before,
@@ -192,15 +302,16 @@ export function revealMobileInputIfOccluded(
       delta: 0,
       restorable: null,
     })
-    return false
+    return caretScrolled
   }
 
   if (!delta) {
+    const caretScrolled = revealTextareaCaret(target, viewport, container)
     const targetBounds = getElementBounds(target)
     reportDiagnostic({
       action: 'avoidance-check',
       target: targetKind,
-      result: 'already-visible',
+      result: caretScrolled ? 'scrolled' : 'already-visible',
       targetBefore: { top: bounds.top, bottom: bounds.bottom },
       targetAfter: targetBounds,
       containerScrollTopBefore: before,
@@ -208,7 +319,7 @@ export function revealMobileInputIfOccluded(
       delta: 0,
       restorable: personalAvoidance?.target === target ? personalAvoidance.restorable : null,
     })
-    return false
+    return caretScrolled
   }
 
   const dialog = target.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]')
@@ -230,6 +341,7 @@ export function revealMobileInputIfOccluded(
     }
   }
   container.scrollTop += delta
+  revealTextareaCaret(target, viewport, container)
   if (personalAvoidance?.container === container) personalAvoidance.applied = container.scrollTop
   const targetBounds = getElementBounds(target)
   reportDiagnostic({

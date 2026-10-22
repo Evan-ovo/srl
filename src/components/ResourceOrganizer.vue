@@ -160,13 +160,12 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
+  <Teleport to="#srl-independent-page-outlet">
+    <main
       v-show="!settingsOpen && !attachmentsOpen"
-      class="editor-overlay resource-detail-overlay"
-      :class="{ 'resource-detail-overlay--content-editor': isContentEditing }"
-      role="presentation"
-      @click.self="requestClose"
+      class="srl-independent-page resource-detail-page"
+      :class="{ 'resource-detail-page--content-editor': isContentEditing }"
+      role="main"
     >
       <section
         class="editor-sheet resource-detail-sheet"
@@ -175,8 +174,6 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
           'resource-detail-sheet--gallery': activeTab === 'gallery',
           'resource-detail-sheet--content-editor': isContentEditing,
         }"
-        role="dialog"
-        aria-modal="true"
         aria-labelledby="resource-detail-title"
       >
         <header class="editor-sheet__header resource-detail__header">
@@ -988,7 +985,7 @@ function cancelCarrierNote(carrier: { id: string; versionNote?: string }): void 
           </div>
         </div>
       </section>
-    </div>
+    </main>
   </Teleport>
 
   <Teleport to="body">

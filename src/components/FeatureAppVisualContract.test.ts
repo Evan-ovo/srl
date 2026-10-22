@@ -36,9 +36,12 @@ describe('Feature App visual contract', () => {
     const glass = readStyle('GlassRefinement.css')
     const appearance = readFileSync(new URL('../core/AppearanceScopes.ts', import.meta.url), 'utf8')
 
-    expect(settings).toContain('class="layout-settings-page"')
+    expect(settings).toContain('class="srl-independent-page layout-settings-page"')
     expect(settings).not.toContain('layout-settings-sheet')
-    expect(responsive).toContain('.layout-settings-overlay {\n  display: block;\n  padding: 0;')
+    const app = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
+    expect(app).toContain('Teleport to="#srl-independent-page-outlet"')
+    expect(settings).not.toContain('aria-modal="true"')
+    expect(responsive).not.toContain('.layout-settings-overlay')
     expect(responsive).toContain('.layout-settings-page {\n  display: grid;')
     expect(responsive).toContain('width: 100%;\n  height: 100%;')
     expect(responsive).toContain('height: 100%;')
@@ -115,6 +118,17 @@ describe('Feature App visual contract', () => {
     expect(cloudCss).toMatch(/\.cloud-workspace\s*\{[^}]*grid-template-columns: minmax\(0, 1fr\)/)
     expect(cloudCss).not.toContain('.cloud-vault')
     expect(cloudCss).toContain('min-height: var(--size-touch);')
+  })
+
+  it('keeps the folder search page in normal scroll flow while the keyboard opens', () => {
+    const folders = readStyle('FolderLibrary.css')
+    const responsive = readStyle('LayoutAndResponsive.css')
+
+    expect(folders).not.toMatch(
+      /\.feature-hub\[data-feature-page='folders'\]\s*\{[^}]*position:\s*fixed/su,
+    )
+    expect(responsive).not.toContain(":root body .feature-hub[data-feature-page='folders']")
+    expect(folders).toContain('.folder-detail__search input')
   })
 
   it('gives Stitch Entry a real tablet and desktop composition', () => {

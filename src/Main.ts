@@ -7,6 +7,7 @@ import { installGlobalErrorHandlers } from './core/FatalErrorNotice'
 import { installNativeRuntime } from './core/NativeRuntime'
 import { installPerformanceMonitor } from './core/PerformanceMonitor'
 import { installSystemInsetsService } from './core/SystemInsetsService'
+import { FEATURE_APP_INACTIVE_EVENT } from './core/ViewportEvents'
 import { disableServiceWorkerForNativeApp, installServiceWorker } from './core/ServiceWorkerUpdate'
 import {
   canUseAndroidNativeDexieCore,
@@ -51,6 +52,7 @@ let focusRevealPending = false
 let focusRevealTarget: MobileEditableElement | undefined
 let focusRevealAttempted = false
 let keyboardFocusActive = false
+let standaloneSafeTop = 0
 
 async function prepareAndroidNativeDatabaseBeforeMount(): Promise<boolean> {
   if (!isCapacitorApp() || !canUseAndroidNativeDexieCore()) return true
@@ -137,6 +139,17 @@ function getViewportBounds() {
   }
 }
 
+function measureStandaloneSafeTop(): number {
+  // Cache a resolved inset per width; startup WebKit may temporarily resolve it to zero.
+  const probe = document.createElement('div')
+  probe.style.cssText =
+    'position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;width:0;height:0;padding-top:var(--safe-top,0px)'
+  document.documentElement.append(probe)
+  const top = Number.parseFloat(window.getComputedStyle(probe).paddingTop) || 0
+  probe.remove()
+  return Math.max(0, top)
+}
+
 function isVisualViewportReduced(height: number): boolean {
   // VisualViewport uses fractional CSS pixels. A subpixel difference after
   // dismissal must not retain keyboard-only layout once the viewport is back.
@@ -170,6 +183,34 @@ function markFocusedMobileInputForReveal(): void {
   scheduleViewportState()
 }
 
+function recheckViewportAfterMobileBlur(event: FocusEvent): void {
+  if (!isMobileEditableElement(event.target as MobileEditableElement)) return
+  if (isMobileEditableElement(event.relatedTarget as MobileEditableElement | null)) return
+  if (!keyboardFocusActive) return
+
+  // iOS standalone can finish dismissing the keyboard without a final
+  // visualViewport resize. Re-read the same viewport owner after blur settles.
+  scheduleViewportRechecks()
+}
+
+function scheduleViewportRechecks(): void {
+  scheduleViewportState()
+  for (const delay of [50, 250, 600]) {
+    window.setTimeout(() => {
+      if (!isMobileEditableElement(getMobileActiveElement())) scheduleViewportState()
+    }, delay)
+  }
+}
+
+function recheckViewportAfterFeatureExit(): void {
+  keyboardFocusActive = false
+  focusRevealPending = false
+  focusRevealTarget = undefined
+  focusRevealAttempted = false
+  document.documentElement.dataset.iosKeyboardOpen = 'false'
+  scheduleViewportRechecks()
+}
+
 function scheduleViewportSettleCheck(): void {
   if (viewportSettleFrame !== undefined) return
   viewportSettleFrame = window.requestAnimationFrame(checkViewportStability)
@@ -196,8 +237,7 @@ function checkViewportStability(): void {
     isMobileEditableElement(input) &&
     lastIOSDevice &&
     window.innerWidth <= 860 &&
-    (window.visualViewport?.scale ?? 1) === 1 &&
-    isVisualViewportReduced(getViewportBounds().height)
+    document.documentElement.dataset.visualViewportReduced === 'true'
   ) {
     // Consume this focus/keyboard session before scrolling. A resulting
     // VisualViewport event must not queue a second correction for the same field.
@@ -210,9 +250,13 @@ function checkViewportStability(): void {
 
 function applyViewportState(): void {
   viewportFrame = undefined
-  const { height: viewportHeight, offsetTop: viewportOffsetTop } = getViewportBounds()
+  const { height: rawViewportHeight, offsetTop: viewportOffsetTop } = getViewportBounds()
+  let viewportHeight = rawViewportHeight
+  const iosStandalone = Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
   const windowHeight = window.innerHeight
-  const viewportWidth = window.innerWidth
+  // Focus zoom changes innerWidth on iOS; it must not reset the expanded
+  // layout/background baseline as though the device had rotated.
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth
   const viewportScale = window.visualViewport?.scale ?? 1
   // Keep the backdrop/layout sizing baseline separate from the visual viewport
   // baseline used for keyboard state: Safari/PWA may report different heights
@@ -222,10 +266,29 @@ function applyViewportState(): void {
     lastLayoutHeight = Math.max(windowHeight, viewportHeight)
     expandedVisualViewportHeight = viewportHeight
     expandedVisualViewportScale = viewportScale
+    standaloneSafeTop = 0
   } else if (viewportHeight >= lastLayoutHeight || windowHeight >= lastLayoutHeight) {
     lastLayoutHeight = Math.max(windowHeight, viewportHeight)
   } else {
     lastLayoutHeight = Math.max(lastLayoutHeight, windowHeight)
+  }
+  // A startup zero is not a measured status-bar extent. Reuse the existing
+  // viewport updates until WebKit supplies it, then stop probing for this width.
+  if (iosStandalone && standaloneSafeTop === 0) standaloneSafeTop = measureStandaloneSafeTop()
+  // Standalone WebKit can dismiss the keyboard into a status-bar-contained
+  // viewport (e.g. 852 -> 448 -> 793). Keep the observed full shell extent,
+  // but only for a loss bounded by the measured top inset. Keyboard-sized
+  // reductions, panning, zoom and ordinary browsers retain their raw geometry.
+  const lostExtent = lastLayoutHeight - rawViewportHeight
+  if (
+    iosStandalone &&
+    viewportScale === 1 &&
+    viewportOffsetTop === 0 &&
+    standaloneSafeTop > 0 &&
+    lostExtent > 0 &&
+    lostExtent <= standaloneSafeTop + 1
+  ) {
+    viewportHeight = lastLayoutHeight
   }
   const focusedEditable = isMobileEditableElement(getMobileActiveElement())
   if (!focusedEditable && !keyboardFocusActive) {
@@ -237,8 +300,8 @@ function applyViewportState(): void {
   }
   document.documentElement.style.setProperty('--layout-viewport-height', `${lastLayoutHeight}px`)
   // Compare extents in the same zoom scale: zoom alone must not retain compact
-  // input layout after the obstructed space is restored. Insets/scrolling keep
-  // their stricter keyboard signal below.
+  // input layout after the obstructed space is restored. Insets keep their
+  // stricter keyboard signal below; internal focus reveal waits for stable geometry.
   const visualViewportReduced =
     Math.floor(
       expandedVisualViewportHeight * expandedVisualViewportScale - viewportHeight * viewportScale,
@@ -274,7 +337,6 @@ function applyViewportState(): void {
       `${viewportOffsetTop}px`,
     )
   }
-  const iosStandalone = Boolean((navigator as Navigator & { standalone?: boolean }).standalone)
   const iosDevice = iosStandalone || isIOSDevice()
   const displayMode =
     window.matchMedia('(display-mode: standalone)').matches || iosStandalone
@@ -303,7 +365,7 @@ function applyViewportState(): void {
   if (document.documentElement.dataset.iosKeyboardOpen !== String(iosKeyboardOpen)) {
     document.documentElement.dataset.iosKeyboardOpen = String(iosKeyboardOpen)
   }
-  if (!isVisualViewportReduced(viewportHeight) && (window.visualViewport?.scale ?? 1) === 1) {
+  if (!visualViewportReduced) {
     restorePersonalInputScroll()
     keyboardFocusActive = false
     focusRevealPending = false
@@ -329,7 +391,12 @@ window.addEventListener('orientationchange', scheduleViewportState, { passive: t
 window.visualViewport?.addEventListener('resize', scheduleViewportState, { passive: true })
 window.visualViewport?.addEventListener('scroll', scheduleViewportState, { passive: true })
 window.addEventListener('pageshow', scheduleViewportState, { passive: true })
+window.addEventListener(FEATURE_APP_INACTIVE_EVENT, recheckViewportAfterFeatureExit)
 window.addEventListener('focusin', markFocusedMobileInputForReveal, {
+  capture: true,
+  passive: true,
+})
+window.addEventListener('focusout', recheckViewportAfterMobileBlur, {
   capture: true,
   passive: true,
 })

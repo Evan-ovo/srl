@@ -2168,12 +2168,14 @@ span.stitch-entry__copy {
   .stitch-editor-backdrop {
     position: fixed;
     z-index: 350;
-    inset: 0;
+    inset: var(--visual-viewport-offset-top, 0px) 0 auto;
+    height: var(--layout-viewport-height, 100lvh);
     display: block;
     background: var(--overlay-background);
   }
-  :root[data-ios-keyboard-open='true'] .stitch-editor-backdrop {
+  :root[data-visual-viewport-reduced='true'] .stitch-editor-backdrop {
     background: var(--color-canvas);
+    background: rgb(from var(--color-canvas) r g b / 1);
   }
 }
 

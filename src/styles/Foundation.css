@@ -337,11 +337,18 @@
   cursor: pointer;
 }
 
-.character-greetings__controls button:hover,
 .character-greetings__controls button:focus-visible {
   border-color: var(--button-border, var(--color-accent));
   background: var(--button-background, var(--color-accent-soft));
   outline: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .character-greetings__controls button:hover {
+    border-color: var(--button-border, var(--color-accent));
+    background: var(--button-background, var(--color-accent-soft));
+    outline: 0;
+  }
 }
 
 .character-greetings__track {
@@ -765,13 +772,22 @@
   cursor: pointer;
 }
 
-.world-browser__list li > button:hover,
 .world-browser__list li > button:focus-visible {
   background: var(
     --button-background,
     color-mix(in srgb, var(--color-accent-soft) 52%, transparent)
   );
   outline: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .world-browser__list li > button:hover {
+    background: var(
+      --button-background,
+      color-mix(in srgb, var(--color-accent-soft) 52%, transparent)
+    );
+    outline: 0;
+  }
 }
 
 .world-browser__list i {
@@ -1199,16 +1215,28 @@
   transition: transform 180ms ease;
 }
 
-.preset-dossier__entries button:hover,
 .preset-dossier__entries button:focus-visible {
   border-color: var(--button-border, var(--color-accent));
   outline: 0;
 }
 
-.preset-dossier__entries button:hover::after,
+@media (hover: hover) and (pointer: fine) {
+  .preset-dossier__entries button:hover {
+    border-color: var(--button-border, var(--color-accent));
+    outline: 0;
+  }
+}
+
 .preset-dossier__entries button:focus-visible::after {
   transform: scale(1.08);
   transform-origin: right bottom;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .preset-dossier__entries button:hover::after {
+    transform: scale(1.08);
+    transform-origin: right bottom;
+  }
 }
 
 .preset-dossier__entries strong {
@@ -1437,11 +1465,18 @@
   cursor: pointer;
 }
 
-.standalone-greeting-list > article > header > button:hover,
 .standalone-greeting-list > article > header > button:focus-visible {
   border-color: var(--button-border, var(--color-accent));
   background: var(--button-background, var(--color-accent-soft));
   outline: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .standalone-greeting-list > article > header > button:hover {
+    border-color: var(--button-border, var(--color-accent));
+    background: var(--button-background, var(--color-accent-soft));
+    outline: 0;
+  }
 }
 
 .rich-content-preview {
@@ -1875,8 +1910,10 @@
   cursor: pointer;
 }
 
-.beauty-preview__fullscreen-btn:hover {
-  background: var(--color-accent-soft);
+@media (hover: hover) and (pointer: fine) {
+  .beauty-preview__fullscreen-btn:hover {
+    background: var(--color-accent-soft);
+  }
 }
 
 /* 全屏弹层 */
@@ -1904,8 +1941,10 @@
   cursor: pointer;
 }
 
-.beauty-fullscreen__close:hover {
-  background: var(--color-accent-soft);
+@media (hover: hover) and (pointer: fine) {
+  .beauty-fullscreen__close:hover {
+    background: var(--color-accent-soft);
+  }
 }
 
 .beauty-fullscreen__toolbar {
@@ -2518,4 +2557,29 @@ input:where([type='checkbox'])[role='switch']:checked::before {
   margin-top: var(--space-section);
   padding-top: 0.75rem;
   border-top: 1px solid var(--color-line-strong);
+}
+.srl-independent-page-outlet {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  pointer-events: none;
+  isolation: isolate;
+}
+
+.srl-independent-page-outlet:has(> .srl-independent-page) {
+  background: var(--color-surface-raised, var(--color-canvas));
+}
+
+.srl-independent-page-outlet > .srl-independent-page {
+  position: absolute;
+  inset: var(--visual-viewport-offset-top) 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--visual-viewport-height, var(--layout-viewport-height, 100lvh));
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  background: var(--color-surface-raised, var(--color-canvas));
+  color: var(--color-ink);
 }

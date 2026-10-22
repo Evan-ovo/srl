@@ -299,12 +299,6 @@
 .ai-tagging__advanced-content textarea {
   min-height: 18rem;
 }
-@media (max-width: 53.75rem) {
-  :root[data-visual-viewport-reduced='true'] .ai-tagging__advanced-content textarea {
-    min-height: min(18rem, calc(var(--visual-viewport-height, 100dvh) / 2));
-    max-height: calc(var(--visual-viewport-height, 100dvh) / 2);
-  }
-}
 .ai-tagging__prompt-actions {
   margin: 0.5rem 0;
 }

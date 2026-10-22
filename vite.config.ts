@@ -55,7 +55,8 @@ function listPublicOfflineAssets(
 ): Array<{ url: string; size: number }> {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const absolutePath = join(directory, entry.name)
-    if (directory === root && entry.name === 'official-apps') return []
+    // Old releases stay downloadable; only this build's asset graph belongs offline.
+    if (directory === root && ['official-apps', 'assets'].includes(entry.name)) return []
     if (entry.isDirectory()) return listPublicOfflineAssets(root, absolutePath)
     const publicPath = relative(root, absolutePath).split(sep).join('/')
     if (

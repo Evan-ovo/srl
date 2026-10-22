@@ -54,6 +54,9 @@ describe('standalone inbox', () => {
   })
 
   it('opens the existing connection settings without duplicating the inbox panels', async () => {
+    const outlet = document.createElement('div')
+    outlet.id = 'srl-independent-page-outlet'
+    document.body.append(outlet)
     const wrapper = mount(DiscordInboxCenter, { attachTo: document.body, global: { stubs } })
     try {
       expect(wrapper.get('h1').text()).toBe('收件箱')
@@ -63,33 +66,46 @@ describe('standalone inbox', () => {
         .findAll('button')
         .find((button) => button.text() === '连接设置')!
         .trigger('click')
-      await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull())
+      await vi.waitFor(() =>
+        expect(document.querySelector('.resource-source-advanced-page')).not.toBeNull(),
+      )
       const back = { handled: false }
       window.dispatchEvent(new CustomEvent('srl:back-request', { detail: back }))
       await flushPromises()
       expect(back.handled).toBe(true)
-      expect(document.querySelector('[role="dialog"]')).toBeNull()
+      expect(document.querySelector('.resource-source-advanced-page')).toBeNull()
       expect(wrapper.get('h1').text()).toBe('收件箱')
       expect(wrapper.find('.discord-inbox-center__secondary').text()).toContain('待整理来源')
       await wrapper
         .findAll('button')
         .find((button) => button.text() === '连接设置')!
         .trigger('click')
-      await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull())
+      await vi.waitFor(() =>
+        expect(document.querySelector('.resource-source-advanced-page')).not.toBeNull(),
+      )
       expect(document.querySelector('h2')?.textContent).toBe('Discord 连接设置')
-      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('返回收件箱')
-      expect(document.querySelector('[role="dialog"] [data-testid="post-inbox"]')).toBeNull()
+      expect(document.querySelector('.resource-source-advanced-page')?.textContent).toContain(
+        '返回收件箱',
+      )
       expect(
-        document.querySelector('[role="dialog"] [data-testid="pairing-settings"]'),
+        document.querySelector('.resource-source-advanced-page [data-testid="post-inbox"]'),
+      ).toBeNull()
+      expect(
+        document.querySelector('.resource-source-advanced-page [data-testid="pairing-settings"]'),
       ).not.toBeNull()
-      expect(document.querySelector('[role="dialog"] [data-testid="resource-inbox"]')).toBeNull()
-      expect(document.querySelector('[role="dialog"] [data-testid="pending-sources"]')).toBeNull()
+      expect(
+        document.querySelector('.resource-source-advanced-page [data-testid="resource-inbox"]'),
+      ).toBeNull()
+      expect(
+        document.querySelector('.resource-source-advanced-page [data-testid="pending-sources"]'),
+      ).toBeNull()
       ;(document.querySelector('.resource-source-advanced__back') as HTMLButtonElement).click()
       await flushPromises()
-      expect(document.querySelector('[role="dialog"]')).toBeNull()
+      expect(document.querySelector('.resource-source-advanced-page')).toBeNull()
       expect(wrapper.find('[data-testid="resource-inbox"]').exists()).toBe(true)
     } finally {
       wrapper.unmount()
+      outlet.remove()
     }
   })
 

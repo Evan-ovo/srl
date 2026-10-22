@@ -118,8 +118,8 @@ onBeforeUnmount(() => {
           'action-sheet--centered': centered,
         }"
         role="presentation"
-        @click.self="close"
       >
+        <div class="action-sheet__backdrop" aria-hidden="true" @click="close" />
         <section
           ref="panel"
           class="action-sheet__panel"
@@ -170,6 +170,13 @@ onBeforeUnmount(() => {
   display: grid;
   align-items: end;
   padding: max(1rem, var(--safe-top)) max(1rem, var(--safe-right)) 0 max(1rem, var(--safe-left));
+  isolation: isolate;
+}
+
+.action-sheet__backdrop {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
   background: var(--overlay-background);
   backdrop-filter: blur(4px);
 }
@@ -186,6 +193,8 @@ onBeforeUnmount(() => {
 }
 
 .action-sheet__panel {
+  position: relative;
+  z-index: 1;
   width: min(100%, 34rem);
   max-height: min(78dvh, 42rem, 100%);
   margin: 0 auto;

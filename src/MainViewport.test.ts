@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { FEATURE_APP_INACTIVE_EVENT } from './core/ViewportEvents'
 
 const startup = vi.hoisted(() => ({ mount: vi.fn(), credentials: vi.fn() }))
 vi.mock('vue', () => ({ createApp: () => ({ mount: startup.mount }) }))
@@ -59,6 +60,15 @@ describe('Main viewport state', () => {
   function notifyFocusIn(): void {
     const event = new FocusEvent('focusin', { bubbles: true })
     for (const listener of listeners.get('focusin') ?? []) {
+      if (typeof listener === 'function') listener(event)
+      else listener.handleEvent(event)
+    }
+  }
+
+  function notifyFocusOut(target: Element, relatedTarget: Element | null = null): void {
+    const event = new FocusEvent('focusout', { bubbles: true, relatedTarget })
+    Object.defineProperty(event, 'target', { value: target })
+    for (const listener of listeners.get('focusout') ?? []) {
       if (typeof listener === 'function') listener(event)
       else listener.handleEvent(event)
     }
@@ -147,6 +157,111 @@ describe('Main viewport state', () => {
     expect(document.getElementById('srl-ios-pwa-geometry-diagnostic')).toBeNull()
   })
 
+  it('restores standalone content when dismissal loses only the measured status-bar extent', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 393)
+    vi.stubGlobal('innerHeight', 852)
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(393)
+    const computed = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element) => {
+      const style = computed(element)
+      return element instanceof HTMLElement && element.style.paddingTop.includes('--safe-top')
+        ? new Proxy(style, {
+            get: (target, key) => (key === 'paddingTop' ? '59px' : Reflect.get(target, key)),
+          })
+        : style
+    })
+    viewport.height = 852
+    await import('./Main')
+    const input = document.createElement('input')
+    document.body.append(input)
+    for (let cycle = 0; cycle < 3; cycle++) {
+      input.focus()
+      notifyFocusIn()
+      viewport.height = 448
+      applyScheduledViewport()
+      expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe('448px')
+      if (cycle !== 1) input.blur()
+      vi.stubGlobal('innerHeight', 793)
+      viewport.height = 793
+      applyScheduledViewport()
+      expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe('852px')
+      expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+      expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+      expect(viewport.height).toBe(793)
+    }
+    viewport.height = 740
+    applyScheduledViewport()
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe('740px')
+    viewport.height = 793
+    viewport.offsetTop = 10
+    applyScheduledViewport()
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe('793px')
+    Object.assign(viewport, { offsetTop: 0, scale: 1.1 })
+    applyScheduledViewport()
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe('793px')
+    Object.assign(viewport, { scale: 1 })
+    iosStandalone = false
+    applyScheduledViewport()
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe('793px')
+    input.remove()
+  })
+
+  it('does not cache a transient zero safe-top through keyboard dismissal', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 393)
+    vi.stubGlobal('innerHeight', 852)
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(393)
+    let safeTop = '0px'
+    const computed = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element) => {
+      const style = computed(element)
+      return element instanceof HTMLElement && element.style.paddingTop.includes('--safe-top')
+        ? new Proxy(style, {
+            get: (target, key) => (key === 'paddingTop' ? safeTop : Reflect.get(target, key)),
+          })
+        : style
+    })
+    viewport.height = 852
+    await import('./Main')
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.focus()
+    notifyFocusIn()
+    safeTop = '59px'
+    viewport.height = 448
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('true')
+    input.blur()
+    vi.stubGlobal('innerHeight', 793)
+    viewport.height = 793
+    applyScheduledViewport()
+    expect(document.documentElement.style.getPropertyValue('--app-viewport-height')).toBe('852px')
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+    input.remove()
+  })
+
+  it('recognizes reopening the keyboard while the same field retains focus', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 390)
+    await import('./Main')
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.focus()
+    notifyFocusIn()
+    for (let cycle = 0; cycle < 3; cycle++) {
+      viewport.height = 448
+      applyScheduledViewport()
+      expect(document.documentElement.dataset.iosKeyboardOpen).toBe('true')
+      viewport.height = 778
+      applyScheduledViewport()
+      expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+      expect(document.activeElement).toBe(input)
+    }
+    input.remove()
+  })
+
   it('keeps the window surface independent of keyboard content height and updates on rotation', async () => {
     iosStandalone = true
     vi.stubGlobal('innerWidth', 390)
@@ -196,6 +311,52 @@ describe('Main viewport state', () => {
     expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
     expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
     input.remove()
+  })
+
+  it('keeps layout coverage and reveals a field through focus zoom and keyboard reopening', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 393)
+    vi.stubGlobal('innerHeight', 852)
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(393)
+    viewport.height = 852
+    const content = document.createElement('div')
+    content.style.overflowY = 'auto'
+    const input = document.createElement('input')
+    content.append(input)
+    document.body.append(content)
+    Object.defineProperties(content, {
+      clientHeight: { value: 220 },
+      scrollHeight: { value: 1200 },
+    })
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 80, 344, 220))
+    vi.spyOn(input, 'getBoundingClientRect').mockImplementation(
+      () => new DOMRect(0, 450 - content.scrollTop, 300, 44),
+    )
+    await import('./Main')
+    input.focus()
+    notifyFocusIn()
+    vi.stubGlobal('innerWidth', 344)
+    vi.stubGlobal('innerHeight', 746)
+    Object.assign(viewport, { height: 392.11, scale: 16 / 14, offsetTop: 277.89 })
+    applyScheduledViewport()
+    settleScheduledViewport()
+    expect(document.documentElement.style.getPropertyValue('--layout-viewport-height')).toBe(
+      '852px',
+    )
+    expect(input.getBoundingClientRect().bottom).toBeLessThanOrEqual(300)
+    const applied = content.scrollTop
+    notifyViewport('scroll')
+    settleScheduledViewport()
+    expect(content.scrollTop).toBe(applied)
+    viewport.height = 746
+    applyScheduledViewport()
+    settleScheduledViewport()
+    content.scrollTop = 0
+    viewport.height = 392.11
+    applyScheduledViewport()
+    settleScheduledViewport()
+    expect(input.getBoundingClientRect().bottom).toBeLessThanOrEqual(300)
+    content.remove()
   })
 
   it('tracks reduced input space when the focus session starts already zoomed', async () => {
@@ -360,6 +521,50 @@ describe('Main viewport state', () => {
     expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
   })
 
+  it('rechecks iOS keyboard dismissal after blur when WebKit emits no final resize', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 390)
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.focus()
+    await import('./Main')
+    viewport.height = 420
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('true')
+
+    input.blur()
+    notifyFocusOut(input)
+    viewport.height = 778
+    vi.advanceTimersByTime(50)
+    settleScheduledViewport()
+
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+    input.remove()
+  })
+
+  it('clears stale keyboard state when a feature page removes the focused input without focusout', async () => {
+    iosStandalone = true
+    vi.stubGlobal('innerWidth', 390)
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.focus()
+    await import('./Main')
+    viewport.height = 420
+    applyScheduledViewport()
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('true')
+
+    input.remove()
+    expect(document.activeElement).not.toBe(input)
+    window.dispatchEvent(new Event(FEATURE_APP_INACTIVE_EVENT))
+    viewport.height = 778
+    applyScheduledViewport()
+    settleScheduledViewport()
+
+    expect(document.documentElement.dataset.iosKeyboardOpen).toBe('false')
+    expect(document.documentElement.dataset.visualViewportReduced).toBe('false')
+  })
+
   it('marks iOS standalone without adding the safe area to app height', async () => {
     iosStandalone = true
     await import('./Main')
@@ -440,7 +645,7 @@ describe('Main viewport state', () => {
     { ios: true, width: 390, scale: 1, reveal: true },
     { ios: false, width: 390, scale: 1, reveal: false },
     { ios: true, width: 1280, scale: 1, reveal: false },
-    { ios: true, width: 390, scale: 1.33, reveal: false },
+    { ios: true, width: 390, scale: 1.33, reveal: true },
   ])(
     'reveals cold dialog focus only for the affected mobile viewport: %j',
     async ({ ios, width, scale, reveal }) => {

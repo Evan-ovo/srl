@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { computed, defineComponent, ref } from 'vue'
+import { computed, defineComponent, nextTick, ref } from 'vue'
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useLibraryLifecycle } from './UseLibraryLifecycle'
@@ -128,6 +128,84 @@ function attachment(index: number): SharedFileBatch {
     },
   }
 }
+
+describe('弹层后台位置保护', () => {
+  let style: HTMLStyleElement
+  beforeEach(() => {
+    style = document.createElement('style')
+    style.textContent = 'html.modal-open body.modal-open { overflow-y: clip }'
+    document.head.append(style)
+    intake.take.mockResolvedValue([])
+  })
+  afterEach(() => {
+    style.remove()
+    vi.restoreAllMocks()
+  })
+
+  it.each(['close', 'unmount'] as const)('restores the opening position on %s', async (end) => {
+    const scrollY = vi.spyOn(window, 'scrollY', 'get').mockReturnValue(1200)
+    vi.spyOn(window, 'scrollX', 'get').mockReturnValue(0)
+    const scroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    const { wrapper, overlay } = mountLifecycle()
+    try {
+      expect(scroll).not.toHaveBeenCalled()
+      overlay.value = true
+      await nextTick()
+      expect(document.body.style.getPropertyValue('--modal-scroll-offset-top')).toBe('-1200px')
+      // The underlying page may report a different offset during native focus.
+      scrollY.mockReturnValue(882)
+      expect(scroll).not.toHaveBeenCalled()
+      if (end === 'close') {
+        overlay.value = false
+        await nextTick()
+      } else wrapper.unmount()
+      expect(scroll).toHaveBeenCalledExactlyOnceWith({ left: 0, top: 1200, behavior: 'instant' })
+      expect(document.body.classList.contains('modal-open')).toBe(false)
+      expect(document.documentElement.classList.contains('modal-open')).toBe(false)
+      expect(document.body.style.getPropertyValue('--modal-scroll-offset-top')).toBe('')
+    } finally {
+      if (wrapper.exists()) wrapper.unmount()
+    }
+  })
+
+  it('does not restore stale offsets when clipping is inactive on desktop or unsupported CSS', async () => {
+    style.textContent = ''
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(1200)
+    const scroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    const { wrapper, overlay } = mountLifecycle()
+    try {
+      overlay.value = true
+      await nextTick()
+      overlay.value = false
+      await nextTick()
+      expect(scroll).not.toHaveBeenCalled()
+      expect(document.body.style.getPropertyValue('--modal-scroll-offset-top')).toBe('')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('uses the current library position for each new modal session', async () => {
+    const scrollY = vi.spyOn(window, 'scrollY', 'get')
+    const scroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    const { wrapper, overlay } = mountLifecycle()
+    try {
+      for (const top of [1200, 1800, 900]) {
+        scrollY.mockReturnValue(top)
+        overlay.value = true
+        await nextTick()
+        scrollY.mockReturnValue(0)
+        overlay.value = false
+        await nextTick()
+        expect(scroll).toHaveBeenLastCalledWith({ left: 0, top, behavior: 'instant' })
+      }
+      expect(scroll).toHaveBeenCalledTimes(3)
+    } finally {
+      wrapper.unmount()
+    }
+    expect(scroll).toHaveBeenCalledTimes(3)
+  })
+})
 
 describe('系统分享待处理队列', () => {
   beforeEach(() => {

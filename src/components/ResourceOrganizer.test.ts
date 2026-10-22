@@ -8,6 +8,10 @@ import './StructuredResourceDetails.vue'
 import './CharacterCardDetails.vue'
 import ResourceOrganizer from './ResourceOrganizer.vue'
 
+const pageOutlet = document.createElement('div')
+pageOutlet.id = 'srl-independent-page-outlet'
+document.body.append(pageOutlet)
+
 it('hides detail while attachments are open and returns through the attachment back action', async () => {
   const AttachmentEntry = defineComponent({
     props: ['open'],
@@ -52,12 +56,12 @@ it('hides detail while attachments are open and returns through the attachment b
   })
   try {
     await flushPromises()
-    expect(wrapper.get('.resource-detail-overlay').isVisible()).toBe(true)
+    expect(wrapper.get('.resource-detail-page').isVisible()).toBe(true)
     await wrapper.get('[data-test="attachments"]').trigger('click')
-    expect(wrapper.get('.resource-detail-overlay').isVisible()).toBe(false)
+    expect(wrapper.get('.resource-detail-page').isVisible()).toBe(false)
     ;(wrapper.vm as unknown as { requestClose: () => void }).requestClose()
     await flushPromises()
-    expect(wrapper.get('.resource-detail-overlay').isVisible()).toBe(true)
+    expect(wrapper.get('.resource-detail-page').isVisible()).toBe(true)
     expect(wrapper.emitted('close')).toBeUndefined()
   } finally {
     wrapper.unmount()
@@ -288,8 +292,8 @@ it.each([RESOURCE_TYPE.CHARACTER_CARD, RESOURCE_TYPE.WORLD_BOOK, RESOURCE_TYPE.R
       })
     content().vm.$emit('workbench-open', true)
     await flushPromises()
-    expect(wrapper.get('.resource-detail-overlay').classes()).toContain(
-      'resource-detail-overlay--content-editor',
+    expect(wrapper.get('.resource-detail-page').classes()).toContain(
+      'resource-detail-page--content-editor',
     )
     expect(wrapper.get('.resource-detail-sheet').classes()).toContain(
       'resource-detail-sheet--content-editor',

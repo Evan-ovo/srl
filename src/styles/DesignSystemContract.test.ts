@@ -186,10 +186,16 @@ describe('mobile design system contract', () => {
     expect(refinement).toContain('FrontendWorkshop 的 10/11/12/14px 层级由各正式 Owner')
     expect(refinement).not.toMatch(/\.frontend-workshop[^{}]*:where\([^)]*button/)
     expect(layout.replace(/\s+/g, '')).toContain(
-      "input:not([type='checkbox'],[type='radio'],[type='range'],[type='color'],[type='file'],:where(.main-api-settingsinput))",
+      "input:not([type='checkbox'],[type='radio'],[type='range'],[type='color'],[type='file'])",
     )
+    const mobileTypography = layout.match(
+      /\/\* Include native dialogs[\s\S]*?font-size: 16px;/,
+    )?.[0]
+    expect(mobileTypography).toBeDefined()
+    expect(mobileTypography).not.toContain('.main-api-settings')
+    expect(mobileTypography).toContain('.chat-memory')
     expect(layout).toMatch(
-      /:is\(#app, \[role='dialog'\]\)\s*:where\([^{}]+\)\s*\{\s*font-size: 16px;/,
+      /:is\(#app, dialog, \[role='dialog'\]\)\s*:where\([^{}]+\)\s*\{\s*font-size: 16px;/,
     )
     expect(refinement).not.toContain('font-size: 1rem')
     expect(stylesEntry).not.toContain('FrontendWorkshopLegacyUiMigration.css')

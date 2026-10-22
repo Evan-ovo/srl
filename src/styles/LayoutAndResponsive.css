@@ -39,9 +39,14 @@
   animation: resource-enter 260ms ease both;
 }
 
-.resource-row:hover,
 .resource-row--active {
   background: var(--color-surface-raised);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .resource-row:hover {
+    background: var(--color-surface-raised);
+  }
 }
 
 .resource-row--active {
@@ -160,8 +165,10 @@
   font-weight: 600;
 }
 
-.resource-row__identity:hover strong {
-  color: var(--color-accent);
+@media (hover: hover) and (pointer: fine) {
+  .resource-row__identity:hover strong {
+    color: var(--color-accent);
+  }
 }
 
 .resource-row__name-block small {
@@ -581,13 +588,7 @@
   border-top: 1px solid var(--color-line-strong);
 }
 
-/* Settings is a full-screen workspace on every viewport, not a centered sheet. */
-.layout-settings-overlay {
-  display: block;
-  padding: 0;
-  background: var(--color-surface-raised);
-}
-
+/* Settings is rendered in the independent page outlet, with its own section scroller. */
 .layout-settings-page {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -1175,13 +1176,15 @@
     padding: var(--mobile-dialog-top-space) 0 0;
   }
 
-  .layout-settings-overlay {
-    display: block;
-    padding: 0;
-  }
-
-  :root[data-ios-keyboard-open='true'] .editor-overlay {
+  :root[data-visual-viewport-reduced='true'] .editor-overlay {
+    /* A backdrop covers paint, not keyboard semantics. Keep it opaque through
+       focus zoom too, including palettes with translucent surface colors. */
     --editor-overlay-background: var(--color-surface-raised);
+  }
+  @supports (color: rgb(from white r g b / 1)) {
+    :root[data-visual-viewport-reduced='true'] .editor-overlay {
+      --editor-overlay-background: rgb(from var(--color-surface-raised) r g b / 1);
+    }
   }
 
   .editor-sheet,
@@ -1204,7 +1207,6 @@
   :root body .persona-app__rename-overlay,
   :root body .discord-inbox-dialog-backdrop,
   :root body .frontend-workbench__layer-popover,
-  :root body .feature-hub[data-feature-page='folders'],
   :root body .stitch.is-reading,
   :root body .external-app-host__workspace--immersive,
   :root body .external-app-manager__overlay {
@@ -1232,16 +1234,23 @@
     );
   }
 
-  /* Compact API and memory editors keep their own typography; other mobile forms retain the 16px baseline. */
-  body
-    input:not([type='checkbox']):not([type='radio']):not([type='color']):not(
-      :where(.main-api-settings input)
-    ),
+  :root[data-ios-keyboard-open='true'] {
+    /* Main owns the keyboard signal; hidden primary navigation reserves no space. */
+    --bottom-nav-reserved: 0px;
+  }
+
+  :root[data-visual-viewport-reduced='true'] .layout-settings__footer {
+    /* Each settings section keeps its own save action beside its fields. */
+    display: none;
+  }
+
+  /* Include native dialogs teleported outside #app: their implicit dialog role
+     does not match [role='dialog']. Compact memory typography stays local. */
+  body input:not([type='checkbox']):not([type='radio']):not([type='color']),
   body
     select:not(
       :where(
         :is(
-            .main-api-settings,
             .chat-memory,
             .resource-picker__toolbar,
             .version-import-dialog__filters,
@@ -1251,19 +1260,11 @@
       )
     ),
   body textarea:not(:where(.chat-memory textarea)),
-  :is(#app, [role='dialog'])
+  :is(#app, dialog, [role='dialog'])
     :where(
-      input:not(
-        [type='checkbox'],
-        [type='radio'],
-        [type='range'],
-        [type='color'],
-        [type='file'],
-        :where(.main-api-settings input)
-      ),
+      input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file']),
       select:not(
         :where(
-          .main-api-settings select,
           .chat-memory select,
           .resource-picker__toolbar select,
           .version-import-dialog__filters select,
@@ -1287,6 +1288,7 @@
     --bottom-action-reserved: 3.875rem;
   }
 
+  :root[data-ios-keyboard-open='true'] .mobile-bottom-nav,
   body.modal-open .mobile-bottom-nav,
   body:has(.assistant-pet-dialog--expanded[open]) .mobile-bottom-nav {
     visibility: hidden;
@@ -1305,12 +1307,18 @@
     overflow: hidden;
   }
 
-  body.modal-open .notice {
-    display: none;
+  @supports (overflow: clip) {
+    :root.modal-open body.modal-open {
+      /* Keep body in normal flow: fixing it shrinks the iOS PWA viewport.
+         Clip the long background while preserving its pre-modal screen position. */
+      height: calc(var(--layout-viewport-height, 100lvh) - var(--modal-scroll-offset-top, 0px));
+      margin-top: var(--modal-scroll-offset-top, 0px);
+      overflow: clip;
+    }
   }
 
-  .layout-settings-page {
-    height: var(--visual-viewport-height);
+  body.modal-open .notice {
+    display: none;
   }
 
   .sidebar {
@@ -2025,25 +2033,16 @@
     font-size: 1.35rem;
   }
 
-  .resource-detail-overlay {
-    z-index: 24;
-    --mobile-dialog-top-space: 0px;
-    align-items: stretch;
-    padding: 0;
-    background: var(--color-canvas);
-    animation: none;
-  }
-
-  .resource-detail-overlay .resource-detail-sheet {
+  .resource-detail-page .resource-detail-sheet {
     width: 100%;
-    height: var(--visual-viewport-height);
+    height: 100%;
     max-height: none;
     padding: 0;
     overflow: hidden;
     overscroll-behavior: contain;
     border: 0;
     border-radius: 0;
-    background: var(--dialog-background);
+    background: var(--page-background, var(--color-surface-raised));
     box-shadow: none;
   }
 

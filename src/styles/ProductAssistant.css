@@ -1401,13 +1401,27 @@
     /* The chat owns an internal scroller; its origin follows the same viewport as its height. */
     position: fixed;
     inset: var(--visual-viewport-offset-top, 0px) 0 auto;
-    height: var(--app-viewport-height, 100dvh);
+    height: var(--layout-viewport-height, var(--app-viewport-height, 100dvh));
     padding-inline: max(var(--space-page-inline), var(--safe-left, 0px))
       max(var(--space-page-inline), var(--safe-right, 0px));
   }
 
   .feature-hub--assistant .product-assistant > .feature-app-header {
     --feature-header-viewport-width: 100%;
+  }
+
+  .feature-hub--assistant .appearance-studio--chat {
+    height: calc(var(--app-viewport-height, 100dvh) - var(--safe-top, 0px));
+  }
+
+  :root[data-visual-viewport-reduced='true'] .feature-hub--assistant {
+    background: var(--color-surface);
+  }
+
+  @supports (color: rgb(from white r g b / 1)) {
+    :root[data-visual-viewport-reduced='true'] .feature-hub--assistant {
+      background: rgb(from var(--color-surface) r g b / 1);
+    }
   }
 
   :root[data-ios-keyboard-open='true'] .feature-hub--assistant .chat-composer {
@@ -1452,6 +1466,11 @@
 }
 .chat-workflow {
   padding: 0 8px;
+}
+.chat-template-workflow {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
 }
 .chat-workflow-list {
   display: grid;
@@ -1563,6 +1582,23 @@
   gap: 0;
   flex-wrap: wrap;
   align-items: center;
+}
+.chat-template-editor > .chat-workflow-actions {
+  gap: 8px;
+}
+.chat-template-editor > .chat-workflow-actions button {
+  flex: 1 1 7rem;
+  padding: 8px 12px;
+}
+.chat-template-editor > .chat-workflow-actions button > span {
+  padding: 0;
+  background: transparent;
+  font: inherit;
+}
+.chat-template-editor > .chat-workflow-actions .chat-workflow-primary {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border-color: transparent;
 }
 .chat-workflow-actions small {
   font-size: 12px;

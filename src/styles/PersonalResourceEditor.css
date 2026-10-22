@@ -27,19 +27,6 @@
   display: grid;
   gap: 12px;
 }
-@media (max-width: 53.75rem) {
-  :root[data-visual-viewport-reduced='true'] .personal-resource-editor {
-    height: 100%;
-  }
-  :root[data-visual-viewport-reduced='true'] .personal-resource-editor .editor-form {
-    container-type: size;
-  }
-  :root[data-visual-viewport-reduced='true'] .personal-resource-editor textarea {
-    /* Fit the real form scroller below its header; rows alone can hide the caret. */
-    min-height: min(8rem, max(44px, calc(100cqh - 24px)));
-    max-height: max(44px, calc(100cqh - 24px));
-  }
-}
 .personal-resource-editor .field {
   min-width: 0;
 }

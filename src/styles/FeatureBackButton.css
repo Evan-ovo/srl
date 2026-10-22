@@ -18,8 +18,10 @@
   cursor: pointer;
 }
 
-.feature-back-button:hover {
-  background: var(--color-accent-soft);
+@media (hover: hover) and (pointer: fine) {
+  .feature-back-button:hover {
+    background: var(--color-accent-soft);
+  }
 }
 
 .feature-back-button:focus-visible {

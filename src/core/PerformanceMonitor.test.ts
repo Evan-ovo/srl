@@ -74,6 +74,19 @@ describe('PerformanceMonitor', () => {
     expect(getPerformanceMonitorVisible()).toBe(true)
   })
 
+  it('separates the restored shell edge from the raw native visual extent', () => {
+    const nav = document.createElement('nav')
+    nav.className = 'mobile-bottom-nav'
+    vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 774, 393, 78))
+    document.body.append(nav)
+    viewport.height = 793
+    document.documentElement.style.setProperty('--app-viewport-height', '852px')
+    enablePanel()
+    expect(metric('底栏差值')).toBe('0 px')
+    expect(metric('原生 visual 差值')).toBe('-59 px')
+    expect(metric('判定')).toBe('底栏已贴视口底部')
+  })
+
   it('refreshes nav geometry in the enabled monitor and handles a removed nav', () => {
     const nav = document.createElement('nav')
     nav.className = 'mobile-bottom-nav'
@@ -109,6 +122,24 @@ describe('PerformanceMonitor', () => {
     expect(document.getElementById('srl-performance-monitor')).toBeNull()
   })
 
+  it('reports the active plaza navigation and its hidden state without changing it', () => {
+    document.body.innerHTML =
+      '<nav class="mobile-bottom-nav" style="display:none"></nav><nav class="plaza-navigation" style="visibility:hidden;pointer-events:none">private-navigation-label</nav>'
+    const nav = document.querySelector<HTMLElement>('.plaza-navigation')!
+    vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 715, 393, 78))
+    enablePanel()
+    const report = JSON.parse(getKeyboardDiagnosticText())
+    expect(report.samples.at(-1).navigation).toMatchObject({
+      kind: 'plaza',
+      visibility: 'hidden',
+      pointerEvents: 'none',
+      box: { top: 715, bottom: 793, height: 78 },
+    })
+    expect(metric('底栏 bottom / height')).toBe('793 / 78 px')
+    expect(nav.style.visibility).toBe('hidden')
+    expect(JSON.stringify(report)).not.toContain('private-navigation-label')
+  })
+
   it('reads resolved safe-bottom pixels instead of parsing an env expression', () => {
     document.documentElement.style.setProperty('--safe-bottom', 'env(safe-area-inset-bottom, 0px)')
     const getStyle = window.getComputedStyle.bind(window)
@@ -124,6 +155,19 @@ describe('PerformanceMonitor', () => {
     expect(panel.querySelector('.srl-performance-monitor__safe-area-probe')).not.toBeNull()
     setPerformanceMonitorVisible(false)
     expect(document.querySelector('.srl-performance-monitor__safe-area-probe')).toBeNull()
+  })
+
+  it('refreshes navigation mounted after startup when the capsule opens without a viewport change', () => {
+    const panel = enablePanel()
+    expect(metric('底栏 bottom / height')).toBe('未找到')
+    const nav = document.createElement('nav')
+    nav.className = 'plaza-navigation'
+    vi.spyOn(nav, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 700, 390, 78))
+    document.body.append(nav)
+    panel.open = true
+    panel.dispatchEvent(new Event('toggle'))
+    flushFrames()
+    expect(metric('底栏 bottom / height')).toBe('778 / 78 px')
   })
 
   it('retains keyboard geometry after blur without capturing names, URLs or secrets', async () => {
@@ -267,6 +311,51 @@ describe('PerformanceMonitor', () => {
     } finally {
       Reflect.deleteProperty(document, 'elementFromPoint')
     }
+  })
+
+  it('copies the current action sheet even when opening it caused no viewport event', () => {
+    enablePanel()
+    const overlay = document.createElement('div')
+    overlay.className = 'action-sheet'
+    overlay.innerHTML = '<section role="dialog"><button>private-action-label</button></section>'
+    document.body.append(overlay)
+    const dialog = overlay.firstElementChild!
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 390, 852))
+    vi.spyOn(dialog, 'getBoundingClientRect').mockReturnValue(new DOMRect(16, 652, 358, 200))
+    const text = getKeyboardDiagnosticText()
+    const sample = JSON.parse(text).samples.at(-1)
+    expect(sample.page).toBe('action-sheet')
+    expect(sample.overlay).toEqual({ top: 0, bottom: 852, height: 852 })
+    expect(sample.dialog).toEqual({ top: 652, bottom: 852, height: 200 })
+    expect(sample.overlayAncestors).toHaveLength(3)
+    expect(text).not.toContain('private-action-label')
+    expect(overlay.style.cssText).toBe('')
+    overlay.remove()
+  })
+
+  it('retains an opened action sheet after closing it to access the monitor', () => {
+    enablePanel()
+    const trigger = document.createElement('button')
+    const overlay = document.createElement('div')
+    overlay.className = 'action-sheet'
+    overlay.innerHTML = '<section role="dialog"><button>private-action-label</button></section>'
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 390, 852))
+    vi.spyOn(overlay.firstElementChild!, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(16, 652, 358, 200),
+    )
+    trigger.addEventListener('click', () => document.body.append(overlay))
+    document.body.append(trigger)
+    trigger.click()
+    flushFrames()
+    overlay.querySelector('button')!.addEventListener('click', () => overlay.remove())
+    overlay.querySelector('button')!.click()
+    flushFrames()
+    const report = JSON.parse(getKeyboardDiagnosticText())
+    expect(report.samples.some((sample: { page: string }) => sample.page === 'action-sheet')).toBe(
+      true,
+    )
+    expect(report.samples.at(-1).page).toBe('page')
+    trigger.remove()
   })
 
   it('provides a manual copy field when clipboard access fails', async () => {

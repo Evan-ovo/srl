@@ -160,6 +160,12 @@ function recordInteractionEvent(type: InteractionEventType, event: Event): void 
     viewport: getViewportDiagnosticState(),
   })
   if (keyboardEvents.length > 80) keyboardEvents.shift()
+  // Capture before the click closes a settled modal, then after its UI update.
+  // Opening samples alone may still be inside the entrance transition.
+  if (type === 'click') {
+    sampleKeyboardGeometry()
+    scheduleDiagnosticsRender()
+  }
 }
 
 function recordMobileInputFocusDiagnostic(event: MobileInputFocusDiagnostic): void {
@@ -199,17 +205,32 @@ function getEnvironmentDiagnostic(): Record<string, unknown> {
   }
 }
 
+function getNavigation(): HTMLElement | null {
+  // Plaza replaces the host navigation while its APP is open.
+  return (
+    document.querySelector<HTMLElement>('.plaza-navigation') ??
+    document.querySelector<HTMLElement>('.mobile-bottom-nav')
+  )
+}
+
 function sampleKeyboardGeometry(): void {
   if (!shouldShowPerformancePanel() || !isIosStandalonePwa()) return
   const viewport = window.visualViewport
   const active = document.activeElement
   const focusedDialog = active?.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]')
+  const focusedPage = active?.closest<HTMLElement>('.srl-independent-page')
   const dialog =
     focusedDialog ??
     [...document.querySelectorAll<HTMLElement>('[role="dialog"], [role="alertdialog"]')]
       .filter((element) => element.getBoundingClientRect().height > 0)
       .at(-1)
-  const overlay = dialog?.closest<HTMLElement>('.editor-overlay, .mobile-dialog-viewport')
+  const page =
+    focusedPage ??
+    [...document.querySelectorAll<HTMLElement>('.srl-independent-page')]
+      .filter((element) => element.getBoundingClientRect().height > 0)
+      .at(-1)
+  const overlay =
+    page ?? dialog?.closest<HTMLElement>('.editor-overlay, .mobile-dialog-viewport, .action-sheet')
   const round = (value: number | undefined) =>
     value === undefined ? null : Math.round(value * 100) / 100
   const geometry = (element: Element | null | undefined) => {
@@ -224,6 +245,8 @@ function sampleKeyboardGeometry(): void {
     : null
   const rootStyle = getComputedStyle(document.documentElement)
   const overlayStyle = overlay ? getComputedStyle(overlay) : null
+  const nav = getNavigation()
+  const navStyle = nav ? getComputedStyle(nav) : null
   // Rectangles alone do not describe clipping or hit testing. Keep both coordinate
   // hypotheses: iOS and desktop engines need not report viewport panning alike.
   // These are read-only probes, not evidence of the pixels actually painted.
@@ -236,6 +259,7 @@ function sampleKeyboardGeometry(): void {
       if (!element) return 'none'
       if (element.closest('#srl-performance-monitor')) return 'monitor'
       if (dialog?.contains(element)) return 'dialog'
+      if (page?.contains(element)) return 'page'
       if (overlay.contains(element)) return 'overlay'
       return 'outside'
     }
@@ -277,15 +301,33 @@ function sampleKeyboardGeometry(): void {
     scrollY: round(window.scrollY),
     rootScrollTop: round(document.documentElement.scrollTop),
     root: geometry(document.documentElement),
+    rootClientHeight: document.documentElement.clientHeight,
     body: geometry(document.body),
+    keyboardOpen: document.documentElement.dataset.iosKeyboardOpen === 'true',
+    viewportReduced: document.documentElement.dataset.visualViewportReduced === 'true',
+    navigation: nav
+      ? {
+          kind: nav.matches('.plaza-navigation') ? 'plaza' : 'main',
+          box: geometry(nav),
+          visibility: navStyle?.visibility,
+          display: navStyle?.display,
+          pointerEvents: navStyle?.pointerEvents,
+          position: navStyle?.position,
+          bottom: navStyle?.bottom,
+        }
+      : null,
     modalLocked: document.body.classList.contains('modal-open'),
-    page: overlay?.matches('.resource-detail-overlay')
-      ? 'resource-detail'
-      : overlay?.matches('.layout-settings-overlay')
-        ? 'settings'
-        : dialog
-          ? 'other-dialog'
-          : 'page',
+    page: overlay?.matches('.srl-independent-page')
+      ? 'independent-page'
+      : overlay?.matches('.action-sheet')
+        ? 'action-sheet'
+        : overlay?.matches('.resource-detail-page')
+          ? 'resource-detail'
+          : overlay?.matches('.layout-settings-overlay, .layout-settings-page')
+            ? 'settings'
+            : dialog
+              ? 'other-dialog'
+              : 'page',
     overlay: geometry(overlay),
     overlayPosition: overlayStyle?.position ?? null,
     overlayTop: overlayStyle?.top ?? null,
@@ -296,6 +338,10 @@ function sampleKeyboardGeometry(): void {
     input: geometry(input),
     inputFontSize: input ? getComputedStyle(input).fontSize : null,
     cssHeight: rootStyle.getPropertyValue('--visual-viewport-height').trim(),
+    cssLayoutHeight: rootStyle.getPropertyValue('--layout-viewport-height').trim(),
+    safeTop: safeAreaProbe
+      ? Number.parseFloat(getComputedStyle(safeAreaProbe).paddingTop) || 0
+      : null,
     cssOffsetTop: rootStyle.getPropertyValue('--visual-viewport-offset-top').trim(),
     hitRowsFromZero: hitRows(0),
     hitRowsFromOffset: viewport?.offsetTop ? hitRows(viewport.offsetTop) : null,
@@ -309,6 +355,9 @@ function sampleKeyboardGeometry(): void {
 }
 
 export function getKeyboardDiagnosticText(): string {
+  // Opening a non-input surface need not change the viewport. Capture the
+  // requested state now instead of copying only an earlier settings snapshot.
+  sampleKeyboardGeometry()
   return JSON.stringify(
     {
       schemaVersion: 2,
@@ -375,7 +424,7 @@ function getIosGeometryRows(): Array<[string, string]> {
   const viewport = window.visualViewport
   const viewportHeight = viewport?.height ?? window.innerHeight
   const viewportBottom = (viewport?.offsetTop ?? 0) + viewportHeight
-  const nav = document.querySelector<HTMLElement>('.mobile-bottom-nav')
+  const nav = getNavigation()
   const navRect = nav?.getBoundingClientRect()
   const rootStyle = getComputedStyle(document.documentElement)
   // SystemInsetsService supplies env()/CSS expressions on the web; measure their resolved value.
@@ -383,7 +432,12 @@ function getIosGeometryRows(): Array<[string, string]> {
     ? Number.parseFloat(getComputedStyle(safeAreaProbe).paddingBottom) || 0
     : 0
   const appViewport = rootStyle.getPropertyValue('--app-viewport-height').trim() || '未设置'
-  const navGap = navRect ? viewportBottom - navRect.bottom : null
+  const contentHeight = Number.parseFloat(appViewport)
+  const contentBottom =
+    (viewport?.offsetTop ?? 0) +
+    (Number.isFinite(contentHeight) && contentHeight > 0 ? contentHeight : viewportHeight)
+  const navGap = navRect ? contentBottom - navRect.bottom : null
+  const rawNavGap = navRect ? viewportBottom - navRect.bottom : null
 
   let verdict = '等待底栏渲染'
   if (navGap !== null) {
@@ -405,6 +459,7 @@ function getIosGeometryRows(): Array<[string, string]> {
       navRect ? `${Math.round(navRect.bottom)} / ${Math.round(navRect.height)} px` : '未找到',
     ],
     ['底栏差值', navGap === null ? '未找到' : `${Math.round(navGap * 100) / 100} px`],
+    ['原生 visual 差值', rawNavGap === null ? '未找到' : `${Math.round(rawNavGap * 100) / 100} px`],
     ['safe-bottom', `${Math.round(safeBottom * 100) / 100} px`],
     ['App viewport', appViewport],
     ['判定', verdict],
@@ -671,7 +726,9 @@ function createPanel(): void {
   safeAreaProbe.style.cssText =
     'position:absolute;visibility:hidden;pointer-events:none;width:0;height:0;padding:var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left)'
   panel.append(safeAreaProbe)
-  panel.addEventListener('toggle', () => requestAnimationFrame(clampSavedPanelPosition))
+  // Async APP navigation may mount after the last viewport sample. Opening the
+  // existing capsule must read the current surface, not display startup metrics.
+  panel.addEventListener('toggle', scheduleDiagnosticsRender)
   document.body.append(panel)
   restorePanelPosition()
   renderPanel()

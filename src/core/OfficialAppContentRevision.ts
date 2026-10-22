@@ -7,12 +7,12 @@ import type { OfficialAppId } from '../types/OfficialApp.js'
 export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   chatReader: 15,
   draw: 1,
-  stitch: 19,
+  stitch: 21,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=frontend-workshop-content-revision
-  frontendWorkshop: 11,
+  frontendWorkshop: 12,
   // SRL-PUBLIC-SYNC: END REPLACE id=frontend-workshop-content-revision
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-generation-content-revision
-  imageGeneration: 12,
+  imageGeneration: 13,
   // SRL-PUBLIC-SYNC: END REPLACE id=image-generation-content-revision
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=image-album-content-revision
   imageAlbum: 6,
@@ -20,7 +20,7 @@ export const OFFICIAL_APP_CONTENT_REVISIONS: Record<OfficialAppId, number> = {
   userPersona: 8,
   tavernBridge: 9,
   // SRL-PUBLIC-SYNC: BEGIN REPLACE id=assistant-content-revision
-  assistant: 61,
+  assistant: 63,
   // SRL-PUBLIC-SYNC: END REPLACE id=assistant-content-revision
 }
 

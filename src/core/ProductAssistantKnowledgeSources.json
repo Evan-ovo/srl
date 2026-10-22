@@ -209,7 +209,7 @@
     {
       "path": "src/App.vue",
       "guides": ["assistant", "import", "data-protection", "appearance"],
-      "sha256": "0b90cdbe93dde1476f15467614084f240d914c215a706dc4fd7fba7f8b6183af"
+      "sha256": "d2cf865ccc5c3263485f60a0c9780aa47a21d0c97754d08b0990e5937a0468e4"
     },
     {
       "path": "src/core/ProductAssistantGuidance.ts",
@@ -375,7 +375,7 @@
     {
       "path": "src/components/ProductAssistantTaskTemplates.vue",
       "guides": ["assistant"],
-      "sha256": "496a5507274015d01eea685ea6b1433c2b564b9b5422919b25f1243623ff316a"
+      "sha256": "779a28c202717eefaab078d49b4faae003da064ca634064e6c89c3ce7a347450"
     },
     {
       "path": "src/components/DiscordSourceHandoffIntake.vue",
@@ -390,7 +390,7 @@
     {
       "path": "src/components/ResourceLinkAdvancedSettings.vue",
       "guides": ["discord-posts"],
-      "sha256": "bed35ce2cada9eb5dd684bc0d58adc5d6054a2d11abb4ee9d7263ab19a4eebfe"
+      "sha256": "48a29a298897d16893c035043e1efd23d40b7c09e417df68fb6fefb698155fcb"
     },
     {
       "path": "src/components/DiscordInboxPanel.vue",
@@ -430,7 +430,7 @@
     {
       "path": "src/components/DiscordSetupGuideDrawer.vue",
       "guides": ["discord-posts"],
-      "sha256": "f4980a289e943f6be877a5c882865040de394661c8adcd17da6217231148ee38"
+      "sha256": "7fc687ce201107d3808aa6698cbceba6a2798fdeaca94c1910acce29353266da"
     },
     {
       "path": "src/services/DiscordHandoffService.ts",
@@ -737,7 +737,7 @@
         "background-notifications",
         "personal-resources"
       ],
-      "sha256": "d09f99d66bc316c0070d3e846ca2b8eff286416e4f57adab3b3746bc0d3ce4f1"
+      "sha256": "9bc42dc4631508eb159ccc4919c1fa04de63a1257925a2d224277e6fb332cbe3"
     },
     {
       "path": "src/composables/UseLibraryFileImport.ts",
@@ -777,7 +777,7 @@
     {
       "path": "src/components/ResourceOrganizer.vue",
       "guides": ["versions"],
-      "sha256": "d5f52140850fcdb782764b40dbe881eaba8e7a64407437b190d28c37d1fbc4fc"
+      "sha256": "17125379141babb464cf8bc436591bf2b1323b55547f417f0812096163d67c97"
     },
     {
       "path": "src/composables/UseNativeResourceExport.ts",
@@ -1047,7 +1047,7 @@
     {
       "path": "src/components/RelayWorkerDeployGuidePage.vue",
       "guides": ["bridge"],
-      "sha256": "0ee7858a330a9765c5111c3f7b083bb442c1a52983f885b6f08a50e4c7830d3d"
+      "sha256": "bd3f4fa27c4c3bedb2dac38ca0b3fef0cc33fda346088860766f49a065805047"
     },
     {
       "path": "src/services/CloudBackupTransport.ts",
@@ -1057,7 +1057,7 @@
     {
       "path": "src/components/AppearanceUiEditor.vue",
       "guides": ["appearance"],
-      "sha256": "6a81496c3ab03482eec1451cb9a1fec6e6250e2e55eea7d5667242f226bbad76"
+      "sha256": "f020b5abc6a6da10cdc96fd8bb0b7f70fea27a41985dd10d16059ef0ec47fe00"
     },
     {
       "path": "src/components/CustomUiFrame.vue",
@@ -1197,7 +1197,7 @@
     {
       "path": "src/Main.ts",
       "guides": ["appearance"],
-      "sha256": "510942c9bbb9186700e72741b76ea9c0083a4325439f70369950595a92be9822"
+      "sha256": "eb321b69115374a3c493c814e00581263b2fe07e5e28a08a7f589a954dad9f24"
     },
     {
       "path": "src/services/ProductAssistantAppearanceReference.ts",
@@ -1347,7 +1347,7 @@
     {
       "path": "src/composables/UseLibraryLifecycle.ts",
       "guides": ["backup", "background-notifications"],
-      "sha256": "9bdfab39d6f9034a043217faf6281b31f43a8b6c77b22de2954e6eda6fc3057f"
+      "sha256": "474db91805b19bfb382cead13042324ce40f735c5c47d788703c49b058cf47c8"
     },
     {
       "path": "src/composables/UseSearchIndex.ts",

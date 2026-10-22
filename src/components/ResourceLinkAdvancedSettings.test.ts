@@ -20,15 +20,19 @@ afterEach(() => {
   Object.assign(discordSetupSession, { active: false, webStepActive: false, chatPresentation: '' })
   document.body.innerHTML = ''
 })
-it('parks the advanced settings overlay during browser chat without discarding drafts or the form owner', async () => {
+it('parks the independent settings page during browser chat without discarding drafts or the form owner', async () => {
   attachForm.mockReturnValue(detachForm)
   Object.assign(discordSetupSession, { active: true, webStepActive: true, chatPresentation: '' })
+  const outlet = document.createElement('div')
+  outlet.id = 'srl-independent-page-outlet'
+  document.body.append(outlet)
   wrapper = shallowMount(ResourceLinkAdvancedSettings, {
     attachTo: document.body,
     global: { stubs: { teleport: false } },
   })
   await flushPromises()
-  const overlay = document.querySelector<HTMLElement>('.resource-source-advanced-overlay')!
+  const overlay = document.querySelector<HTMLElement>('.resource-source-advanced-page')!
+  expect(overlay.getAttribute('role')).toBe('main')
   const input = overlay.querySelector<HTMLInputElement>('input')!
   input.value = '2234567890123456789'
   input.dispatchEvent(new Event('input', { bubbles: true }))

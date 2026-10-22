@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { SRL_BACK_REQUEST_EVENT, type SrlBackRequestDetail } from '../composables/UseBackStack'
 
 const emit = defineEmits<{ close: [] }>()
 const closeButton = ref<HTMLButtonElement | null>(null)
 const copiedDeployCommand = ref(false)
 const copyError = ref('')
 const deployCommand = 'pnpm exec wrangler deploy --config wrangler.example.jsonc'
-let previousBodyOverflow = ''
 let copyTimer: number | undefined
 
 function fallbackCopy(value: string): boolean {
@@ -42,29 +42,38 @@ async function copyDeployCommand(): Promise<void> {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') emit('close')
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    emit('close')
+  }
+}
+
+function handleBack(event: Event): void {
+  const detail = (event as CustomEvent<SrlBackRequestDetail>).detail
+  if (!detail || detail.handled) return
+  detail.handled = true
+  emit('close')
 }
 
 onMounted(() => {
-  previousBodyOverflow = document.body.style.overflow
-  document.body.style.overflow = 'hidden'
-  window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('keydown', handleKeydown, true)
+  window.addEventListener(SRL_BACK_REQUEST_EVENT, handleBack, true)
   closeButton.value?.focus()
 })
 
 onBeforeUnmount(() => {
-  document.body.style.overflow = previousBodyOverflow
-  window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('keydown', handleKeydown, true)
+  window.removeEventListener(SRL_BACK_REQUEST_EVENT, handleBack, true)
   if (copyTimer !== undefined) window.clearTimeout(copyTimer)
 })
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="#srl-independent-page-outlet">
     <main
-      class="relay-worker-guide"
-      role="dialog"
-      aria-modal="true"
+      class="srl-independent-page relay-worker-guide"
+      role="main"
       aria-label="SRL-Worker-Public 操作步骤"
       tabindex="-1"
     >

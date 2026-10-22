@@ -438,7 +438,7 @@ async function clearBotToken(): Promise<void> {
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="#srl-independent-page-outlet">
     <div
       v-show="
         !(
@@ -447,15 +447,12 @@ async function clearBotToken(): Promise<void> {
           discordSetupSession.chatPresentation
         )
       "
-      class="resource-source-advanced-overlay mobile-dialog-viewport"
-      role="presentation"
-      @click.self="emit('close')"
+      class="srl-independent-page resource-source-advanced-page"
+      role="main"
     >
       <section
         class="resource-source-advanced"
         data-assistant-help-context="discord-bridge"
-        role="dialog"
-        aria-modal="true"
         aria-labelledby="resource-source-advanced-title"
       >
         <header class="resource-source-advanced__header">

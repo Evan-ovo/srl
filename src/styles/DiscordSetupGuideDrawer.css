@@ -1,24 +1,12 @@
-.discord-guide-backdrop {
-  position: fixed;
+.discord-guide-page {
   inset: 0;
-  z-index: 1190;
-  border: 0;
-  background: var(--overlay-background);
-}
-
-.discord-guide-drawer {
-  position: fixed;
-  z-index: 1200;
-  inset: var(--visual-viewport-offset-top) 0 auto auto;
-  height: var(--visual-viewport-height);
+  width: 100%;
+  height: 100%;
   box-sizing: border-box;
   padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
-  width: min(410px, 91vw);
   display: flex;
   flex-direction: column;
-  background: var(--dialog-background);
-  border-left: 1px solid var(--color-line);
-  box-shadow: var(--dialog-shadow, var(--glass-shadow));
+  background: var(--color-surface-raised, var(--color-canvas));
 }
 
 .discord-guide-drawer__header {
@@ -225,43 +213,11 @@
   color: var(--color-ink-soft);
 }
 
-.discord-guide-fade-enter-active,
-.discord-guide-fade-leave-active,
-.discord-guide-slide-enter-active,
-.discord-guide-slide-leave-active {
-  transition:
-    opacity 160ms ease,
-    transform 180ms ease;
-}
-
-.discord-guide-fade-enter-from,
-.discord-guide-fade-leave-to {
-  opacity: 0;
-}
-
-.discord-guide-slide-enter-from,
-.discord-guide-slide-leave-to {
-  transform: translateX(100%);
-}
-
 @media (max-width: 640px) {
-  .discord-guide-drawer {
-    width: 91vw;
-  }
-
   .discord-guide-drawer__header,
   .discord-guide-drawer__body {
     padding-left: 18px;
     padding-right: 18px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .discord-guide-fade-enter-active,
-  .discord-guide-fade-leave-active,
-  .discord-guide-slide-enter-active,
-  .discord-guide-slide-leave-active {
-    transition: none;
   }
 }
 

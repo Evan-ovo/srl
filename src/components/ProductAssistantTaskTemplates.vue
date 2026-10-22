@@ -171,7 +171,7 @@ async function remove(value: AssistantTaskTemplate) {
 }
 </script>
 <template>
-  <section aria-label="常用任务模板" class="chat-workflow">
+  <section aria-label="常用任务模板" class="chat-workflow chat-template-workflow">
     <input
       ref="fileInput"
       type="file"
